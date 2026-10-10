@@ -1,8 +1,12 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "./worktreeCleanup";
+import {
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+  isThreadAssociatedWithWorktree,
+} from "./worktreeCleanup";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -82,32 +86,59 @@ describe("getOrphanedWorktreePathForThread", () => {
 describe("formatWorktreePathForDisplay", () => {
   it("shows only the last path segment for unix-like paths", () => {
     const result = formatWorktreePathForDisplay(
-      "/Users/julius/.dpcode/worktrees/t3code-mvp/t3code-4e609bb8",
+      "/Users/julius/.synara/worktrees/synara-mvp/synara-4e609bb8",
     );
-    expect(result).toBe("t3code-4e609bb8");
-  });
-
-  it("keeps legacy .t3 worktree paths readable after migration", () => {
-    const result = formatWorktreePathForDisplay(
-      "/Users/julius/.t3/worktrees/t3code-mvp/t3code-legacy123",
-    );
-    expect(result).toBe("t3code-legacy123");
+    expect(result).toBe("synara-4e609bb8");
   });
 
   it("normalizes windows separators before selecting the final segment", () => {
     const result = formatWorktreePathForDisplay(
-      "C:\\Users\\julius\\.dpcode\\worktrees\\t3code-mvp\\t3code-4e609bb8",
+      "C:\\Users\\julius\\.synara\\worktrees\\synara-mvp\\synara-4e609bb8",
     );
-    expect(result).toBe("t3code-4e609bb8");
-  });
-
-  it("uses the final segment even when outside ~/.dpcode/worktrees", () => {
-    const result = formatWorktreePathForDisplay("/tmp/custom-worktrees/my-worktree");
-    expect(result).toBe("my-worktree");
+    expect(result).toBe("synara-4e609bb8");
   });
 
   it("ignores trailing slashes", () => {
     const result = formatWorktreePathForDisplay("/tmp/custom-worktrees/my-worktree/");
     expect(result).toBe("my-worktree");
+  });
+});
+
+describe("isThreadAssociatedWithWorktree", () => {
+  const worktreePath = "/tmp/repo/worktrees/feature-a";
+
+  it("matches the current worktree path", () => {
+    expect(isThreadAssociatedWithWorktree({ worktreePath }, worktreePath)).toBe(true);
+  });
+
+  it("matches the associated worktree path when the thread moved back to local", () => {
+    expect(
+      isThreadAssociatedWithWorktree(
+        { worktreePath: null, associatedWorktreePath: worktreePath },
+        worktreePath,
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores surrounding whitespace in recorded paths", () => {
+    expect(
+      isThreadAssociatedWithWorktree({ worktreePath: `  ${worktreePath}\n` }, worktreePath),
+    ).toBe(true);
+  });
+
+  it("does not match missing, blank, or different paths", () => {
+    expect(isThreadAssociatedWithWorktree({}, worktreePath)).toBe(false);
+    expect(
+      isThreadAssociatedWithWorktree(
+        { worktreePath: "   ", associatedWorktreePath: undefined },
+        worktreePath,
+      ),
+    ).toBe(false);
+    expect(
+      isThreadAssociatedWithWorktree(
+        { worktreePath: "/tmp/repo/worktrees/feature-b" },
+        worktreePath,
+      ),
+    ).toBe(false);
   });
 });

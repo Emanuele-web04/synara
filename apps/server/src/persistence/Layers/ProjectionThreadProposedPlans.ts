@@ -5,8 +5,10 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionThreadProposedPlansInput,
+  GetLatestProjectionThreadProposedPlanSummaryInput,
   ListProjectionThreadProposedPlansInput,
   ProjectionThreadProposedPlan,
+  ProjectionThreadProposedPlanSummary,
   ProjectionThreadProposedPlanRepository,
   type ProjectionThreadProposedPlanRepositoryShape,
 } from "../Services/ProjectionThreadProposedPlans.ts";
@@ -68,6 +70,28 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
     `,
   });
 
+  const getLatestProjectionThreadProposedPlanSummaryRow = SqlSchema.findOneOption({
+    Request: GetLatestProjectionThreadProposedPlanSummaryInput,
+    Result: ProjectionThreadProposedPlanSummary,
+    execute: ({ threadId, preferredTurnId }) => sql`
+      SELECT
+        plan_id AS "planId",
+        turn_id AS "turnId",
+        implemented_at AS "implementedAt",
+        updated_at AS "updatedAt"
+      FROM projection_thread_proposed_plans
+      WHERE thread_id = ${threadId}
+      ORDER BY
+        CASE
+          WHEN ${preferredTurnId} IS NOT NULL AND turn_id = ${preferredTurnId} THEN 0
+          ELSE 1
+        END ASC,
+        updated_at DESC,
+        plan_id DESC
+      LIMIT 1
+    `,
+  });
+
   const deleteProjectionThreadProposedPlanRows = SqlSchema.void({
     Request: DeleteProjectionThreadProposedPlansInput,
     execute: ({ threadId }) => sql`
@@ -88,6 +112,16 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
       ),
     );
 
+  const getLatestSummaryByThreadId: ProjectionThreadProposedPlanRepositoryShape["getLatestSummaryByThreadId"] =
+    (input) =>
+      getLatestProjectionThreadProposedPlanSummaryRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "ProjectionThreadProposedPlanRepository.getLatestSummaryByThreadId:query",
+          ),
+        ),
+      );
+
   const deleteByThreadId: ProjectionThreadProposedPlanRepositoryShape["deleteByThreadId"] = (
     input,
   ) =>
@@ -100,6 +134,7 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
   return {
     upsert,
     listByThreadId,
+    getLatestSummaryByThreadId,
     deleteByThreadId,
   } satisfies ProjectionThreadProposedPlanRepositoryShape;
 });

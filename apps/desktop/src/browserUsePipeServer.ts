@@ -1,74 +1,76 @@
 // FILE: browserUsePipeServer.ts
-// Purpose: Exposes the in-app browser over a Codex-compatible browser-use native pipe.
+// Purpose: Exposes the canonical high-level browser host over a private local RPC pipe.
 // Layer: Desktop browser automation bridge
-// Depends on: DesktopBrowserManager and Node net server primitives
 
+import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as Net from "node:net";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
-import type { BrowserExecuteCdpInput, ThreadBrowserState, ThreadId } from "@t3tools/contracts";
+import type { BrowserToolName, ThreadId } from "@synara/contracts";
 
+import {
+  DesktopBrowserAutomationHost,
+  type BrowserAutomationToolRequest,
+} from "./browserAutomation/desktopBrowserAutomationHost";
+import { BrowserAutomationHostError } from "./browserAutomation/hostErrors";
 import type { DesktopBrowserManager } from "./browserManager";
 
-const BROWSER_USE_HEADER_BYTES = 4;
-const BROWSER_USE_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
-const BROWSER_USE_INITIAL_URL = "about:blank";
-const BROWSER_USE_PANEL_READY_TIMEOUT_MS = 2_000;
-const BROWSER_USE_PANEL_READY_POLL_MS = 50;
-const BROWSER_USE_PIPE_DIR = "codex-browser-use";
-const BROWSER_USE_PIPE_NAME_PREFIX = "synara-iab";
+const FRAME_HEADER_BYTES = 4;
+// 8 MiB PNG sidecars expand to about 10.7 MiB in base64; 12 MiB keeps the
+// contract maximum plus bounded structured content inside one correlated frame.
+const MAX_MESSAGE_BYTES = 12 * 1024 * 1024;
+// The gateway accepts JSON-RPC batches of up to 50 messages and currently
+// opens one short-lived pipe connection per browser call. Keep enough room for
+// a full batch plus control traffic while retaining a finite local bound.
+const MAX_CLIENTS = 64;
+const MAX_IN_FLIGHT_REQUESTS = 16;
+const MAX_QUEUED_OUTPUT_BYTES = 1024 * 1024;
+const MAX_WORKSPACE_ROOT_BYTES = 4_096;
+const PIPE_DIR = "synara-browser-host";
+const PIPE_NAME_PREFIX = "synara-browser-host";
+
+export const SYNARA_BROWSER_HOST_PIPE_ENV = "SYNARA_BROWSER_HOST_PIPE_PATH";
+export const SYNARA_BROWSER_HOST_CAPABILITY_ENV = "SYNARA_BROWSER_HOST_CAPABILITY";
+export const SYNARA_BROWSER_HOST_CAPABILITY_FD_ENV = "SYNARA_BROWSER_HOST_CAPABILITY_FD";
+/** @deprecated Read/written only while old backend builds are still supported. */
 export const SYNARA_BROWSER_USE_PIPE_ENV = "SYNARA_BROWSER_USE_PIPE_PATH";
-export const DPCODE_BROWSER_USE_PIPE_ENV = "DPCODE_BROWSER_USE_PIPE_PATH";
-export const T3CODE_BROWSER_USE_PIPE_ENV = "T3CODE_BROWSER_USE_PIPE_PATH";
 
-type BrowserUseRpcId = string | number;
+type RpcId = string | number;
+type WriteResult = "written" | "overflow" | "closed";
 
-interface BrowserUseRpcRequest {
-  id?: BrowserUseRpcId;
-  method?: string;
-  params?: unknown;
+interface RpcRequest {
+  readonly id?: RpcId;
+  readonly method?: string;
+  readonly params?: unknown;
 }
 
-interface BrowserUseTrackedTab {
-  id: number;
-  threadId: ThreadId;
-  tabId: string;
+interface PipeClient {
+  readonly socket: Net.Socket;
+  pendingChunks: Buffer[];
+  pendingBytes: number;
+  inFlightRequests: number;
+  sessionId: string | null;
+  threadId: ThreadId | null;
+  outputBackpressured: boolean;
+  readonly abortControllers: Map<RpcId, AbortController>;
 }
 
-interface BrowserUsePipeServerOptions {
-  pipePath?: string;
-  requestOpenPanel?: () => void | Promise<void>;
+export interface BrowserHostPipeServerOptions {
+  readonly vault?: import("./browserAutomation/browserVault").BrowserVault;
+  readonly vaultCapture?: import("./browserAutomation/browserVaultCapture").BrowserVaultCapture;
+  readonly pipePath?: string;
+  readonly capability?: string;
+  readonly platform?: NodeJS.Platform;
+  readonly requestOpenPanel?: (threadId: ThreadId) => void | Promise<void>;
+  readonly automationHost?: Pick<DesktopBrowserAutomationHost, "executeTool">;
+  readonly maxInFlightRequests?: number;
+  readonly maxQueuedOutputBytes?: number;
 }
-
-export function resolveDefaultBrowserUsePipePath(platform = process.platform): string {
-  if (platform === "win32") {
-    return String.raw`\\.\pipe\codex-browser-use-${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}`;
-  }
-  return Path.join(
-    OS.tmpdir(),
-    BROWSER_USE_PIPE_DIR,
-    `${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}.sock`,
-  );
-}
-
-export function resolveConfiguredBrowserUsePipePath(
-  env: NodeJS.ProcessEnv = process.env,
-  platform = process.platform,
-): string {
-  const configured =
-    env[SYNARA_BROWSER_USE_PIPE_ENV]?.trim() ||
-    env[DPCODE_BROWSER_USE_PIPE_ENV]?.trim() ||
-    env[T3CODE_BROWSER_USE_PIPE_ENV]?.trim();
-  return configured || resolveDefaultBrowserUsePipePath(platform);
-}
-
-export const SYNARA_BROWSER_USE_PIPE_PATH = resolveConfiguredBrowserUsePipePath();
-export const DPCODE_BROWSER_USE_PIPE_PATH = SYNARA_BROWSER_USE_PIPE_PATH;
 
 function asObject(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   return value as Record<string, unknown>;
@@ -78,21 +80,77 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function requireSessionId(params: unknown): string {
-  const sessionId = asString(asObject(params)?.session_id);
-  if (!sessionId) {
-    throw new Error("Missing required browser session_id");
+function asWorkspaceRoot(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > MAX_WORKSPACE_ROOT_BYTES ||
+    value.includes("\u0000") ||
+    !Path.isAbsolute(value)
+  ) {
+    throw new BrowserAutomationHostError({ code: "BrowserInputUnsupported" });
   }
-  return sessionId;
+  return value;
 }
 
-function encodeBrowserUseFrame(message: unknown): Buffer {
+function parseRpcRequest(raw: string): RpcRequest | null {
+  try {
+    return asObject(JSON.parse(raw)) as RpcRequest | null;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveDefaultBrowserHostPipePath(
+  platform = process.platform,
+  pid = process.pid,
+): string {
+  const suffix = `${pid}-${Crypto.randomUUID()}`;
+  if (platform === "win32") {
+    return `\\\\.\\pipe\\${PIPE_NAME_PREFIX}-${suffix}`;
+  }
+  // Darwin limits sockaddr_un paths to roughly 104 bytes, while OS.tmpdir()
+  // normally expands to a long /var/folders/... path. /tmp keeps the address
+  // bounded; the per-user directory is still created and verified as 0700.
+  const uid = process.getuid?.();
+  const privateDirectory = uid === undefined ? PIPE_DIR : `${PIPE_DIR}-${uid}`;
+  return Path.join("/tmp", privateDirectory, `${suffix}.sock`);
+}
+
+export function resolveConfiguredBrowserHostPipePath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform = process.platform,
+): string {
+  const configured =
+    env[SYNARA_BROWSER_HOST_PIPE_ENV]?.trim() || env[SYNARA_BROWSER_USE_PIPE_ENV]?.trim();
+  return configured || resolveDefaultBrowserHostPipePath(platform);
+}
+
+export const SYNARA_BROWSER_HOST_PIPE_PATH = resolveConfiguredBrowserHostPipePath();
+
+export function resolveBrowserHostPipeBackendEnv(
+  inheritedEnv: NodeJS.ProcessEnv,
+  activePipePath: string | null | undefined,
+  capabilityFd?: number | null,
+): NodeJS.ProcessEnv {
+  const backendEnv = { ...inheritedEnv };
+  delete backendEnv[SYNARA_BROWSER_HOST_PIPE_ENV];
+  delete backendEnv[SYNARA_BROWSER_USE_PIPE_ENV];
+  delete backendEnv[SYNARA_BROWSER_HOST_CAPABILITY_ENV];
+  delete backendEnv[SYNARA_BROWSER_HOST_CAPABILITY_FD_ENV];
+  const pipePath = activePipePath?.trim();
+  if (pipePath && Number.isInteger(capabilityFd) && (capabilityFd ?? 0) >= 3) {
+    backendEnv[SYNARA_BROWSER_HOST_PIPE_ENV] = pipePath;
+    backendEnv[SYNARA_BROWSER_USE_PIPE_ENV] = pipePath;
+    backendEnv[SYNARA_BROWSER_HOST_CAPABILITY_FD_ENV] = String(capabilityFd);
+  }
+  return backendEnv;
+}
+
+function encodeFrame(message: unknown): Buffer {
   const payload = Buffer.from(JSON.stringify(message), "utf8");
-  const header = Buffer.alloc(BROWSER_USE_HEADER_BYTES);
+  const header = Buffer.alloc(FRAME_HEADER_BYTES);
   if (OS.endianness() === "LE") {
     header.writeUInt32LE(payload.length, 0);
   } else {
@@ -101,382 +159,387 @@ function encodeBrowserUseFrame(message: unknown): Buffer {
   return Buffer.concat([header, payload]);
 }
 
-function decodeBrowserUseFrames(buffer: Buffer): { messages: string[]; remaining: Buffer } | null {
+/**
+ * Bytes needed before the first pending frame can be decoded: the header
+ * alone while it is still incomplete, then header + payload. `null` when the
+ * header already announces an oversized frame, mirroring `decodeFrames`.
+ */
+function expectedFrameLength(chunks: ReadonlyArray<Buffer>): number | null {
+  const header = Buffer.alloc(FRAME_HEADER_BYTES);
+  let copied = 0;
+  for (const chunk of chunks) {
+    if (copied >= FRAME_HEADER_BYTES) break;
+    copied += chunk.copy(header, copied, 0, Math.min(chunk.length, FRAME_HEADER_BYTES - copied));
+  }
+  if (copied < FRAME_HEADER_BYTES) return FRAME_HEADER_BYTES;
+  const length = OS.endianness() === "LE" ? header.readUInt32LE(0) : header.readUInt32BE(0);
+  if (length > MAX_MESSAGE_BYTES) return null;
+  return FRAME_HEADER_BYTES + length;
+}
+
+function decodeFrames(
+  buffer: Buffer,
+): { readonly messages: string[]; readonly remaining: Buffer } | null {
   let offset = 0;
   const messages: string[] = [];
-  while (buffer.length - offset >= BROWSER_USE_HEADER_BYTES) {
-    const messageLength =
+  while (buffer.length - offset >= FRAME_HEADER_BYTES) {
+    const length =
       OS.endianness() === "LE" ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
-    if (messageLength > BROWSER_USE_MAX_MESSAGE_BYTES) {
-      return null;
-    }
-    const frameLength = BROWSER_USE_HEADER_BYTES + messageLength;
-    if (buffer.length - offset < frameLength) {
-      break;
-    }
+    if (length > MAX_MESSAGE_BYTES) return null;
+    const frameLength = FRAME_HEADER_BYTES + length;
+    if (buffer.length - offset < frameLength) break;
     messages.push(
-      buffer.subarray(offset + BROWSER_USE_HEADER_BYTES, offset + frameLength).toString("utf8"),
+      buffer.subarray(offset + FRAME_HEADER_BYTES, offset + frameLength).toString("utf8"),
     );
     offset += frameLength;
   }
-  return {
-    messages,
-    remaining: buffer.subarray(offset),
-  };
+  return { messages, remaining: buffer.subarray(offset) };
 }
 
-function ensurePipeParentDirectory(pipePath: string): void {
-  if (process.platform === "win32") {
-    return;
+function ensureUnixPipeParent(pipePath: string): void {
+  const parent = Path.dirname(pipePath);
+  try {
+    FS.mkdirSync(parent, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
-  FS.mkdirSync(Path.dirname(pipePath), { recursive: true });
+  const stat = FS.lstatSync(parent);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`Browser host pipe parent is not a private directory: ${parent}`);
+  }
+  if (process.getuid && stat.uid !== process.getuid()) {
+    throw new Error(`Browser host pipe parent is not owned by this user: ${parent}`);
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    throw new Error(`Browser host pipe parent permissions are not private: ${parent}`);
+  }
 }
 
-function cleanupPipePath(pipePath: string): void {
-  if (process.platform === "win32") {
-    return;
-  }
+function cleanupUnixPipe(pipePath: string): void {
   try {
     const stat = FS.lstatSync(pipePath);
-    if (!stat.isSocket() && !stat.isFile()) {
-      return;
+    if (stat.isSymbolicLink() || (!stat.isSocket() && !stat.isFile())) {
+      throw new Error(`Refusing to replace unsafe browser host pipe path: ${pipePath}`);
+    }
+    if (process.getuid && stat.uid !== process.getuid()) {
+      throw new Error(`Refusing to replace browser host pipe not owned by this user: ${pipePath}`);
     }
     FS.unlinkSync(pipePath);
-  } catch {
-    // Ignore stale socket cleanup failures.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 
-export class BrowserUsePipeServer {
+export class BrowserHostPipeServer {
   private readonly sockets = new Set<Net.Socket>();
-  private readonly pendingBySocket = new Map<Net.Socket, Buffer>();
-  private readonly trackedTabByKey = new Map<string, BrowserUseTrackedTab>();
-  private readonly trackedTabById = new Map<number, BrowserUseTrackedTab>();
-  private readonly selectedTrackedTabIdBySessionId = new Map<string, number>();
-  private readonly cdpListenerDisposeBySessionId = new Map<string, () => void>();
+  private readonly clients = new Map<Net.Socket, PipeClient>();
   private readonly server: Net.Server;
   private readonly pipePath: string;
-  private readonly requestOpenPanel: (() => void | Promise<void>) | undefined;
-  private nextTrackedTabId = 1;
+  private readonly platform: NodeJS.Platform;
+  private readonly automationHost: Pick<DesktopBrowserAutomationHost, "executeTool">;
+  private readonly disposeAutomationHost: (() => Promise<void>) | undefined;
+  private readonly drainAutomationHost: (() => Promise<void>) | undefined;
+  private readonly maxInFlightRequests: number;
+  private readonly maxQueuedOutputBytes: number;
+  private readonly capability: string;
   private started = false;
 
   constructor(
-    private readonly browserManager: DesktopBrowserManager,
-    options: BrowserUsePipeServerOptions | string = SYNARA_BROWSER_USE_PIPE_PATH,
+    browserManager: DesktopBrowserManager,
+    options: BrowserHostPipeServerOptions | string = SYNARA_BROWSER_HOST_PIPE_PATH,
   ) {
-    this.pipePath =
-      typeof options === "string" ? options : (options.pipePath ?? SYNARA_BROWSER_USE_PIPE_PATH);
-    this.requestOpenPanel = typeof options === "string" ? undefined : options.requestOpenPanel;
-    this.server = Net.createServer((socket) => this.handleSocketConnection(socket));
+    const normalized = typeof options === "string" ? { pipePath: options } : options;
+    this.platform = normalized.platform ?? process.platform;
+    this.pipePath = normalized.pipePath ?? SYNARA_BROWSER_HOST_PIPE_PATH;
+    const capability = normalized.capability?.trim();
+    if (!capability || Buffer.byteLength(capability, "utf8") < 32) {
+      throw new Error("Browser host requires a private backend capability.");
+    }
+    this.capability = capability;
+    this.maxInFlightRequests = normalized.maxInFlightRequests ?? MAX_IN_FLIGHT_REQUESTS;
+    this.maxQueuedOutputBytes = normalized.maxQueuedOutputBytes ?? MAX_QUEUED_OUTPUT_BYTES;
+    const hostOptions = {
+      ...(normalized.requestOpenPanel ? { requestOpenPanel: normalized.requestOpenPanel } : {}),
+      ...(normalized.vault ? { vault: normalized.vault } : {}),
+      ...(normalized.vaultCapture ? { vaultCapture: normalized.vaultCapture } : {}),
+    };
+    if (normalized.automationHost) {
+      this.automationHost = normalized.automationHost;
+      this.disposeAutomationHost = undefined;
+      this.drainAutomationHost = undefined;
+    } else {
+      const automationHost = new DesktopBrowserAutomationHost(browserManager, hostOptions);
+      this.automationHost = automationHost;
+      this.disposeAutomationHost = () => automationHost.dispose();
+      this.drainAutomationHost = () => automationHost.waitForIdle();
+    }
+    this.server = Net.createServer((socket) => this.handleConnection(socket));
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.drainAutomationHost?.();
   }
 
   async start(): Promise<void> {
-    if (this.started) {
-      return;
+    if (this.started) return;
+    if (this.platform !== "win32") {
+      ensureUnixPipeParent(this.pipePath);
+      cleanupUnixPipe(this.pipePath);
     }
-    ensurePipeParentDirectory(this.pipePath);
-    cleanupPipePath(this.pipePath);
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
-      this.server.listen(this.pipePath, () => {
+      this.server.listen({ path: this.pipePath, readableAll: false, writableAll: false }, () => {
         this.server.off("error", reject);
         resolve();
       });
     });
+    if (this.platform !== "win32") FS.chmodSync(this.pipePath, 0o600);
     this.started = true;
   }
 
   async dispose(): Promise<void> {
-    for (const dispose of this.cdpListenerDisposeBySessionId.values()) {
-      dispose();
-    }
-    this.cdpListenerDisposeBySessionId.clear();
+    const wasStarted = this.started;
     for (const socket of this.sockets) {
       socket.destroy();
     }
+    for (const client of this.clients.values()) {
+      for (const controller of client.abortControllers.values()) {
+        controller.abort();
+      }
+      client.abortControllers.clear();
+    }
     this.sockets.clear();
-    this.pendingBySocket.clear();
+    this.clients.clear();
+    await this.disposeAutomationHost?.();
     if (this.started) {
-      await new Promise<void>((resolve) => {
-        this.server.close(() => resolve());
-      });
+      await new Promise<void>((resolve) => this.server.close(() => resolve()));
       this.started = false;
     }
-    cleanupPipePath(this.pipePath);
+    if (wasStarted && this.platform !== "win32") cleanupUnixPipe(this.pipePath);
   }
 
-  private handleSocketConnection(socket: Net.Socket): void {
-    this.sockets.add(socket);
-    this.pendingBySocket.set(socket, Buffer.alloc(0));
-    socket.on("data", (chunk) => this.handleSocketData(socket, chunk));
-    socket.on("close", () => {
-      this.sockets.delete(socket);
-      this.pendingBySocket.delete(socket);
-    });
-    socket.on("error", () => {
-      this.sockets.delete(socket);
-      this.pendingBySocket.delete(socket);
+  private handleConnection(socket: Net.Socket): void {
+    if (this.sockets.size >= MAX_CLIENTS) {
       socket.destroy();
-    });
+      return;
+    }
+    const client: PipeClient = {
+      socket,
+      pendingChunks: [],
+      pendingBytes: 0,
+      inFlightRequests: 0,
+      sessionId: null,
+      threadId: null,
+      outputBackpressured: false,
+      abortControllers: new Map(),
+    };
+    this.sockets.add(socket);
+    this.clients.set(socket, client);
+    socket.on("data", (chunk) => this.handleData(client, chunk));
+    const release = () => {
+      for (const controller of client.abortControllers.values()) controller.abort();
+      client.abortControllers.clear();
+      this.sockets.delete(socket);
+      this.clients.delete(socket);
+    };
+    socket.on("close", release);
+    socket.on("error", release);
   }
 
-  private handleSocketData(socket: Net.Socket, chunk: Buffer): void {
-    const decoded = decodeBrowserUseFrames(
-      Buffer.concat([this.pendingBySocket.get(socket) ?? Buffer.alloc(0), chunk]),
+  private handleData(client: PipeClient, chunk: Buffer): void {
+    // Accumulate chunks and only concatenate once the pending bytes can hold a
+    // complete frame. Re-concatenating the whole pending buffer on every socket
+    // chunk made reassembling a multi-megabyte screenshot frame quadratic
+    // (~1 GiB of memmove for one 10 MiB frame) on the main-process event loop.
+    client.pendingChunks.push(chunk);
+    client.pendingBytes += chunk.length;
+    const expectedFrameBytes = expectedFrameLength(client.pendingChunks);
+    if (expectedFrameBytes === null) {
+      client.socket.destroy();
+      return;
+    }
+    if (client.pendingBytes < expectedFrameBytes) {
+      return;
+    }
+    const decoded = decodeFrames(
+      client.pendingChunks.length === 1
+        ? client.pendingChunks[0]!
+        : Buffer.concat(client.pendingChunks, client.pendingBytes),
     );
     if (!decoded) {
-      this.pendingBySocket.delete(socket);
-      socket.destroy();
+      client.socket.destroy();
       return;
     }
-    this.pendingBySocket.set(socket, decoded.remaining);
-    for (const message of decoded.messages) {
-      void this.handleIncomingMessage(socket, message);
+    client.pendingChunks = decoded.remaining.length > 0 ? [decoded.remaining] : [];
+    client.pendingBytes = decoded.remaining.length;
+    for (const raw of decoded.messages) {
+      if (client.inFlightRequests >= this.maxInFlightRequests) {
+        const id = parseRpcRequest(raw)?.id;
+        if (id !== undefined) {
+          this.write(client, {
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32_001,
+              message: "Too many in-flight browser host requests",
+            },
+          });
+        }
+        continue;
+      }
+      client.inFlightRequests += 1;
+      void this.handleMessage(client, raw).finally(() => {
+        client.inFlightRequests -= 1;
+      });
     }
   }
 
-  private async handleIncomingMessage(socket: Net.Socket, rawMessage: string): Promise<void> {
-    let request: BrowserUseRpcRequest;
-    try {
-      request = JSON.parse(rawMessage) as BrowserUseRpcRequest;
-    } catch {
+  private async handleMessage(client: PipeClient, raw: string): Promise<void> {
+    const request = parseRpcRequest(raw);
+    if (!request || request.id === undefined || typeof request.method !== "string") return;
+    if (client.abortControllers.has(request.id)) {
+      this.write(client, {
+        jsonrpc: "2.0",
+        id: request.id,
+        error: {
+          code: -32_001,
+          message: "Duplicate in-flight browser host request id",
+        },
+      });
       return;
     }
-
-    if (request.id === undefined || typeof request.method !== "string") {
-      return;
-    }
-
+    const controller = new AbortController();
+    client.abortControllers.set(request.id, controller);
     try {
-      const result = await this.handleRequest(request.method, request.params);
-      socket.write(encodeBrowserUseFrame({ jsonrpc: "2.0", id: request.id, result }));
-    } catch (error) {
-      socket.write(
-        encodeBrowserUseFrame({
-          jsonrpc: "2.0",
-          id: request.id,
-          error: {
-            code: 1,
-            message: error instanceof Error ? error.message : String(error),
-          },
-        }),
+      const result = await this.handleRequest(
+        client,
+        request.method,
+        request.params,
+        controller.signal,
       );
+      this.write(client, { jsonrpc: "2.0", id: request.id, result });
+    } catch (error) {
+      this.write(client, {
+        jsonrpc: "2.0",
+        id: request.id,
+        error: {
+          code: error instanceof BrowserAutomationHostError ? -32_010 : -32_000,
+          message: error instanceof Error ? error.message : String(error),
+          ...(error instanceof BrowserAutomationHostError ? { data: error.envelope } : {}),
+        },
+      });
+    } finally {
+      client.abortControllers.delete(request.id);
     }
   }
 
-  private async handleRequest(method: string, params: unknown): Promise<unknown> {
+  private handleRequest(
+    client: PipeClient,
+    method: string,
+    params: unknown,
+    signal: AbortSignal,
+  ): Promise<unknown> | unknown {
     switch (method) {
       case "ping":
         return "pong";
       case "getInfo":
-        const sessionId = asString(asObject(params)?.session_id);
-        return {
-          name: "Synara In-app Browser",
-          version: "0.1.0",
-          type: "iab",
-          ...(sessionId ? { metadata: { codexSessionId: sessionId } } : {}),
-        };
-      case "getTabs":
-        return this.getTabsForSession(requireSessionId(params));
-      case "createTab":
-        return this.createTabForSession(requireSessionId(params));
-      case "nameSession":
-        requireSessionId(params);
-        if (!asString(asObject(params)?.name)) {
-          throw new Error("nameSession requires a name");
-        }
-        return {};
-      case "attach":
-        return this.attachForSession(requireSessionId(params), params);
-      case "detach":
-        return this.detachForSession(requireSessionId(params));
-      case "executeCdp":
-        return this.executeCdpForSession(requireSessionId(params), params);
+        return this.getInfo(client, params);
+      case "executeTool":
+        return this.executeTool(client, params, signal);
       default:
         throw new Error(`No handler registered for method: ${method}`);
     }
   }
 
-  private getActiveBrowserHostState(): {
-    threadId: ThreadId;
-    state: ThreadBrowserState;
-  } | null {
-    const snapshot = this.browserManager.getBrowserUseSnapshot();
-    if (!snapshot || !snapshot.state.open) {
-      return null;
+  private getInfo(client: PipeClient, params: unknown): unknown {
+    const request = asObject(params);
+    const sessionId = asString(request?.session_id);
+    if (!sessionId) throw new Error("getInfo requires session_id");
+    const suppliedCapability = asString(request?.capability);
+    const expectedBytes = Buffer.from(this.capability, "utf8");
+    const suppliedBytes = Buffer.from(suppliedCapability ?? "", "utf8");
+    if (
+      suppliedBytes.byteLength !== expectedBytes.byteLength ||
+      !Crypto.timingSafeEqual(suppliedBytes, expectedBytes)
+    ) {
+      throw new BrowserAutomationHostError({
+        code: "BrowserAuthorizationDenied",
+        retryable: false,
+        phase: "auth",
+        effectMayHaveCommitted: false,
+      });
     }
-    return snapshot;
-  }
-
-  private async waitForActiveBrowserHostState(): Promise<{
-    threadId: ThreadId;
-    state: ThreadBrowserState;
-  } | null> {
-    const existing = this.getActiveBrowserHostState();
-    if (existing) {
-      return existing;
+    if (client.sessionId && client.sessionId !== sessionId) {
+      throw new Error("Browser session does not belong to this pipe connection");
     }
-
-    await this.requestOpenPanel?.();
-    const deadline = Date.now() + BROWSER_USE_PANEL_READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      const snapshot = this.getActiveBrowserHostState();
-      if (snapshot) {
-        return snapshot;
-      }
-      await new Promise((resolve) => setTimeout(resolve, BROWSER_USE_PANEL_READY_POLL_MS));
-    }
-    return null;
-  }
-
-  private trackTab(threadId: ThreadId, tabId: string): BrowserUseTrackedTab {
-    const key = `${threadId}:${tabId}`;
-    const existing = this.trackedTabByKey.get(key);
-    if (existing) {
-      return existing;
-    }
-    const tracked = {
-      id: this.nextTrackedTabId,
-      threadId,
-      tabId,
-    } satisfies BrowserUseTrackedTab;
-    this.nextTrackedTabId += 1;
-    this.trackedTabByKey.set(key, tracked);
-    this.trackedTabById.set(tracked.id, tracked);
-    return tracked;
-  }
-
-  private getTabsForSession(sessionId: string): Array<{
-    id: number;
-    title: string;
-    active: boolean;
-    url: string;
-  }> {
-    const snapshot = this.getActiveBrowserHostState();
-    if (!snapshot) {
-      return [];
-    }
-    const selectedTrackedTabId = this.selectedTrackedTabIdBySessionId.get(sessionId) ?? null;
-    return snapshot.state.tabs.map((tab) => {
-      const tracked = this.trackTab(snapshot.threadId, tab.id);
-      return {
-        id: tracked.id,
-        title: tab.title,
-        active:
-          selectedTrackedTabId === tracked.id ||
-          (selectedTrackedTabId === null && snapshot.state.activeTabId === tab.id),
-        url: tab.lastCommittedUrl ?? tab.url,
-      };
-    });
-  }
-
-  private async createTabForSession(sessionId: string): Promise<{
-    id: number;
-    title: string;
-    active: boolean;
-    url: string;
-  }> {
-    const snapshot = await this.waitForActiveBrowserHostState();
-    if (!snapshot) {
-      throw new Error("No active Synara browser pane available");
-    }
-    const nextState = this.browserManager.newTab({
-      threadId: snapshot.threadId,
-      url: BROWSER_USE_INITIAL_URL,
-      activate: true,
-    });
-    const activeTab =
-      nextState.tabs.find((tab) => tab.id === nextState.activeTabId) ?? nextState.tabs[0] ?? null;
-    if (!activeTab) {
-      throw new Error("Could not create a browser tab.");
-    }
-    const tracked = this.trackTab(snapshot.threadId, activeTab.id);
-    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
+    client.sessionId = sessionId;
     return {
-      id: tracked.id,
-      title: activeTab.title,
-      active: true,
-      url: activeTab.lastCommittedUrl ?? activeTab.url,
+      name: "Synara Browser Host",
+      version: "1.0.0",
+      type: "synara-browser-host",
+      metadata: {
+        sessionId,
+        protocolVersion: 1,
+        physicalScope: "visible-shared-electron-webview",
+        methods: ["executeTool"],
+      },
     };
   }
 
-  private resolveTrackedTabForSession(sessionId: string, params: unknown): BrowserUseTrackedTab {
-    const requestedTrackedTabId = asNumber(asObject(params)?.tabId);
-    const trackedTabId =
-      requestedTrackedTabId ?? this.selectedTrackedTabIdBySessionId.get(sessionId) ?? null;
-    if (trackedTabId === null) {
-      throw new Error("No browser tab selected for this session.");
-    }
-    const tracked = this.trackedTabById.get(trackedTabId);
-    if (!tracked) {
-      throw new Error(`Unknown tab: ${trackedTabId}`);
-    }
-    return tracked;
-  }
-
-  private async attachForSession(
-    sessionId: string,
-    params: unknown,
-  ): Promise<Record<string, never>> {
-    const tracked = this.resolveTrackedTabForSession(sessionId, params);
-    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
-    this.cdpListenerDisposeBySessionId.get(sessionId)?.();
-    await this.browserManager.attachBrowserUseTab({
-      threadId: tracked.threadId,
-      tabId: tracked.tabId,
-    });
-    const dispose = this.browserManager.subscribeToCdpEvents(
-      {
-        threadId: tracked.threadId,
-        tabId: tracked.tabId,
-      },
-      (event) => {
-        this.broadcastNotification("onCDPEvent", {
-          source: {
-            tabId: tracked.id,
-          },
-          method: event.method,
-          ...(event.params !== undefined ? { params: event.params } : {}),
-        });
-      },
-    );
-    this.cdpListenerDisposeBySessionId.set(sessionId, dispose);
-    return {};
-  }
-
-  private async detachForSession(sessionId: string): Promise<Record<string, never>> {
-    this.cdpListenerDisposeBySessionId.get(sessionId)?.();
-    this.cdpListenerDisposeBySessionId.delete(sessionId);
-    return {};
-  }
-
-  private async executeCdpForSession(sessionId: string, params: unknown): Promise<unknown> {
+  private executeTool(client: PipeClient, params: unknown, signal: AbortSignal): Promise<unknown> {
     const request = asObject(params);
-    const method = asString(request?.method);
-    if (!method) {
-      throw new Error("executeCdp requires a method");
+    const sessionId = asString(request?.session_id);
+    const provider = asString(request?.provider);
+    const threadId = asString(request?.thread_id);
+    const name = asString(request?.name);
+    const workspaceRoot = asWorkspaceRoot(request?.workspace_root);
+    if (!sessionId || sessionId !== client.sessionId || !provider || !threadId || !name) {
+      throw new BrowserAutomationHostError({ code: "BrowserInputUnsupported" });
     }
-    const tracked = this.resolveTrackedTabForSession(sessionId, asObject(request?.target) ?? null);
-    this.selectedTrackedTabIdBySessionId.set(sessionId, tracked.id);
-    const commandParams = asObject(request?.commandParams);
-    return this.browserManager.executeCdp({
-      threadId: tracked.threadId,
-      tabId: tracked.tabId,
-      method,
-      ...(commandParams ? { params: commandParams } : {}),
-    } satisfies BrowserExecuteCdpInput);
+    if (client.threadId && client.threadId !== threadId) {
+      throw new BrowserAutomationHostError({
+        code: "BrowserTabScopeViolation",
+        retryable: false,
+        phase: "routing",
+        effectMayHaveCommitted: false,
+      });
+    }
+    client.threadId = threadId as ThreadId;
+    return this.automationHost.executeTool({
+      sessionId,
+      provider,
+      threadId: threadId as ThreadId,
+      name: name as BrowserToolName,
+      arguments: request?.arguments ?? {},
+      ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+      signal,
+    } satisfies BrowserAutomationToolRequest);
   }
 
-  private broadcastNotification(method: string, params: unknown): void {
-    const payload = encodeBrowserUseFrame({
-      jsonrpc: "2.0",
-      method,
-      params,
-    });
-    for (const socket of this.sockets) {
-      if (!socket.destroyed) {
-        socket.write(payload);
-      }
+  private write(client: PipeClient, message: unknown): WriteResult {
+    const { socket } = client;
+    if (socket.destroyed || socket.writableEnded) return "closed";
+    const frame = encodeFrame(message);
+    if (frame.byteLength > MAX_MESSAGE_BYTES) {
+      socket.destroy();
+      return "overflow";
     }
+    const isResponse = asObject(message)?.id !== undefined;
+    if (!isResponse && socket.writableLength + frame.length > this.maxQueuedOutputBytes) {
+      return "overflow";
+    }
+    const accepted = socket.write(frame);
+    if (!accepted && !client.outputBackpressured) {
+      client.outputBackpressured = true;
+      socket.pause();
+      socket.once("drain", () => {
+        client.outputBackpressured = false;
+        if (!socket.destroyed) socket.resume();
+      });
+    }
+    return "written";
   }
 }
+
+/** @deprecated Compatibility alias for callers using the former browser-use name. */
+export { BrowserHostPipeServer as BrowserUsePipeServer };

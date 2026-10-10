@@ -3,7 +3,7 @@
 // Layer: UI state store
 // Exports: useRecentViewsStore
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import {
@@ -41,11 +41,6 @@ function normalizeRecentView(input: unknown): RecentView | null {
       threadId: threadId as ThreadId,
       ...(splitViewId ? { splitViewId } : {}),
     };
-  }
-
-  if (record.kind === "workspace") {
-    const workspaceId = normalizeOptionalId(record.workspaceId);
-    return workspaceId ? { kind: "workspace", workspaceId } : null;
   }
 
   if (record.kind === "settings") {

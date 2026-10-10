@@ -1,4 +1,5 @@
-import type { ProviderModelDescriptor } from "@t3tools/contracts";
+import type { ProviderModelDescriptor } from "@synara/contracts";
+import { parseCursorCliReasoningEffort } from "@synara/shared/model";
 
 function uniqueByValue<T extends { readonly value: string }>(values: ReadonlyArray<T>): T[] {
   const seen = new Set<string>();
@@ -22,32 +23,6 @@ function cursorReasoningLabel(value: string): string {
     default:
       return value.charAt(0).toUpperCase() + value.slice(1);
   }
-}
-
-function parseCursorCliReasoningEffort(model: string): string | undefined {
-  const tokens = model.trim().toLowerCase().split("-");
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    const token = tokens[index];
-    if (!token) {
-      continue;
-    }
-    if (token === "xhigh") {
-      return "xhigh";
-    }
-    if (token === "high" && tokens[index - 1] === "extra") {
-      return "xhigh";
-    }
-    if (
-      token === "max" ||
-      token === "none" ||
-      token === "low" ||
-      token === "medium" ||
-      token === "high"
-    ) {
-      return token;
-    }
-  }
-  return undefined;
 }
 
 function stripCursorParameterizedSuffix(value: string): string {
@@ -104,8 +79,11 @@ function defaultEffortForGroup(
   if (baseSlug.includes("gpt") || baseSlug.includes("codex")) {
     return efforts.includes("medium") ? "medium" : efforts[0];
   }
-  if (baseSlug.includes("claude")) {
-    return efforts.includes("high") ? "high" : efforts[0];
+  // Claude and Grok (and most other Cursor chat models) default to high.
+  // Collapsed CLI lists are ordered low → high, so taking efforts[0] would
+  // make Grok look like a low-default model in the picker.
+  if (efforts.includes("high")) {
+    return "high";
   }
   return efforts[0];
 }
@@ -136,7 +114,9 @@ function fallbackContextWindowOptionsForCursorBase(
     ];
   }
   if (
+    baseSlug === "claude-fable-5-1" ||
     baseSlug === "claude-fable-5" ||
+    baseSlug === "claude-sonnet-5" ||
     baseSlug === "claude-opus-4-8" ||
     baseSlug === "claude-opus-4-7"
   ) {
@@ -240,22 +220,4 @@ export function collapseCursorModelVariants(
         : {}),
     };
   });
-}
-
-export function mergeCursorModelVariantsWithBaseControls(
-  models: ReadonlyArray<ProviderModelDescriptor>,
-): ProviderModelDescriptor[] {
-  const seen = new Set<string>();
-  const merged: ProviderModelDescriptor[] = [];
-
-  for (const model of [...collapseCursorModelVariants(models), ...models]) {
-    const key = model.slug.trim().toLowerCase();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    merged.push(model);
-  }
-
-  return merged;
 }

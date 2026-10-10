@@ -2,7 +2,7 @@
 // Purpose: Normalizes OpenUsage local HTTP snapshots into the shared rate-limit
 // model consumed by the local toolbar popover.
 
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderKind } from "@synara/contracts";
 
 import type { ProviderRateLimit, RateLimitWindow } from "~/lib/rateLimits";
 import { normalizeRateLimitLabel } from "~/lib/rateLimits";
@@ -62,7 +62,6 @@ function toUsedPercent(line: OpenUsageProgressLine): number | undefined {
 function toProviderKind(providerId: string | undefined): ProviderKind | null {
   if (providerId === "codex") return "codex";
   if (providerId === "claude") return "claudeAgent";
-  if (providerId === "gemini") return "gemini";
   return null;
 }
 
@@ -71,7 +70,6 @@ export function openUsageProviderIdForProvider(
 ): string | null {
   if (provider === "codex") return "codex";
   if (provider === "claudeAgent") return "claude";
-  if (provider === "gemini") return "gemini";
   return null;
 }
 

@@ -7,50 +7,119 @@
  * @module CliConfig
  */
 import OS from "node:os";
-import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceMap } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  ServiceMap,
+  Stream,
+} from "effect";
 import { Command, Flag } from "effect/unstable/cli";
-import { NetService } from "@t3tools/shared/Net";
+import type { ServerSettings } from "@synara/contracts";
+import { NetService } from "@synara/shared/Net";
+import {
+  MIGRATION_DIVERGENCE_CONSENT_ENV,
+  MIGRATION_RUNTIME_SOURCE_DIGEST_ENV,
+} from "@synara/shared/migrationRecovery";
+import {
+  optionalBooleanEnvironmentConfig,
+  optionalBooleanFlag,
+  resolveBooleanConfig,
+  type BooleanFlagInput,
+} from "@synara/shared/cli";
 import {
   DEFAULT_PORT,
   deriveServerPaths,
+  normalizeHttpsPublicOrigin,
+  preparePrivateServerPaths,
+  remoteAccessPolicyError,
+  resolveCanonicalWorkspaceRoots,
   resolveStaticDir,
   ServerConfig,
   type RuntimeMode,
   type ServerConfigShape,
 } from "./config";
-import { migrateLegacyHomeIfNeeded } from "./homeMigration";
+import {
+  SYNARA_BETA_BUNDLE_ID,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
+} from "@synara/shared/desktopIdentity";
+import { runBetaImportIfRequested } from "./betaImport";
+import { startBetaUsageSnapshotJob } from "./betaUsageSnapshot";
+import { LATEST_MIGRATION_ID } from "./persistence/Migrations";
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
+import { ServerAuth } from "./auth/Services/ServerAuth";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
-import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
+import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
+import {
+  claudeCredentialKeepaliveTargets,
+  createClaudeCredentialKeepaliveController,
+} from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
-import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
+import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntimeReconciler";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
-import { formatHostForUrl, isWildcardHost } from "./startupAccess";
-import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
-import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { ServerSettingsService } from "./serverSettings";
+import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
+import {
+  discoverServerRuntime,
+  pairExternalMcpClient,
+  resolveExternalMcpBaseDir,
+  serveExternalMcpStdio,
+  verifyServerRuntime,
+} from "./externalMcp/bridge";
+import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
+import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
+import {
+  embeddedMigrationRuntimeSourceDigest,
+  verifyMigrationRuntimeIdentity,
+} from "./migrationBundleIdentity";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
+const DESKTOP_SHUTDOWN_TOKEN_ENV_KEY = "SYNARA_DESKTOP_SHUTDOWN_TOKEN";
+
+function consumeProcessEnvironmentValue(environmentKey: string): string | undefined {
+  const matchingKeys =
+    process.platform === "win32"
+      ? Object.keys(process.env).filter((key) => key.toUpperCase() === environmentKey)
+      : [environmentKey];
+  let value: string | undefined;
+
+  for (const key of matchingKeys) {
+    value ??= process.env[key];
+    delete process.env[key];
+  }
+
+  return value;
+}
+
 interface CliInput {
   readonly mode: Option.Option<RuntimeMode>;
   readonly port: Option.Option<number>;
   readonly host: Option.Option<string>;
-  readonly t3Home: Option.Option<string>;
+  readonly synaraHome: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
-  readonly noBrowser: Option.Option<boolean>;
+  readonly publicUrl: Option.Option<URL>;
+  readonly allowInsecureRemote: BooleanFlagInput;
+  readonly noBrowser: BooleanFlagInput;
   readonly authToken: Option.Option<string>;
-  readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
-  readonly logProviderEvents: Option.Option<boolean>;
-  readonly logWebSocketEvents: Option.Option<boolean>;
+  readonly autoBootstrapProjectFromCwd: BooleanFlagInput;
+  readonly logProviderEvents: BooleanFlagInput;
+  readonly logWebSocketEvents: BooleanFlagInput;
 }
 
 /**
@@ -77,7 +146,7 @@ export interface CliConfigShape {
  * CliConfig - Service tag for startup CLI/runtime helpers.
  */
 export class CliConfig extends ServiceMap.Service<CliConfig, CliConfigShape>()(
-  "t3/main/CliConfig",
+  "synara/main/CliConfig",
 ) {
   static readonly layer = Layer.effect(
     CliConfig,
@@ -97,7 +166,7 @@ export class CliConfig extends ServiceMap.Service<CliConfig, CliConfigShape>()(
 }
 
 const CliEnvConfig = Config.all({
-  mode: Config.string("T3CODE_MODE").pipe(
+  mode: Config.string("SYNARA_MODE").pipe(
     Config.option,
     Config.map(
       Option.match<RuntimeMode, string>({
@@ -106,36 +175,39 @@ const CliEnvConfig = Config.all({
       }),
     ),
   ),
-  port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  port: Config.port("SYNARA_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  host: Config.string("SYNARA_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   synaraHome: Config.string("SYNARA_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  dpcodeHome: Config.string("DPCODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
+  publicUrl: Config.url("SYNARA_PUBLIC_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  allowInsecureRemote: optionalBooleanEnvironmentConfig("SYNARA_ALLOW_INSECURE_REMOTE"),
+  noBrowser: optionalBooleanEnvironmentConfig("SYNARA_NO_BROWSER"),
+  authToken: Config.string("SYNARA_AUTH_TOKEN").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  authToken: Config.string("T3CODE_AUTH_TOKEN").pipe(
+  desktopShutdownToken: Config.string("SYNARA_DESKTOP_SHUTDOWN_TOKEN").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  autoBootstrapProjectFromCwd: Config.boolean("T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD").pipe(
+  migrationDivergenceConsent: Config.string(MIGRATION_DIVERGENCE_CONSENT_ENV).pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  logProviderEvents: Config.boolean("T3CODE_LOG_PROVIDER_EVENTS").pipe(
+  migrationRuntimeSourceDigest: Config.string(MIGRATION_RUNTIME_SOURCE_DIGEST_ENV).pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  logWebSocketEvents: Config.boolean("T3CODE_LOG_WS_EVENTS").pipe(
+  autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
+    "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
+  ),
+  trashDir: Config.string("SYNARA_TRASH_DIR").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  logProviderEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_PROVIDER_EVENTS"),
+  logWebSocketEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_WS_EVENTS"),
 });
-
-const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
-  Option.getOrElse(Option.filter(flag, Boolean), () => envValue);
 
 const ServerConfigLive = (input: CliInput) =>
   Layer.effect(
@@ -149,6 +221,34 @@ const ServerConfigLive = (input: CliInput) =>
             new StartupError({ message: "Failed to read environment configuration", cause }),
         ),
       );
+      const liveProcessDesktopShutdownToken = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(DESKTOP_SHUTDOWN_TOKEN_ENV_KEY),
+      );
+      const liveProcessMigrationConsent = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(MIGRATION_DIVERGENCE_CONSENT_ENV),
+      );
+      const liveProcessMigrationSourceDigest = yield* Effect.sync(() =>
+        consumeProcessEnvironmentValue(MIGRATION_RUNTIME_SOURCE_DIGEST_ENV),
+      );
+
+      const launcherMigrationSourceDigest =
+        env.migrationRuntimeSourceDigest ?? liveProcessMigrationSourceDigest;
+      yield* Effect.try({
+        try: () =>
+          verifyMigrationRuntimeIdentity({
+            cwd: cliConfig.cwd,
+            embeddedDigest: embeddedMigrationRuntimeSourceDigest(),
+            launcherDigest: launcherMigrationSourceDigest,
+          }),
+        catch: (cause) =>
+          new StartupError({
+            message:
+              cause instanceof Error
+                ? `${cause.name}: ${cause.message}`
+                : "Migration bundle check failed",
+            cause,
+          }),
+      });
 
       const mode = Option.getOrElse(input.mode, () => env.mode);
 
@@ -166,61 +266,118 @@ const ServerConfigLive = (input: CliInput) =>
       });
 
       const devUrl = Option.getOrElse(input.devUrl, () => env.devUrl);
-      const configuredHome =
-        Option.getOrUndefined(input.t3Home) ?? env.synaraHome ?? env.t3Home ?? env.dpcodeHome;
-      const baseDir = yield* resolveBaseDir(configuredHome);
-      // Import legacy state before runtime paths are derived under ~/.synara.
-      yield* migrateLegacyHomeIfNeeded({
-        baseDir,
-        homeDir: OS.homedir(),
-        devUrl,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new StartupError({
-              message: "Failed to migrate legacy Synara home directory",
-              cause,
-            }),
-        ),
+      const configuredPublicUrl = Option.getOrUndefined(input.publicUrl) ?? env.publicUrl;
+      const publicUrl = configuredPublicUrl
+        ? (normalizeHttpsPublicOrigin(configuredPublicUrl) ?? undefined)
+        : undefined;
+      if (configuredPublicUrl && publicUrl === undefined) {
+        return yield* new StartupError({
+          message:
+            "SYNARA_PUBLIC_URL/--public-url must be an HTTPS root origin without credentials, path, query, or fragment (for example https://synara.example.com).",
+        });
+      }
+      const allowInsecureRemote = resolveBooleanConfig(
+        input.allowInsecureRemote,
+        env.allowInsecureRemote,
+        false,
       );
+      const configuredHome = Option.getOrUndefined(input.synaraHome) ?? env.synaraHome;
+      const baseDir = yield* resolveBaseDir(configuredHome);
+      const userHomeDir = OS.homedir();
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
-      const noBrowser = resolveBooleanFlag(input.noBrowser, env.noBrowser ?? mode === "desktop");
+      // A "Copy my data to Beta" request from a stable install lands as a
+      // marker in this home; it must be consumed before the private state
+      // directory (and its database) is created or repaired.
+      // Only Synara Beta consumes the marker, so a stray file in any other
+      // home can never replace that install's database.
+      if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+        const importResult = yield* Effect.tryPromise({
+          try: () =>
+            runBetaImportIfRequested({
+              betaHomeDir: baseDir,
+              stateDir: derivedPaths.stateDir,
+              latestMigrationId: LATEST_MIGRATION_ID,
+            }),
+          catch: (cause) =>
+            new StartupError({ message: "Failed to complete the stable→beta data import", cause }),
+        });
+        if (importResult.consumed) {
+          yield* Effect.logInfo("stable→beta data import finished").pipe(
+            Effect.annotateLogs({ ok: importResult.ok, error: importResult.error ?? null }),
+          );
+        }
+      }
+      yield* Effect.try({
+        try: () => preparePrivateServerPaths(derivedPaths),
+        catch: (cause) =>
+          new StartupError({ message: "Failed to secure Synara's local state directory", cause }),
+      });
+      const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
-      const autoBootstrapProjectFromCwd = resolveBooleanFlag(
+      const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
+      const migrationDivergenceConsent =
+        env.migrationDivergenceConsent ?? liveProcessMigrationConsent;
+      const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,
-        env.autoBootstrapProjectFromCwd ?? mode === "web",
+        env.autoBootstrapProjectFromCwd,
+        mode === "web",
       );
       // Provider event NDJSON logging is helpful for debugging, but it is too
       // expensive to keep enabled on the streaming hot path by default.
-      const logProviderEvents = resolveBooleanFlag(
+      const logProviderEvents = resolveBooleanConfig(
         input.logProviderEvents,
-        env.logProviderEvents ?? false,
+        env.logProviderEvents,
+        false,
       );
       // Keep websocket payload logging opt-in in dev. Terminal/TUI traffic is
       // high-volume enough that automatic logging adds noticeable CPU and I/O.
-      const logWebSocketEvents = resolveBooleanFlag(
+      const logWebSocketEvents = resolveBooleanConfig(
         input.logWebSocketEvents,
-        env.logWebSocketEvents ?? false,
+        env.logWebSocketEvents,
+        false,
       );
       const staticDir = devUrl ? undefined : yield* cliConfig.resolveStaticDir;
-      const host =
-        Option.getOrUndefined(input.host) ??
-        env.host ??
-        (mode === "desktop" ? "127.0.0.1" : undefined);
+      // Omitting Node's host listens on an unspecified address, which exposes
+      // the server beyond the local machine on common platforms. Keep every
+      // mode loopback-only unless remote access is explicit and authenticated.
+      const host = Option.getOrUndefined(input.host) ?? env.host ?? "127.0.0.1";
+      const remotePolicyError = remoteAccessPolicyError({
+        host,
+        authToken,
+        devUrl,
+        publicUrl,
+        allowInsecureRemote,
+      });
+      if (remotePolicyError) {
+        return yield* new StartupError({
+          message: remotePolicyError,
+        });
+      }
+
+      const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot } =
+        yield* resolveCanonicalWorkspaceRoots({ homeDir: userHomeDir });
 
       const config: ServerConfigShape = {
         mode,
         port,
         cwd: cliConfig.cwd,
-        homeDir: OS.homedir(),
+        homeDir,
+        chatWorkspaceRoot,
+        studioWorkspaceRoot,
+        groupsWorkspaceRoot,
         host,
         baseDir,
         ...derivedPaths,
         staticDir,
         devUrl,
+        publicUrl,
+        allowInsecureRemote,
         noBrowser,
         authToken,
+        desktopShutdownToken,
+        migrationDivergenceConsent,
         autoBootstrapProjectFromCwd,
+        trashDir: env.trashDir,
         logProviderEvents,
         logWebSocketEvents,
       } satisfies ServerConfigShape;
@@ -230,58 +387,50 @@ const ServerConfigLive = (input: CliInput) =>
   );
 
 const LayerLive = (input: CliInput) => {
-  const runtimeServicesLayer = makeServerRuntimeServicesLayer();
-  const providerLayer = makeServerProviderLayer();
-  const providerHealthLayer = ProviderHealthLive.pipe(
-    // Provider health reads persisted provider settings while constructing its
-    // cache, so build it with the same runtime services layer exposed to Server.
-    Layer.provideMerge(runtimeServicesLayer),
-  );
+  const { runtimeServicesLayer, providerLayer } = makeServerApplicationLayers();
   const providerSessionReaperLayer = ProviderSessionReaperLive.pipe(
     // The reaper coordinates orchestration state with live provider sessions,
     // so it belongs at the top level where both layers are available.
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
   );
-
+  const providerRuntimeReconcilerLayer = ProviderRuntimeReconcilerLive.pipe(
+    Layer.provide(ProviderRuntimeEventRepositoryLive),
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerLayer),
+  );
   return Layer.empty.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
-    Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(providerSessionReaperLayer),
+    Layer.provideMerge(providerRuntimeReconcilerLayer),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
-    Layer.provideMerge(AnalyticsServiceLayerLive),
     Layer.provideMerge(ServerConfigLive(input)),
   );
 };
 
-export const recordStartupHeartbeat = Effect.gen(function* () {
-  const analytics = yield* AnalyticsService;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+export function makeServerStartupLogData(config: ServerConfigShape): Record<string, unknown> {
+  const safeConfig: Record<string, unknown> = { ...config };
+  delete safeConfig.authToken;
+  delete safeConfig.desktopShutdownToken;
+  delete safeConfig.migrationDivergenceConsent;
+  delete safeConfig.devUrl;
 
-  const { threadCount, projectCount } = yield* projectionSnapshotQuery.getCounts().pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("failed to gather startup projection counts for telemetry", { cause }).pipe(
-        Effect.as({
-          threadCount: 0,
-          projectCount: 0,
-        }),
-      ),
-    ),
-  );
-
-  yield* analytics.record("server.boot.heartbeat", {
-    threadCount,
-    projectCount,
-  });
-});
+  return {
+    ...safeConfig,
+    devUrl: config.devUrl?.toString(),
+    authEnabled: Boolean(config.authToken),
+  };
+}
 
 const makeServerProgram = (input: CliInput) =>
   Effect.gen(function* () {
     const cliConfig = yield* CliConfig;
     const { start, stopSignal } = yield* Server;
     const openDeps = yield* Open;
+    const serverAuth = yield* ServerAuth;
+    const serverSettings = yield* ServerSettingsService;
     yield* cliConfig.fixPath;
 
     const config = yield* ServerConfig;
@@ -297,27 +446,92 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
-    const orchestrationEngine = yield* OrchestrationEngineService;
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    // Start the retention loop after the server is live so startup can serve
-    // existing history first, then prune inactive threads in the background.
-    yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
-    yield* Effect.forkChild(recordStartupHeartbeat);
 
     const localUrl = `http://localhost:${config.port}`;
     const bindUrl =
       config.host && !isWildcardHost(config.host)
         ? `http://${formatHostForUrl(config.host)}:${config.port}`
         : localUrl;
-    const { authToken, devUrl, ...safeConfig } = config;
-    yield* Effect.logInfo("Synara running", {
-      ...safeConfig,
-      devUrl: devUrl?.toString(),
-      authEnabled: Boolean(authToken),
+    const pairingBaseUrl = config.publicUrl?.origin ?? bindUrl;
+    const startupPairingUrl =
+      config.publicUrl || !isLoopbackHost(config.host)
+        ? yield* serverAuth.issueStartupPairingUrl(pairingBaseUrl).pipe(
+            Effect.mapError(
+              (cause) =>
+                new StartupError({
+                  message: "Failed to create the remote-access startup pairing link.",
+                  cause,
+                }),
+            ),
+          )
+        : undefined;
+
+    const orchestrationEngine = yield* OrchestrationEngineService;
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    // Start the retention loop after the server is live so startup can serve
+    // existing history first, then hide inactive threads from the app in the background.
+    yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
+    // Beta only: anonymous 24h usage snapshot for diagnostics. Same gate as the
+    // stable→beta import; failures are logged inside and never break startup.
+    if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+      yield* startBetaUsageSnapshotJob(config.baseDir);
+    }
+    // Optional Claude OAuth keepalive. Disabled by default because it touches
+    // Claude Code auth data in the background; users can opt in with
+    // SYNARA_CLAUDE_KEEPALIVE=1.
+    const claudeKeepalive = createClaudeCredentialKeepaliveController({
+      homeDir: config.homeDir,
+      log: (message) => Effect.runFork(Effect.logInfo(message)),
     });
+    const reconcileClaudeKeepalive = (settings: ServerSettings) =>
+      Effect.promise(() =>
+        claudeKeepalive.reconcile(
+          claudeCredentialKeepaliveTargets(settings, {
+            homeDir: config.homeDir,
+            stateDir: config.stateDir,
+          }),
+        ),
+      );
+    // Attach before reading the initial snapshot. The settings PubSub does not
+    // replay, so reading first could miss a disable/path update in the small
+    // window before the stream consumer subscribes.
+    const claudeKeepaliveSettingsChanges = yield* serverSettings.streamChanges.pipe(
+      Stream.toQueue({ capacity: "unbounded" }),
+    );
+    yield* reconcileClaudeKeepalive(yield* serverSettings.getSettings);
+    yield* Stream.fromQueue(claudeKeepaliveSettingsChanges).pipe(
+      Stream.runForEach(reconcileClaudeKeepalive),
+      Effect.ensuring(Effect.promise(() => claudeKeepalive.stop())),
+      Effect.forkChild,
+    );
+
+    yield* Effect.logInfo("Synara running", makeServerStartupLogData(config));
+    if (startupPairingUrl) {
+      if (config.allowInsecureRemote && !config.publicUrl) {
+        yield* Effect.logWarning(
+          "INSECURE REMOTE ACCESS ENABLED: credentials and session traffic are unencrypted",
+          {
+            pairingUrl: startupPairingUrl,
+            hint: "Use only on a trusted LAN. Configure SYNARA_PUBLIC_URL behind HTTPS for protected remote access.",
+          },
+        );
+      }
+      yield* Effect.logInfo(
+        config.publicUrl
+          ? "Remote access requires an authenticated owner session"
+          : "Insecure remote pairing link created",
+        {
+          pairingUrl: startupPairingUrl,
+          hint:
+            isWildcardHost(config.host) && !config.publicUrl
+              ? "Replace localhost in this one-time URL with the server's reachable hostname or IP."
+              : "Open this one-time URL to establish the first owner session.",
+        },
+      );
+    }
 
     if (!config.noBrowser) {
-      const target = config.devUrl?.toString() ?? bindUrl;
+      const target = startupPairingUrl ?? config.devUrl?.toString() ?? bindUrl;
       yield* openDeps.openBrowser(target).pipe(
         Effect.catch(() =>
           Effect.logInfo("browser auto-open unavailable", {
@@ -328,7 +542,7 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     return yield* stopSignal;
-  }).pipe(Effect.provide(LayerLive(input)));
+  }).pipe(Effect.scoped, Effect.provide(LayerLive(input)));
 
 /**
  * These flags mirrors the environment variables and the config shape.
@@ -347,7 +561,7 @@ const hostFlag = Flag.string("host").pipe(
   Flag.withDescription("Host/interface to bind (for example 127.0.0.1, 0.0.0.0, or a Tailnet IP)."),
   Flag.optional,
 );
-const t3HomeFlag = Flag.string("home-dir").pipe(
+const synaraHomeFlag = Flag.string("home-dir").pipe(
   Flag.withDescription("Base directory for all Synara data (equivalent to SYNARA_HOME)."),
   Flag.optional,
 );
@@ -356,47 +570,199 @@ const devUrlFlag = Flag.string("dev-url").pipe(
   Flag.withDescription("Dev web URL to proxy/redirect to (equivalent to VITE_DEV_SERVER_URL)."),
   Flag.optional,
 );
-const noBrowserFlag = Flag.boolean("no-browser").pipe(
-  Flag.withDescription("Disable automatic browser opening."),
+const publicUrlFlag = Flag.string("public-url").pipe(
+  Flag.withSchema(Schema.URLFromString),
+  Flag.withDescription(
+    "HTTPS public root origin provided by a TLS-terminating reverse proxy (equivalent to SYNARA_PUBLIC_URL).",
+  ),
   Flag.optional,
 );
+const allowInsecureRemoteFlag = optionalBooleanFlag("allow-insecure-remote", {
+  description:
+    "Explicitly allow unencrypted authenticated remote access on a trusted LAN (equivalent to SYNARA_ALLOW_INSECURE_REMOTE).",
+});
+const noBrowserFlag = optionalBooleanFlag("no-browser", {
+  description: "Disable automatic browser opening.",
+  negativeName: "browser",
+  negativeDescription: "Enable automatic browser opening.",
+});
 const authTokenFlag = Flag.string("auth-token").pipe(
   Flag.withDescription("Auth token required for WebSocket connections."),
   Flag.withAlias("token"),
   Flag.optional,
 );
-const autoBootstrapProjectFromCwdFlag = Flag.boolean("auto-bootstrap-project-from-cwd").pipe(
+const autoBootstrapProjectFromCwdFlag = optionalBooleanFlag("auto-bootstrap-project-from-cwd", {
+  description: "Create a project for the current working directory on startup when missing.",
+});
+const logProviderEventsFlag = optionalBooleanFlag("log-provider-events", {
+  description:
+    "Emit native/canonical provider NDJSON logs for debugging (equivalent to SYNARA_LOG_PROVIDER_EVENTS).",
+});
+const logWebSocketEventsFlag = optionalBooleanFlag("log-websocket-events", {
+  description:
+    "Emit server-side logs for outbound WebSocket push traffic (equivalent to SYNARA_LOG_WS_EVENTS).",
+  aliases: ["log-ws-events"],
+});
+
+const mcpIntegrationFlag = Flag.string("integration").pipe(
   Flag.withDescription(
-    "Create a project for the current working directory on startup when missing.",
+    "Paired integration id to serve (required only when more than one is stored).",
   ),
-  Flag.optional,
-);
-const logProviderEventsFlag = Flag.boolean("log-provider-events").pipe(
-  Flag.withDescription(
-    "Emit native/canonical provider NDJSON logs for debugging (equivalent to T3CODE_LOG_PROVIDER_EVENTS).",
-  ),
-  Flag.optional,
-);
-const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
-  Flag.withDescription(
-    "Emit server-side logs for outbound WebSocket push traffic (equivalent to T3CODE_LOG_WS_EVENTS).",
-  ),
-  Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
 
-export const t3Cli = Command.make("t3", {
+// Base `synara` command defined before the MCP subcommands so they can yield
+// its parsed input (notably `--home-dir` / `synaraHome`) via Effect's command
+// context. This avoids a duplicate `--home-dir` flag between the root command
+// and its MCP subcommands, which the Effect CLI assigns to the parent and
+// leaves the subcommand flag unset.
+const baseServerCommand = Command.make("synara", {
   mode: modeFlag,
   port: portFlag,
   host: hostFlag,
-  t3Home: t3HomeFlag,
+  synaraHome: synaraHomeFlag,
   devUrl: devUrlFlag,
+  publicUrl: publicUrlFlag,
+  allowInsecureRemote: allowInsecureRemoteFlag,
   noBrowser: noBrowserFlag,
   authToken: authTokenFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logProviderEvents: logProviderEventsFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
-}).pipe(
-  Command.withDescription("Run the Synara server."),
-  Command.withHandler((input) => Effect.scoped(makeServerProgram(input))),
+}).pipe(Command.withDescription("Run the Synara server."));
+
+const mcpServeCommand = Command.make(
+  "serve",
+  { integration: mcpIntegrationFlag },
+  ({ integration }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+      yield* Effect.tryPromise({
+        try: () =>
+          serveExternalMcpStdio({
+            baseDir,
+            ...(Option.isSome(integration) ? { integrationId: integration.value } : {}),
+          }),
+        catch: (cause) =>
+          new StartupError({ message: "External MCP stdio bridge stopped.", cause }),
+      });
+    }),
+).pipe(
+  Command.withDescription(
+    "Serve the paired Synara external MCP integration over stdio for Codex, Claude, and other MCP clients.",
+  ),
 );
+
+const mcpPairCommand = Command.make(
+  "pair",
+  {
+    code: Flag.string("code").pipe(
+      Flag.withDescription("Short-lived pairing code issued by Synara Settings."),
+    ),
+  },
+  ({ code }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+      const paired = yield* Effect.tryPromise({
+        try: () =>
+          pairExternalMcpClient({
+            baseDir,
+            pairingCode: code,
+          }),
+        catch: (cause) => new StartupError({ message: "External MCP pairing failed.", cause }),
+      });
+      process.stdout.write(
+        `Paired Synara external MCP integration "${paired.paired.name}".\nCredential stored privately at ${paired.storePath}.\nConfigure the MCP client command as: ${externalMcpShellCommand(externalMcpLauncher(["mcp", "serve", "--integration", paired.paired.integrationId, "--home-dir", baseDir]))}\n`,
+      );
+      if (process.platform === "win32") {
+        process.stdout.write(
+          "Windows note: Synara stores this credential under your user profile, but Windows does not expose POSIX 0600 permission checks. Protect the profile and its Synara data directory.\n",
+        );
+      }
+    }),
+).pipe(Command.withDescription("Pair this CLI with a user-approved Synara MCP integration."));
+
+const serverStatusCommand = Command.make(
+  "status",
+  {
+    url: Flag.string("url").pipe(
+      Flag.withDescription("Synara server base URL to probe."),
+      Flag.optional,
+    ),
+    json: Flag.boolean("json").pipe(
+      Flag.withDescription("Print machine-readable JSON."),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ url, json }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const discovered = Option.isSome(url)
+        ? { url: url.value }
+        : (() => {
+            const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+            try {
+              const runtime = discoverServerRuntime(baseDir);
+              return { url: runtime.state.origin, runtime };
+            } catch (cause) {
+              return {
+                error:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Failed to discover a running Synara server.",
+              };
+            }
+          })();
+      const result =
+        "error" in discovered
+          ? {
+              reachable: false as const,
+              ready: false as const,
+              url: "[undiscovered]",
+              error: discovered.error,
+            }
+          : yield* Effect.promise(async () => {
+              try {
+                if ("runtime" in discovered) {
+                  await verifyServerRuntime(discovered.runtime, globalThis.fetch);
+                }
+                return await fetchSynaraServerStatus({ url: discovered.url });
+              } catch (cause) {
+                return {
+                  reachable: false as const,
+                  ready: false as const,
+                  url: discovered.url,
+                  error:
+                    cause instanceof Error
+                      ? cause.message
+                      : "Failed to verify the discovered Synara server.",
+                };
+              }
+            });
+      process.stdout.write(
+        json ? `${JSON.stringify(result, null, 2)}\n` : `${formatSynaraServerStatus(result)}\n`,
+      );
+      if (!result.ready) {
+        process.exitCode = 1;
+      }
+    }),
+).pipe(Command.withDescription("Check whether a Synara server is reachable and ready."));
+
+const serverToolsCommand = Command.make("server").pipe(
+  Command.withDescription("Inspect and manage a running Synara server."),
+  Command.withSubcommands([serverStatusCommand]),
+);
+
+const mcpCommand = Command.make("mcp").pipe(
+  Command.withDescription("Manage Synara's loopback external MCP bridge."),
+  Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
+);
+
+const serverCommand = baseServerCommand.pipe(
+  Command.withHandler((input) => makeServerProgram(input)),
+  Command.withSubcommands([serverToolsCommand, mcpCommand]),
+);
+
+export const synaraCli = serverCommand;

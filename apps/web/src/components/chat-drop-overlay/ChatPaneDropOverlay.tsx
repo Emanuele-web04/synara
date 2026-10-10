@@ -3,24 +3,20 @@
 // Layer: UI component (route surfaces wrap it around <ChatView /> or empty-state placeholders)
 // Exports: ChatPaneDropOverlay component, drag MIME constant, drop-zone helpers used by tests
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  type DragEvent as ReactDragEvent,
-  type ReactNode,
-} from "react";
-import { type ThreadId } from "@t3tools/contracts";
+import { useEffect, useRef, type DragEvent as ReactDragEvent, type ReactNode } from "react";
+import { type ThreadId } from "@synara/contracts";
 
 import { type SplitDirection, type SplitDropSide } from "../../splitViewStore";
+import {
+  getActiveThreadDragId,
+  isThreadDragTransfer,
+  isWithinThreadMentionDropzone,
+  readThreadDragPayload,
+  type ThreadDragPayload,
+} from "../../lib/threadDrag";
 import { cn } from "../../lib/utils";
 
-// Custom MIME so external file drops on the composer (which listen for `Files`) cannot trigger us.
-export const THREAD_DRAG_MIME = "application/x-t3-thread";
-
-export interface ThreadDragPayload {
-  threadId: ThreadId;
-}
+export { THREAD_DRAG_MIME, type ThreadDragPayload } from "../../lib/threadDrag";
 
 export type DropZone = "top" | "bottom" | "left" | "right";
 
@@ -108,7 +104,7 @@ export function getDropZoneFromPointer(
   return chooseHorizontal();
 }
 
-export function dropZoneToDirectionSide(zone: DropZone): {
+function dropZoneToDirectionSide(zone: DropZone): {
   direction: SplitDirection;
   side: SplitDropSide;
 } {
@@ -119,27 +115,11 @@ export function dropZoneToDirectionSide(zone: DropZone): {
 }
 
 function isThreadDrag(event: ReactDragEvent): boolean {
-  const types = event.dataTransfer.types;
-  for (let index = 0; index < types.length; index += 1) {
-    if (types[index] === THREAD_DRAG_MIME) return true;
-  }
-  return false;
+  return isThreadDragTransfer(event.dataTransfer);
 }
 
 function parseThreadDragPayload(event: ReactDragEvent): ThreadDragPayload | null {
-  try {
-    const raw = event.dataTransfer.getData(THREAD_DRAG_MIME);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ThreadDragPayload>;
-    if (typeof parsed.threadId === "string") {
-      return {
-        threadId: parsed.threadId as ThreadId,
-      };
-    }
-  } catch {
-    return null;
-  }
-  return null;
+  return readThreadDragPayload(event.dataTransfer);
 }
 
 // Applies the same thread constraints for hover feedback and the final drop.
@@ -159,15 +139,12 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   const rectMeasuredAtRef = useRef(0);
   const activeZoneRef = useRef<DropZone | null>(null);
 
-  const isZoneAllowed = useCallback(
-    (zone: DropZone): boolean => {
-      const { direction } = dropZoneToDirectionSide(zone);
-      return canDropInDirection ? canDropInDirection(direction) : true;
-    },
-    [canDropInDirection],
-  );
+  const isZoneAllowed = (zone: DropZone): boolean => {
+    const { direction } = dropZoneToDirectionSide(zone);
+    return canDropInDirection ? canDropInDirection(direction) : true;
+  };
 
-  const setPreviewZone = useCallback((zone: DropZone | null) => {
+  const setPreviewZone = (zone: DropZone | null) => {
     const preview = previewRef.current;
     if (!preview) return;
     const nextClassName = zone
@@ -182,15 +159,15 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
     }
     preview.dataset.chatPaneDropZone = zone;
     preview.className = nextClassName;
-  }, []);
+  };
 
-  const resetOverlayState = useCallback(() => {
+  const resetOverlayState = () => {
     rectRef.current = null;
     rectMeasuredAtRef.current = 0;
     setPreviewZone(null);
-  }, [setPreviewZone]);
+  };
 
-  const getCurrentRect = useCallback(() => {
+  const getCurrentRect = () => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return null;
     const now = performance.now();
@@ -199,92 +176,91 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
       rectMeasuredAtRef.current = now;
     }
     return rectRef.current;
-  }, []);
+  };
 
-  const getZoneForEvent = useCallback(
-    (event: ReactDragEvent<HTMLDivElement>) =>
-      getDropZoneFromPointer(
-        getCurrentRect() ?? EMPTY_RECT,
-        event.clientX,
-        event.clientY,
-        isZoneAllowed,
-      ),
-    [getCurrentRect, isZoneAllowed],
-  );
+  const getZoneForEvent = (event: ReactDragEvent<HTMLDivElement>) =>
+    getDropZoneFromPointer(
+      getCurrentRect() ?? EMPTY_RECT,
+      event.clientX,
+      event.clientY,
+      isZoneAllowed,
+    );
 
-  const getAllowedZoneForEvent = useCallback(
-    (event: ReactDragEvent<HTMLDivElement>) => {
-      const zone = getZoneForEvent(event);
-      if (!zone) return null;
-      const payload = parseThreadDragPayload(event);
-      if (
-        payload &&
-        !isThreadDragPayloadAllowed(payload, {
-          excludedThreadIds,
-        })
-      ) {
-        return null;
-      }
-      return zone;
-    },
-    [excludedThreadIds, getZoneForEvent],
-  );
+  const getAllowedZoneForEvent = (event: ReactDragEvent<HTMLDivElement>) => {
+    const zone = getZoneForEvent(event);
+    if (!zone) return null;
+    // Drag data is unreadable until `drop`; fall back to the in-app drag source.
+    const activeThreadId = getActiveThreadDragId();
+    const payload =
+      parseThreadDragPayload(event) ?? (activeThreadId ? { threadId: activeThreadId } : null);
+    if (
+      payload &&
+      !isThreadDragPayloadAllowed(payload, {
+        excludedThreadIds,
+      })
+    ) {
+      return null;
+    }
+    return zone;
+  };
 
-  const handleDragEnter = useCallback(
-    (event: ReactDragEvent<HTMLDivElement>) => {
-      if (!isThreadDrag(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      rectRef.current = wrapperRef.current?.getBoundingClientRect() ?? null;
-      rectMeasuredAtRef.current = performance.now();
-      const zone = getAllowedZoneForEvent(event);
-      event.dataTransfer.dropEffect = zone ? "move" : "none";
-      setPreviewZone(zone);
-    },
-    [getAllowedZoneForEvent, setPreviewZone],
-  );
+  // The composer turns a thread drop into an @mention; it owns the event there,
+  // so only drop the split preview left over from the surrounding pane.
+  const deferToMentionDropzone = (event: ReactDragEvent<HTMLDivElement>): boolean => {
+    if (!isWithinThreadMentionDropzone(event.target)) return false;
+    setPreviewZone(null);
+    return true;
+  };
 
-  const handleDragOver = useCallback(
-    (event: ReactDragEvent<HTMLDivElement>) => {
-      if (!isThreadDrag(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const zone = getAllowedZoneForEvent(event);
-      event.dataTransfer.dropEffect = zone ? "move" : "none";
-      setPreviewZone(zone);
-    },
-    [getAllowedZoneForEvent, setPreviewZone],
-  );
+  const handleDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    rectRef.current = wrapperRef.current?.getBoundingClientRect() ?? null;
+    rectMeasuredAtRef.current = performance.now();
+    const zone = getAllowedZoneForEvent(event);
+    event.dataTransfer.dropEffect = zone ? "move" : "none";
+    setPreviewZone(zone);
+  };
 
-  const handleDragLeave = useCallback(
-    (event: ReactDragEvent<HTMLDivElement>) => {
-      if (!isThreadDrag(event)) return;
-      const wrapper = wrapperRef.current;
-      if (!wrapper) return;
-      const related = event.relatedTarget as Node | null;
-      if (related && wrapper.contains(related)) return;
+  const handleDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const zone = getAllowedZoneForEvent(event);
+    event.dataTransfer.dropEffect = zone ? "move" : "none";
+    setPreviewZone(zone);
+  };
+
+  const handleDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!isThreadDrag(event)) return;
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const related = event.relatedTarget as Node | null;
+    if (related && wrapper.contains(related)) return;
+    resetOverlayState();
+  };
+
+  const handleDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) {
       resetOverlayState();
-    },
-    [resetOverlayState],
-  );
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const zone = getZoneForEvent(event);
+    const payload = parseThreadDragPayload(event);
 
-  const handleDrop = useCallback(
-    (event: ReactDragEvent<HTMLDivElement>) => {
-      if (!isThreadDrag(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const zone = getZoneForEvent(event);
-      const payload = parseThreadDragPayload(event);
+    resetOverlayState();
 
-      resetOverlayState();
-
-      if (!zone || !payload) return;
-      if (!isThreadDragPayloadAllowed(payload, { excludedThreadIds })) return;
-      const { direction, side } = dropZoneToDirectionSide(zone);
-      onDrop({ ...payload, direction, side });
-    },
-    [excludedThreadIds, getZoneForEvent, onDrop, resetOverlayState],
-  );
+    if (!zone || !payload) return;
+    if (!isThreadDragPayloadAllowed(payload, { excludedThreadIds })) return;
+    const { direction, side } = dropZoneToDirectionSide(zone);
+    onDrop({ ...payload, direction, side });
+  };
 
   useEffect(() => {
     resetOverlayState();

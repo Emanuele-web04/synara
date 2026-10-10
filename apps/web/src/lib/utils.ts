@@ -1,15 +1,38 @@
-import { CommandId, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { CommandId, MessageId, ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 import { type CxOptions, cx } from "class-variance-authority";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
 import * as Random from "effect/Random";
 import * as Effect from "effect/Effect";
+
+// `text-ui*` / `text-chat*` are font sizes from the `@theme` block in index.css.
+// Register them so twMerge resolves them against `text-xs` etc. instead of
+// treating them as text colors.
+const twMerge = extendTailwindMerge({
+  extend: {
+    theme: {
+      text: [
+        "ui",
+        "ui-lg",
+        "ui-sm",
+        "ui-xs",
+        "ui-2xs",
+        "ui-meta",
+        "ui-timestamp",
+        "chat",
+        "chat-code",
+        "chat-meta",
+        "chat-tiny",
+      ],
+    },
+  },
+});
 
 export function cn(...inputs: CxOptions) {
   return twMerge(cx(inputs));
 }
 
 export function isMacPlatform(platform: string): boolean {
-  return /mac|iphone|ipad|ipod/i.test(platform);
+  return /mac|darwin|iphone|ipad|ipod/i.test(platform);
 }
 
 export function isWindowsPlatform(platform: string): boolean {
@@ -18,6 +41,16 @@ export function isWindowsPlatform(platform: string): boolean {
 
 export function isLinuxPlatform(platform: string): boolean {
   return /linux/i.test(platform);
+}
+
+/** The host platform string, safe to read where `navigator` may be absent (SSR, node tests). */
+export function getNavigatorPlatform(): string {
+  return typeof navigator === "undefined" ? "" : navigator.platform;
+}
+
+/** Single source of truth for "render the ⌘ affordance instead of the Ctrl one". */
+export function isMacNavigatorPlatform(): boolean {
+  return isMacPlatform(getNavigatorPlatform());
 }
 
 export function randomUUID(): string {
@@ -30,6 +63,8 @@ export function randomUUID(): string {
 export const newCommandId = (): CommandId => CommandId.makeUnsafe(randomUUID());
 
 export const newProjectId = (): ProjectId => ProjectId.makeUnsafe(randomUUID());
+
+export const newSpaceId = (): SpaceId => SpaceId.makeUnsafe(randomUUID());
 
 export const newThreadId = (): ThreadId => ThreadId.makeUnsafe(randomUUID());
 

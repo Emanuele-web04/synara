@@ -1,9 +1,10 @@
 import type {
-  ProviderKind,
+  ProviderDriverKind,
+  ProviderInstanceId,
   ProviderSessionRuntimeStatus,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -14,14 +15,20 @@ import type {
 
 export interface ProviderRuntimeBinding {
   readonly threadId: ThreadId;
-  readonly provider: ProviderKind;
+  readonly provider: ProviderDriverKind;
+  readonly providerInstanceId: ProviderInstanceId;
   readonly adapterKey?: string;
   readonly status?: ProviderSessionRuntimeStatus;
+  readonly lifecycleGeneration?: string;
   readonly lastSeenAt?: string;
   readonly resumeCursor?: unknown | null;
   readonly runtimePayload?: unknown | null;
   readonly runtimeMode?: RuntimeMode;
 }
+
+export type ProviderRuntimeBindingUpsert = Omit<ProviderRuntimeBinding, "providerInstanceId"> & {
+  readonly providerInstanceId?: ProviderInstanceId;
+};
 
 export type ProviderSessionDirectoryReadError = ProviderSessionDirectoryPersistenceError;
 
@@ -31,12 +38,12 @@ export type ProviderSessionDirectoryWriteError =
 
 export interface ProviderSessionDirectoryShape {
   readonly upsert: (
-    binding: ProviderRuntimeBinding,
+    binding: ProviderRuntimeBindingUpsert,
   ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
 
   readonly getProvider: (
     threadId: ThreadId,
-  ) => Effect.Effect<ProviderKind, ProviderSessionDirectoryReadError>;
+  ) => Effect.Effect<ProviderDriverKind, ProviderSessionDirectoryReadError>;
 
   readonly getBinding: (
     threadId: ThreadId,
@@ -60,4 +67,4 @@ export interface ProviderSessionDirectoryShape {
 export class ProviderSessionDirectory extends ServiceMap.Service<
   ProviderSessionDirectory,
   ProviderSessionDirectoryShape
->()("t3/provider/Services/ProviderSessionDirectory") {}
+>()("synara/provider/Services/ProviderSessionDirectory") {}

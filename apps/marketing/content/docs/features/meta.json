@@ -1,0 +1,17 @@
+{
+  "title": "Features",
+  "defaultOpen": true,
+  "pages": [
+    "overview",
+    "computer-use",
+    "project-import",
+    "composer",
+    "thread-goals",
+    "organize",
+    "workspace-editor",
+    "browser-sessions",
+    "ios-simulator",
+    "automations",
+    "customization"
+  ]
+}

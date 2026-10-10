@@ -59,23 +59,16 @@ const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Comm
   }
 });
 
-interface PublishIconBackup {
-  readonly targetPath: string;
-  readonly backupPath: string;
-}
-
 const applyPublishIconOverrides = Effect.fn("applyPublishIconOverrides")(function* (
   repoRoot: string,
-  serverDir: string,
+  stagedPackageDir: string,
 ) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const backups: PublishIconBackup[] = [];
 
   for (const override of PUBLISH_ICON_OVERRIDES) {
     const sourcePath = path.join(repoRoot, override.sourceRelativePath);
-    const targetPath = path.join(serverDir, override.targetRelativePath);
-    const backupPath = `${targetPath}.publish-bak`;
+    const targetPath = path.join(stagedPackageDir, override.targetRelativePath);
 
     if (!(yield* fs.exists(sourcePath))) {
       return yield* new CliError({
@@ -88,25 +81,10 @@ const applyPublishIconOverrides = Effect.fn("applyPublishIconOverrides")(functio
       });
     }
 
-    yield* fs.copyFile(targetPath, backupPath);
     yield* fs.copyFile(sourcePath, targetPath);
-    backups.push({ targetPath, backupPath });
   }
 
-  yield* Effect.log("[cli] Applied publish icon overrides to dist/client");
-  return backups as ReadonlyArray<PublishIconBackup>;
-});
-
-const restorePublishIconOverrides = Effect.fn("restorePublishIconOverrides")(function* (
-  backups: ReadonlyArray<PublishIconBackup>,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  for (const backup of backups) {
-    if (!(yield* fs.exists(backup.backupPath))) {
-      continue;
-    }
-    yield* fs.rename(backup.backupPath, backup.targetPath);
-  }
+  yield* Effect.log("[cli] Applied publish icon overrides inside the isolated package stage");
 });
 
 const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")(function* (
@@ -164,6 +142,16 @@ const buildCmd = Command.make(
         })`bun tsdown`,
       );
 
+      // The device backend compiles this helper against the user's installed
+      // Xcode on first attach. tsdown bundles JavaScript only, and desktop/CLI
+      // packaging stage only `dist`, so leaving the sources under `native`
+      // makes the feature work in development but fail in every packaged app.
+      const deviceHelperSource = path.join(serverDir, "native/device-helper");
+      const deviceHelperTarget = path.join(serverDir, "dist/device-helper");
+      yield* fs.copy(deviceHelperSource, deviceHelperTarget);
+      yield* fs.chmod(path.join(deviceHelperTarget, "build.sh"), 0o755);
+      yield* Effect.log("[cli] Bundled iOS Simulator helper sources into dist/device-helper");
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 
@@ -176,6 +164,90 @@ const buildCmd = Command.make(
       }
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));
+
+// ---------------------------------------------------------------------------
+// distribution staging (shared by publish and pack)
+// ---------------------------------------------------------------------------
+
+const stageDistributionPackage = Effect.fn("stageDistributionPackage")(function* (
+  appVersion: Option.Option<string>,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const repoRoot = yield* RepoRoot;
+  const serverDir = path.join(repoRoot, "apps/server");
+
+  // Assert build assets exist
+  for (const relPath of [
+    "dist/index.mjs",
+    "dist/restoreMigrationBackup.mjs",
+    "dist/client/index.html",
+  ]) {
+    const abs = path.join(serverDir, relPath);
+    if (!(yield* fs.exists(abs))) {
+      return yield* new CliError({
+        message: `Missing build asset: ${abs}. Run the build subcommand first.`,
+      });
+    }
+  }
+
+  const version = Option.getOrElse(appVersion, () => serverPackageJson.version);
+  const pkg = {
+    name: serverPackageJson.name,
+    license: serverPackageJson.license,
+    repository: serverPackageJson.repository,
+    bin: serverPackageJson.bin,
+    type: serverPackageJson.type,
+    version,
+    engines: serverPackageJson.engines,
+    files: serverPackageJson.files,
+    dependencies: resolveCatalogDependencies(
+      serverPackageJson.dependencies as Record<string, unknown>,
+      resolveRootWorkspaceCatalog(),
+      "apps/server dependencies",
+    ),
+  };
+
+  const stagedPackageDir = yield* fs.makeTempDirectoryScoped({
+    prefix: "synara-cli-publish-",
+  });
+  yield* fs.copy(path.join(serverDir, "dist"), path.join(stagedPackageDir, "dist"));
+  for (const binTarget of Object.values(pkg.bin)) {
+    if (typeof binTarget !== "string" || !binTarget.startsWith("dist/")) {
+      return yield* new CliError({
+        message: `CLI bin target must stay inside the staged dist directory: ${String(binTarget)}`,
+      });
+    }
+    const stagedBinPath = path.join(stagedPackageDir, binTarget);
+    if (!(yield* fs.exists(stagedBinPath))) {
+      return yield* new CliError({ message: `Missing staged CLI bin target: ${binTarget}` });
+    }
+    const stagedBin = yield* fs.readFileString(stagedBinPath);
+    if (!stagedBin.startsWith("#!/usr/bin/env node\n")) {
+      return yield* new CliError({
+        message: `Staged CLI bin target is missing its Node shebang: ${binTarget}`,
+      });
+    }
+    yield* fs.chmod(stagedBinPath, 0o755);
+  }
+  yield* applyPublishIconOverrides(repoRoot, stagedPackageDir);
+  yield* fs.writeFileString(
+    path.join(stagedPackageDir, "package.json"),
+    `${JSON.stringify(pkg, null, 2)}\n`,
+  );
+  const stagedRootEntries = (yield* fs.readDirectory(stagedPackageDir)).sort();
+  if (
+    stagedRootEntries.length !== 2 ||
+    stagedRootEntries[0] !== "dist" ||
+    stagedRootEntries[1] !== "package.json"
+  ) {
+    return yield* new CliError({
+      message: `Unexpected CLI publish-stage entries: ${stagedRootEntries.join(", ")}`,
+    });
+  }
+
+  return { stagedPackageDir, version };
+});
 
 // ---------------------------------------------------------------------------
 // publish subcommand
@@ -193,94 +265,71 @@ const publishCmd = Command.make(
   },
   (config) =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const fs = yield* FileSystem.FileSystem;
-      const repoRoot = yield* RepoRoot;
-      const serverDir = path.join(repoRoot, "apps/server");
-      const packageJsonPath = path.join(serverDir, "package.json");
-      const backupPath = `${packageJsonPath}.bak`;
+      const { stagedPackageDir } = yield* stageDistributionPackage(config.appVersion);
 
-      // Assert build assets exist
-      for (const relPath of ["dist/index.mjs", "dist/client/index.html"]) {
-        const abs = path.join(serverDir, relPath);
-        if (!(yield* fs.exists(abs))) {
-          return yield* new CliError({
-            message: `Missing build asset: ${abs}. Run the build subcommand first.`,
-          });
-        }
-      }
+      const args = ["publish", "--access", config.access, "--tag", config.tag];
+      if (config.provenance) args.push("--provenance");
+      if (config.dryRun) args.push("--dry-run");
 
-      yield* Effect.acquireUseRelease(
-        // Acquire: backup package.json, resolve catalog: deps, strip devDependencies/scripts
-        Effect.gen(function* () {
-          // Resolve catalog dependencies before any file mutations. If this throws,
-          // acquire fails and no release hook runs, so filesystem must still be untouched.
-          const version = Option.getOrElse(config.appVersion, () => serverPackageJson.version);
-          const pkg = {
-            name: serverPackageJson.name,
-            repository: serverPackageJson.repository,
-            bin: serverPackageJson.bin,
-            type: serverPackageJson.type,
-            version,
-            engines: serverPackageJson.engines,
-            files: serverPackageJson.files,
-            dependencies: serverPackageJson.dependencies as Record<string, unknown>,
-          };
-
-          pkg.dependencies = resolveCatalogDependencies(
-            pkg.dependencies,
-            resolveRootWorkspaceCatalog(),
-            "apps/server dependencies",
-          );
-
-          const original = yield* fs.readFileString(packageJsonPath);
-          yield* fs.writeFileString(backupPath, original);
-          yield* fs.writeFileString(packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`);
-          yield* Effect.log("[cli] Resolved package.json for publish");
-
-          const iconBackups = yield* applyPublishIconOverrides(repoRoot, serverDir);
-          return { iconBackups };
+      yield* Effect.log(`[cli] Running from isolated stage: npm ${args.join(" ")}`);
+      yield* runCommand(
+        ChildProcess.make("npm", [...args], {
+          cwd: stagedPackageDir,
+          stdout: config.verbose ? "inherit" : "ignore",
+          stderr: "inherit",
+          // Windows needs shell mode to resolve .cmd shims.
+          shell: process.platform === "win32",
         }),
-        // Use: npm publish
-        () =>
-          Effect.gen(function* () {
-            const args = ["publish", "--access", config.access, "--tag", config.tag];
-            if (config.provenance) args.push("--provenance");
-            if (config.dryRun) args.push("--dry-run");
-
-            yield* Effect.log(`[cli] Running: npm ${args.join(" ")}`);
-            yield* runCommand(
-              ChildProcess.make("npm", [...args], {
-                cwd: serverDir,
-                stdout: config.verbose ? "inherit" : "ignore",
-                stderr: "inherit",
-                // Windows needs shell mode to resolve .cmd shims.
-                shell: process.platform === "win32",
-              }),
-            );
-          }),
-        // Release: restore
-        (resource: { readonly iconBackups: ReadonlyArray<PublishIconBackup> }) =>
-          Effect.gen(function* () {
-            yield* restorePublishIconOverrides(resource.iconBackups).pipe(
-              Effect.catch((error) =>
-                Effect.logError(`[cli] Failed to restore publish icon overrides: ${String(error)}`),
-              ),
-            );
-            yield* fs.rename(backupPath, packageJsonPath);
-            if (config.verbose) yield* Effect.log("[cli] Restored original package.json");
-          }),
       );
     }),
 ).pipe(Command.withDescription("Publish the server package to npm."));
+
+// ---------------------------------------------------------------------------
+// pack subcommand
+// ---------------------------------------------------------------------------
+
+const packCmd = Command.make(
+  "pack",
+  {
+    out: Flag.string("out").pipe(Flag.withDefault("release-server")),
+    appVersion: Flag.string("app-version").pipe(Flag.optional),
+  },
+  (config) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+
+      const { stagedPackageDir, version } = yield* stageDistributionPackage(config.appVersion);
+
+      const outDir = path.isAbsolute(config.out)
+        ? config.out
+        : path.join(process.cwd(), config.out);
+      yield* fs.makeDirectory(outDir, { recursive: true });
+
+      const tarballPath = path.join(outDir, `synara-server-${version}.tar.gz`);
+      yield* runCommand(
+        ChildProcess.make("tar", ["-czf", tarballPath, "dist", "package.json"], {
+          cwd: stagedPackageDir,
+          stdout: "inherit",
+          stderr: "inherit",
+          // Windows needs shell mode to resolve .cmd shims.
+          shell: process.platform === "win32",
+        }),
+      );
+
+      yield* Effect.log(`[cli] Wrote server tarball: ${tarballPath}`);
+    }),
+).pipe(
+  Command.withDescription("Produce a synara-server-<version>.tar.gz from the staged package."),
+);
 
 // ---------------------------------------------------------------------------
 // root command
 // ---------------------------------------------------------------------------
 
 const cli = Command.make("cli").pipe(
-  Command.withDescription("T3 server build & publish CLI."),
-  Command.withSubcommands([buildCmd, publishCmd]),
+  Command.withDescription("Synara server build & publish CLI."),
+  Command.withSubcommands([buildCmd, publishCmd, packCmd]),
 );
 
 Command.run(cli, { version: "0.0.0" }).pipe(

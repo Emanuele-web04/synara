@@ -11,17 +11,6 @@ import {
 } from "./useDesktopTopBarGutter";
 
 describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
-  it("never reserves a gutter in the browser build", () => {
-    expect(
-      shouldReserveDesktopTopBarTrafficLightGutter({
-        isElectron: false,
-        isMacDesktop: true,
-        sidebarOpen: false,
-        isMobile: false,
-      }),
-    ).toBe(false);
-  });
-
   it("never reserves a gutter for non-macOS desktop windows", () => {
     expect(
       shouldReserveDesktopTopBarTrafficLightGutter({
@@ -70,29 +59,20 @@ describe("shouldReserveDesktopTopBarTrafficLightGutter", () => {
 });
 
 describe("shouldReserveDesktopTopBarWindowControlsGutter", () => {
-  it("never reserves a gutter outside Electron", () => {
+  it("never reserves a gutter when the live window still has a native frame", () => {
     expect(
       shouldReserveDesktopTopBarWindowControlsGutter({
-        isElectron: false,
-        isWindowsDesktop: true,
+        isElectron: true,
+        customTitleBarActive: false,
       }),
     ).toBe(false);
   });
 
-  it("never reserves a gutter for non-Windows desktop windows", () => {
+  it("reserves a gutter when the frameless custom title bar is active", () => {
     expect(
       shouldReserveDesktopTopBarWindowControlsGutter({
         isElectron: true,
-        isWindowsDesktop: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("reserves a gutter for Windows Electron caption controls", () => {
-    expect(
-      shouldReserveDesktopTopBarWindowControlsGutter({
-        isElectron: true,
-        isWindowsDesktop: true,
+        customTitleBarActive: true,
       }),
     ).toBe(true);
   });

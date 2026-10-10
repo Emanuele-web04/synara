@@ -3,31 +3,27 @@
 //          underpins domain-level dedup (every URL on a site shares one cache key).
 // Layer: Server utility tests
 
-import { describe, expect, it } from "vitest";
+import { outboundHttp, type OutboundHttpResponse } from "@synara/shared/outboundHttp";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { normalizeFaviconHost, tryParseHost } from "./siteFaviconCache";
+import { clearSiteFaviconCache, resolveFavicon, tryParseHost } from "./siteFaviconCache";
 
-describe("normalizeFaviconHost", () => {
-  it("lower-cases the host", () => {
-    expect(normalizeFaviconHost("GitHub.COM")).toBe("github.com");
-  });
+const imageResponse: OutboundHttpResponse = {
+  status: 200,
+  headers: new Headers({ "content-type": "image/png" }),
+  body: new Uint8Array([1, 2, 3]),
+  url: "https://www.google.com/favicon.png",
+};
 
-  it("strips a leading www.", () => {
-    expect(normalizeFaviconHost("www.example.com")).toBe("example.com");
-  });
-
-  it("keeps non-www subdomains intact", () => {
-    expect(normalizeFaviconHost("docs.example.com")).toBe("docs.example.com");
-  });
+afterEach(() => {
+  clearSiteFaviconCache();
+  vi.restoreAllMocks();
 });
 
 describe("tryParseHost", () => {
-  it("extracts the host from a full URL", () => {
-    expect(tryParseHost("https://x.com/thegenioo/status/2062795593567666188")).toBe("x.com");
-  });
-
   it("accepts a bare domain without a scheme", () => {
     expect(tryParseHost("example.com")).toBe("example.com");
+    expect(tryParseHost("docs.example.com")).toBe("docs.example.com");
   });
 
   it("normalizes www and casing", () => {
@@ -40,5 +36,39 @@ describe("tryParseHost", () => {
 
   it("returns null for empty input", () => {
     expect(tryParseHost("   ")).toBeNull();
+  });
+});
+
+describe("resolveFavicon", () => {
+  it("uses the shared bounded outbound policy", async () => {
+    const request = vi.spyOn(outboundHttp, "request").mockResolvedValue(imageResponse);
+
+    const favicon = await resolveFavicon("example.com");
+
+    expect(favicon.bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(request.mock.calls[0]?.[0].policy).toMatchObject({
+      service: "site-favicon",
+      allowedOrigins: ["https://www.google.com"],
+      maxResponseBytes: 512 * 1024,
+      requirePublicAddress: true,
+    });
+  });
+
+  it("pins the direct fallback to the requested public origin", async () => {
+    const request = vi
+      .spyOn(outboundHttp, "request")
+      .mockResolvedValueOnce({ ...imageResponse, status: 404, body: new Uint8Array() })
+      .mockResolvedValueOnce({ ...imageResponse, status: 404, body: new Uint8Array() })
+      .mockResolvedValueOnce({
+        ...imageResponse,
+        url: "https://example.org/favicon.ico",
+      });
+
+    await resolveFavicon("example.org");
+
+    expect(request.mock.calls[2]?.[0]).toMatchObject({
+      url: "https://example.org/favicon.ico",
+      policy: { allowedOrigins: ["https://example.org"] },
+    });
   });
 });

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 
@@ -28,9 +28,41 @@ function parseLogLine(line: string) {
 }
 
 describe("EventNdjsonLogger", () => {
+  it.effect("writes image metadata without persisting model image bodies", () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-image-log-"));
+      try {
+        const logger = yield* makeEventNdjsonLogger(path.join(tempDir, "native.ndjson"), {
+          stream: "native",
+        });
+        assert.isDefined(logger);
+        if (!logger) return;
+        const data = Buffer.alloc(512 * 1024, 123).toString("base64");
+        const image = { type: "image", data, mimeType: "image/png" };
+        yield* logger.write({ content: [image] }, ThreadId.makeUnsafe("image-thread"));
+        yield* logger.close();
+        const line = fs.readFileSync(path.join(tempDir, "image-thread.log"), "utf8").trim();
+        const logged = JSON.parse(parseLogLine(line).payload);
+        assert.isBelow(line.length, 1000);
+        assert.deepEqual(logged.content, [
+          {
+            type: "image",
+            mimeType: "image/png",
+            synaraImageOmitted: true,
+            encodedLength: data.length,
+            byteLength: 512 * 1024,
+          },
+        ]);
+        assert.equal(image.data, data);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
   it.effect("writes effect-style lines to thread-scoped files", () =>
     Effect.gen(function* () {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-log-"));
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-log-"));
       const basePath = path.join(tempDir, "provider-native.ndjson");
 
       try {
@@ -54,6 +86,11 @@ describe("EventNdjsonLogger", () => {
         const threadTwoPath = path.join(tempDir, "thread-2.log");
         assert.equal(fs.existsSync(threadOnePath), true);
         assert.equal(fs.existsSync(threadTwoPath), true);
+        if (process.platform !== "win32") {
+          assert.equal(fs.statSync(tempDir).mode & 0o777, 0o700);
+          assert.equal(fs.statSync(threadOnePath).mode & 0o777, 0o600);
+          assert.equal(fs.statSync(threadTwoPath).mode & 0o777, 0o600);
+        }
 
         const first = parseLogLine(fs.readFileSync(threadOnePath, "utf8").trim());
         const second = parseLogLine(fs.readFileSync(threadTwoPath, "utf8").trim());
@@ -78,7 +115,7 @@ describe("EventNdjsonLogger", () => {
     "falls back to a global segment when orchestration thread id is missing or invalid",
     () =>
       Effect.gen(function* () {
-        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-log-"));
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-log-"));
         const basePath = path.join(tempDir, "provider-canonical.ndjson");
 
         try {
@@ -114,7 +151,7 @@ describe("EventNdjsonLogger", () => {
 
   it.effect("rotates per-thread files when max size is exceeded", () =>
     Effect.gen(function* () {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-log-"));
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-log-"));
       const basePath = path.join(tempDir, "provider-native.ndjson");
 
       try {
@@ -158,6 +195,11 @@ describe("EventNdjsonLogger", () => {
           matchingFiles.some((entry) => entry === `${fileStem}.3`),
           false,
         );
+        if (process.platform !== "win32") {
+          for (const entry of matchingFiles) {
+            assert.equal(fs.statSync(path.join(tempDir, entry)).mode & 0o777, 0o600);
+          }
+        }
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }

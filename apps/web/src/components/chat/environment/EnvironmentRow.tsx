@@ -8,8 +8,10 @@
 import { useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { ChevronDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 
 import {
   ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME,
@@ -25,9 +27,9 @@ import {
  */
 export const ENVIRONMENT_ROW_CLASS_NAME = cn(
   "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left",
-  "text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground)]",
-  "outline-none transition-colors",
-  "hover:bg-[var(--color-background-elevated-secondary)]",
+  "text-ui font-normal text-[var(--color-text-foreground)]",
+  "outline-none",
+  ELEVATED_HOVER_SURFACE_CLASS_NAME,
   "focus-visible:bg-[var(--color-background-elevated-secondary)]",
   "disabled:pointer-events-none disabled:opacity-50",
 );
@@ -88,33 +90,31 @@ export function EnvironmentLabeledSection({
  */
 export function EnvironmentCollapsibleSection({
   label,
-  defaultOpen = true,
+  defaultOpen: defaultOpenProp,
   children,
 }: {
   label: ReactNode;
   defaultOpen?: boolean;
   children: ReactNode;
 }) {
+  const defaultOpen = defaultOpenProp ?? true;
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="flex flex-col">
       <CollapsibleTrigger
         className={cn(
           "group/section flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1 text-left",
-          "outline-none transition-colors",
-          "hover:bg-[var(--color-background-elevated-secondary)]",
+          "outline-none",
+          ELEVATED_HOVER_SURFACE_CLASS_NAME,
           "focus-visible:bg-[var(--color-background-elevated-secondary)]",
         )}
       >
         <span className={cn(ENVIRONMENT_PANEL_SECTION_LABEL_INLINE_CLASS_NAME, "min-w-0 truncate")}>
           {label}
         </span>
-        <ChevronDownIcon
-          aria-hidden
-          className={cn(
-            "size-3 shrink-0 text-[var(--color-text-foreground-secondary)] opacity-60 transition-transform duration-220 ease-out motion-reduce:transition-none",
-            open ? "rotate-0" : "-rotate-90",
-          )}
+        <DisclosureChevron
+          open={open}
+          className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)] opacity-60"
         />
       </CollapsibleTrigger>
       <CollapsiblePanel>
@@ -133,7 +133,7 @@ export function EnvironmentRowBody({
   icon,
   label,
   trailing,
-  compact = false,
+  compact: compactProp,
 }: {
   icon: ReactNode;
   label: ReactNode;
@@ -141,6 +141,7 @@ export function EnvironmentRowBody({
   /** Skip the 16px icon gutter — for cramped dock/diff header pickers. */
   compact?: boolean;
 }) {
+  const compact = compactProp ?? false;
   return (
     <>
       {compact ? (
@@ -160,6 +161,8 @@ type EnvironmentRowProps = Omit<ComponentPropsWithoutRef<"button">, "children"> 
   icon: ReactNode;
   label: ReactNode;
   trailing?: ReactNode;
+  /** Let a wider leading glyph (e.g. an avatar) size its own gutter. */
+  compact?: boolean;
 };
 
 /**
@@ -171,6 +174,7 @@ export function EnvironmentRow({
   icon,
   label,
   trailing,
+  compact,
   className,
   type,
   ...props
@@ -181,7 +185,12 @@ export function EnvironmentRow({
       className={cn(ENVIRONMENT_ROW_CLASS_NAME, className)}
       {...props}
     >
-      <EnvironmentRowBody icon={icon} label={label} trailing={trailing} />
+      <EnvironmentRowBody
+        icon={icon}
+        label={label}
+        trailing={trailing}
+        {...(compact ? { compact } : {})}
+      />
     </button>
   );
 }

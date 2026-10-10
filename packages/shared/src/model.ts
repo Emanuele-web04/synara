@@ -1,39 +1,45 @@
 import {
+  CLAUDE_CODE_EFFORT_OPTIONS,
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_CAPABILITIES_INDEX,
   MODEL_OPTIONS_BY_PROVIDER,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
+  OMP_THINKING_LEVEL_OPTIONS,
+  type AntigravityModelOptions,
+  type ClaudeApiEffort,
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
-  type CodexModelOptions,
   type CursorModelOptions,
-  type GeminiModelOptions,
-  type GeminiThinkingBudget,
-  type GeminiThinkingLevel,
   type GrokModelOptions,
   type GrokReasoningEffort,
   type ModelCapabilities,
   type ModelSelection,
   type ModelSlug,
   type OpenCodeModelOptions,
+  type ProviderModelDescriptor,
+  type ProviderModelVariantDescriptor,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type PiModelOptions,
   type PiThinkingLevel,
+  type OmpModelOptions,
+  type OmpThinkingLevel,
   type ProviderKind,
   type ProviderWithDefaultModel,
-  CodexReasoningEffort,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
-  gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
+  antigravity: new Set<ModelSlug>(),
   grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
-  kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
+  droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
+  // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
+  devin: new Set<ModelSlug>(),
+  omp: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -41,11 +47,7 @@ export interface SelectableModelOption {
   name: string;
 }
 
-export type GeminiThinkingConfigKind = "budget" | "level";
-
-const GEMINI_3_MODEL_PATTERN = /^(?:auto-)?gemini-3(?:[.-]|$)/i;
-const GEMINI_2_5_MODEL_PATTERN = /^(?:auto-)?gemini-2\.5(?:[.-]|$)/i;
-const GEMINI_THINKING_LEVEL_SET = new Set<GeminiThinkingLevel>(["LOW", "HIGH"]);
+const CLAUDE_CODE_EFFORT_SET: ReadonlySet<string> = new Set(CLAUDE_CODE_EFFORT_OPTIONS);
 const PI_THINKING_LEVEL_SET = new Set<PiThinkingLevel>([
   "off",
   "minimal",
@@ -53,13 +55,9 @@ const PI_THINKING_LEVEL_SET = new Set<PiThinkingLevel>([
   "medium",
   "high",
   "xhigh",
+  "max",
 ]);
-const GEMINI_THINKING_BUDGET_MAP = new Map<string, GeminiThinkingBudget>([
-  ["-1", -1],
-  ["0", 0],
-  ["512", 512],
-]);
-
+const OMP_THINKING_LEVEL_SET = new Set<OmpThinkingLevel>(OMP_THINKING_LEVEL_OPTIONS);
 export const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [],
   supportsFastMode: false,
@@ -67,45 +65,9 @@ export const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
   promptInjectedEffortLevels: [],
   contextWindowOptions: [],
 };
-export const DEFAULT_GEMINI_MODEL_CAPABILITIES = EMPTY_MODEL_CAPABILITIES;
 
-export const GEMINI_3_MODEL_CAPABILITIES: ModelCapabilities = {
-  reasoningEffortLevels: [
-    { value: "HIGH", label: "High", isDefault: true },
-    { value: "LOW", label: "Low" },
-  ],
-  supportsFastMode: false,
-  supportsThinkingToggle: false,
-  promptInjectedEffortLevels: [],
-  contextWindowOptions: [],
-};
-
-export const GEMINI_2_5_MODEL_CAPABILITIES: ModelCapabilities = {
-  reasoningEffortLevels: [
-    { value: "-1", label: "Dynamic", isDefault: true },
-    { value: "512", label: "512 Tokens" },
-  ],
-  supportsFastMode: false,
-  supportsThinkingToggle: false,
-  promptInjectedEffortLevels: [],
-  contextWindowOptions: [],
-};
-
-function isGeminiThinkingLevel(value: string): value is GeminiThinkingLevel {
-  return GEMINI_THINKING_LEVEL_SET.has(value as GeminiThinkingLevel);
-}
-
-function isGeminiThinkingBudget(value: string): value is `${GeminiThinkingBudget}` {
-  return GEMINI_THINKING_BUDGET_MAP.has(value);
-}
-
-function sanitizeGeminiAliasSegment(value: string): string {
-  const sanitized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return sanitized || "model";
+function isClaudeCodeEffort(value: string): value is ClaudeCodeEffort {
+  return CLAUDE_CODE_EFFORT_SET.has(value);
 }
 
 export function getModelOptions(provider: ProviderKind = "codex") {
@@ -113,7 +75,7 @@ export function getModelOptions(provider: ProviderKind = "codex") {
 }
 
 function hasDefaultModel(provider: ProviderKind): provider is ProviderWithDefaultModel {
-  return provider !== "pi";
+  return provider !== "pi" && provider !== "omp";
 }
 
 export function getDefaultModel(provider: "pi"): null;
@@ -123,59 +85,124 @@ export function getDefaultModel(provider: ProviderKind = "codex"): ModelSlug | n
   return hasDefaultModel(provider) ? DEFAULT_MODEL_BY_PROVIDER[provider] : null;
 }
 
-export function getGeminiThinkingConfigKind(
-  model: string | null | undefined,
-): GeminiThinkingConfigKind | null {
-  const trimmed = trimOrNull(model);
-  if (!trimmed) {
-    return null;
-  }
-  if (GEMINI_3_MODEL_PATTERN.test(trimmed)) {
-    return "level";
-  }
-  if (GEMINI_2_5_MODEL_PATTERN.test(trimmed)) {
-    return "budget";
-  }
-  return null;
-}
-
-export function geminiCapabilitiesForModel(
-  modelId: string | null | undefined,
-  fallbackCapabilities: ModelCapabilities = EMPTY_MODEL_CAPABILITIES,
-): ModelCapabilities {
-  const trimmed = trimOrNull(modelId)?.toLowerCase();
-  switch (getGeminiThinkingConfigKind(modelId)) {
-    case "level":
-      return GEMINI_3_MODEL_CAPABILITIES;
-    case "budget":
-      if (!trimmed) {
-        return fallbackCapabilities;
-      }
-      return GEMINI_2_5_MODEL_CAPABILITIES;
-    default:
-      return fallbackCapabilities;
-  }
-}
-
 const MODEL_NAME_BY_SLUG = new Map(
   Object.values(MODEL_OPTIONS_BY_PROVIDER)
     .flat()
     .map((option) => [option.slug.toLowerCase(), option.name] as const),
 );
 
-// Turns a raw model slug into a readable label when no built-in name exists.
-// GPT slugs keep their canonical "GPT-x" casing; provider-scoped custom ids
-// ("vendor/model") stay verbatim; everything else is title-cased on -/_ .
-export function humanizeModelSlug(slug: string): string {
-  if (slug.toLowerCase().startsWith("gpt-")) {
-    const [, version, ...rest] = slug.split("-");
-    if (rest.length === 0) return `GPT-${version}`;
-    return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  deepseek: "DeepSeek",
+  glm: "GLM",
+  gpt: "GPT",
+  minimax: "MiniMax",
+  openai: "OpenAI",
+  opencode: "OpenCode",
+  swe: "SWE",
+  xai: "xAI",
+  xhigh: "XHigh",
+};
+
+// First tokens that mark a provider-supplied label as a model-family name
+// worth normalizing: the brand tokens plus families whose casing is already
+// title-case. Anything else (custom names like "MyModel", "K2P6") keeps its
+// original casing untouched.
+const MODEL_FAMILY_TOKENS: ReadonlySet<string> = new Set([
+  ...Object.keys(MODEL_TOKEN_DISPLAY_NAMES),
+  "adaptive",
+  "auto",
+  "claude",
+  "codex",
+  "composer",
+  "cursor",
+  "devin",
+  "gemini",
+  "grok",
+  "inkling",
+  "kimi",
+  "nemotron",
+]);
+
+function humanizeModelToken(token: string): string {
+  const key = token.toLowerCase();
+  const displayName = Object.prototype.hasOwnProperty.call(MODEL_TOKEN_DISPLAY_NAMES, key)
+    ? MODEL_TOKEN_DISPLAY_NAMES[key]
+    : undefined;
+  return displayName ?? token.charAt(0).toUpperCase() + token.slice(1);
+}
+
+const MODEL_DATE_OR_BUILD_TOKEN_PATTERN = /^\d{8}$/u;
+
+// Rejoins version fragments split on "-"/"_": a pure-digit token merges onto a
+// preceding token that already ends in a digit, so "swe-1-6" reads as 1.6,
+// "claude-opus-4-8" as 4.8, and "kimi-k2-6" as K2.6. Zero-prefixed tokens and
+// eight-digit provider date/build stamps stay separate, never version minors.
+function joinModelVersionTokens(tokens: string[]): string[] {
+  const merged: string[] = [];
+  for (const token of tokens) {
+    const previous = merged[merged.length - 1];
+    if (
+      /^\d+$/u.test(token) &&
+      (token === "0" || !token.startsWith("0")) &&
+      !MODEL_DATE_OR_BUILD_TOKEN_PATTERN.test(token) &&
+      previous !== undefined &&
+      /\d$/u.test(previous)
+    ) {
+      merged[merged.length - 1] = `${previous}.${token}`;
+    } else {
+      merged.push(token);
+    }
   }
+  return merged;
+}
+
+// Canonical brand shapes that differ from plain space-joined words.
+function restoreModelNameSeparators(name: string): string {
+  return name.replace(/\bGPT (\d)/gu, "GPT-$1");
+}
+
+// Turns a raw model slug into a readable label when no built-in name exists.
+// Provider-scoped custom ids ("vendor/model") stay verbatim; everything else is
+// tokenized on -/_, version fragments rejoined with ".", known model-family
+// brands restored to their canonical casing, and GPT versions rehyphenated.
+export function humanizeModelSlug(slug: string): string {
   if (slug.includes("/")) {
     return slug;
   }
-  return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  const tokens = joinModelVersionTokens(slug.split(/[-_]+/g)).map(humanizeModelToken);
+  return restoreModelNameSeparators(tokens.join(" "));
+}
+
+/**
+ * Normalizes a provider-supplied display name to Synara's canonical casing:
+ * known brand tokens are re-cased ("Swe" → "SWE", "Deepseek" → "DeepSeek"),
+ * slug separators become spaces ("GLM-5.3-Flash" → "GLM 5.3 Flash"), digit
+ * fragments rejoin as versions, and GPT versions keep their hyphen. Gated on a
+ * known family first token so freeform names keep their casing; non-brand
+ * tokens and a parenthesized tail pass through unchanged.
+ */
+export function normalizeModelDisplayName(name: string): string {
+  const trimmed = name.trim();
+  const parenIndex = trimmed.indexOf("(");
+  const head = parenIndex >= 0 ? trimmed.slice(0, parenIndex).trimEnd() : trimmed;
+  const tail = parenIndex >= 0 ? trimmed.slice(parenIndex) : "";
+  const tokens = head.split(/[-_\s]+/u).filter(Boolean);
+  const [firstToken] = tokens;
+  if (firstToken === undefined || !MODEL_FAMILY_TOKENS.has(firstToken.toLowerCase())) {
+    return trimmed;
+  }
+  const normalized = joinModelVersionTokens(tokens)
+    .map((token) => {
+      const displayName = Object.prototype.hasOwnProperty.call(
+        MODEL_TOKEN_DISPLAY_NAMES,
+        token.toLowerCase(),
+      )
+        ? MODEL_TOKEN_DISPLAY_NAMES[token.toLowerCase()]
+        : undefined;
+      return displayName ?? token;
+    })
+    .join(" ");
+  return `${restoreModelNameSeparators(normalized)}${tail ? ` ${tail}` : ""}`;
 }
 
 export function formatModelDisplayName(model: string | null | undefined): string | undefined {
@@ -187,100 +214,160 @@ export function formatModelDisplayName(model: string | null | undefined): string
   return MODEL_NAME_BY_SLUG.get(normalized.toLowerCase()) ?? humanizeModelSlug(normalized);
 }
 
-export function getGeminiThinkingSelectionValue(
-  caps: ModelCapabilities,
-  modelOptions: GeminiModelOptions | null | undefined,
-): string | null {
-  const candidates = [
-    trimOrNull(modelOptions?.thinkingLevel),
-    modelOptions?.thinkingBudget !== undefined ? String(modelOptions.thinkingBudget) : null,
-  ];
+// ── Effort helpers ────────────────────────────────────────────────────
 
-  return (
-    candidates.find(
-      (candidate): candidate is string => !!candidate && hasEffortLevel(caps, candidate),
-    ) ??
-    candidates.find((candidate): candidate is string => !!candidate) ??
-    null
-  );
-}
-
-export function geminiModelOptionsFromEffortValue(
-  value: string | null | undefined,
-): GeminiModelOptions | undefined {
-  const trimmed = trimOrNull(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (isGeminiThinkingLevel(trimmed)) {
-    return { thinkingLevel: trimmed };
-  }
-  if (isGeminiThinkingBudget(trimmed)) {
-    return {
-      thinkingBudget: GEMINI_THINKING_BUDGET_MAP.get(trimmed) as GeminiThinkingBudget,
-    };
+export function parseCursorCliReasoningEffort(model: string): string | undefined {
+  const tokens = model.trim().toLowerCase().split("-");
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index];
+    if (!token) {
+      continue;
+    }
+    if (token === "xhigh") {
+      return "xhigh";
+    }
+    if (token === "high" && tokens[index - 1] === "extra") {
+      return "xhigh";
+    }
+    if (
+      token === "max" ||
+      token === "none" ||
+      token === "low" ||
+      token === "medium" ||
+      token === "high"
+    ) {
+      return token;
+    }
   }
   return undefined;
 }
 
-export function getGeminiThinkingModelAlias(
-  model: string,
-  modelOptions: GeminiModelOptions | null | undefined,
-): string | null {
-  const kind = getGeminiThinkingConfigKind(model);
-  if (!kind || !modelOptions) {
-    return null;
-  }
-
-  const caps = getModelCapabilities("gemini", model);
-  const effort = getGeminiThinkingSelectionValue(caps, modelOptions);
-  if (!effort || !hasEffortLevel(caps, effort)) {
-    return null;
-  }
-  const nextOptions = geminiModelOptionsFromEffortValue(effort);
-  if (!nextOptions) {
-    return null;
-  }
-
-  const base = sanitizeGeminiAliasSegment(model);
-  if (kind === "level" && nextOptions.thinkingLevel) {
-    return `synara-gemini-${base}-thinking-level-${nextOptions.thinkingLevel.toLowerCase()}`;
-  }
-  if (kind === "budget" && nextOptions.thinkingBudget !== undefined) {
-    const budget =
-      nextOptions.thinkingBudget === -1 ? "dynamic" : String(nextOptions.thinkingBudget);
-    return `synara-gemini-${base}-thinking-budget-${budget}`;
-  }
-  return null;
-}
-
-export function resolveGeminiApiModelId(
-  model: string,
-  modelOptions: GeminiModelOptions | null | undefined,
-): string {
-  return getGeminiThinkingModelAlias(model, modelOptions) ?? model;
-}
-
-// ── Effort helpers ────────────────────────────────────────────────────
-
-/** Check whether a capabilities object includes a given effort value. */
 export function hasEffortLevel(caps: ModelCapabilities, value: string): boolean {
   return caps.reasoningEffortLevels.some((l) => l.value === value);
 }
 
-/** Return the default effort value for a capabilities object, or null if none. */
 export function getDefaultEffort(caps: ModelCapabilities): string | null {
   return caps.reasoningEffortLevels.find((l) => l.isDefault)?.value ?? null;
 }
 
-/** Check whether a capabilities object includes a given context window value. */
 export function hasContextWindowOption(caps: ModelCapabilities, value: string): boolean {
   return caps.contextWindowOptions.some((option) => option.value === value);
 }
 
-/** Return the default context window value for a capabilities object, or null if none. */
 export function getDefaultContextWindow(caps: ModelCapabilities): string | null {
   return caps.contextWindowOptions.find((option) => option.isDefault)?.value ?? null;
+}
+
+const DEVIN_STATIC_MODEL_VARIANTS: Readonly<
+  Record<string, ReadonlyArray<ProviderModelVariantDescriptor>>
+> = {
+  "swe-1-6": [
+    { model: "swe-1-6", fastMode: false },
+    { model: "swe-1-6-fast", fastMode: true },
+  ],
+  "swe-1-7": [
+    { model: "swe-1-7", fastMode: false },
+    { model: "swe-1-7-lightning", fastMode: true },
+  ],
+};
+
+export function getDevinStaticModelVariants(
+  model: string | null | undefined,
+): ReadonlyArray<ProviderModelVariantDescriptor> | undefined {
+  const normalizedModel = normalizeModelSlug(model, "devin");
+  return normalizedModel ? DEVIN_STATIC_MODEL_VARIANTS[normalizedModel] : undefined;
+}
+
+export function resolveDevinModelVariant(input: {
+  readonly model?: string | null | undefined;
+  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly modelVariant?: string | null | undefined;
+  readonly reasoningEffort?: string | null | undefined;
+  readonly fastMode?: boolean | undefined;
+  readonly thinking?: boolean | null | undefined;
+  readonly contextWindow?: string | null | undefined;
+}): string | undefined {
+  const variants = input.runtimeModel?.modelVariants ?? getDevinStaticModelVariants(input.model);
+  const explicitVariant = trimOrNull(input.modelVariant) ?? undefined;
+  if (!variants?.length) {
+    return explicitVariant;
+  }
+
+  const reasoningEffort = trimOrNull(input.reasoningEffort);
+  const contextWindow = trimOrNull(input.contextWindow);
+  const mapsReasoningEffort =
+    reasoningEffort !== null && variants.some((variant) => variant.reasoningEffort !== undefined);
+  const mapsFastMode =
+    input.fastMode !== undefined && variants.some((variant) => variant.fastMode !== undefined);
+  const mapsThinking =
+    input.thinking !== null &&
+    input.thinking !== undefined &&
+    variants.some((variant) => variant.thinking !== undefined);
+  const mapsContextWindow =
+    contextWindow !== null && variants.some((variant) => variant.contextWindow !== undefined);
+  if (!mapsReasoningEffort && !mapsFastMode && !mapsThinking && !mapsContextWindow) {
+    return explicitVariant;
+  }
+
+  const effectiveReasoningEffort =
+    reasoningEffort ?? trimOrNull(input.runtimeModel?.defaultReasoningEffort);
+  const effectiveContextWindow =
+    contextWindow ?? trimOrNull(input.runtimeModel?.defaultContextWindow);
+  // Thinking is on by default for Devin families that expose a thinking
+  // toggle. Keep the persisted option sparse, but use the effective
+  // default when resolving a non-default context window to its concrete
+  // process-start variant.
+  const effectiveThinking =
+    input.thinking ?? (input.runtimeModel?.supportsThinkingToggle === true ? true : undefined);
+  const matches = (variant: ProviderModelVariantDescriptor): boolean => {
+    if (effectiveReasoningEffort && variant.reasoningEffort !== effectiveReasoningEffort) {
+      return false;
+    }
+    if (effectiveContextWindow && variant.contextWindow !== effectiveContextWindow) {
+      return false;
+    }
+    if (input.fastMode === true && variant.fastMode !== true) {
+      return false;
+    }
+    if (input.fastMode !== true && variant.fastMode === true) {
+      return false;
+    }
+    if (
+      effectiveThinking !== null &&
+      effectiveThinking !== undefined &&
+      variant.thinking !== undefined
+    ) {
+      return variant.thinking === effectiveThinking;
+    }
+    return true;
+  };
+
+  const preferred = variants.filter(matches);
+  const withDefaultContext =
+    !contextWindow && effectiveContextWindow
+      ? preferred.filter((variant) => variant.contextWindow === effectiveContextWindow)
+      : preferred;
+  return (withDefaultContext[0] ?? preferred[0])?.model;
+}
+
+export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: string): boolean {
+  return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
+}
+
+// Claude model ids may carry a context-window qualifier, e.g. `claude-fable-5-1[1m]`.
+const CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN = /\[([^\]]+)\]$/u;
+
+export function getClaudeContextWindowSuffix(model: string | null | undefined): string | null {
+  if (typeof model !== "string") return null;
+  return CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN.exec(model)?.[1]?.toLowerCase() ?? null;
+}
+
+export function stripClaudeContextWindowSuffix(model: string): string {
+  return model.replace(CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN, "");
+}
+
+export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
+  return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
 }
 
 export function resolveLabeledOptionValue(
@@ -336,47 +423,23 @@ function providerOptionSelectionValue(
   return typeof value === "string" || typeof value === "boolean" ? value : undefined;
 }
 
-export function getProviderOptionSelectionValue(
-  selections: ProviderOptionSelectionsInput,
-  id: string,
-): string | boolean | undefined {
-  return providerOptionSelectionValue(selections, id);
-}
-
-export function getProviderOptionStringSelectionValue(
-  selections: ProviderOptionSelectionsInput,
-  id: string,
-): string | undefined {
-  const value = getProviderOptionSelectionValue(selections, id);
-  return typeof value === "string" ? value : undefined;
-}
-
 export function getProviderOptionBooleanSelectionValue(
   selections: ProviderOptionSelectionsInput,
   id: string,
 ): boolean | undefined {
-  const value = getProviderOptionSelectionValue(selections, id);
+  const value = providerOptionSelectionValue(selections, id);
   return typeof value === "boolean" ? value : undefined;
-}
-
-export function getModelSelectionOptionValue(
-  modelSelection: ModelSelection | null | undefined,
-  id: string,
-): string | boolean | undefined {
-  return getProviderOptionSelectionValue(
-    modelSelection?.options as ProviderOptionSelectionsInput,
-    id,
-  );
 }
 
 export function getModelSelectionStringOptionValue(
   modelSelection: ModelSelection | null | undefined,
   id: string,
 ): string | undefined {
-  return getProviderOptionStringSelectionValue(
+  const value = providerOptionSelectionValue(
     modelSelection?.options as ProviderOptionSelectionsInput,
     id,
   );
+  return typeof value === "string" ? value : undefined;
 }
 
 export function getModelSelectionBooleanOptionValue(
@@ -418,20 +481,14 @@ function withProviderOptionCurrentValue(
   return { ...descriptor, currentValue };
 }
 
-function reasoningDescriptorId(provider: ProviderKind, caps: ModelCapabilities): string {
+function reasoningDescriptorId(provider: ProviderKind): string {
   if (provider === "claudeAgent") {
     return "effort";
   }
-  if (provider === "kilo" || provider === "opencode") {
+  if (provider === "opencode") {
     return "variant";
   }
-  if (provider === "gemini") {
-    const values = caps.reasoningEffortLevels.map((option) => option.value);
-    return values.length > 0 && values.every((value) => /^-?\d+$/u.test(value))
-      ? "thinkingBudget"
-      : "thinkingLevel";
-  }
-  if (provider === "pi") {
+  if (provider === "pi" || provider === "omp") {
     return "thinkingLevel";
   }
   return "reasoningEffort";
@@ -442,15 +499,13 @@ function legacyCapabilityDescriptors(
   caps: ModelCapabilities,
 ): ProviderOptionDescriptor[] {
   const primaryOptions =
-    provider === "kilo" || provider === "opencode"
-      ? (caps.variantOptions ?? [])
-      : caps.reasoningEffortLevels;
+    provider === "opencode" ? (caps.variantOptions ?? []) : caps.reasoningEffortLevels;
   const descriptors: ProviderOptionDescriptor[] = [];
   if (primaryOptions.length > 0) {
     const defaultPrimaryOption = primaryOptions.find((option) => option.isDefault);
     descriptors.push({
-      id: reasoningDescriptorId(provider, caps),
-      label: provider === "kilo" || provider === "opencode" ? "Variant" : "Reasoning",
+      id: reasoningDescriptorId(provider),
+      label: provider === "opencode" ? "Variant" : "Reasoning",
       type: "select",
       options: primaryOptions.map((option) => ({
         id: option.value,
@@ -478,6 +533,20 @@ function legacyCapabilityDescriptors(
       ...(defaultContextWindowOption ? { currentValue: defaultContextWindowOption.value } : {}),
     });
   }
+  if (caps.autoCompactWindowOptions && caps.autoCompactWindowOptions.length > 0) {
+    const defaultOption = caps.autoCompactWindowOptions.find((option) => option.isDefault);
+    descriptors.push({
+      id: "autoCompactWindow",
+      label: "Auto-compact",
+      type: "select",
+      options: caps.autoCompactWindowOptions.map((option) => ({
+        id: option.value,
+        label: option.label,
+        ...(option.isDefault ? { isDefault: true as const } : {}),
+      })),
+      ...(defaultOption ? { currentValue: defaultOption.value } : {}),
+    });
+  }
   if (caps.supportsFastMode) {
     descriptors.push({ id: "fastMode", label: "Fast Mode", type: "boolean" });
   }
@@ -498,7 +567,7 @@ export function getProviderOptionDescriptors(input: {
   return descriptors.map((descriptor) =>
     withProviderOptionCurrentValue(
       descriptor,
-      getProviderOptionSelectionValue(input.selections, descriptor.id),
+      providerOptionSelectionValue(input.selections, descriptor.id),
     ),
   );
 }
@@ -515,50 +584,138 @@ export function getProviderOptionCurrentValue(
   return descriptor.currentValue ?? descriptor.options.find((option) => option.isDefault)?.id;
 }
 
-export function getProviderOptionCurrentLabel(
-  descriptor: ProviderOptionDescriptor | null | undefined,
-): string | undefined {
-  const value = getProviderOptionCurrentValue(descriptor);
-  if (!descriptor) {
-    return undefined;
-  }
-  if (descriptor.type === "boolean") {
-    return typeof value === "boolean" ? (value ? "On" : "Off") : undefined;
-  }
-  return typeof value === "string"
-    ? descriptor.options.find((option) => option.id === value)?.label
-    : undefined;
-}
-
-export function buildProviderOptionSelectionsFromDescriptors(
-  descriptors: ReadonlyArray<ProviderOptionDescriptor> | null | undefined,
-): ProviderOptionSelection[] | undefined {
-  if (!descriptors || descriptors.length === 0) {
-    return undefined;
-  }
-  const selections = descriptors.flatMap((descriptor) => {
-    const value = getProviderOptionCurrentValue(descriptor);
-    return typeof value === "string" || typeof value === "boolean"
-      ? [{ id: descriptor.id, value }]
-      : [];
-  });
-  return selections.length > 0 ? selections : undefined;
-}
-
 // ── Data-driven capability resolver ───────────────────────────────────
 
 export function getModelCapabilities(
   provider: ProviderKind,
   model: string | null | undefined,
 ): ModelCapabilities {
-  const slug = normalizeModelSlug(model, provider);
+  const normalizedSlug = normalizeModelSlug(model, provider);
+  const slug =
+    provider === "claudeAgent" && normalizedSlug
+      ? stripClaudeContextWindowSuffix(normalizedSlug)
+      : normalizedSlug;
   if (slug && MODEL_CAPABILITIES_INDEX[provider]?.[slug]) {
     return MODEL_CAPABILITIES_INDEX[provider][slug];
   }
-  if (provider === "gemini") {
-    return geminiCapabilitiesForModel(slug ?? model, EMPTY_MODEL_CAPABILITIES);
+  if (provider === "grok" && slug) {
+    // Grok exposes reasoning effort as a provider-level CLI option, while its
+    // runtime model catalog contains only model ids. New models inherit the
+    // matching CLI ladder (grok-build vs Grok 4.5 vs Grok 4.6+) before discovery
+    // returns a descriptor.
+    return grokCapabilitiesForFamily(resolveGrokEffortFamily(slug));
+  }
+  if (provider === "claudeAgent" && slug) {
+    const newestKnown = resolveNewestKnownClaudeFamilyModel(slug);
+    if (newestKnown) {
+      return MODEL_CAPABILITIES_INDEX.claudeAgent[newestKnown] ?? EMPTY_MODEL_CAPABILITIES;
+    }
   }
   return EMPTY_MODEL_CAPABILITIES;
+}
+
+// Claude Code ships new models before Synara's catalog lists them. Catalog
+// entries always win; only an id that is newer than every catalog model of its
+// family borrows that family's newest capabilities. Older or unrecognized ids
+// keep the empty fallback so custom and legacy selections do not gain options.
+const CLAUDE_FAMILY_MODEL_PATTERN =
+  /^claude-(fable|opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/u;
+
+type ClaudeFamilyModelVersion = {
+  readonly family: string;
+  readonly major: number;
+  readonly minor: number;
+};
+
+function parseClaudeFamilyModelVersion(slug: string): ClaudeFamilyModelVersion | null {
+  const match = CLAUDE_FAMILY_MODEL_PATTERN.exec(slug.trim().toLowerCase());
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+  return { family: match[1], major: Number(match[2]), minor: Number(match[3] ?? 0) };
+}
+
+function compareClaudeFamilyModelVersions(
+  left: ClaudeFamilyModelVersion,
+  right: ClaudeFamilyModelVersion,
+): number {
+  return left.major - right.major || left.minor - right.minor;
+}
+
+const NEWEST_CLAUDE_CATALOG_MODEL_BY_FAMILY = (() => {
+  const newest = new Map<string, { slug: ModelSlug; version: ClaudeFamilyModelVersion }>();
+  for (const model of MODEL_OPTIONS_BY_PROVIDER.claudeAgent) {
+    const version = parseClaudeFamilyModelVersion(model.slug);
+    const current = version ? newest.get(version.family) : undefined;
+    if (version && (!current || compareClaudeFamilyModelVersions(version, current.version) > 0)) {
+      newest.set(version.family, { slug: model.slug, version });
+    }
+  }
+  return newest;
+})();
+
+/**
+ * Returns the newest catalog model of `slug`'s Claude family when `slug` is a
+ * newer release the catalog does not list yet (e.g. `claude-opus-6` → the
+ * newest catalog Opus). Catalog, older, and unrecognized ids return `null`.
+ */
+export function resolveNewestKnownClaudeFamilyModel(
+  model: string | null | undefined,
+): ModelSlug | null {
+  const normalized = normalizeModelSlug(model, "claudeAgent");
+  if (!normalized) {
+    return null;
+  }
+  const slug = stripClaudeContextWindowSuffix(normalized) as ModelSlug;
+  if (MODEL_SLUG_SET_BY_PROVIDER.claudeAgent.has(slug)) {
+    return null;
+  }
+  const version = parseClaudeFamilyModelVersion(slug);
+  const newest = version ? NEWEST_CLAUDE_CATALOG_MODEL_BY_FAMILY.get(version.family) : undefined;
+  return version && newest && compareClaudeFamilyModelVersions(version, newest.version) > 0
+    ? newest.slug
+    : null;
+}
+
+export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" {
+  const slug = model.trim().toLowerCase();
+  if (
+    slug.includes("build") ||
+    slug.includes("code-fast") ||
+    slug === "grok-4" ||
+    slug === "grok-4.3" ||
+    slug.startsWith("grok-4.3-")
+  ) {
+    return "build";
+  }
+
+  const version = /grok-(\d+)\.(\d+)/u.exec(slug);
+  if (!version) {
+    // Preserve the legacy Grok Build ladder for custom or future aliases we
+    // cannot classify. Discovery can still opt known versioned models into
+    // the newer ladders without silently changing persisted custom models.
+    return "build";
+  }
+  const major = Number(version[1]);
+  const minor = Number(version[2]);
+  if (major < 4 || (major === 4 && minor <= 3)) {
+    return "build";
+  }
+  if (major === 4 && minor === 5) {
+    return "4.5";
+  }
+  return "4.6";
+}
+
+function grokCapabilitiesForFamily(family: "build" | "4.5" | "4.6"): ModelCapabilities {
+  const grokCaps = MODEL_CAPABILITIES_INDEX.grok;
+  if (family === "build") {
+    return grokCaps["grok-build"] ?? EMPTY_MODEL_CAPABILITIES;
+  }
+  if (family === "4.5") {
+    return grokCaps["grok-4.5"] ?? grokCaps["grok-4.6"] ?? EMPTY_MODEL_CAPABILITIES;
+  }
+  return grokCaps["grok-4.6"] ?? EMPTY_MODEL_CAPABILITIES;
 }
 
 export function isClaudeUltrathinkPrompt(text: string | null | undefined): boolean {
@@ -579,12 +736,22 @@ export function normalizeModelSlug(
   }
 
   const providerScopedModel =
-    provider === "claudeAgent" ? trimmed.replace(/\[[^\]]+\]$/u, "") : trimmed;
+    provider === "claudeAgent"
+      ? stripClaudeContextWindowSuffix(trimmed)
+      : provider === "devin" && trimmed === trimmed.toLowerCase() && trimmed.endsWith("-medium")
+        ? trimmed.slice(0, -"-medium".length)
+        : trimmed;
   const aliases = MODEL_SLUG_ALIASES_BY_PROVIDER[provider] as Record<string, ModelSlug>;
-  const aliased = Object.prototype.hasOwnProperty.call(aliases, providerScopedModel)
-    ? aliases[providerScopedModel]
+  const aliasKey = providerScopedModel.toLowerCase();
+  const aliased = Object.prototype.hasOwnProperty.call(aliases, aliasKey)
+    ? aliases[aliasKey]
     : undefined;
-  return typeof aliased === "string" ? aliased : (providerScopedModel as ModelSlug);
+  const normalized = typeof aliased === "string" ? aliased : providerScopedModel;
+  return (
+    provider === "claudeAgent" && getClaudeContextWindowSuffix(trimmed) === "1m"
+      ? `${normalized}[1m]`
+      : normalized
+  ) as ModelSlug;
 }
 
 export function resolveSelectableModel(
@@ -617,15 +784,37 @@ export function resolveSelectableModel(
   }
 
   const resolved = options.find((option) => option.slug === normalized);
-  return resolved ? resolved.slug : null;
+  if (resolved) {
+    return resolved.slug;
+  }
+
+  // Scoped providers (omp/pi/opencode) surface catalog slugs as
+  // `<upstream-provider>/<model>`, while saved selections and custom entries
+  // can hold the bare model id. Resolve a bare slug to a uniquely matching
+  // scoped option; ambiguity across upstream providers resolves to nothing.
+  if (
+    (provider === "omp" || provider === "pi" || provider === "opencode") &&
+    !normalized.includes("/")
+  ) {
+    const scoped = options.filter((option) => option.slug.endsWith(`/${normalized}`));
+    if (scoped.length === 1) {
+      return scoped[0]!.slug;
+    }
+  }
+
+  return null;
 }
 
 export function resolveModelSlug(
   model: string | null | undefined,
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
-  const normalized = normalizeModelSlug(model, provider);
-  if (provider === "pi") {
+  const normalizedModel = normalizeModelSlug(model, provider);
+  const normalized =
+    provider === "claudeAgent" && normalizedModel
+      ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
+      : normalizedModel;
+  if (provider === "devin" || provider === "pi" || provider === "omp") {
     return normalized;
   }
   if (!normalized) {
@@ -644,37 +833,27 @@ export function resolveModelSlugForProvider(
   return resolveModelSlug(model, provider);
 }
 
-/** Trim a string, returning null for empty/missing values. */
 export function trimOrNull<T extends string>(value: T | null | undefined): T | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim() as T;
   return trimmed || null;
 }
 
-export function normalizeCodexModelOptions(
-  model: string | null | undefined,
-  modelOptions: CodexModelOptions | null | undefined,
-): CodexModelOptions | undefined {
-  const caps = getModelCapabilities("codex", model);
-  const defaultReasoningEffort = getDefaultEffort(caps) as CodexReasoningEffort;
-  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort) ?? defaultReasoningEffort;
-  const fastModeEnabled = modelOptions?.fastMode === true;
-  const nextOptions: CodexModelOptions = {
-    ...(reasoningEffort !== defaultReasoningEffort ? { reasoningEffort } : {}),
-    ...(fastModeEnabled ? { fastMode: true } : {}),
-  };
-  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
-}
-
+/**
+ * Keeps only explicit Claude option overrides. The model-native auto-compact
+ * window stays unset so Claude Code can apply server tuning, settings.json,
+ * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
+ */
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
 ): ClaudeModelOptions | undefined {
   const caps = getModelCapabilities("claudeAgent", model);
   const defaultReasoningEffort = getDefaultEffort(caps);
-  const defaultContextWindow = getDefaultContextWindow(caps);
+  const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps);
   const resolvedEffort = trimOrNull(modelOptions?.effort);
-  const resolvedContextWindow = trimOrNull(modelOptions?.contextWindow);
+  const resolvedAutoCompactWindow =
+    trimOrNull(modelOptions?.autoCompactWindow) ?? trimOrNull(modelOptions?.contextWindow);
   const isPromptInjected = caps.promptInjectedEffortLevels.includes(resolvedEffort ?? "");
   const effort =
     resolvedEffort &&
@@ -683,11 +862,11 @@ export function normalizeClaudeModelOptions(
     resolvedEffort !== defaultReasoningEffort
       ? resolvedEffort
       : undefined;
-  const contextWindow =
-    resolvedContextWindow &&
-    hasContextWindowOption(caps, resolvedContextWindow) &&
-    resolvedContextWindow !== defaultContextWindow
-      ? resolvedContextWindow
+  const autoCompactWindow =
+    resolvedAutoCompactWindow &&
+    hasAutoCompactWindowOption(caps, resolvedAutoCompactWindow) &&
+    resolvedAutoCompactWindow !== defaultAutoCompactWindow
+      ? resolvedAutoCompactWindow
       : undefined;
   const thinking =
     caps.supportsThinkingToggle && modelOptions?.thinking === false ? false : undefined;
@@ -696,48 +875,119 @@ export function normalizeClaudeModelOptions(
     ...(thinking === false ? { thinking: false } : {}),
     ...(effort ? { effort } : {}),
     ...(fastMode ? { fastMode: true } : {}),
-    ...(contextWindow ? { contextWindow } : {}),
+    ...(autoCompactWindow ? { autoCompactWindow } : {}),
   };
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
 export function resolveApiModelId(modelSelection: ModelSelection): string {
-  switch (modelSelection.provider) {
-    case "claudeAgent": {
-      const caps = getModelCapabilities(modelSelection.provider, modelSelection.model);
-      return modelSelection.options?.contextWindow === "1m" && hasContextWindowOption(caps, "1m")
-        ? `${modelSelection.model}[1m]`
-        : modelSelection.model;
-    }
-    default:
-      return modelSelection.model;
+  if (
+    modelSelection.provider === "claudeAgent" &&
+    normalizeClaudeModelOptions(modelSelection.model, modelSelection.options)?.autoCompactWindow ===
+      "1m" &&
+    getClaudeContextWindowSuffix(modelSelection.model) === null
+  ) {
+    return `${modelSelection.model}[1m]`;
   }
+  return modelSelection.model;
 }
 
-export function normalizeGeminiModelOptions(
+/**
+ * Map a requested Claude Code effort to the API effort passed at session spawn.
+ * `ultrathink` is prompt-injected (no API effort); `ultracode` runs as xhigh plus
+ * the `ultracode` session setting.
+ */
+export function getEffectiveClaudeCodeEffort(
+  effort: ClaudeCodeEffort | null | undefined,
+): ClaudeApiEffort | null {
+  if (!effort || effort === "ultrathink") {
+    return null;
+  }
+  return effort === "ultracode" ? "xhigh" : effort;
+}
+
+interface ClaudeSpawnProfile {
+  readonly maxEffort: boolean;
+  readonly autoCompactWindow: string | undefined;
+}
+
+// Claude's live flag settings do not refresh the runtime auto-compaction window.
+// Keep this profile aligned with the adapter's normalized spawn settings.
+function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
+  const caps = getModelCapabilities("claudeAgent", selection.model);
+  const requestedEffort = trimOrNull(selection.options?.effort ?? null);
+  const effort =
+    requestedEffort && isClaudeCodeEffort(requestedEffort) && hasEffortLevel(caps, requestedEffort)
+      ? requestedEffort
+      : null;
+  return {
+    maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
+    autoCompactWindow: normalizeClaudeModelOptions(selection.model, selection.options)
+      ?.autoCompactWindow,
+  } satisfies ClaudeSpawnProfile;
+}
+
+/** Restart only for spawn-fixed settings; resume preserves identity, not guaranteed cache hits. */
+export function claudeSelectionRequiresRestart(
+  previous: ModelSelection | undefined,
+  next: ModelSelection,
+): boolean {
+  if (next.provider !== "claudeAgent") {
+    return false;
+  }
+  if (previous === undefined) {
+    // First observation in this process: the live session was started from the
+    // same selection source, so treat it as unchanged rather than replaying.
+    return false;
+  }
+  if (previous.provider !== "claudeAgent") {
+    return true;
+  }
+  // Normalize against each model before deciding a model-only switch is live:
+  // a persisted `max` request may become spawn-fixed (or stop being so) as the
+  // selected model's capabilities change.
+  const prev = claudeSpawnProfile(previous);
+  const desired = claudeSpawnProfile(next);
+  return (
+    prev.maxEffort !== desired.maxEffort || prev.autoCompactWindow !== desired.autoCompactWindow
+  );
+}
+
+export function normalizeCursorModelOptions(
   model: string | null | undefined,
-  modelOptions: GeminiModelOptions | null | undefined,
-): GeminiModelOptions | undefined {
-  const caps = getModelCapabilities("gemini", model);
-  const effort = getGeminiThinkingSelectionValue(caps, modelOptions);
-  if (!effort || !hasEffortLevel(caps, effort)) {
-    return undefined;
-  }
-  const defaultEffort = getDefaultEffort(caps);
-  const nextOptions = geminiModelOptionsFromEffortValue(effort);
-  if (!nextOptions) {
-    return undefined;
-  }
-
-  const normalizedEffort =
-    nextOptions.thinkingLevel !== undefined
-      ? nextOptions.thinkingLevel
-      : String(nextOptions.thinkingBudget);
-  if (normalizedEffort === defaultEffort) {
-    return undefined;
-  }
-
-  return nextOptions;
+  modelOptions: CursorModelOptions | null | undefined,
+  capabilities: ModelCapabilities = getModelCapabilities("cursor", model),
+): CursorModelOptions | undefined {
+  const defaultReasoningEffort = getDefaultEffort(capabilities);
+  const rawEffort = trimOrNull(modelOptions?.reasoningEffort);
+  // Cursor's fast variants use a different implicit default (Grok fast → low).
+  // Always send the UI-selected effort, including the composer default.
+  const reasoningEffort =
+    rawEffort && hasEffortLevel(capabilities, rawEffort)
+      ? rawEffort
+      : defaultReasoningEffort && hasEffortLevel(capabilities, defaultReasoningEffort)
+        ? defaultReasoningEffort
+        : undefined;
+  const rawContextWindow = trimOrNull(modelOptions?.contextWindow);
+  const defaultContextWindow = getDefaultContextWindow(capabilities);
+  const contextWindow =
+    rawContextWindow &&
+    hasContextWindowOption(capabilities, rawContextWindow) &&
+    rawContextWindow !== defaultContextWindow
+      ? rawContextWindow
+      : undefined;
+  const fastMode = capabilities.supportsFastMode ? modelOptions?.fastMode === true : undefined;
+  const thinking =
+    capabilities.supportsThinkingToggle && modelOptions?.thinking !== undefined
+      ? modelOptions.thinking
+      : undefined;
+  const nextOptions: CursorModelOptions = {
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+  };
+  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
 export function normalizeGrokModelOptions(
@@ -755,12 +1005,35 @@ export function normalizeGrokModelOptions(
   return { reasoningEffort: reasoningEffort as GrokReasoningEffort };
 }
 
+export function normalizeAntigravityModelOptions(
+  model: string | null | undefined,
+  modelOptions: AntigravityModelOptions | null | undefined,
+  capabilities: ModelCapabilities = getModelCapabilities("antigravity", model),
+): AntigravityModelOptions | undefined {
+  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
+  if (!reasoningEffort || !hasEffortLevel(capabilities, reasoningEffort)) {
+    return undefined;
+  }
+  if (reasoningEffort === getDefaultEffort(capabilities)) {
+    return undefined;
+  }
+  return { reasoningEffort };
+}
+
 export function normalizePiModelOptions(
   modelOptions: PiModelOptions | null | undefined,
 ): PiModelOptions | undefined {
   const thinkingLevel = trimOrNull(modelOptions?.thinkingLevel);
   return thinkingLevel && PI_THINKING_LEVEL_SET.has(thinkingLevel as PiThinkingLevel)
     ? { thinkingLevel: thinkingLevel as PiThinkingLevel }
+    : undefined;
+}
+export function normalizeOmpModelOptions(
+  modelOptions: OmpModelOptions | null | undefined,
+): OmpModelOptions | undefined {
+  const thinkingLevel = trimOrNull(modelOptions?.thinkingLevel);
+  return thinkingLevel && OMP_THINKING_LEVEL_SET.has(thinkingLevel as OmpThinkingLevel)
+    ? { thinkingLevel: thinkingLevel as OmpThinkingLevel }
     : undefined;
 }
 
@@ -772,18 +1045,6 @@ export function normalizeOpenCodeModelOptions(
   const nextOptions: OpenCodeModelOptions = {
     ...(variant ? { variant } : {}),
     ...(agent ? { agent } : {}),
-  };
-  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
-}
-
-export function normalizeCursorModelOptions(
-  modelOptions: CursorModelOptions | null | undefined,
-): CursorModelOptions | undefined {
-  const nextOptions: CursorModelOptions = {
-    ...(modelOptions?.reasoningEffort ? { reasoningEffort: modelOptions.reasoningEffort } : {}),
-    ...(modelOptions?.fastMode !== undefined ? { fastMode: modelOptions.fastMode } : {}),
-    ...(modelOptions?.thinking !== undefined ? { thinking: modelOptions.thinking } : {}),
-    ...(modelOptions?.contextWindow ? { contextWindow: modelOptions.contextWindow } : {}),
   };
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }

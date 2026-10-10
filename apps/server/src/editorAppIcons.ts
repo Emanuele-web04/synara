@@ -12,12 +12,15 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { EDITORS, type EditorId } from "@t3tools/contracts";
-import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
+import { EDITORS, type EditorId } from "@synara/contracts";
+import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
+import { execProcessFile } from "@synara/shared/processRuntime";
 
 import {
   getEditorMacApplications,
+  getEditorWindowsStorePackages,
   resolveMacApplicationBundlePath,
+  resolveWindowsStorePackageInstallLocation,
   type EditorDefinition,
 } from "./editorAppDiscovery";
 
@@ -26,6 +29,7 @@ export { EDITOR_ICON_ROUTE_PATH };
 const execFileAsync = promisify(execFile);
 const MAX_DESKTOP_FILES_TO_SCAN = 1_500;
 const MAX_ICON_FILES_TO_SCAN = 8_000;
+const MAX_WINDOWS_PACKAGE_ICON_FILES_TO_SCAN = 1_200;
 // Editors installed as CLI-only (no app bundle / desktop icon) never resolve a
 // native icon. Cache that "structural" miss long enough to avoid re-running the
 // subprocess + filesystem scans on every menu open, while still picking up a
@@ -454,12 +458,102 @@ async function resolveLinuxEditorIconSource(input: {
   };
 }
 
+function scoreWindowsStoreIconPath(iconPath: string): number | null {
+  const name = path.basename(iconPath).toLowerCase();
+  const extension = path.extname(name);
+  if (extension !== ".png" && extension !== ".svg") return null;
+
+  let score = extension === ".png" ? 0 : 20;
+  if (name.includes("square44x44logo")) {
+    score += 0;
+  } else if (name.includes("appicon") || name.includes("logo")) {
+    score += 10;
+  } else {
+    score += 50;
+  }
+
+  if (name.includes("unplated")) score -= 3;
+  if (name.includes("targetsize-256") || name.includes("scale-200")) score -= 2;
+  if (name.includes("targetsize-48") || name.includes("scale-100")) score -= 1;
+  return score;
+}
+
+async function findWindowsStorePackageIcon(packageDir: string): Promise<string | null> {
+  const roots = Array.from(new Set([path.join(packageDir, "Assets"), packageDir]));
+  let best: { path: string; score: number } | null = null;
+  let scanned = 0;
+
+  for (const root of roots) {
+    if (!(await directoryExists(root))) continue;
+    const pendingDirs = [root];
+    while (pendingDirs.length > 0) {
+      const currentDir = pendingDirs.pop();
+      if (!currentDir) continue;
+      const entries = await fs.readdir(currentDir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (++scanned > MAX_WINDOWS_PACKAGE_ICON_FILES_TO_SCAN) return best?.path ?? null;
+        const candidate = path.join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          pendingDirs.push(candidate);
+          continue;
+        }
+        if (!(await fileExists(candidate))) continue;
+        const score = scoreWindowsStoreIconPath(candidate);
+        if (score === null) continue;
+        if (!best || score < best.score) best = { path: candidate, score };
+      }
+    }
+  }
+
+  return best?.path ?? null;
+}
+
+async function resolveWindowsStoreEditorIconSource(input: {
+  readonly editor: EditorDefinition;
+  readonly platform: NodeJS.Platform;
+  readonly env: NodeJS.ProcessEnv;
+}): Promise<EditorIconSource | null> {
+  const packages = getEditorWindowsStorePackages(input.editor);
+  const findIconSource = async (packageDir: string): Promise<EditorIconSource | null> => {
+    const iconPath = await findWindowsStorePackageIcon(packageDir);
+    if (!iconPath) return null;
+    const extension = path.extname(iconPath).toLowerCase();
+    if (extension === ".svg") {
+      return {
+        sourcePath: iconPath,
+        outputExtension: "svg",
+        contentType: "image/svg+xml",
+        transform: "copy",
+      };
+    }
+
+    return {
+      sourcePath: iconPath,
+      outputExtension: "png",
+      contentType: "image/png",
+      transform: "copy",
+    };
+  };
+
+  const appxPackageDir = resolveWindowsStorePackageInstallLocation(
+    packages,
+    input.platform,
+    input.env,
+  );
+  if (appxPackageDir) return findIconSource(appxPackageDir);
+
+  return null;
+}
+
 async function resolveWindowsEditorIconSource(input: {
   readonly editor: EditorDefinition;
   readonly platform: NodeJS.Platform;
   readonly env: NodeJS.ProcessEnv;
 }): Promise<EditorIconSource | null> {
   if (input.platform !== "win32") return null;
+  const storeSource = await resolveWindowsStoreEditorIconSource(input);
+  if (storeSource) return storeSource;
+
   const exePath = await resolveCommandPath({
     commands: input.editor.commands ?? null,
     platform: input.platform,
@@ -567,7 +661,17 @@ async function writeIconArtifact(input: {
     "$bitmap.Dispose()",
     "$icon.Dispose()",
   ].join("; ");
-  await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script]);
+  // Route through the shared process boundary: it resolves the interpreter and
+  // keeps its console window hidden, so icon extraction cannot flash a
+  // PowerShell window on Windows.
+  await new Promise<void>((resolve, reject) => {
+    execProcessFile(
+      "powershell.exe",
+      ["-NoProfile", "-Command", script],
+      { encoding: "utf8" },
+      (error) => (error ? reject(error) : resolve()),
+    );
+  });
 }
 
 async function resolveCachedEditorIconUncached(input: {
@@ -610,6 +714,10 @@ function iconLookupCacheKey(input: {
     env.HOME ?? "",
     env.XDG_DATA_HOME ?? "",
     env.XDG_DATA_DIRS ?? "",
+    env.LOCALAPPDATA ?? "",
+    env.ProgramFiles ?? "",
+    env.ProgramW6432 ?? "",
+    env.SystemDrive ?? "",
     resolvePathEnvironmentVariable(env),
     env.PATHEXT ?? "",
   ].join("\0");

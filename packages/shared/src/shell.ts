@@ -5,19 +5,58 @@
 import * as OS from "node:os";
 import { execFileSync } from "node:child_process";
 
-const PATH_CAPTURE_START = "__T3CODE_PATH_START__";
-const PATH_CAPTURE_END = "__T3CODE_PATH_END__";
 const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 
 type ExecFileSyncLike = (
   file: string,
   args: ReadonlyArray<string>,
-  options: { encoding: "utf8"; timeout: number },
+  options: { encoding: "utf8"; timeout: number; windowsHide?: boolean },
 ) => string;
 
 function trimNonEmpty(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Marks an environment whose PATH was already resolved from the user's real
+ * environment (login shell, launchctl, or the Windows registry) by a parent process.
+ *
+ * Probing a login shell costs ~1s because `-ilc` sources the user's full interactive
+ * rc (nvm, pyenv, conda, oh-my-zsh, direnv). The desktop shell pays that once before
+ * it spawns the backend, and the backend inherits the result — so without this marker
+ * the same probe is serialized a second time before the server ever starts listening.
+ */
+export const SHELL_ENVIRONMENT_HYDRATED_ENV_NAME = "SYNARA_PATH_HYDRATED";
+export const SHELL_ENVIRONMENT_HYDRATED_ENV_VALUE = "1";
+
+/**
+ * A populated PATH proves nothing on its own — every process inherits one, including
+ * the truncated `/usr/bin:/bin` a GUI launch starts with. Only an explicit marker from
+ * a process that actually ran the probe may suppress it.
+ */
+export function isShellEnvironmentHydrated(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env[SHELL_ENVIRONMENT_HYDRATED_ENV_NAME] === SHELL_ENVIRONMENT_HYDRATED_ENV_VALUE &&
+    trimNonEmpty(env.PATH) !== undefined
+  );
+}
+
+/**
+ * Stamps (or clears) the hydration marker on an environment handed to a child process.
+ * Always written explicitly: an inherited marker from an unrelated parent must never
+ * suppress a probe this process did not actually perform.
+ */
+export function applyShellEnvironmentHydrationMarker(
+  env: NodeJS.ProcessEnv,
+  hydrated: boolean,
+): NodeJS.ProcessEnv {
+  if (hydrated) {
+    env[SHELL_ENVIRONMENT_HYDRATED_ENV_NAME] = SHELL_ENVIRONMENT_HYDRATED_ENV_VALUE;
+  } else {
+    delete env[SHELL_ENVIRONMENT_HYDRATED_ENV_NAME];
+  }
+  return env;
 }
 
 function readUserLoginShell(): string | undefined {
@@ -56,18 +95,6 @@ export function resolveLoginShell(
   return listLoginShellCandidates(platform, shell)[0];
 }
 
-export function extractPathFromShellOutput(output: string): string | null {
-  const startIndex = output.indexOf(PATH_CAPTURE_START);
-  if (startIndex === -1) return null;
-
-  const valueStartIndex = startIndex + PATH_CAPTURE_START.length;
-  const endIndex = output.indexOf(PATH_CAPTURE_END, valueStartIndex);
-  if (endIndex === -1) return null;
-
-  const pathValue = output.slice(valueStartIndex, endIndex).trim();
-  return pathValue.length > 0 ? pathValue : null;
-}
-
 export function readPathFromLoginShell(
   shell: string,
   execFile: ExecFileSyncLike = execFileSync,
@@ -83,6 +110,7 @@ export function readPathFromLaunchctl(
       execFile("/bin/launchctl", ["getenv", "PATH"], {
         encoding: "utf8",
         timeout: 2000,
+        windowsHide: true,
       }),
     );
   } catch {
@@ -128,18 +156,28 @@ export function mergePathEntries(
 }
 
 function envCaptureStart(name: string): string {
-  return `__T3CODE_ENV_${name}_START__`;
+  return `__SYNARA_ENV_${name}_START__`;
 }
 
 function envCaptureEnd(name: string): string {
-  return `__T3CODE_ENV_${name}_END__`;
+  return `__SYNARA_ENV_${name}_END__`;
 }
 
-function buildEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
+function buildEnvironmentCaptureCommand(names: ReadonlyArray<string>, nushell: boolean): string {
   return names
     .map((name) => {
       if (!SHELL_ENV_NAME_PATTERN.test(name)) {
         throw new Error(`Unsupported environment variable name: ${name}`);
+      }
+
+      if (nushell) {
+        // External printenv applies Nu's ENV_CONVERSIONS (notably its list-valued
+        // PATH). complete tolerates an unset variable without POSIX `||` syntax.
+        return [
+          `print '${envCaptureStart(name)}'`,
+          `do { ^printenv ${name} } | complete | get stdout | print --no-newline`,
+          `print '${envCaptureEnd(name)}'`,
+        ].join("; ");
       }
 
       return [
@@ -187,9 +225,13 @@ export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
     return {};
   }
 
-  const output = execFile(shell, ["-ilc", buildEnvironmentCaptureCommand(names)], {
+  const nushell = /(?:^|[\\/])nu(?:\.exe)?$/i.test(shell);
+  const command = buildEnvironmentCaptureCommand(names, nushell);
+  const args = nushell ? ["--login", "--interactive", "--commands", command] : ["-ilc", command];
+  const output = execFile(shell, args, {
     encoding: "utf8",
     timeout: 5000,
+    windowsHide: true,
   });
 
   const environment: Partial<Record<string, string>> = {};
@@ -285,7 +327,9 @@ export const readWindowsPersistentEnvironment: WindowsEnvironmentReader = (
   const output = execFile(
     resolveWindowsPowerShellPath(),
     ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_ENVIRONMENT_SCRIPT],
-    { encoding: "utf8", timeout: 5000 },
+    // Hide the interpreter window: without it every read flashes a console on
+    // Windows, because this process is a GUI app spawning a console child.
+    { encoding: "utf8", timeout: 5000, windowsHide: true },
   );
 
   let parsed: {

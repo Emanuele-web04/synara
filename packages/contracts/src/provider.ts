@@ -16,7 +16,6 @@ import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
-  ProviderKind,
   ProviderRequestKind,
   ProviderReviewTarget,
   ProviderSandboxMode,
@@ -24,6 +23,7 @@ import {
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 
 const ProviderSessionStatus = Schema.Literals([
@@ -35,7 +35,8 @@ const ProviderSessionStatus = Schema.Literals([
 ]);
 
 export const ProviderSession = Schema.Struct({
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
@@ -51,13 +52,31 @@ export type ProviderSession = typeof ProviderSession.Type;
 
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
-  provider: Schema.optional(ProviderKind),
+  provider: Schema.optional(ProviderDriverKind),
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Extra folders of a multi-folder project the session may read and write besides `cwd`.
+   * Only providers that can grant them natively (Codex, Claude) receive this.
+   */
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
+  forkSourceResumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   providerOptions: Schema.optional(ProviderStartOptions),
+  /** Explicit per-thread provisioning for the Linux computer MCP tools. */
+  enableComputerControl: Schema.optional(Schema.Boolean),
+  /**
+   * Pre-approve the Synara group/gateway MCP tools (`mcp__synara__*`,
+   * `synara_*`) for this session even when the runtime mode would normally ask
+   * for approval. The gateway already authorizes them server-side; the
+   * interactive prompt only adds friction for trusted principals such as a
+   * group coordinator. File edits and shell commands still ask.
+   */
+  autoApproveSynaraTools: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
@@ -82,10 +101,36 @@ export type ProviderSteerTurnInput = typeof ProviderSteerTurnInput.Type;
 export const ProviderForkThreadInput = Schema.Struct({
   sourceThreadId: ThreadId,
   threadId: ThreadId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
+  /** External imports must pin a completed native transcript boundary. */
+  requireCompletedSource: Schema.optional(Schema.Boolean),
+  /**
+   * Fork only the native history through the end of this source turn ("Fork
+   * from this turn"). Absent = the source's latest point. An adapter that
+   * cannot honor the boundary must not fork at the latest point instead; the
+   * caller then rebuilds the fork from its imported transcript.
+   */
+  throughTurnId: Schema.optional(TurnId),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   sourceResumeCursor: Schema.optional(Schema.Unknown),
+  sourceCwd: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /** Extra folders of a multi-folder project; see `ProviderSessionStartInput`. */
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
+  /**
+   * The computer-control fact a start would carry, so a fork leases the same
+   * gateway capabilities as its source instead of silently losing
+   * `computer:control` at the fork boundary.
+   */
+  enableComputerControl: Schema.optional(Schema.Boolean),
+  /**
+   * Same hand-off as `enableComputerControl`: the gateway-approval fact a
+   * start would carry, so a fork leases the same pre-approved Synara tools as
+   * its source session.
+   */
+  autoApproveSynaraTools: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
 });
 export type ProviderForkThreadInput = typeof ProviderForkThreadInput.Type;
@@ -116,6 +161,32 @@ export const ProviderInterruptTurnInput = Schema.Struct({
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
 
+export const ProviderStopTaskInput = Schema.Struct({
+  threadId: ThreadId,
+  taskId: TrimmedNonEmptyString,
+});
+export type ProviderStopTaskInput = typeof ProviderStopTaskInput.Type;
+
+export const ProviderBackgroundTaskInput = Schema.Struct({
+  threadId: ThreadId,
+  toolUseId: TrimmedNonEmptyString,
+});
+export type ProviderBackgroundTaskInput = typeof ProviderBackgroundTaskInput.Type;
+
+export const ProviderSteerSubagentInput = Schema.Struct({
+  threadId: ThreadId,
+  providerThreadId: TrimmedNonEmptyString,
+  input: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  ),
+  attachments: Schema.optional(
+    Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+  ),
+  skills: Schema.optional(Schema.Array(ProviderSkillReference)),
+  mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
+});
+export type ProviderSteerSubagentInput = typeof ProviderSteerSubagentInput.Type;
+
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -129,6 +200,7 @@ export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
 export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
 });
 export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput.Type;
@@ -136,6 +208,7 @@ export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput
 export const ProviderRespondToUserInputInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   answers: ProviderUserInputAnswers,
 });
 export type ProviderRespondToUserInputInput = typeof ProviderRespondToUserInputInput.Type;
@@ -145,7 +218,8 @@ const ProviderEventKind = Schema.Literals(["session", "notification", "request",
 export const ProviderEvent = Schema.Struct({
   id: EventId,
   kind: ProviderEventKind,
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   threadId: ThreadId,
   createdAt: IsoDateTime,
   method: TrimmedNonEmptyString,
@@ -155,6 +229,7 @@ export const ProviderEvent = Schema.Struct({
   itemId: Schema.optional(ProviderItemId),
   requestId: Schema.optional(ApprovalRequestId),
   requestKind: Schema.optional(ProviderRequestKind),
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   providerThreadId: Schema.optional(TrimmedNonEmptyString),
   providerParentThreadId: Schema.optional(TrimmedNonEmptyString),
   textDelta: Schema.optional(Schema.String),

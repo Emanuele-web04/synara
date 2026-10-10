@@ -118,22 +118,9 @@ export function createTerminalModeReplayTracker(
       if (!modes.wraparoundMode) parts.push("\u001b[?7l");
       if (internals._core?.coreService?.isCursorHidden === true) parts.push("\u001b[?25l");
 
-      switch (modes.mouseTrackingMode) {
-        case "x10":
-          parts.push("\u001b[?9h");
-          break;
-        case "vt200":
-          parts.push("\u001b[?1000h");
-          break;
-        case "drag":
-          parts.push("\u001b[?1002h");
-          break;
-        case "any":
-          parts.push("\u001b[?1003h");
-          break;
-        case "none":
-          break;
-      }
+      // Do not replay mouse tracking modes. After app restart the TUI that
+      // enabled mouse reporting may be gone, and reasserting it makes ordinary
+      // mouse movement print raw escape sequences into the shell.
 
       if (kittyKeyboardState.flags > 0) {
         parts.push(`\u001b[=${kittyKeyboardState.flags};1u`);

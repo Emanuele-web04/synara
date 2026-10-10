@@ -2,14 +2,181 @@ import { Schema } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
+import {
+  AutomationCancelRunInput,
+  AutomationCancelRunResult,
+  AutomationArchiveRunInput,
+  AutomationCreateInput,
+  AutomationDefinition,
+  AutomationDeleteInput,
+  AutomationGetMemoryInput,
+  AutomationListInput,
+  AutomationListResult,
+  AutomationMarkRunReadInput,
+  AutomationMemory,
+  AutomationResolveProposalInput,
+  AutomationResolveProposalResult,
+  AutomationRunActionResult,
+  AutomationRunNowInput,
+  AutomationRunNowResult,
+  AutomationStreamEvent,
+  AutomationUpdateInput,
+} from "./automation";
+import {
+  Todo,
+  TodoCreateInput,
+  TodoDeleteInput,
+  TodoListResult,
+  TodoStreamEvent,
+  TodoUpdateInput,
+} from "./todo";
+import {
+  ProjectAgentConfigureInput,
+  ProjectAgentLinkProjectInput,
+  ProjectAgentUnlinkProjectInput,
+  ProjectAgentExportDocumentsInput,
+  ProjectAgentExportDocumentsResult,
+  ProjectAgentGetOverviewInput,
+  ProjectAgentListSummariesInput,
+  ProjectAgentListSummariesResult,
+  ProjectAgentGoalControlInput,
+  ProjectAgentListActivityInput,
+  ProjectAgentListActivityResult,
+  ProjectAgentListDocumentsInput,
+  ProjectAgentListDocumentsResult,
+  ProjectAgentListTasksInput,
+  ProjectAgentListTasksResult,
+  ProjectAgentOverview,
+  ProjectAgentReadDocumentInput,
+  ProjectAgentReadDocumentResult,
+  ProjectAgentRefreshDigestInput,
+  ProjectAgentStartGoalInput,
+  ProjectAgentStreamEvent,
+  ProjectAgentSubscribeInput,
+  ProjectAgentUpdateGoalInput,
+  ProjectAgentUpdateTaskInput,
+  ProjectAgentWriteDocumentInput,
+  ProjectAgentCreateTaskInput,
+  ProjectAgentExcludeThreadInput,
+  ProjectAgentBackfillInput,
+  ProjectAgentDeleteGroupInput,
+  ProjectAgentDeleteGroupResult,
+  ProjectAgentGroupControlInput,
+  ProjectAgentListThreadIndexInput,
+  ProjectAgentListThreadIndexResult,
+  ProjectAgentListEvidenceInput,
+  ProjectAgentListEvidenceResult,
+  ProjectAgentLibraryDeleteInput,
+  ProjectAgentLibraryHistoryInput,
+  ProjectAgentLibraryHistoryResult,
+  ProjectAgentLibraryListInput,
+  ProjectAgentLibraryListResult,
+  ProjectAgentLibraryMkdirInput,
+  ProjectAgentLibraryMutationResult,
+  ProjectAgentLibraryRenameInput,
+  ProjectAgentLibraryRestoreInput,
+  ProjectAgentLibraryStatusInput,
+  ProjectAgentLibraryStatusResult,
+  ProjectAgentResolveWorkerInput,
+  ProjectAgentResolveWorkerResult,
+  ProjectDocumentRevision,
+  ProjectGoal,
+  ProjectTask,
+  ProjectThreadIndexEntry,
+} from "./projectAgent";
 import { OpenInEditorInput } from "./editor";
+import {
+  ExternalMcpCreateIntegrationInput,
+  ExternalMcpCreateIntegrationResult,
+  ExternalMcpIntegration,
+  ExternalMcpRefreshPairingInput,
+  ExternalMcpRevokeIntegrationInput,
+} from "./externalMcp";
+import {
+  DEVICE_WS_METHODS,
+  DeviceAttachInput,
+  DeviceBootInput,
+  DeviceBootResult,
+  DeviceDescribeUiInput,
+  DeviceDescribeUiResult,
+  DeviceDetachInput,
+  DeviceEvent,
+  DeviceInstallAppInput,
+  DeviceInstallAppResult,
+  DeviceKeyEventInput,
+  DeviceLaunchAppInput,
+  DeviceLaunchAppResult,
+  DeviceListInput,
+  DeviceListResult,
+  DeviceOpenUrlInput,
+  DevicePressButtonInput,
+  DeviceScreenshotInput,
+  DeviceScreenshotResult,
+  DeviceStartRecordingInput,
+  DeviceStartRecordingResult,
+  DeviceStopRecordingInput,
+  DeviceStopRecordingResult,
+  DeviceShutdownInput,
+  DeviceSwipeInput,
+  DeviceScrollToElementInput,
+  DeviceScrollToElementResult,
+  DeviceTapInput,
+  DeviceThreadInput,
+  DeviceTypeTextInput,
+  ThreadDeviceState,
+} from "./device";
+import {
+  COMPUTER_WS_METHODS,
+  ComputerActionResult,
+  ComputerClickInput,
+  ComputerDoubleClickInput,
+  ComputerDragInput,
+  ComputerEvent,
+  ComputerGetScreenSizeInput,
+  ComputerGetScreenSizeResult,
+  ComputerGetStateInput,
+  ComputerGetStatusInput,
+  ComputerHotkeyInput,
+  ComputerInputClickInput,
+  ComputerInputKeyInput,
+  ComputerInputScrollInput,
+  ComputerLaunchAppInput,
+  ComputerLaunchAppResult,
+  ComputerListWindowsInput,
+  ComputerListWindowsResult,
+  ComputerMoveCursorInput,
+  ComputerPerformActionInput,
+  ComputerPressKeyInput,
+  ComputerProvisionInput,
+  ComputerProvisionResult,
+  ComputerRightClickInput,
+  ComputerScrollInput,
+  ComputerSelectTextInput,
+  ComputerSetValueInput,
+  ComputerTypeTextInput,
+  ComputerState,
+  ComputerStatusResult,
+  ComputerThreadInput,
+  ComputerSetControlEnabledInput,
+  ComputerControlEnabledResult,
+  ThreadComputerState,
+} from "./computer";
+import { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import {
+  GitHubProjectProvisionInput,
+  GitHubProjectProvisionProgressEvent,
+} from "./githubProjectProvisioning";
+import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
   GitActionProgressEvent,
+  GitBlameLineInput,
+  GitBlameLineResult,
+  GitReadFileAtRevInput,
+  GitReadFileAtRevResult,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
-  GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitHubRepositoryInput,
@@ -18,14 +185,19 @@ import {
   GitHandoffThreadResult,
   GitInitInput,
   GitListBranchesInput,
+  GitListRecentCommitsInput,
   GitListBranchesResult,
+  GitListRecentCommitsResult,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullInput,
   GitPullRequestRefInput,
+  GitPullRequestSnapshotInput,
+  GitPullRequestSnapshotResult,
   GitPullResult,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
+  GitWorkingTreeDiffStatsResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
@@ -41,9 +213,34 @@ import {
   GitSummarizeDiffInput,
   GitSummarizeDiffResult,
   GitUnstageFilesInput,
+  GitWorktreeSetupProgressEvent,
   GitUnstageFilesResult,
 } from "./git";
-import { KeybindingRule } from "./keybindings";
+import {
+  PullRequestActionInput,
+  PullRequestCommentInput,
+  PullRequestActionResult,
+  PullRequestDetail,
+  PullRequestDetailInput,
+  PullRequestDiffResult,
+  PullRequestSetPinnedInput,
+  PullRequestSetPinnedResult,
+  PullRequestsUnavailableError,
+} from "./pullRequests";
+import {
+  PullRequestAutoFixGetInput,
+  PullRequestAutoFixListResult,
+  PullRequestAutoFixResult,
+  PullRequestAutoFixSetInput,
+} from "./pullRequestAutoFix";
+import {
+  GitHubInboxListInput,
+  GitHubInboxListResult,
+  GitHubIssueCommentInput,
+  GitHubIssueCommentResult,
+  GitHubIssueDetail,
+  GitHubIssueDetailInput,
+} from "./githubInbox";
 import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
@@ -74,6 +271,8 @@ import {
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import {
+  ProjectCreateLocalFilePreviewGrantInput,
+  ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
   ProjectDiscoverScriptsInput,
   ProjectDiscoverScriptsResult,
@@ -82,10 +281,20 @@ import {
   ProjectListDirectoriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectFileChangeEvent,
+  ProjectWatchFileInput,
+  ProjectPrewarmSearchIndexInput,
+  ProjectPrewarmSearchIndexResult,
+  ProjectResolveWorkspaceFileReferencesInput,
+  ProjectResolveWorkspaceFileReferencesResult,
+  ProjectResolveOutOfRootFileReferenceInput,
+  ProjectResolveOutOfRootFileReferenceResult,
   ProjectRunDevServerInput,
   ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
+  ProjectSearchContentInput,
+  ProjectSearchContentResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
   ProjectStopDevServerInput,
@@ -95,17 +304,25 @@ import {
 } from "./project";
 import {
   ServerConfig,
+  ServerRuntimeStatus,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ServerReadThreadDiagnosticsInput,
+  ServerReadThreadDiagnosticsResult,
+  ServerGenerateAutomationIntentInput,
+  ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
+  ServerConsumeCodexResetCreditInput,
+  ServerConsumeCodexResetCreditResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
+  ServerKeepAwakeUpdatedPayload,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
@@ -116,7 +333,12 @@ import {
   ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
+  ServerEditKeybindingsInput,
+  ServerEditKeybindingsResult,
+  ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
+  ServerVoicePrewarmInput,
+  ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "./server";
@@ -131,12 +353,38 @@ import {
   TerminalSessionSnapshot,
   TerminalWriteInput,
 } from "./terminal";
+import {
+  StatsGetProfileStatsInput,
+  StatsGetProfileStatsResult,
+  StatsGetProfileTokenStatsInput,
+  StatsGetProfileTokenStatsResult,
+  StatsGetRecapInput,
+  StatsGetRecapResult,
+} from "./stats";
 import { WS_METHODS } from "./ws";
+import {
+  WS_BOOTSTRAP_METHOD,
+  WsBootstrapNegotiateInput,
+  WsBootstrapNegotiateResult,
+  WsCompatibilityError,
+} from "./wsCompatibility";
+
+/** Retry only the affected orchestration subscription from its last applied cursor. */
+export const ORCHESTRATION_STREAM_OVERFLOW_CODE = "ORCHESTRATION_STREAM_OVERFLOW";
 
 export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcError", {
   message: Schema.String,
   cause: Schema.optional(Schema.Defect),
+  code: Schema.optional(Schema.String),
+  retryable: Schema.optional(Schema.Boolean),
+  retryAfterMs: Schema.optional(Schema.Number),
 }) {}
+
+export const WsBootstrapNegotiateRpc = Rpc.make(WS_BOOTSTRAP_METHOD, {
+  payload: WsBootstrapNegotiateInput,
+  success: WsBootstrapNegotiateResult,
+  error: WsCompatibilityError,
+});
 
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -152,6 +400,45 @@ export const WsOrchestrationImportThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.
   success: OrchestrationImportThreadResult,
   error: WsRpcError,
 });
+
+export const WsOrchestrationSettleTurnDispatchRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.settleTurnDispatch,
+  {
+    payload: OrchestrationRpcSchemas.settleTurnDispatch.input,
+    success: OrchestrationRpcSchemas.settleTurnDispatch.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsListProjectImportsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.listProjectImports, {
+  payload: OrchestrationRpcSchemas.listProjectImports.input,
+  success: OrchestrationRpcSchemas.listProjectImports.output,
+  error: WsRpcError,
+});
+
+export const WsLoadProjectImportHistoryRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.loadProjectImportHistory,
+  {
+    payload: OrchestrationRpcSchemas.loadProjectImportHistory.input,
+    success: OrchestrationRpcSchemas.loadProjectImportHistory.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsImportProjectRpc = Rpc.make(ORCHESTRATION_WS_METHODS.importProject, {
+  payload: OrchestrationRpcSchemas.importProject.input,
+  success: OrchestrationRpcSchemas.importProject.output,
+  error: WsRpcError,
+});
+
+export const WsOrchestrationRegenerateThreadTitleRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
+  {
+    payload: OrchestrationRpcSchemas.regenerateThreadTitle.input,
+    success: OrchestrationRpcSchemas.regenerateThreadTitle.output,
+    error: WsRpcError,
+  },
+);
 
 export const WsOrchestrationGetSnapshotRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getSnapshot, {
   payload: OrchestrationRpcSchemas.getSnapshot.input,
@@ -189,11 +476,53 @@ export const WsOrchestrationGetFullThreadDiffRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationGetThreadDetailSnapshotRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot,
+  {
+    payload: OrchestrationRpcSchemas.getThreadDetailSnapshot.input,
+    success: OrchestrationRpcSchemas.getThreadDetailSnapshot.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationSearchThreadsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.searchThreads, {
+  payload: OrchestrationRpcSchemas.searchThreads.input,
+  success: OrchestrationRpcSchemas.searchThreads.output,
+  error: WsRpcError,
+});
+
 export const WsOrchestrationReplayEventsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.replayEvents, {
   payload: OrchestrationRpcSchemas.replayEvents.input,
   success: OrchestrationRpcSchemas.replayEvents.output,
   error: WsRpcError,
 });
+
+export const WsOrchestrationListProviderDeliveryBlockersRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
+  {
+    payload: OrchestrationRpcSchemas.listProviderDeliveryBlockers.input,
+    success: OrchestrationRpcSchemas.listProviderDeliveryBlockers.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationReconcileProviderDeliveryRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.reconcileProviderDelivery,
+  {
+    payload: OrchestrationRpcSchemas.reconcileProviderDelivery.input,
+    success: OrchestrationRpcSchemas.reconcileProviderDelivery.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationPrepareQuitResumeRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.prepareQuitResume,
+  {
+    payload: OrchestrationRpcSchemas.prepareQuitResume.input,
+    success: OrchestrationRpcSchemas.prepareQuitResume.output,
+    error: WsRpcError,
+  },
+);
 
 export const WsOrchestrationSubscribeShellRpc = Rpc.make(ORCHESTRATION_WS_METHODS.subscribeShell, {
   payload: OrchestrationRpcSchemas.subscribeShell.input,
@@ -264,11 +593,57 @@ export const WsProjectsSearchLocalEntriesRpc = Rpc.make(WS_METHODS.projectsSearc
   error: WsRpcError,
 });
 
+export const WsProjectsSearchContentRpc = Rpc.make(WS_METHODS.projectsSearchContent, {
+  payload: ProjectSearchContentInput,
+  success: ProjectSearchContentResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsPrewarmSearchIndexRpc = Rpc.make(WS_METHODS.projectsPrewarmSearchIndex, {
+  payload: ProjectPrewarmSearchIndexInput,
+  success: ProjectPrewarmSearchIndexResult,
+  error: WsRpcError,
+});
+
 export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   payload: ProjectReadFileInput,
   success: ProjectReadFileResult,
   error: WsRpcError,
 });
+
+export const WsProjectsSubscribeFileChangeRpc = Rpc.make(WS_METHODS.projectsSubscribeFileChange, {
+  payload: ProjectWatchFileInput,
+  success: ProjectFileChangeEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsProjectsResolveWorkspaceFileReferencesRpc = Rpc.make(
+  WS_METHODS.projectsResolveWorkspaceFileReferences,
+  {
+    payload: ProjectResolveWorkspaceFileReferencesInput,
+    success: ProjectResolveWorkspaceFileReferencesResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsProjectsResolveOutOfRootFileReferenceRpc = Rpc.make(
+  WS_METHODS.projectsResolveOutOfRootFileReference,
+  {
+    payload: ProjectResolveOutOfRootFileReferenceInput,
+    success: ProjectResolveOutOfRootFileReferenceResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsProjectsCreateLocalFilePreviewGrantRpc = Rpc.make(
+  WS_METHODS.projectsCreateLocalFilePreviewGrant,
+  {
+    payload: ProjectCreateLocalFilePreviewGrantInput,
+    success: ProjectCreateLocalFilePreviewGrantResult,
+    error: WsRpcError,
+  },
+);
 
 export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
@@ -304,11 +679,359 @@ export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
   },
 );
 
+export const WsProjectsProvisionFromGitHubRpc = Rpc.make(WS_METHODS.projectsProvisionFromGitHub, {
+  payload: GitHubProjectProvisionInput,
+  success: GitHubProjectProvisionProgressEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsStudioListThreadOutputsRpc = Rpc.make(WS_METHODS.studioListThreadOutputs, {
+  payload: StudioListThreadOutputsInput,
+  success: StudioListThreadOutputsResult,
+  error: WsRpcError,
+});
+
 export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
   success: FilesystemBrowseResult,
   error: WsRpcError,
 });
+
+// ── Device pane ──────────────────────────────────────────────────────
+// Grouped separately from WsFeatureRpcGroup: the device engine is macOS-only,
+// so the server merges this group in only where a backend can exist.
+
+export const WsDeviceListRpc = Rpc.make(DEVICE_WS_METHODS.list, {
+  payload: DeviceListInput,
+  success: DeviceListResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceBootRpc = Rpc.make(DEVICE_WS_METHODS.boot, {
+  payload: DeviceBootInput,
+  success: DeviceBootResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceShutdownRpc = Rpc.make(DEVICE_WS_METHODS.shutdown, {
+  payload: DeviceShutdownInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsDeviceAttachRpc = Rpc.make(DEVICE_WS_METHODS.attach, {
+  payload: DeviceAttachInput,
+  success: ThreadDeviceState,
+  error: WsRpcError,
+});
+
+export const WsDeviceDetachRpc = Rpc.make(DEVICE_WS_METHODS.detach, {
+  payload: DeviceDetachInput,
+  success: ThreadDeviceState,
+  error: WsRpcError,
+});
+
+export const WsDeviceGetThreadStateRpc = Rpc.make(DEVICE_WS_METHODS.getThreadState, {
+  payload: DeviceThreadInput,
+  success: ThreadDeviceState,
+  error: WsRpcError,
+});
+
+export const WsDeviceTapRpc = Rpc.make(DEVICE_WS_METHODS.tap, {
+  payload: DeviceTapInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsDeviceSwipeRpc = Rpc.make(DEVICE_WS_METHODS.swipe, {
+  payload: DeviceSwipeInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsDeviceTypeTextRpc = Rpc.make(DEVICE_WS_METHODS.typeText, {
+  payload: DeviceTypeTextInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsDeviceKeyEventRpc = Rpc.make(DEVICE_WS_METHODS.keyEvent, {
+  payload: DeviceKeyEventInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsDevicePressButtonRpc = Rpc.make(DEVICE_WS_METHODS.pressButton, {
+  payload: DevicePressButtonInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsDeviceInstallAppRpc = Rpc.make(DEVICE_WS_METHODS.installApp, {
+  payload: DeviceInstallAppInput,
+  success: DeviceInstallAppResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceLaunchAppRpc = Rpc.make(DEVICE_WS_METHODS.launchApp, {
+  payload: DeviceLaunchAppInput,
+  success: DeviceLaunchAppResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceOpenUrlRpc = Rpc.make(DEVICE_WS_METHODS.openUrl, {
+  payload: DeviceOpenUrlInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsDeviceScreenshotRpc = Rpc.make(DEVICE_WS_METHODS.screenshot, {
+  payload: DeviceScreenshotInput,
+  success: DeviceScreenshotResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceStartRecordingRpc = Rpc.make(DEVICE_WS_METHODS.startRecording, {
+  payload: DeviceStartRecordingInput,
+  success: DeviceStartRecordingResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceStopRecordingRpc = Rpc.make(DEVICE_WS_METHODS.stopRecording, {
+  payload: DeviceStopRecordingInput,
+  success: DeviceStopRecordingResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceDescribeUiRpc = Rpc.make(DEVICE_WS_METHODS.describeUi, {
+  payload: DeviceDescribeUiInput,
+  success: DeviceDescribeUiResult,
+  error: WsRpcError,
+});
+
+export const WsDeviceScrollToElementRpc = Rpc.make(DEVICE_WS_METHODS.scrollToElement, {
+  payload: DeviceScrollToElementInput,
+  success: DeviceScrollToElementResult,
+  error: WsRpcError,
+});
+
+export const WsSubscribeDeviceEventsRpc = Rpc.make(DEVICE_WS_METHODS.subscribeEvents, {
+  payload: Schema.Struct({}),
+  success: DeviceEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsDeviceRpcGroup = RpcGroup.make(
+  WsDeviceListRpc,
+  WsDeviceBootRpc,
+  WsDeviceShutdownRpc,
+  WsDeviceAttachRpc,
+  WsDeviceDetachRpc,
+  WsDeviceGetThreadStateRpc,
+  WsDeviceTapRpc,
+  WsDeviceSwipeRpc,
+  WsDeviceTypeTextRpc,
+  WsDeviceKeyEventRpc,
+  WsDevicePressButtonRpc,
+  WsDeviceInstallAppRpc,
+  WsDeviceLaunchAppRpc,
+  WsDeviceOpenUrlRpc,
+  WsDeviceScreenshotRpc,
+  WsDeviceStartRecordingRpc,
+  WsDeviceStopRecordingRpc,
+  WsDeviceDescribeUiRpc,
+  WsDeviceScrollToElementRpc,
+  WsSubscribeDeviceEventsRpc,
+);
+
+// ── Computer control ────────────────────────────────────────────────
+// Two callers, two gates. The agent reaches these methods through the MCP
+// gateway only, gated on the session's `computer:control` capability lease;
+// the human pane reaches them through its own authenticated WebSocket with no
+// turn attached and no gateway in between. The group is kept separate so both
+// admission rules stay visible next to the contract they guard.
+
+export const WsComputerGetStatusRpc = Rpc.make(COMPUTER_WS_METHODS.getStatus, {
+  payload: ComputerGetStatusInput,
+  success: ComputerStatusResult,
+  error: WsRpcError,
+});
+
+export const WsComputerGetAuditHistoryRpc = Rpc.make(COMPUTER_WS_METHODS.getAuditHistory, {
+  payload: ComputerGetAuditHistoryInput,
+  success: ComputerGetAuditHistoryResult,
+  error: WsRpcError,
+});
+
+export const WsComputerProvisionRpc = Rpc.make(COMPUTER_WS_METHODS.provision, {
+  payload: ComputerProvisionInput,
+  success: ComputerProvisionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerListWindowsRpc = Rpc.make(COMPUTER_WS_METHODS.listWindows, {
+  payload: ComputerListWindowsInput,
+  success: ComputerListWindowsResult,
+  error: WsRpcError,
+});
+
+export const WsComputerGetStateRpc = Rpc.make(COMPUTER_WS_METHODS.getState, {
+  payload: ComputerGetStateInput,
+  success: ComputerState,
+  error: WsRpcError,
+});
+
+export const WsComputerGetScreenSizeRpc = Rpc.make(COMPUTER_WS_METHODS.getScreenSize, {
+  payload: ComputerGetScreenSizeInput,
+  success: ComputerGetScreenSizeResult,
+  error: WsRpcError,
+});
+
+export const WsComputerLaunchAppRpc = Rpc.make(COMPUTER_WS_METHODS.launchApp, {
+  payload: ComputerLaunchAppInput,
+  success: ComputerLaunchAppResult,
+  error: WsRpcError,
+});
+
+export const WsComputerClickRpc = Rpc.make(COMPUTER_WS_METHODS.click, {
+  payload: ComputerClickInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerDoubleClickRpc = Rpc.make(COMPUTER_WS_METHODS.doubleClick, {
+  payload: ComputerDoubleClickInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerRightClickRpc = Rpc.make(COMPUTER_WS_METHODS.rightClick, {
+  payload: ComputerRightClickInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerMoveCursorRpc = Rpc.make(COMPUTER_WS_METHODS.moveCursor, {
+  payload: ComputerMoveCursorInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerDragRpc = Rpc.make(COMPUTER_WS_METHODS.drag, {
+  payload: ComputerDragInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerScrollRpc = Rpc.make(COMPUTER_WS_METHODS.scroll, {
+  payload: ComputerScrollInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerTypeTextRpc = Rpc.make(COMPUTER_WS_METHODS.typeText, {
+  payload: ComputerTypeTextInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerPressKeyRpc = Rpc.make(COMPUTER_WS_METHODS.pressKey, {
+  payload: ComputerPressKeyInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerHotkeyRpc = Rpc.make(COMPUTER_WS_METHODS.hotkey, {
+  payload: ComputerHotkeyInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerSetValueRpc = Rpc.make(COMPUTER_WS_METHODS.setValue, {
+  payload: ComputerSetValueInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerPerformActionRpc = Rpc.make(COMPUTER_WS_METHODS.performAction, {
+  payload: ComputerPerformActionInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerSelectTextRpc = Rpc.make(COMPUTER_WS_METHODS.selectText, {
+  payload: ComputerSelectTextInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerSetControlEnabledRpc = Rpc.make(COMPUTER_WS_METHODS.setControlEnabled, {
+  payload: ComputerSetControlEnabledInput,
+  success: ComputerControlEnabledResult,
+  error: WsRpcError,
+});
+
+export const WsComputerGetThreadStateRpc = Rpc.make(COMPUTER_WS_METHODS.getThreadState, {
+  payload: ComputerThreadInput,
+  success: ThreadComputerState,
+  error: WsRpcError,
+});
+
+export const WsComputerInputClickRpc = Rpc.make(COMPUTER_WS_METHODS.inputClick, {
+  payload: ComputerInputClickInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerInputScrollRpc = Rpc.make(COMPUTER_WS_METHODS.inputScroll, {
+  payload: ComputerInputScrollInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsComputerInputKeyRpc = Rpc.make(COMPUTER_WS_METHODS.inputKey, {
+  payload: ComputerInputKeyInput,
+  success: ComputerActionResult,
+  error: WsRpcError,
+});
+
+export const WsSubscribeComputerEventsRpc = Rpc.make(COMPUTER_WS_METHODS.subscribeEvents, {
+  payload: Schema.Struct({}),
+  success: ComputerEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+/** Platform-neutral computer control and perception surface. */
+export const WsComputerRpcGroup = RpcGroup.make(
+  WsComputerGetStatusRpc,
+  WsComputerGetAuditHistoryRpc,
+  WsComputerProvisionRpc,
+  WsComputerListWindowsRpc,
+  WsComputerGetStateRpc,
+  WsComputerGetScreenSizeRpc,
+  WsComputerLaunchAppRpc,
+  WsComputerClickRpc,
+  WsComputerDoubleClickRpc,
+  WsComputerRightClickRpc,
+  WsComputerMoveCursorRpc,
+  WsComputerDragRpc,
+  WsComputerScrollRpc,
+  WsComputerTypeTextRpc,
+  WsComputerPressKeyRpc,
+  WsComputerHotkeyRpc,
+  WsComputerSetValueRpc,
+  WsComputerPerformActionRpc,
+  WsComputerSelectTextRpc,
+  WsComputerGetThreadStateRpc,
+  WsComputerSetControlEnabledRpc,
+  WsComputerInputClickRpc,
+  WsComputerInputScrollRpc,
+  WsComputerInputKeyRpc,
+  WsSubscribeComputerEventsRpc,
+);
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: OpenInEditorInput,
@@ -331,6 +1054,24 @@ export const WsGitGithubRepositoryRpc = Rpc.make(WS_METHODS.gitGithubRepository,
 export const WsGitReadWorkingTreeDiffRpc = Rpc.make(WS_METHODS.gitReadWorkingTreeDiff, {
   payload: GitReadWorkingTreeDiffInput,
   success: GitReadWorkingTreeDiffResult,
+  error: WsRpcError,
+});
+
+export const WsGitBlameLineRpc = Rpc.make(WS_METHODS.gitBlameLine, {
+  payload: GitBlameLineInput,
+  success: GitBlameLineResult,
+  error: WsRpcError,
+});
+
+export const WsGitReadFileAtRevRpc = Rpc.make(WS_METHODS.gitReadFileAtRev, {
+  payload: GitReadFileAtRevInput,
+  success: GitReadFileAtRevResult,
+  error: WsRpcError,
+});
+
+export const WsGitWorkingTreeDiffStatsRpc = Rpc.make(WS_METHODS.gitWorkingTreeDiffStats, {
+  payload: GitReadWorkingTreeDiffInput,
+  success: GitWorkingTreeDiffStatsResult,
   error: WsRpcError,
 });
 
@@ -359,9 +1100,79 @@ export const WsGitResolvePullRequestRpc = Rpc.make(WS_METHODS.gitResolvePullRequ
   error: WsRpcError,
 });
 
+export const WsGitPullRequestSnapshotRpc = Rpc.make(WS_METHODS.gitPullRequestSnapshot, {
+  payload: GitPullRequestSnapshotInput,
+  success: GitPullRequestSnapshotResult,
+  error: WsRpcError,
+});
+
 export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePullRequestThread, {
   payload: GitPreparePullRequestThreadInput,
   success: GitPreparePullRequestThreadResult,
+  error: WsRpcError,
+});
+
+const PullRequestsRpcError = Schema.Union([PullRequestsUnavailableError, WsRpcError]);
+
+export const WsGitHubInboxListRpc = Rpc.make(WS_METHODS.githubInboxList, {
+  payload: GitHubInboxListInput,
+  success: GitHubInboxListResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsGitHubInboxIssueDetailRpc = Rpc.make(WS_METHODS.githubInboxIssueDetail, {
+  payload: GitHubIssueDetailInput,
+  success: GitHubIssueDetail,
+  error: PullRequestsRpcError,
+});
+
+export const WsGitHubInboxIssueCommentRpc = Rpc.make(WS_METHODS.githubInboxIssueComment, {
+  payload: GitHubIssueCommentInput,
+  success: GitHubIssueCommentResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
+  payload: PullRequestDetailInput,
+  success: PullRequestDetail,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsDiffRpc = Rpc.make(WS_METHODS.pullRequestsDiff, {
+  payload: PullRequestDetailInput,
+  success: PullRequestDiffResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsActionRpc = Rpc.make(WS_METHODS.pullRequestsAction, {
+  payload: PullRequestActionInput,
+  success: PullRequestActionResult,
+  error: PullRequestsRpcError,
+});
+
+// Comments reuse the action acknowledgment shape: the mutation is confirmed independently of
+// the follow-up detail refetch that surfaces the new comment.
+export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
+  payload: PullRequestCommentInput,
+  success: PullRequestActionResult,
+  error: PullRequestsRpcError,
+});
+
+export const WsPullRequestsSetPinnedRpc = Rpc.make(WS_METHODS.pullRequestsSetPinned, {
+  payload: PullRequestSetPinnedInput,
+  success: PullRequestSetPinnedResult,
+  error: WsRpcError,
+});
+
+export const WsPullRequestsGetAutoFixRpc = Rpc.make(WS_METHODS.pullRequestsGetAutoFix, {
+  payload: PullRequestAutoFixGetInput,
+  success: PullRequestAutoFixListResult,
+  error: WsRpcError,
+});
+
+export const WsPullRequestsSetAutoFixRpc = Rpc.make(WS_METHODS.pullRequestsSetAutoFix, {
+  payload: PullRequestAutoFixSetInput,
+  success: PullRequestAutoFixResult,
   error: WsRpcError,
 });
 
@@ -371,16 +1182,25 @@ export const WsGitListBranchesRpc = Rpc.make(WS_METHODS.gitListBranches, {
   error: WsRpcError,
 });
 
+export const WsGitListRecentCommitsRpc = Rpc.make(WS_METHODS.gitListRecentCommits, {
+  payload: GitListRecentCommitsInput,
+  success: GitListRecentCommitsResult,
+  error: WsRpcError,
+});
+
 export const WsGitCreateWorktreeRpc = Rpc.make(WS_METHODS.gitCreateWorktree, {
   payload: GitCreateWorktreeInput,
   success: GitCreateWorktreeResult,
   error: WsRpcError,
 });
 
+// Streams setup phases (branch → worktree → copy-changes) so the UI can show
+// real progress; the terminal `completed` event carries the created worktree.
 export const WsGitCreateDetachedWorktreeRpc = Rpc.make(WS_METHODS.gitCreateDetachedWorktree, {
   payload: GitCreateDetachedWorktreeInput,
-  success: GitCreateDetachedWorktreeResult,
+  success: GitWorktreeSetupProgressEvent,
   error: WsRpcError,
+  stream: true,
 });
 
 export const WsGitRemoveWorktreeRpc = Rpc.make(WS_METHODS.gitRemoveWorktree, {
@@ -498,6 +1318,12 @@ export const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTermina
   stream: true,
 });
 
+export const WsServerGetRuntimeStatusRpc = Rpc.make(WS_METHODS.serverGetRuntimeStatus, {
+  payload: Schema.Struct({}),
+  success: ServerRuntimeStatus,
+  error: WsRpcError,
+});
+
 export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
@@ -534,6 +1360,42 @@ export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvide
   error: ServerProviderUpdateError,
 });
 
+export const WsServerListExternalMcpIntegrationsRpc = Rpc.make(
+  WS_METHODS.serverListExternalMcpIntegrations,
+  {
+    payload: Schema.Struct({}),
+    success: Schema.Array(ExternalMcpIntegration),
+    error: WsRpcError,
+  },
+);
+
+export const WsServerCreateExternalMcpIntegrationRpc = Rpc.make(
+  WS_METHODS.serverCreateExternalMcpIntegration,
+  {
+    payload: ExternalMcpCreateIntegrationInput,
+    success: ExternalMcpCreateIntegrationResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerRevokeExternalMcpIntegrationRpc = Rpc.make(
+  WS_METHODS.serverRevokeExternalMcpIntegration,
+  {
+    payload: ExternalMcpRevokeIntegrationInput,
+    success: Schema.Struct({ revoked: Schema.Boolean }),
+    error: WsRpcError,
+  },
+);
+
+export const WsServerRefreshExternalMcpPairingRpc = Rpc.make(
+  WS_METHODS.serverRefreshExternalMcpPairing,
+  {
+    payload: ExternalMcpRefreshPairingInput,
+    success: ExternalMcpCreateIntegrationResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -567,9 +1429,48 @@ export const WsServerListProviderUsageRpc = Rpc.make(WS_METHODS.serverListProvid
   error: WsRpcError,
 });
 
+export const WsServerConsumeCodexResetCreditRpc = Rpc.make(
+  WS_METHODS.serverConsumeCodexResetCredit,
+  {
+    payload: ServerConsumeCodexResetCreditInput,
+    success: ServerConsumeCodexResetCreditResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsStatsGetProfileStatsRpc = Rpc.make(WS_METHODS.statsGetProfileStats, {
+  payload: StatsGetProfileStatsInput,
+  success: StatsGetProfileStatsResult,
+  error: WsRpcError,
+});
+
+export const WsStatsGetProfileTokenStatsRpc = Rpc.make(WS_METHODS.statsGetProfileTokenStats, {
+  payload: StatsGetProfileTokenStatsInput,
+  success: StatsGetProfileTokenStatsResult,
+  error: WsRpcError,
+});
+
+export const WsStatsGetRecapRpc = Rpc.make(WS_METHODS.statsGetRecap, {
+  payload: StatsGetRecapInput,
+  success: StatsGetRecapResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
   success: ServerDiagnosticsResult,
+  error: WsRpcError,
+});
+
+export const WsServerReadThreadDiagnosticsRpc = Rpc.make(WS_METHODS.serverReadThreadDiagnostics, {
+  payload: ServerReadThreadDiagnosticsInput,
+  success: ServerReadThreadDiagnosticsResult,
+  error: WsRpcError,
+});
+
+export const WsServerPrewarmVoiceRpc = Rpc.make(WS_METHODS.serverPrewarmVoice, {
+  payload: ServerVoicePrewarmInput,
+  success: ServerVoicePrewarmResult,
   error: WsRpcError,
 });
 
@@ -585,9 +1486,24 @@ export const WsServerGenerateThreadRecapRpc = Rpc.make(WS_METHODS.serverGenerate
   error: WsRpcError,
 });
 
+export const WsServerGenerateAutomationIntentRpc = Rpc.make(
+  WS_METHODS.serverGenerateAutomationIntent,
+  {
+    payload: ServerGenerateAutomationIntentInput,
+    success: ServerGenerateAutomationIntentResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
-  payload: KeybindingRule,
+  payload: ServerUpsertKeybindingInput,
   success: ServerUpsertKeybindingResult,
+  error: WsRpcError,
+});
+
+export const WsServerEditKeybindingsRpc = Rpc.make(WS_METHODS.serverEditKeybindings, {
+  payload: ServerEditKeybindingsInput,
+  success: ServerEditKeybindingsResult,
   error: WsRpcError,
 });
 
@@ -618,6 +1534,13 @@ export const WsSubscribeServerProviderStatusesRpc = Rpc.make(
 export const WsSubscribeServerSettingsRpc = Rpc.make(WS_METHODS.subscribeServerSettings, {
   payload: Schema.Struct({}),
   success: Schema.Struct({ settings: ServerGetSettingsResult }),
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsSubscribeServerKeepAwakeRpc = Rpc.make(WS_METHODS.subscribeServerKeepAwake, {
+  payload: Schema.Struct({}),
+  success: ServerKeepAwakeUpdatedPayload,
   error: WsRpcError,
   stream: true,
 });
@@ -679,15 +1602,323 @@ export const WsProviderListAgentsRpc = Rpc.make(WS_METHODS.providerListAgents, {
   error: WsRpcError,
 });
 
-export const WsRpcGroup = RpcGroup.make(
+export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
+  payload: AutomationListInput,
+  success: AutomationListResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationGetMemoryRpc = Rpc.make(WS_METHODS.automationGetMemory, {
+  payload: AutomationGetMemoryInput,
+  success: Schema.NullOr(AutomationMemory),
+  error: WsRpcError,
+});
+
+export const WsAutomationCreateRpc = Rpc.make(WS_METHODS.automationCreate, {
+  payload: AutomationCreateInput,
+  success: AutomationDefinition,
+  error: WsRpcError,
+});
+
+export const WsAutomationUpdateRpc = Rpc.make(WS_METHODS.automationUpdate, {
+  payload: AutomationUpdateInput,
+  success: AutomationDefinition,
+  error: WsRpcError,
+});
+
+export const WsAutomationDeleteRpc = Rpc.make(WS_METHODS.automationDelete, {
+  payload: AutomationDeleteInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAutomationRunNowRpc = Rpc.make(WS_METHODS.automationRunNow, {
+  payload: AutomationRunNowInput,
+  success: AutomationRunNowResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationCancelRunRpc = Rpc.make(WS_METHODS.automationCancelRun, {
+  payload: AutomationCancelRunInput,
+  success: AutomationCancelRunResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationMarkRunReadRpc = Rpc.make(WS_METHODS.automationMarkRunRead, {
+  payload: AutomationMarkRunReadInput,
+  success: AutomationRunActionResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationArchiveRunRpc = Rpc.make(WS_METHODS.automationArchiveRun, {
+  payload: AutomationArchiveRunInput,
+  success: AutomationRunActionResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationResolveProposalRpc = Rpc.make(WS_METHODS.automationResolveProposal, {
+  payload: AutomationResolveProposalInput,
+  success: AutomationResolveProposalResult,
+  error: WsRpcError,
+});
+
+export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutomationEvents, {
+  payload: Schema.Struct({}),
+  success: AutomationStreamEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsTodoListRpc = Rpc.make(WS_METHODS.todoList, {
+  payload: Schema.Struct({}),
+  success: TodoListResult,
+  error: WsRpcError,
+});
+
+export const WsTodoCreateRpc = Rpc.make(WS_METHODS.todoCreate, {
+  payload: TodoCreateInput,
+  success: Todo,
+  error: WsRpcError,
+});
+
+export const WsTodoUpdateRpc = Rpc.make(WS_METHODS.todoUpdate, {
+  payload: TodoUpdateInput,
+  success: Todo,
+  error: WsRpcError,
+});
+
+export const WsTodoDeleteRpc = Rpc.make(WS_METHODS.todoDelete, {
+  payload: TodoDeleteInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsSubscribeTodoEventsRpc = Rpc.make(WS_METHODS.subscribeTodoEvents, {
+  payload: Schema.Struct({}),
+  success: TodoStreamEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsProjectAgentGetOverviewRpc = Rpc.make(WS_METHODS.projectAgentGetOverview, {
+  payload: ProjectAgentGetOverviewInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentListSummariesRpc = Rpc.make(WS_METHODS.projectAgentListSummaries, {
+  payload: ProjectAgentListSummariesInput,
+  success: ProjectAgentListSummariesResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentConfigureRpc = Rpc.make(WS_METHODS.projectAgentConfigure, {
+  payload: ProjectAgentConfigureInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentLinkProjectRpc = Rpc.make(WS_METHODS.projectAgentLinkProject, {
+  payload: ProjectAgentLinkProjectInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentUnlinkProjectRpc = Rpc.make(WS_METHODS.projectAgentUnlinkProject, {
+  payload: ProjectAgentUnlinkProjectInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentPauseGroupRpc = Rpc.make(WS_METHODS.projectAgentPauseGroup, {
+  payload: ProjectAgentGroupControlInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentResumeGroupRpc = Rpc.make(WS_METHODS.projectAgentResumeGroup, {
+  payload: ProjectAgentGroupControlInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentArchiveGroupRpc = Rpc.make(WS_METHODS.projectAgentArchiveGroup, {
+  payload: ProjectAgentGroupControlInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentUnarchiveGroupRpc = Rpc.make(WS_METHODS.projectAgentUnarchiveGroup, {
+  payload: ProjectAgentGroupControlInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentRestartCoordinatorRpc = Rpc.make(
+  WS_METHODS.projectAgentRestartCoordinator,
+  {
+    payload: ProjectAgentGroupControlInput,
+    success: ProjectAgentOverview,
+    error: WsRpcError,
+  },
+);
+export const WsProjectAgentDeleteGroupRpc = Rpc.make(WS_METHODS.projectAgentDeleteGroup, {
+  payload: ProjectAgentDeleteGroupInput,
+  success: ProjectAgentDeleteGroupResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentStartGoalRpc = Rpc.make(WS_METHODS.projectAgentStartGoal, {
+  payload: ProjectAgentStartGoalInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentUpdateGoalRpc = Rpc.make(WS_METHODS.projectAgentUpdateGoal, {
+  payload: ProjectAgentUpdateGoalInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentPauseGoalRpc = Rpc.make(WS_METHODS.projectAgentPauseGoal, {
+  payload: ProjectAgentGoalControlInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentResumeGoalRpc = Rpc.make(WS_METHODS.projectAgentResumeGoal, {
+  payload: ProjectAgentGoalControlInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentStopGoalRpc = Rpc.make(WS_METHODS.projectAgentStopGoal, {
+  payload: ProjectAgentGoalControlInput,
+  success: ProjectGoal,
+  error: WsRpcError,
+});
+export const WsProjectAgentListTasksRpc = Rpc.make(WS_METHODS.projectAgentListTasks, {
+  payload: ProjectAgentListTasksInput,
+  success: ProjectAgentListTasksResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentUpdateTaskRpc = Rpc.make(WS_METHODS.projectAgentUpdateTask, {
+  payload: ProjectAgentUpdateTaskInput,
+  success: ProjectTask,
+  error: WsRpcError,
+});
+export const WsProjectAgentCreateTaskRpc = Rpc.make(WS_METHODS.projectAgentCreateTask, {
+  payload: ProjectAgentCreateTaskInput,
+  success: ProjectTask,
+  error: WsRpcError,
+});
+export const WsProjectAgentListEvidenceRpc = Rpc.make(WS_METHODS.projectAgentListEvidence, {
+  payload: ProjectAgentListEvidenceInput,
+  success: ProjectAgentListEvidenceResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentListThreadIndexRpc = Rpc.make(WS_METHODS.projectAgentListThreadIndex, {
+  payload: ProjectAgentListThreadIndexInput,
+  success: ProjectAgentListThreadIndexResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentExcludeThreadRpc = Rpc.make(WS_METHODS.projectAgentExcludeThread, {
+  payload: ProjectAgentExcludeThreadInput,
+  success: ProjectThreadIndexEntry,
+  error: WsRpcError,
+});
+export const WsProjectAgentBackfillSummariesRpc = Rpc.make(
+  WS_METHODS.projectAgentBackfillSummaries,
+  {
+    payload: ProjectAgentBackfillInput,
+    success: ProjectAgentOverview,
+    error: WsRpcError,
+  },
+);
+export const WsProjectAgentListActivityRpc = Rpc.make(WS_METHODS.projectAgentListActivity, {
+  payload: ProjectAgentListActivityInput,
+  success: ProjectAgentListActivityResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentListDocumentsRpc = Rpc.make(WS_METHODS.projectAgentListDocuments, {
+  payload: ProjectAgentListDocumentsInput,
+  success: ProjectAgentListDocumentsResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentReadDocumentRpc = Rpc.make(WS_METHODS.projectAgentReadDocument, {
+  payload: ProjectAgentReadDocumentInput,
+  success: ProjectAgentReadDocumentResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentWriteDocumentRpc = Rpc.make(WS_METHODS.projectAgentWriteDocument, {
+  payload: ProjectAgentWriteDocumentInput,
+  success: ProjectDocumentRevision,
+  error: WsRpcError,
+});
+export const WsProjectAgentExportDocumentsRpc = Rpc.make(WS_METHODS.projectAgentExportDocuments, {
+  payload: ProjectAgentExportDocumentsInput,
+  success: ProjectAgentExportDocumentsResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentRefreshDigestRpc = Rpc.make(WS_METHODS.projectAgentRefreshDigest, {
+  payload: ProjectAgentRefreshDigestInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryListRpc = Rpc.make(WS_METHODS.projectAgentLibraryList, {
+  payload: ProjectAgentLibraryListInput,
+  success: ProjectAgentLibraryListResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryMkdirRpc = Rpc.make(WS_METHODS.projectAgentLibraryMkdir, {
+  payload: ProjectAgentLibraryMkdirInput,
+  success: ProjectAgentLibraryMutationResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryRenameRpc = Rpc.make(WS_METHODS.projectAgentLibraryRename, {
+  payload: ProjectAgentLibraryRenameInput,
+  success: ProjectAgentLibraryMutationResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryDeleteRpc = Rpc.make(WS_METHODS.projectAgentLibraryDelete, {
+  payload: ProjectAgentLibraryDeleteInput,
+  success: ProjectAgentLibraryMutationResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryHistoryRpc = Rpc.make(WS_METHODS.projectAgentLibraryHistory, {
+  payload: ProjectAgentLibraryHistoryInput,
+  success: ProjectAgentLibraryHistoryResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryRestoreRpc = Rpc.make(WS_METHODS.projectAgentLibraryRestore, {
+  payload: ProjectAgentLibraryRestoreInput,
+  success: ProjectAgentLibraryMutationResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryStatusRpc = Rpc.make(WS_METHODS.projectAgentLibraryStatus, {
+  payload: ProjectAgentLibraryStatusInput,
+  success: ProjectAgentLibraryStatusResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentResolveWorkerRpc = Rpc.make(WS_METHODS.projectAgentResolveWorker, {
+  payload: ProjectAgentResolveWorkerInput,
+  success: ProjectAgentResolveWorkerResult,
+  error: WsRpcError,
+});
+export const WsSubscribeProjectAgentEventsRpc = Rpc.make(WS_METHODS.subscribeProjectAgentEvents, {
+  payload: ProjectAgentSubscribeInput,
+  success: ProjectAgentStreamEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
+
+export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
+  WsOrchestrationSettleTurnDispatchRpc,
   WsOrchestrationImportThreadRpc,
+  WsListProjectImportsRpc,
+  WsImportProjectRpc,
+  WsLoadProjectImportHistoryRpc,
+  WsOrchestrationRegenerateThreadTitleRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,
+  WsOrchestrationGetThreadDetailSnapshotRpc,
+  WsOrchestrationSearchThreadsRpc,
   WsOrchestrationRepairStateRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
+  WsOrchestrationListProviderDeliveryBlockersRpc,
+  WsOrchestrationReconcileProviderDeliveryRpc,
+  WsOrchestrationPrepareQuitResumeRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationUnsubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
@@ -697,23 +1928,46 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsListDirectoriesRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
+  WsProjectsSearchContentRpc,
+  WsProjectsPrewarmSearchIndexRpc,
   WsProjectsReadFileRpc,
+  WsProjectsSubscribeFileChangeRpc,
+  WsProjectsResolveWorkspaceFileReferencesRpc,
+  WsProjectsResolveOutOfRootFileReferenceRpc,
+  WsProjectsCreateLocalFilePreviewGrantRpc,
   WsProjectsWriteFileRpc,
   WsProjectsRunDevServerRpc,
   WsProjectsStopDevServerRpc,
   WsProjectsListDevServersRpc,
   WsSubscribeProjectDevServerEventsRpc,
+  WsProjectsProvisionFromGitHubRpc,
+  WsStudioListThreadOutputsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
   WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,
+  WsGitBlameLineRpc,
+  WsGitReadFileAtRevRpc,
+  WsGitWorkingTreeDiffStatsRpc,
   WsGitSummarizeDiffRpc,
   WsGitPullRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
+  WsGitPullRequestSnapshotRpc,
   WsGitPreparePullRequestThreadRpc,
+  WsGitHubInboxListRpc,
+  WsGitHubInboxIssueDetailRpc,
+  WsGitHubInboxIssueCommentRpc,
+  WsPullRequestsDetailRpc,
+  WsPullRequestsDiffRpc,
+  WsPullRequestsActionRpc,
+  WsPullRequestsCommentRpc,
+  WsPullRequestsSetPinnedRpc,
+  WsPullRequestsGetAutoFixRpc,
+  WsPullRequestsSetAutoFixRpc,
   WsGitListBranchesRpc,
+  WsGitListRecentCommitsRpc,
   WsGitCreateWorktreeRpc,
   WsGitCreateDetachedWorktreeRpc,
   WsGitRemoveWorktreeRpc,
@@ -735,24 +1989,38 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
   WsSubscribeTerminalEventsRpc,
+  WsServerGetRuntimeStatusRpc,
   WsServerGetConfigRpc,
   WsServerGetEnvironmentRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
+  WsServerListExternalMcpIntegrationsRpc,
+  WsServerCreateExternalMcpIntegrationRpc,
+  WsServerRevokeExternalMcpIntegrationRpc,
+  WsServerRefreshExternalMcpPairingRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerListProviderUsageRpc,
+  WsServerConsumeCodexResetCreditRpc,
+  WsStatsGetProfileStatsRpc,
+  WsStatsGetProfileTokenStatsRpc,
+  WsStatsGetRecapRpc,
   WsServerGetDiagnosticsRpc,
+  WsServerReadThreadDiagnosticsRpc,
+  WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,
+  WsServerGenerateAutomationIntentRpc,
   WsServerUpsertKeybindingRpc,
+  WsServerEditKeybindingsRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerProviderStatusesRpc,
+  WsSubscribeServerKeepAwakeRpc,
   WsSubscribeServerSettingsRpc,
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderCompactThreadRpc,
@@ -763,4 +2031,63 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderReadPluginRpc,
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
+  WsAutomationListRpc,
+  WsAutomationGetMemoryRpc,
+  WsAutomationCreateRpc,
+  WsAutomationUpdateRpc,
+  WsAutomationDeleteRpc,
+  WsAutomationRunNowRpc,
+  WsAutomationCancelRunRpc,
+  WsAutomationMarkRunReadRpc,
+  WsAutomationArchiveRunRpc,
+  WsAutomationResolveProposalRpc,
+  WsSubscribeAutomationEventsRpc,
+  WsTodoListRpc,
+  WsTodoCreateRpc,
+  WsTodoUpdateRpc,
+  WsTodoDeleteRpc,
+  WsSubscribeTodoEventsRpc,
+);
+
+// Project-agent RPCs live in a satellite group: folding them into
+// WsFeatureRpcGroup pushes its inferred type past the declaration emit limit.
+export const WsProjectAgentRpcGroup = RpcGroup.make(
+  WsProjectAgentGetOverviewRpc,
+  WsProjectAgentListSummariesRpc,
+  WsProjectAgentConfigureRpc,
+  WsProjectAgentLinkProjectRpc,
+  WsProjectAgentUnlinkProjectRpc,
+  WsProjectAgentPauseGroupRpc,
+  WsProjectAgentResumeGroupRpc,
+  WsProjectAgentArchiveGroupRpc,
+  WsProjectAgentUnarchiveGroupRpc,
+  WsProjectAgentRestartCoordinatorRpc,
+  WsProjectAgentDeleteGroupRpc,
+  WsProjectAgentStartGoalRpc,
+  WsProjectAgentUpdateGoalRpc,
+  WsProjectAgentPauseGoalRpc,
+  WsProjectAgentResumeGoalRpc,
+  WsProjectAgentStopGoalRpc,
+  WsProjectAgentListTasksRpc,
+  WsProjectAgentUpdateTaskRpc,
+  WsProjectAgentCreateTaskRpc,
+  WsProjectAgentListEvidenceRpc,
+  WsProjectAgentListThreadIndexRpc,
+  WsProjectAgentExcludeThreadRpc,
+  WsProjectAgentBackfillSummariesRpc,
+  WsProjectAgentListActivityRpc,
+  WsProjectAgentListDocumentsRpc,
+  WsProjectAgentReadDocumentRpc,
+  WsProjectAgentWriteDocumentRpc,
+  WsProjectAgentExportDocumentsRpc,
+  WsProjectAgentRefreshDigestRpc,
+  WsProjectAgentLibraryListRpc,
+  WsProjectAgentLibraryMkdirRpc,
+  WsProjectAgentLibraryRenameRpc,
+  WsProjectAgentLibraryDeleteRpc,
+  WsProjectAgentLibraryHistoryRpc,
+  WsProjectAgentLibraryRestoreRpc,
+  WsProjectAgentLibraryStatusRpc,
+  WsProjectAgentResolveWorkerRpc,
+  WsSubscribeProjectAgentEventsRpc,
 );

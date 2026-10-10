@@ -3,36 +3,40 @@
 // Layer: Route/UI support
 // Exports: section ids, nav items, and search normalization helper
 
+import { KEYBINDINGS_ICON_NAME } from "~/lib/icons";
+
 export const SETTINGS_SECTION_IDS = [
   "general",
+  "profile",
   "appearance",
   "notifications",
   "behavior",
+  "appsnap",
+  "computer",
+  "shortcuts",
   "worktrees",
   "archived",
   "models",
   "providers",
   "skills",
   "usage",
+  "integrations",
   "advanced",
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
-export type SettingsNavGroupId = "app" | "synara";
+export type SettingsNavGroupId = "personal" | "integrations" | "coding" | "system" | "archived";
 
 /**
- * Deep-link scroll targets inside a settings panel. Each id is shared by the element that owns
- * it (its `id` + scroll ref), the panel effect that scrolls it into view, and any caller that
- * navigates to it via `?target=…`. Centralizing them keeps the anchor and its links from
- * silently drifting apart.
+ * Deep-link scroll targets inside settings panels. Each id is shared by its DOM owner and callers
+ * that navigate with `?target=…`; the settings route resolves every target after the active panel
+ * mounts.
  */
 export const SETTINGS_TARGETS = {
   providerUpdates: "provider-updates",
   providerInstalls: "provider-installs",
   environmentPanel: "environment-panel",
 } as const;
-
-export type SettingsTargetId = (typeof SETTINGS_TARGETS)[keyof typeof SETTINGS_TARGETS];
 
 export type SettingsNavItem = {
   id: SettingsSectionId;
@@ -42,106 +46,171 @@ export type SettingsNavItem = {
   /** Basename of a SVG under `/central-icons-reversed`. */
   icon: string;
   eyebrow: string;
+  /**
+   * Maturity label shown beside the section name, in the sidebar and on the
+   * panel's own heading. Absent for a settled feature; one source so the two
+   * places can never disagree about what is still in beta.
+   */
+  badge?: string;
 };
 
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   id: SettingsNavGroupId;
   label: string;
 }> = [
-  { id: "app", label: "App" },
-  { id: "synara", label: "Synara" },
+  { id: "personal", label: "Personal" },
+  { id: "integrations", label: "Integrations" },
+  { id: "coding", label: "Coding" },
+  { id: "system", label: "System" },
+  { id: "archived", label: "Archived" },
 ] as const;
 
 export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   {
     id: "general",
-    group: "app",
+    group: "personal",
     label: "General",
-    description: "Default provider, thread mode, and sidebar organization.",
-    icon: "settings-gear-1",
+    description: "Choose defaults for new chats, navigation, and the Environment panel.",
+    icon: "settings-gear-4",
     eyebrow: "Workflow defaults",
   },
   {
+    id: "profile",
+    group: "personal",
+    label: "Profile",
+    description: "Your local activity, streaks, and a shareable stats card.",
+    icon: "user",
+    eyebrow: "Your stats",
+  },
+  {
     id: "appearance",
-    group: "app",
+    group: "personal",
     label: "Appearance",
-    description: "Theme, typography, and timestamp formatting.",
+    description: "Customize the theme, typography, density, and time format.",
     icon: "color-palette",
     eyebrow: "Visual language",
   },
   {
     id: "notifications",
-    group: "app",
+    group: "personal",
     label: "Notifications",
-    description: "In-app toasts and desktop alerts.",
+    description: "Choose how Synara tells you when work finishes or needs attention.",
     icon: "bell",
     eyebrow: "Alerts",
   },
   {
     id: "behavior",
-    group: "app",
-    label: "Behavior",
-    description: "Streaming, diff handling, and destructive confirmations.",
+    group: "personal",
+    label: "Chat behavior",
+    description: "Control live responses, follow-ups, review defaults, and safety confirmations.",
     icon: "settings-slider-hor",
     eyebrow: "Interaction rules",
   },
   {
+    id: "shortcuts",
+    group: "personal",
+    label: "Keybindings",
+    description: "Change, add, or remove the shortcut for every Synara command.",
+    icon: KEYBINDINGS_ICON_NAME,
+    eyebrow: "Key bindings",
+  },
+  {
+    id: "usage",
+    group: "personal",
+    label: "Usage & limits",
+    description: "See remaining quota and credits for every signed-in provider.",
+    icon: "gauge",
+    eyebrow: "Provider limits",
+  },
+  {
+    id: "appsnap",
+    group: "integrations",
+    label: "AppSnap",
+    description: "Capture another app's frontmost window directly into a task.",
+    icon: "screen-capture",
+    eyebrow: "Screen capture",
+  },
+  {
+    id: "computer",
+    group: "integrations",
+    label: "Computer use",
+    description: "Let agents see and control this computer's desktop, and check backend status.",
+    icon: "computer-use",
+    eyebrow: "Desktop control",
+    badge: "Beta",
+  },
+  {
+    id: "integrations",
+    group: "integrations",
+    label: "MCP connections",
+    description: "Give Codex, Claude, and other local agents scoped access to Synara tasks.",
+    icon: "plugin-1",
+    eyebrow: "External agents",
+  },
+  {
+    id: "providers",
+    group: "coding",
+    label: "Agent providers",
+    description: "Choose visible coding agents and manage their installed CLI tools.",
+    icon: "puzzle",
+    eyebrow: "Coding agents",
+  },
+  {
+    id: "models",
+    group: "coding",
+    label: "Models & writing",
+    description:
+      "Choose the source control writing style, Git writing model, and custom model slugs.",
+    icon: "brain",
+    eyebrow: "Model configuration",
+  },
+  {
+    id: "skills",
+    group: "coding",
+    label: "Agent skills",
+    description: "Review reusable workflows discovered across all configured providers.",
+    icon: "building-blocks",
+    eyebrow: "Reusable workflows",
+  },
+  {
     id: "worktrees",
-    group: "app",
-    label: "Worktrees",
-    description: "Review and clean up the worktrees created by Synara.",
+    group: "coding",
+    label: "Managed worktrees",
+    description: "Review and clean up isolated workspaces created by Synara.",
     icon: "branch-simple",
     eyebrow: "Workspace management",
   },
   {
-    id: "archived",
-    group: "app",
-    label: "Archived",
-    description: "View and restore archived threads.",
-    icon: "archive",
-    eyebrow: "Thread management",
-  },
-  {
-    id: "models",
-    group: "synara",
-    label: "Models",
-    description: "Git writing defaults and custom model slugs.",
-    icon: "brain",
-    eyebrow: "AI configuration",
-  },
-  {
-    id: "providers",
-    group: "synara",
-    label: "Providers",
-    description: "Choose visible providers, review CLI installs, and update provider tools.",
-    icon: "puzzle",
-    eyebrow: "Picker visibility",
-  },
-  {
-    id: "skills",
-    group: "synara",
-    label: "Skills",
-    description: "Every skill found across providers, with toggles to control availability.",
-    icon: "building-blocks",
-    eyebrow: "Agent skills",
-  },
-  {
-    id: "usage",
-    group: "synara",
-    label: "Usage",
-    description: "Remaining quota and credits for each signed-in provider.",
-    icon: "gauge",
-    eyebrow: "Limits & credits",
-  },
-  {
     id: "advanced",
-    group: "synara",
-    label: "Advanced",
-    description: "Keybindings, recovery, and version info.",
+    group: "system",
+    label: "System tools",
+    description: "Manage sessions, recovery tools, low-level keybindings, and version details.",
     icon: "toolbox",
     eyebrow: "System tools",
   },
+  {
+    id: "archived",
+    group: "archived",
+    label: "Archived threads",
+    description: "Find and restore threads you previously archived.",
+    icon: "archive",
+    eyebrow: "Thread management",
+  },
 ] as const;
+
+/**
+ * Stable DOM id for a settings row, derived from its (string) title. Shared by the row that
+ * renders the anchor and by the search index that deep-links to it via `?target=…`, so the
+ * two can't drift. Panels stay mounted and render null while inactive, so the slug only needs
+ * to be unique within a section.
+ */
+export function settingRowAnchorId(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `setting-${slug}`;
+}
 
 export function normalizeSettingsSection(value: unknown): SettingsSectionId {
   if (typeof value !== "string") {

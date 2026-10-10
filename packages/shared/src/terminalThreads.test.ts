@@ -4,7 +4,48 @@
 
 import { describe, expect, it } from "vitest";
 
-import { resolveTerminalVisualIdentity } from "./terminalThreads";
+import {
+  deriveTerminalCommandIdentity,
+  deriveTerminalProcessIdentity,
+  resolveTerminalVisualIdentity,
+  terminalCliKindFromValue,
+  terminalScopeIdsForThread,
+} from "./terminalThreads";
+
+it("includes the independent dock scope when cleaning up a host thread", () => {
+  expect(terminalScopeIdsForThread("thread-1")).toEqual(["thread-1", "dock-terminal:thread-1"]);
+});
+
+describe("Antigravity CLI identity", () => {
+  it("detects the agy command", () => {
+    expect(deriveTerminalCommandIdentity("agy")).toEqual({
+      cliKind: "antigravity",
+      iconKey: "antigravity",
+      title: "Antigravity CLI",
+    });
+  });
+
+  it("detects the Antigravity CLI process", () => {
+    expect(deriveTerminalProcessIdentity("/Users/dev/.local/bin/agy --model fast")).toMatchObject({
+      cliKind: "antigravity",
+      iconKey: "antigravity",
+    });
+  });
+
+  it("normalizes persisted Antigravity CLI metadata", () => {
+    expect(terminalCliKindFromValue(" antigravity ")).toBe("antigravity");
+    expect(
+      resolveTerminalVisualIdentity({
+        cliKind: "antigravity",
+        fallbackTitle: "Terminal 1",
+      }),
+    ).toMatchObject({
+      cliKind: "antigravity",
+      iconKey: "antigravity",
+      title: "Antigravity CLI",
+    });
+  });
+});
 
 describe("resolveTerminalVisualIdentity", () => {
   it("treats explicit null cliKind as a generic terminal even when the title looks provider-like", () => {
@@ -21,7 +62,7 @@ describe("resolveTerminalVisualIdentity", () => {
     });
   });
 
-  it("still infers provider identity from title when cliKind is omitted", () => {
+  it("infers provider identity from the title when cliKind is omitted", () => {
     expect(
       resolveTerminalVisualIdentity({
         fallbackTitle: "Terminal 1",

@@ -2,7 +2,7 @@
 // Purpose: "Notes" section of the Environment panel — a per-thread freeform scratchpad.
 // Layer: Environment panel section
 
-import { THREAD_NOTES_MAX_CHARS, type ThreadId } from "@t3tools/contracts";
+import { THREAD_NOTES_MAX_CHARS, type ThreadId } from "@synara/contracts";
 
 import { Textarea } from "~/components/ui/textarea";
 
@@ -30,7 +30,7 @@ export function EnvironmentNotesSection({
           // use) that warms slightly on focus — no fill, no ring. The child selector bumps the
           // inner textarea padding for a touch more breathing room around the text.
           unstyled
-          className="relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2"
+          className="relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-ui text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2"
           value={autosave.value}
           onChange={autosave.onChange}
           onFocus={autosave.onFocus}

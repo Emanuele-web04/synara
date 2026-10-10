@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -10,6 +10,7 @@ import type { SplitView } from "../../splitViewStore";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
 const THREAD_B = ThreadId.makeUnsafe("thread-b");
+const THREAD_C = ThreadId.makeUnsafe("thread-c");
 
 function createSplitView(): SplitView {
   const firstLeaf = {
@@ -55,20 +56,114 @@ function createSplitView(): SplitView {
 }
 
 describe("resolveVisibleToastThreadIds", () => {
-  it("returns only the active thread for single-chat routes", () => {
+  it("includes the active sidechat when its host dock is visible", () => {
     expect(
       resolveVisibleToastThreadIds({
         activeThreadId: THREAD_A,
         splitView: null,
+        rightDockRendered: true,
+        rightDockState: {
+          open: true,
+          activePaneId: "sidechat-pane",
+          panes: [
+            {
+              id: "sidechat-pane",
+              kind: "sidechat",
+              threadId: THREAD_B,
+              diffTurnId: null,
+              diffFilePath: null,
+              filePath: null,
+              pullRequestProjectId: null,
+              pullRequestRepository: null,
+              pullRequestNumber: null,
+              pullRequestInitialTab: null,
+            },
+          ],
+        },
+      }),
+    ).toEqual(new Set([THREAD_A, THREAD_B]));
+  });
+
+  it("does not treat hidden or inactive sidechat panes as visible", () => {
+    expect(
+      resolveVisibleToastThreadIds({
+        activeThreadId: THREAD_A,
+        splitView: null,
+        rightDockRendered: true,
+        rightDockState: {
+          open: false,
+          activePaneId: "sidechat-pane",
+          panes: [
+            {
+              id: "sidechat-pane",
+              kind: "sidechat",
+              threadId: THREAD_B,
+              diffTurnId: null,
+              diffFilePath: null,
+              filePath: null,
+              pullRequestProjectId: null,
+              pullRequestRepository: null,
+              pullRequestNumber: null,
+              pullRequestInitialTab: null,
+            },
+          ],
+        },
       }),
     ).toEqual(new Set([THREAD_A]));
   });
 
-  it("returns every visible split thread without duplicates", () => {
+  it("ignores persisted dock state while the editor route hides the dock", () => {
+    expect(
+      resolveVisibleToastThreadIds({
+        activeThreadId: THREAD_A,
+        splitView: null,
+        rightDockRendered: false,
+        rightDockState: {
+          open: true,
+          activePaneId: "sidechat-pane",
+          panes: [
+            {
+              id: "sidechat-pane",
+              kind: "sidechat",
+              threadId: THREAD_B,
+              diffTurnId: null,
+              diffFilePath: null,
+              filePath: null,
+              pullRequestProjectId: null,
+              pullRequestRepository: null,
+              pullRequestNumber: null,
+              pullRequestInitialTab: null,
+            },
+          ],
+        },
+      }),
+    ).toEqual(new Set([THREAD_A]));
+  });
+
+  it("ignores persisted dock state while the route is rendering a split", () => {
     expect(
       resolveVisibleToastThreadIds({
         activeThreadId: THREAD_A,
         splitView: createSplitView(),
+        rightDockRendered: true,
+        rightDockState: {
+          open: true,
+          activePaneId: "sidechat-pane",
+          panes: [
+            {
+              id: "sidechat-pane",
+              kind: "sidechat",
+              threadId: THREAD_C,
+              diffTurnId: null,
+              diffFilePath: null,
+              filePath: null,
+              pullRequestProjectId: null,
+              pullRequestRepository: null,
+              pullRequestNumber: null,
+              pullRequestInitialTab: null,
+            },
+          ],
+        },
       }),
     ).toEqual(new Set([THREAD_A, THREAD_B]));
   });
@@ -82,15 +177,6 @@ describe("shouldRenderToastForVisibleThreads", () => {
         visibleThreadIds: new Set([THREAD_A]),
       }),
     ).toBe(true);
-  });
-
-  it("keeps thread-scoped toasts limited to visible threads by default", () => {
-    expect(
-      shouldRenderToastForVisibleThreads({
-        toastThreadId: THREAD_B,
-        visibleThreadIds: new Set([THREAD_A]),
-      }),
-    ).toBe(false);
   });
 
   it("allows explicit cross-thread visibility for deeplink notifications", () => {

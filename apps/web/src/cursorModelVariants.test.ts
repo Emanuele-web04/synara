@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   collapseCursorModelVariants,
-  mergeCursorModelVariantsWithBaseControls,
   normalizeCursorModelVariantBaseId,
 } from "./cursorModelVariants";
 
@@ -15,49 +14,45 @@ describe("normalizeCursorModelVariantBaseId", () => {
     expect(normalizeCursorModelVariantBaseId("claude-4.6-opus-max-thinking-fast")).toBe(
       "claude-opus-4-6",
     );
-  });
-});
-
-describe("mergeCursorModelVariantsWithBaseControls", () => {
-  it("keeps raw Cursor CLI variants while adding a rich base model first", () => {
-    const models = [
-      {
-        slug: "claude-fable-5-high",
-        name: "Fable 5 1M",
-        upstreamProviderId: "anthropic",
-        upstreamProviderName: "Anthropic",
-        supportedReasoningEfforts: [{ value: "high", label: "High" }],
-        defaultReasoningEffort: "high",
-      },
-      {
-        slug: "claude-fable-5-max",
-        name: "Fable 5 1M Max",
-        upstreamProviderId: "anthropic",
-        upstreamProviderName: "Anthropic",
-        supportedReasoningEfforts: [{ value: "max", label: "Max" }],
-        defaultReasoningEffort: "max",
-      },
-    ];
-
-    const merged = mergeCursorModelVariantsWithBaseControls(models);
-
-    expect(merged.map((model) => model.slug)).toEqual([
-      "claude-fable-5",
-      "claude-fable-5-high",
-      "claude-fable-5-max",
-    ]);
-    expect(merged[0]).toMatchObject({
-      slug: "claude-fable-5",
-      contextWindowOptions: [
-        { value: "300k", label: "300K", isDefault: true },
-        { value: "1m", label: "1M" },
-      ],
-      defaultContextWindow: "300k",
-    });
+    expect(normalizeCursorModelVariantBaseId("claude-5-sonnet-max-fast")).toBe("claude-sonnet-5");
   });
 });
 
 describe("collapseCursorModelVariants", () => {
+  it("keeps transport variants out of the model picker", () => {
+    expect(
+      collapseCursorModelVariants([
+        {
+          slug: "grok-4.5",
+          name: "Cursor Grok 4.5",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportsThinkingToggle: true,
+        },
+        {
+          slug: "grok-4.5[thinking=true]",
+          name: "Cursor Grok 4.5",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+        },
+        {
+          slug: "grok-4.5[thinking=false]",
+          name: "Cursor Grok 4.5",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+        },
+      ]),
+    ).toEqual([
+      {
+        slug: "grok-4.5",
+        name: "Cursor Grok 4.5",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportsThinkingToggle: true,
+      },
+    ]);
+  });
+
   it("collapses Cursor CLI variants into one model with trait capabilities", () => {
     expect(
       collapseCursorModelVariants([
@@ -138,6 +133,51 @@ describe("collapseCursorModelVariants", () => {
           { value: "1m", label: "1M" },
         ],
         defaultContextWindow: "300k",
+      },
+    ]);
+  });
+
+  it("defaults collapsed Cursor Grok variants to high and keeps fast as a toggle", () => {
+    expect(
+      collapseCursorModelVariants([
+        {
+          slug: "grok-4.6-low",
+          name: "Cursor Grok 4.6 Low",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+          defaultReasoningEffort: "low",
+        },
+        {
+          slug: "grok-4.6-high",
+          name: "Cursor Grok 4.6 High",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "high", label: "High" }],
+          defaultReasoningEffort: "high",
+        },
+        {
+          slug: "grok-4.6-low-fast",
+          name: "Cursor Grok 4.6 Low Fast",
+          upstreamProviderId: "xai",
+          upstreamProviderName: "xAI",
+          supportedReasoningEfforts: [{ value: "low", label: "Low" }],
+          defaultReasoningEffort: "low",
+          supportsFastMode: true,
+        },
+      ]),
+    ).toEqual([
+      {
+        slug: "grok-4.6",
+        name: "Cursor Grok 4.6",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "high", label: "High", isDefault: true },
+        ],
+        defaultReasoningEffort: "high",
+        supportsFastMode: true,
       },
     ]);
   });

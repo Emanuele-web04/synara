@@ -11,7 +11,7 @@ import type {
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
   ServerProviderUpdateError,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -41,5 +41,5 @@ export interface ProviderHealthShape {
 }
 
 export class ProviderHealth extends ServiceMap.Service<ProviderHealth, ProviderHealthShape>()(
-  "t3/provider/Services/ProviderHealth",
+  "synara/provider/Services/ProviderHealth",
 ) {}

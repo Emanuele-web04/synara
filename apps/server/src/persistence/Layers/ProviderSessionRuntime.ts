@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema, Struct } from "effect";
@@ -6,7 +6,7 @@ import { Effect, Layer, Option, Schema, Struct } from "effect";
 import {
   toPersistenceDecodeError,
   toPersistenceSqlError,
-  type ProviderSessionRuntimeRepositoryError,
+  toPersistenceSqlOrDecodeError,
 } from "../Errors.ts";
 import {
   ProviderSessionRuntime,
@@ -29,13 +29,6 @@ const GetRuntimeRequestSchema = Schema.Struct({
 
 const DeleteRuntimeRequestSchema = GetRuntimeRequestSchema;
 
-function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
-  return (cause: unknown): ProviderSessionRuntimeRepositoryError =>
-    Schema.isSchemaError(cause)
-      ? toPersistenceDecodeError(decodeOperation)(cause)
-      : toPersistenceSqlError(sqlOperation)(cause);
-}
-
 const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -46,9 +39,11 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
         INSERT INTO provider_session_runtime (
           thread_id,
           provider_name,
+          provider_instance_id,
           adapter_key,
           runtime_mode,
           status,
+          lifecycle_generation,
           last_seen_at,
           resume_cursor_json,
           runtime_payload_json
@@ -56,9 +51,11 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
         VALUES (
           ${runtime.threadId},
           ${runtime.providerName},
+          ${runtime.providerInstanceId},
           ${runtime.adapterKey},
           ${runtime.runtimeMode},
           ${runtime.status},
+          ${runtime.lifecycleGeneration},
           ${runtime.lastSeenAt},
           ${runtime.resumeCursor},
           ${runtime.runtimePayload}
@@ -66,9 +63,11 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
         ON CONFLICT (thread_id)
         DO UPDATE SET
           provider_name = excluded.provider_name,
+          provider_instance_id = excluded.provider_instance_id,
           adapter_key = excluded.adapter_key,
           runtime_mode = excluded.runtime_mode,
           status = excluded.status,
+          lifecycle_generation = excluded.lifecycle_generation,
           last_seen_at = excluded.last_seen_at,
           resume_cursor_json = excluded.resume_cursor_json,
           runtime_payload_json = excluded.runtime_payload_json
@@ -83,9 +82,11 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           provider_name AS "providerName",
+          provider_instance_id AS "providerInstanceId",
           adapter_key AS "adapterKey",
           runtime_mode AS "runtimeMode",
           status,
+          lifecycle_generation AS "lifecycleGeneration",
           last_seen_at AS "lastSeenAt",
           resume_cursor_json AS "resumeCursor",
           runtime_payload_json AS "runtimePayload"
@@ -102,9 +103,11 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           provider_name AS "providerName",
+          provider_instance_id AS "providerInstanceId",
           adapter_key AS "adapterKey",
           runtime_mode AS "runtimeMode",
           status,
+          lifecycle_generation AS "lifecycleGeneration",
           last_seen_at AS "lastSeenAt",
           resume_cursor_json AS "resumeCursor",
           runtime_payload_json AS "runtimePayload"

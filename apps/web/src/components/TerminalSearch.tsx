@@ -4,7 +4,7 @@
 // Exports: TerminalSearch
 
 import type { SearchAddon, ISearchOptions } from "@xterm/addon-search";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconButton } from "~/components/ui/icon-button";
 import { ChevronDownIcon, ChevronUpIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -32,14 +32,11 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
   const [hasResults, setHasResults] = useState<boolean | null>(null);
   const [caseSensitive, setCaseSensitive] = useState(false);
 
-  const searchOptions = useMemo(
-    (): ISearchOptions => ({
-      caseSensitive,
-      regex: false,
-      decorations: SEARCH_DECORATIONS as NonNullable<ISearchOptions["decorations"]>,
-    }),
-    [caseSensitive],
-  );
+  const searchOptions: ISearchOptions = {
+    caseSensitive,
+    regex: false,
+    decorations: SEARCH_DECORATIONS as NonNullable<ISearchOptions["decorations"]>,
+  };
 
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -54,44 +51,38 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
     }
   }, [isOpen, searchAddon]);
 
-  const handleSearch = useCallback(
-    (direction: "next" | "previous") => {
-      if (!searchAddon || !query) return;
-      if (searchTimerRef.current !== null) {
-        window.clearTimeout(searchTimerRef.current);
-        searchTimerRef.current = null;
-      }
-      const found =
-        direction === "next"
-          ? searchAddon.findNext(query, searchOptions)
-          : searchAddon.findPrevious(query, searchOptions);
-      setHasResults(found);
-    },
-    [searchAddon, query, searchOptions],
-  );
+  const handleSearch = (direction: "next" | "previous") => {
+    if (!searchAddon || !query) return;
+    if (searchTimerRef.current !== null) {
+      window.clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
+    const found =
+      direction === "next"
+        ? searchAddon.findNext(query, searchOptions)
+        : searchAddon.findPrevious(query, searchOptions);
+    setHasResults(found);
+  };
 
-  const clearSearchTimer = useCallback(() => {
+  const clearSearchTimer = () => {
     if (searchTimerRef.current === null) return;
     window.clearTimeout(searchTimerRef.current);
     searchTimerRef.current = null;
-  }, []);
+  };
 
-  const scheduleSearch = useCallback(
-    (nextQuery: string) => {
-      clearSearchTimer();
-      if (!searchAddon || !nextQuery) {
-        setHasResults(null);
-        searchAddon?.clearDecorations();
-        return;
-      }
+  const scheduleSearch = (nextQuery: string) => {
+    clearSearchTimer();
+    if (!searchAddon || !nextQuery) {
+      setHasResults(null);
+      searchAddon?.clearDecorations();
+      return;
+    }
 
-      searchTimerRef.current = window.setTimeout(() => {
-        searchTimerRef.current = null;
-        setHasResults(searchAddon.findNext(nextQuery, searchOptions));
-      }, SEARCH_DEBOUNCE_MS);
-    },
-    [clearSearchTimer, searchAddon, searchOptions],
-  );
+    searchTimerRef.current = window.setTimeout(() => {
+      searchTimerRef.current = null;
+      setHasResults(searchAddon.findNext(nextQuery, searchOptions));
+    }, SEARCH_DEBOUNCE_MS);
+  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newQuery = e.target.value;
@@ -111,9 +102,15 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
     prevCaseSensitiveRef.current = caseSensitive;
     prevSearchAddonRef.current = searchAddon;
     if (searchAddon && query) {
-      scheduleSearch(query);
+      // Inline debounce (rather than scheduleSearch) so every state write in
+      // this effect happens inside the timer, keeping it compiler-eligible.
+      clearSearchTimer();
+      searchTimerRef.current = window.setTimeout(() => {
+        searchTimerRef.current = null;
+        setHasResults(searchAddon.findNext(query, searchOptions));
+      }, SEARCH_DEBOUNCE_MS);
     }
-  }, [searchAddon, query, scheduleSearch, caseSensitive]);
+  }, [searchAddon, query, clearSearchTimer, caseSensitive, searchOptions]);
 
   useEffect(() => () => clearSearchTimer(), [clearSearchTimer]);
 
@@ -144,10 +141,12 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
         placeholder="Find"
-        className="h-6 w-28 min-w-0 flex-shrink bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+        className="h-6 w-28 min-w-0 flex-shrink bg-transparent text-ui leading-snug text-foreground placeholder:text-muted-foreground focus:outline-none"
       />
       {hasResults === false && query && (
-        <span className="whitespace-nowrap px-1 text-xs text-muted-foreground">No results</span>
+        <span className="whitespace-nowrap px-1 text-ui leading-snug text-muted-foreground">
+          No results
+        </span>
       )}
       <div className="flex shrink-0 items-center">
         <IconButton
@@ -160,7 +159,7 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
               : "text-muted-foreground hover:bg-muted-foreground/20 hover:text-foreground",
           )}
         >
-          <span className="text-[10px] font-bold leading-none">Aa</span>
+          <span className="text-ui-xs font-bold leading-none">Aa</span>
         </IconButton>
         <IconButton
           onClick={() => handleSearch("previous")}

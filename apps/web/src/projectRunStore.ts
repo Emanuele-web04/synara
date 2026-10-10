@@ -3,9 +3,7 @@
 // Layer: Web UI state
 // Exports: useProjectRunStore plus helpers for syncing dev-server lifecycle events.
 
-import type { ProjectDevServer, ProjectId } from "@t3tools/contracts";
-
-export type ProjectRunStatus = ProjectDevServer["status"];
+import type { ProjectDevServer, ProjectId } from "@synara/contracts";
 
 /**
  * A tracked dev server as projected from the server. This mirrors the

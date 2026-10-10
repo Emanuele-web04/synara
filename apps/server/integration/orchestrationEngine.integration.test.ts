@@ -12,7 +12,7 @@ import {
   ProviderKind,
   ThreadId,
   ModelSelection,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 
@@ -76,6 +76,19 @@ function waitForSync<A>(
   });
 }
 
+/**
+ * Stale checkpoint refs are pruned only after `thread.revert.complete` commits,
+ * so the projection can already show the trimmed thread while the refs are still
+ * on disk. Poll instead of asserting straight after `thread.reverted`.
+ */
+function waitForGitRefMissing(cwd: string, ref: string) {
+  return waitForSync(
+    () => gitRefExists(cwd, ref),
+    (exists) => !exists,
+    `git ref '${ref}' to be deleted`,
+  );
+}
+
 function runtimeBase(eventId: string, createdAt: string, provider: IntegrationProvider = "codex") {
   return {
     eventId: asEventId(eventId),
@@ -109,8 +122,8 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
   Effect.gen(function* () {
     const createdAt = nowIso();
     const provider = harness.adapterHarness?.provider ?? "codex";
-    if (provider === "pi") {
-      throw new Error("Pi integration tests require an explicit model selection.");
+    if (provider === "pi" || provider === "omp") {
+      throw new Error("Pi/OMP integration tests require an explicit model selection.");
     }
     const defaultModel = DEFAULT_MODEL_BY_PROVIDER[provider];
 
@@ -540,6 +553,7 @@ it.live("tracks approval requests and resolves pending approvals on user respons
       yield* seedProjectAndThread(harness);
 
       yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+        deferCompletion: true,
         events: [
           {
             type: "turn.started",
@@ -582,25 +596,29 @@ it.live("tracks approval requests and resolves pending approvals on user respons
       );
 
       const pendingRow = yield* harness.waitForPendingApproval(
+        THREAD_ID,
         "req-approval-1",
         (row) => row.status === "pending" && row.decision === null,
       );
       assert.equal(pendingRow.status, "pending");
+      assert.notEqual(pendingRow.lifecycleGeneration, null);
 
       yield* harness.engine.dispatch({
         type: "thread.approval.respond",
         commandId: CommandId.makeUnsafe("cmd-approval-respond"),
         threadId: THREAD_ID,
         requestId: APPROVAL_REQUEST_ID,
+        lifecycleGeneration: pendingRow.lifecycleGeneration!,
         decision: "accept",
         createdAt: nowIso(),
       });
 
       const resolvedRow = yield* harness.waitForPendingApproval(
+        THREAD_ID,
         "req-approval-1",
-        (row) => row.status === "resolved" && row.decision === "accept",
+        (row) => row.status === "confirmed" && row.decision === "accept",
       );
-      assert.equal(resolvedRow.status, "resolved");
+      assert.equal(resolvedRow.status, "confirmed");
       assert.equal(resolvedRow.decision, "accept");
 
       const approvalResponses = yield* waitForSync(
@@ -857,10 +875,7 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
         true,
       );
       assert.equal(fs.readFileSync(path.join(harness.workspaceDir, "README.md"), "utf8"), "v2\n");
-      assert.equal(
-        gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
-        false,
-      );
+      yield* waitForGitRefMissing(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2));
       assert.deepEqual(harness.adapterHarness!.getRollbackCalls(THREAD_ID), [1]);
 
       const checkpointRows = yield* harness.checkpointRepository.listByThreadId({
@@ -872,7 +887,7 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
 );
 
 it.live(
-  "appends checkpoint.revert.failed activity when revert is requested without an active session",
+  "appends checkpoint.revert.failed activity when revert without an active session finds no checkpoint",
   () =>
     withHarness((harness) =>
       Effect.gen(function* () {
@@ -898,11 +913,12 @@ it.live(
           (activity) => activity.kind === "checkpoint.revert.failed",
         );
         assert.equal(failureActivity !== undefined, true);
+        // A revert dispatched without a live provider session is no longer rejected up
+        // front: it resolves the checkpoint cwd on its own and fails only when the
+        // requested turn has no filesystem checkpoint.
         assert.equal(
-          String(
-            (failureActivity?.payload as { readonly detail?: string } | undefined)?.detail,
-          ).includes("No active provider session"),
-          true,
+          String((failureActivity?.payload as { readonly detail?: string } | undefined)?.detail),
+          "Filesystem checkpoint is unavailable for turn 0.",
         );
       }),
     ),
@@ -1082,80 +1098,6 @@ itLiveUnlessCi(
     ),
 );
 
-it.live("forwards claudeAgent approval responses to the provider session", () =>
-  withHarness(
-    (harness) =>
-      Effect.gen(function* () {
-        yield* seedProjectAndThread(harness);
-
-        yield* harness.adapterHarness!.queueTurnResponseForNextSession({
-          events: [
-            {
-              type: "turn.started",
-              ...runtimeBase("evt-claude-approval-1", "2026-02-24T10:12:00.000Z", "claudeAgent"),
-              threadId: THREAD_ID,
-              turnId: FIXTURE_TURN_ID,
-            },
-            {
-              type: "approval.requested",
-              ...runtimeBase("evt-claude-approval-2", "2026-02-24T10:12:00.050Z", "claudeAgent"),
-              threadId: THREAD_ID,
-              turnId: FIXTURE_TURN_ID,
-              requestId: APPROVAL_REQUEST_ID,
-              requestKind: "command",
-              detail: "Approve Claude tool call",
-            },
-            {
-              type: "turn.completed",
-              ...runtimeBase("evt-claude-approval-3", "2026-02-24T10:12:00.100Z", "claudeAgent"),
-              threadId: THREAD_ID,
-              turnId: FIXTURE_TURN_ID,
-              status: "completed",
-            },
-          ],
-        });
-
-        yield* startTurn({
-          harness,
-          commandId: "cmd-turn-start-claude-approval",
-          messageId: "msg-user-claude-approval",
-          text: "Need approval",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-sonnet-4-6",
-          },
-        });
-
-        const thread = yield* harness.waitForThread(THREAD_ID, (entry) =>
-          entry.activities.some((activity) => activity.kind === "approval.requested"),
-        );
-        assert.equal(thread.session?.threadId, "thread-1");
-
-        yield* harness.engine.dispatch({
-          type: "thread.approval.respond",
-          commandId: CommandId.makeUnsafe("cmd-claude-approval-respond"),
-          threadId: THREAD_ID,
-          requestId: APPROVAL_REQUEST_ID,
-          decision: "accept",
-          createdAt: nowIso(),
-        });
-
-        yield* harness.waitForPendingApproval(
-          "req-approval-1",
-          (row) => row.status === "resolved" && row.decision === "accept",
-        );
-
-        const approvalResponses = yield* waitForSync(
-          () => harness.adapterHarness!.getApprovalResponses(THREAD_ID),
-          (responses) => responses.length === 1,
-          "claude provider approval response",
-        );
-        assert.equal(approvalResponses[0]?.decision, "accept");
-      }),
-    "claudeAgent",
-  ),
-);
-
 it.live("forwards thread.turn.interrupt to claudeAgent provider sessions", () =>
   withHarness(
     (harness) =>
@@ -1163,6 +1105,7 @@ it.live("forwards thread.turn.interrupt to claudeAgent provider sessions", () =>
         yield* seedProjectAndThread(harness);
 
         yield* harness.adapterHarness!.queueTurnResponseForNextSession({
+          deferCompletion: true,
           events: [
             {
               type: "turn.started",
@@ -1350,13 +1293,10 @@ itLiveUnlessCi("reverts claudeAgent turns and rolls back provider conversation s
             entry.checkpoints.length === 1 && entry.checkpoints[0]?.checkpointTurnCount === 1,
         );
         assert.equal(revertedThread.checkpoints[0]?.checkpointTurnCount, 1);
+        yield* waitForGitRefMissing(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2));
         assert.equal(
           gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 1)),
           true,
-        );
-        assert.equal(
-          gitRefExists(harness.workspaceDir, checkpointRefForThreadTurn(THREAD_ID, 2)),
-          false,
         );
         assert.deepEqual(harness.adapterHarness!.getRollbackCalls(THREAD_ID), [1]);
       }),

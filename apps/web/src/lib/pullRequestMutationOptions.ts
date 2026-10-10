@@ -1,0 +1,450 @@
+import type {
+  GitHubInboxState,
+  GitHubInboxSort,
+  PullRequestActionInput,
+  PullRequestAutoFixListResult,
+  PullRequestAutoFixSetInput,
+  PullRequestCommentInput,
+  PullRequestSetPinnedInput,
+  PullRequestState,
+} from "@synara/contracts";
+import { normalizeGitHubPullRequestUrl } from "@synara/shared/githubRepository";
+import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+
+import { ensureNativeApi } from "~/nativeApi";
+import {
+  optimisticallyPatchPullRequestGitCaches,
+  pullRequestGitQueryFilters,
+  rollbackPullRequestGitCaches,
+  type GitPullRequestActionRollback,
+} from "./pullRequestGitCache";
+import { githubInboxQueryKeys } from "./githubInboxQueryOptions";
+import {
+  cancelPullRequestListScopes,
+  githubInboxStateForPullRequestState,
+  invalidatePullRequestListScopes,
+  isPullRequestListQueryKey,
+  listScopesContainingPullRequest,
+  listScopesContainingPullRequestRepository,
+  optimisticallyPatchPullRequestActionFieldsInListCaches,
+  optimisticallyPatchPullRequestPinInListCaches,
+  patchOwnedPullRequestPinInCache,
+  patchPullRequestPinInListCaches,
+  preserveProtectedActionValues,
+  preserveProtectedPinValues,
+  rollbackPullRequestActionFieldsInListCaches,
+  type ActionListCacheRollback,
+  type PullRequestActionListPatch,
+  type PullRequestListCache,
+  type PullRequestListQueryScope,
+} from "./pullRequestCache";
+import {
+  beginPinMutation,
+  beginPullRequestActionProtection,
+  beginPullRequestRefresh,
+  finishPinMutation,
+  finishPullRequestActionProtection,
+  finishPullRequestRefresh,
+  isFinalActivePinMutation,
+  isLatestPinMutation,
+  pinMutationRollbackState,
+  protectedActionFieldsForRefresh,
+  protectedPinIdentitiesForRefresh,
+  PULL_REQUEST_ACTION_REFRESH_SCOPE_ID,
+  recordPinMutationAcknowledgement,
+  recordPinMutationBaseline,
+  runPinMutationInIdentityOrder,
+  type PinMutationContext,
+  type PullRequestActionProtectionContext,
+} from "./pullRequestMutationCoordinator";
+import { pullRequestQueryKeys } from "./pullRequestQueryOptions";
+
+export const pullRequestMutationKeys = {
+  action: ["pull-requests", "action"] as const,
+  setPinned: ["pull-requests", "set-pinned"] as const,
+  comment: ["pull-requests", "comment"] as const,
+  forceRefresh: ["pull-requests", "force-refresh"] as const,
+};
+
+type ActionOwnedFields = { state?: PullRequestState; isDraft?: boolean; closedAt?: string | null };
+type ActionMutationContext = {
+  previousDetailFields: ActionOwnedFields | null;
+  listRollbackByQuery: ActionListCacheRollback[];
+  gitRollbackByQuery: GitPullRequestActionRollback[];
+  optimisticListPatch: PullRequestActionListPatch;
+  affectedScopes: PullRequestListQueryScope[];
+  protection: PullRequestActionProtectionContext;
+};
+
+function optimisticPullRequestActionPatch(
+  action: PullRequestActionInput["action"],
+): { state?: PullRequestState; isDraft?: boolean; closedAt?: string | null } | null {
+  switch (action) {
+    case "ready":
+      return { isDraft: false };
+    case "draft":
+      return { isDraft: true };
+    case "close":
+      return { state: "closed", closedAt: new Date().toISOString() };
+    case "reopen":
+      return { state: "open", closedAt: null };
+    case "merge":
+      return null;
+  }
+}
+
+// The sidebar review badge reads the open inbox list, so invalidating the open scope (which a
+// state change always touches, as source or target) also refreshes the badge.
+function actionListScopes(
+  queryClient: QueryClient,
+  input: PullRequestActionInput,
+  targetState: GitHubInboxState | undefined,
+): PullRequestListQueryScope[] {
+  const scopes = listScopesContainingPullRequestRepository(queryClient, input);
+  if (targetState === undefined || scopes.some((scope) => scope.state === targetState)) {
+    return scopes;
+  }
+  return [...scopes, { state: targetState }];
+}
+
+function pullRequestActionTargetState(
+  action: PullRequestActionInput["action"],
+): GitHubInboxState | undefined {
+  switch (action) {
+    case "close":
+    case "merge":
+      return "closed";
+    case "reopen":
+      return "open";
+    case "ready":
+    case "draft":
+      return undefined;
+  }
+}
+
+function invalidatePullRequestActionDetails(
+  queryClient: QueryClient,
+  input: PullRequestActionInput,
+) {
+  if (input.action !== "merge") {
+    return queryClient.invalidateQueries({
+      queryKey: pullRequestQueryKeys.detail(input),
+      exact: true,
+    });
+  }
+  // A stacked merge changes every PR through the selected stack position. The action payload is
+  // intentionally small, so invalidate all cached details for this repository; standalone merges
+  // pay the same bounded invalidation and avoid a second pre-merge stack lookup.
+  return queryClient.invalidateQueries({
+    predicate: (query) => {
+      const key = query.queryKey;
+      return key[0] === "pull-requests" && key[1] === "detail" && key[3] === input.repository;
+    },
+  });
+}
+
+export function pullRequestActionMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationKey: pullRequestMutationKeys.action,
+    // Manual refreshes share this scope, so their snapshot cannot race a PR state action.
+    scope: { id: PULL_REQUEST_ACTION_REFRESH_SCOPE_ID },
+    networkMode: "always",
+    mutationFn: (input: PullRequestActionInput) => ensureNativeApi().pullRequests.action(input),
+    onMutate: async (input): Promise<ActionMutationContext> => {
+      const patch = optimisticPullRequestActionPatch(input.action) ?? {};
+      const optimisticListPatch = {
+        ...(patch.state !== undefined ? { state: patch.state } : {}),
+        ...(patch.isDraft !== undefined ? { isDraft: patch.isDraft } : {}),
+      };
+      const protection = beginPullRequestActionProtection(queryClient, input, optimisticListPatch);
+      try {
+        const detailKey = pullRequestQueryKeys.detail(input);
+        const affectedScopes = actionListScopes(
+          queryClient,
+          input,
+          pullRequestActionTargetState(input.action),
+        );
+        await Promise.all([
+          queryClient.cancelQueries({ queryKey: detailKey, exact: true }),
+          cancelPullRequestListScopes(queryClient, affectedScopes),
+          queryClient.cancelQueries(pullRequestGitQueryFilters(input)),
+        ]);
+        const previousDetail = queryClient.getQueryData<
+          ActionOwnedFields & Record<string, unknown>
+        >(detailKey);
+        let previousDetailFields: ActionOwnedFields | null = null;
+        if (previousDetail && Object.keys(patch).length > 0) {
+          previousDetailFields = {
+            ...(patch.state !== undefined ? { state: previousDetail.state } : {}),
+            ...(patch.isDraft !== undefined ? { isDraft: previousDetail.isDraft } : {}),
+            ...(patch.closedAt !== undefined ? { closedAt: previousDetail.closedAt } : {}),
+          };
+          queryClient.setQueryData(detailKey, { ...previousDetail, ...patch });
+        }
+
+        return {
+          previousDetailFields,
+          optimisticListPatch,
+          listRollbackByQuery: optimisticallyPatchPullRequestActionFieldsInListCaches(
+            queryClient,
+            input,
+            optimisticListPatch,
+          ),
+          gitRollbackByQuery: optimisticallyPatchPullRequestGitCaches(
+            queryClient,
+            input,
+            optimisticListPatch,
+          ),
+          affectedScopes,
+          protection,
+        };
+      } catch (error) {
+        finishPullRequestActionProtection(queryClient, protection, "failed");
+        throw error;
+      }
+    },
+    onError: async (_error, input, context) => {
+      // Failed intent must stop winning query-result overlays before rollback/refetch restores
+      // the last cache value and then converges on remote truth. finish is idempotent in settled.
+      if (context) finishPullRequestActionProtection(queryClient, context.protection, "failed");
+      const patch = optimisticPullRequestActionPatch(input.action);
+      if (patch && context) {
+        const previousDetailFields = context.previousDetailFields;
+        if (previousDetailFields) {
+          queryClient.setQueryData<Record<string, unknown>>(
+            pullRequestQueryKeys.detail(input),
+            (current) => (current ? { ...current, ...previousDetailFields } : current),
+          );
+        }
+        rollbackPullRequestActionFieldsInListCaches({
+          queryClient,
+          identity: input,
+          optimisticPatch: context.optimisticListPatch,
+          rollbackByQuery: context.listRollbackByQuery,
+        });
+        rollbackPullRequestGitCaches({
+          queryClient,
+          identity: input,
+          optimisticPatch: context.optimisticListPatch,
+          rollback: context.gitRollbackByQuery,
+        });
+      }
+      // The command may have reached GitHub even when transport failed. Mark the rollback
+      // provisional so reconnect/refetch converges on server truth instead of assuming failure.
+      await Promise.all([
+        context
+          ? invalidatePullRequestListScopes(queryClient, context.affectedScopes)
+          : Promise.resolve(),
+        invalidatePullRequestActionDetails(queryClient, input),
+        queryClient.invalidateQueries(pullRequestGitQueryFilters(input)),
+      ]);
+    },
+    onSuccess: async (result, input, context) => {
+      // GitHub already accepted the action. Cache reconciliation is best-effort and must not
+      // reject this callback, because TanStack would route that callback error through onError
+      // and roll back an action that actually succeeded remotely.
+      await Promise.allSettled([
+        invalidatePullRequestListScopes(queryClient, context.affectedScopes),
+        invalidatePullRequestActionDetails(queryClient, input),
+        queryClient.invalidateQueries(pullRequestGitQueryFilters(input, result.workspaceRoot)),
+      ]);
+    },
+    onSettled: (_result, error, _input, context) => {
+      if (context) {
+        finishPullRequestActionProtection(
+          queryClient,
+          context.protection,
+          error ? "failed" : "succeeded",
+        );
+      }
+    },
+  });
+}
+
+function rollbackPullRequestPinInListCaches(
+  queryClient: QueryClient,
+  input: PullRequestSetPinnedInput,
+  context: PinMutationContext,
+) {
+  const rollbackState = pinMutationRollbackState(queryClient, context);
+  if (!rollbackState.latest) return;
+
+  if (rollbackState.acknowledgedIsPinned !== null) {
+    for (const [queryKey] of queryClient.getQueriesData<PullRequestListCache>({
+      predicate: (query) => isPullRequestListQueryKey(query.queryKey),
+    })) {
+      patchOwnedPullRequestPinInCache({
+        queryClient,
+        queryKey,
+        identity: input,
+        expectedIsPinned: context.optimisticIsPinned,
+        nextIsPinned: rollbackState.acknowledgedIsPinned,
+      });
+    }
+    return;
+  }
+
+  for (const baseline of rollbackState.baselineByQuery) {
+    patchOwnedPullRequestPinInCache({
+      queryClient,
+      queryKey: baseline.queryKey,
+      identity: input,
+      expectedIsPinned: context.optimisticIsPinned,
+      nextIsPinned: baseline.previousIsPinned,
+    });
+  }
+}
+
+export function pullRequestSetPinnedMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationKey: pullRequestMutationKeys.setPinned,
+    // Pins no longer block refreshes or unrelated PRs. The coordinator serializes only writes
+    // for the same identity, while the epochs below keep optimistic callbacks field-safe.
+    networkMode: "always",
+    mutationFn: (input: PullRequestSetPinnedInput) =>
+      runPinMutationInIdentityOrder(queryClient, input, () =>
+        ensureNativeApi().pullRequests.setPinned(input),
+      ),
+    onMutate: async (input): Promise<PinMutationContext> => {
+      const mutation = beginPinMutation(queryClient, input);
+      const context: PinMutationContext = {
+        ...mutation,
+        rollbackByQuery: [],
+        affectedScopes: listScopesContainingPullRequest(queryClient, input),
+      };
+      try {
+        await cancelPullRequestListScopes(queryClient, context.affectedScopes);
+        context.rollbackByQuery = optimisticallyPatchPullRequestPinInListCaches(queryClient, input);
+        recordPinMutationBaseline(queryClient, context);
+        return context;
+      } catch (error) {
+        finishPinMutation(queryClient, context);
+        throw error;
+      }
+    },
+    onError: (_error, input, context) => {
+      if (context) rollbackPullRequestPinInListCaches(queryClient, input, context);
+    },
+    onSuccess: async (result, _input, context) => {
+      if (!context) return;
+      recordPinMutationAcknowledgement(queryClient, context, result.isPinned);
+      if (!isLatestPinMutation(queryClient, context)) return;
+      await cancelPullRequestListScopes(queryClient, context.affectedScopes);
+      if (!isLatestPinMutation(queryClient, context)) return;
+      patchPullRequestPinInListCaches(queryClient, result, result.isPinned);
+    },
+    onSettled: async (_result, _error, _input, context) => {
+      if (!context) return;
+      const reconcileMembership = isFinalActivePinMutation(queryClient, context);
+      const affectedScopes = context.affectedScopes;
+      finishPinMutation(queryClient, context);
+      // A row may exist only in an exact truncated query. Revalidate the All/exact siblings
+      // once the rapid-toggle chain settles so pin membership is added or removed correctly.
+      if (reconcileMembership) {
+        await invalidatePullRequestListScopes(queryClient, affectedScopes);
+      }
+    },
+  });
+}
+
+export function pullRequestCommentMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationKey: pullRequestMutationKeys.comment,
+    networkMode: "always",
+    mutationFn: (input: PullRequestCommentInput) => ensureNativeApi().pullRequests.comment(input),
+    onSettled: async (_result, _error, input) => {
+      const detailKey = pullRequestQueryKeys.detail(input);
+      const detailState = queryClient.getQueryData<{ state?: PullRequestState }>(detailKey)?.state;
+      const affectedScopes = listScopesContainingPullRequestRepository(queryClient, input);
+      if (detailState) {
+        // A new comment updates GitHub's `updatedAt` and can move an out-of-cap PR into the
+        // list. Include that scope even when no cached row proves membership.
+        affectedScopes.push({ state: githubInboxStateForPullRequestState(detailState) });
+      }
+      await Promise.all([
+        invalidatePullRequestListScopes(queryClient, affectedScopes),
+        queryClient.invalidateQueries({
+          queryKey: detailKey,
+          exact: true,
+        }),
+      ]);
+    },
+  });
+}
+
+export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationKey: pullRequestMutationKeys.forceRefresh,
+    // State-changing actions and snapshots are serialized; pins remain concurrent and are
+    // merged field-by-field through the retained identity protection below.
+    scope: { id: PULL_REQUEST_ACTION_REFRESH_SCOPE_ID },
+    networkMode: "always",
+    mutationFn: (input: { state: GitHubInboxState; sort?: GitHubInboxSort }) =>
+      ensureNativeApi().githubInbox.list({
+        state: input.state,
+        sort: input.sort ?? "created",
+        forceRefresh: true,
+      }),
+    onMutate: async (input) => {
+      const context = beginPullRequestRefresh(queryClient);
+      try {
+        await queryClient.cancelQueries({
+          queryKey: githubInboxQueryKeys.list(input.state, input.sort),
+          exact: true,
+        });
+        return context;
+      } catch (error) {
+        finishPullRequestRefresh(queryClient, context);
+        throw error;
+      }
+    },
+    onSuccess: (result, input, context) => {
+      const refreshedQueryKey = githubInboxQueryKeys.list(input.state, input.sort);
+      const protectedIdentities = context
+        ? protectedPinIdentitiesForRefresh(queryClient, context)
+        : new Set<string>();
+      const current = queryClient.getQueryData<PullRequestListCache>(refreshedQueryKey);
+      const actionProtectedResult = context
+        ? preserveProtectedActionValues(
+            result,
+            current,
+            protectedActionFieldsForRefresh(queryClient, context),
+          )
+        : result;
+      queryClient.setQueryData(
+        refreshedQueryKey,
+        preserveProtectedPinValues(actionProtectedResult, current, protectedIdentities),
+      );
+    },
+    onSettled: (_result, _error, _input, context) => {
+      finishPullRequestRefresh(queryClient, context);
+    },
+  });
+}
+
+/** Auto-fix CI switch; shared by the PR menu checkbox and the composer hint. */
+export function pullRequestSetAutoFixMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: (input: PullRequestAutoFixSetInput) =>
+      ensureNativeApi().pullRequests.setAutoFix(input),
+    // Swap this PR's entry in the chat's list so every row and the composer tip update at once.
+    onSuccess: (result, input) => {
+      queryClient.setQueryData<PullRequestAutoFixListResult>(
+        pullRequestQueryKeys.autoFix(input.threadId),
+        (current) => ({
+          states: [
+            ...(current?.states ?? []).filter(
+              (state) =>
+                normalizeGitHubPullRequestUrl(state.pullRequestUrl) !==
+                  normalizeGitHubPullRequestUrl(input.pullRequestUrl) &&
+                normalizeGitHubPullRequestUrl(state.requestedPullRequestUrl) !==
+                  normalizeGitHubPullRequestUrl(input.pullRequestUrl) &&
+                state.pullRequestUrl !== result.state?.pullRequestUrl,
+            ),
+            ...(result.state ? [result.state] : []),
+          ],
+        }),
+      );
+    },
+  });
+}

@@ -1,11 +1,21 @@
 // FILE: ProviderUsageMenuControl.tsx
 // Purpose: Shared provider-usage chip/menu used in the chat header and Environment panel.
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@t3tools/contracts";
-import { useMemo, type ReactNode } from "react";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerCodexResetCredits,
+  type ServerGetProviderUsageSnapshotResult,
+} from "@synara/contracts";
+import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
+import { type ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
-import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
+import {
+  type ProviderUsageSummaryData,
+  useProviderUsageSummary,
+} from "~/hooks/useProviderUsageSummary";
 import {
   deriveProviderUsageDisplayRows,
   selectPrimaryProviderUsageDisplayRow,
@@ -14,7 +24,7 @@ import {
 import type { OpenUsageUsageLine } from "~/lib/openUsageRateLimits";
 import type { ProviderRateLimit } from "~/lib/rateLimits";
 import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
+import { createAccountRateLimitThreadsSelector } from "~/storeSelectors";
 
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { ChatHeaderButton } from "./chat/chatHeaderControls";
@@ -25,51 +35,95 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export interface ProviderUsageMenuModel {
   menuTitle: string;
-  primaryRow: ProviderUsageDisplayRow;
+  primaryRow: ProviderUsageDisplayRow | null;
+  rows: ReadonlyArray<ProviderUsageDisplayRow>;
   rateLimits: ReadonlyArray<ProviderRateLimit>;
   usageLines: ReadonlyArray<OpenUsageUsageLine>;
+  notice: string | undefined;
+  emptyMessage: string | undefined;
   isLoading: boolean;
+  resetCredits?: ServerCodexResetCredits | undefined;
 }
 
-export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsageMenuModel | null {
-  const { settings } = useAppSettings();
-  const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
-  const threads = useStore(selectAllThreads);
-  const usageSummary = useProviderUsageSummary({
-    provider,
-    threads,
-    codexHomePath: settings.codexHomePath || null,
-  });
-  const usageRows = useMemo(
-    () => deriveProviderUsageDisplayRows(usageSummary.rateLimits),
-    [usageSummary.rateLimits],
-  );
-  const primaryRow = useMemo(() => selectPrimaryProviderUsageDisplayRow(usageRows), [usageRows]);
-
-  if (!primaryRow) {
-    return null;
-  }
+export function buildProviderUsageMenuModel(input: {
+  provider: ProviderKind;
+  providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  usageSummary: ProviderUsageSummaryData & { readonly isLoading: boolean };
+}): ProviderUsageMenuModel {
+  const rows = deriveProviderUsageDisplayRows(input.usageSummary.rateLimits);
 
   return {
-    menuTitle: `${PROVIDER_DISPLAY_NAMES[provider]} usage`,
-    primaryRow,
-    rateLimits: usageSummary.rateLimits,
-    usageLines: usageSummary.usageLines,
-    isLoading: usageSummary.isLoading,
+    menuTitle: `${PROVIDER_DISPLAY_NAMES[input.provider]} usage`,
+    primaryRow: selectPrimaryProviderUsageDisplayRow(rows),
+    rows,
+    rateLimits: input.usageSummary.rateLimits,
+    usageLines: input.usageSummary.usageLines,
+    notice: input.usageSummary.usageNotice,
+    emptyMessage: providerUsageEmptyMessage(input.provider, input.providerSnapshot),
+    isLoading: input.usageSummary.isLoading,
+    resetCredits: input.usageSummary.resetCredits,
   };
+}
+
+// Module-level: the selector memoizes on store slices, so recreating it per render would
+// defeat the memo and rebuild every thread on each streaming flush.
+const selectAccountRateLimitThreads = createAccountRateLimitThreadsSelector();
+
+function providerUsageEmptyMessage(
+  provider: ProviderKind,
+  snapshot: ServerGetProviderUsageSnapshotResult | undefined,
+): string | undefined {
+  switch (snapshot?.status) {
+    case "needs-auth":
+      return snapshot.detail ?? providerUsageNeedsAuthDetail(provider);
+    case "unsupported":
+      return snapshot.detail ?? "Live usage is not available for this provider configuration.";
+    case "error":
+      return snapshot.detail ?? "Usage is currently unavailable.";
+    default:
+      return undefined;
+  }
+}
+
+export function useProviderUsageMenuModel(
+  provider: ProviderKind,
+  input: {
+    instanceId?: ProviderInstanceId | undefined;
+    providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  } = {},
+): ProviderUsageMenuModel {
+  const { settings } = useAppSettings();
+  const threads = useStore(selectAccountRateLimitThreads);
+  const usageSummary = useProviderUsageSummary({
+    provider,
+    instanceId: input.instanceId,
+    threads,
+    codexHomePath: settings.codexHomePath || null,
+    providerSnapshot: input.providerSnapshot,
+    fetchOpenUsageData: false,
+  });
+
+  return buildProviderUsageMenuModel({
+    provider,
+    providerSnapshot: input.providerSnapshot,
+    usageSummary,
+  });
 }
 
 export function ProviderUsageMenuPopup({
   provider,
   model,
-  align = "end",
+  align: alignProp,
+  showUsageLines = false,
   children,
 }: {
   provider: ProviderKind;
   model: ProviderUsageMenuModel;
   align?: "start" | "end";
+  showUsageLines?: boolean;
   children: ReactNode;
 }) {
+  const align = alignProp ?? "end";
   return (
     <Menu modal={false}>
       {children}
@@ -78,8 +132,12 @@ export function ProviderUsageMenuPopup({
           provider={provider}
           rateLimits={model.rateLimits}
           usageLines={model.usageLines}
+          notice={model.notice}
+          emptyMessage={model.emptyMessage}
           isLoading={model.isLoading}
-          showUsageLines={false}
+          resetCredits={model.resetCredits}
+          resetCreditsSurface="popover"
+          showUsageLines={showUsageLines}
           showTitle={false}
           className="px-2 pb-1 pt-1"
         />
@@ -91,7 +149,7 @@ export function ProviderUsageMenuPopup({
 export function ProviderUsageMenuControl({ provider }: { provider: ProviderKind }) {
   const model = useProviderUsageMenuModel(provider);
 
-  if (!model) {
+  if (!model.primaryRow) {
     return null;
   }
 

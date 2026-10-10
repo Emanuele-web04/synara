@@ -3,7 +3,7 @@
 // Layer: Shared runtime utility (consumed by web UI surfaces).
 // Depends on: ServerLocalServerProcess contract shape.
 
-import type { ServerLocalServerProcess } from "@t3tools/contracts";
+import type { ServerLocalServerProcess } from "@synara/contracts";
 
 import { isWorkspaceRootWithin } from "./threadWorkspace";
 
@@ -38,7 +38,7 @@ export function localServerPrimaryLabel(server: ServerLocalServerProcess): strin
 
 /**
  * Short folder label for a local dev server — the final segment of its working
- * directory (e.g. "dpcode-website" for ".../Developer/dpcode-website"), or null
+ * directory (e.g. "synara-website" for ".../Developer/synara-website"), or null
  * when the cwd is unknown. The monitor only resolves a cwd on POSIX hosts, but
  * the split tolerates either separator defensively.
  */

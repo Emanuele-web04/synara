@@ -1,14 +1,33 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { OrchestrationShellSnapshot, ThreadId } from "@t3tools/contracts";
-import { resolveWorktreeHandoffIntent } from "@t3tools/shared/worktreeHandoff";
+import {
+  resolveWorktreeHandoffIntent,
+  resolveWorktreeHandoffWorkspaceMetadata,
+} from "@synara/shared/worktreeHandoff";
 import { useCallback, useState } from "react";
 import { gitHandoffThreadMutationOptions } from "~/lib/gitReactQuery";
 import { buildSuggestedWorktreeName } from "../components/ChatView.logic";
 import { toastManager } from "../components/ui/toast";
 import { newCommandId } from "../lib/utils";
-import { readNativeApi } from "../nativeApi";
-import { setupProjectScript } from "../projectScripts";
-import type { Project, ProjectScript, Thread, ThreadWorkspacePatch } from "../types";
+import {
+  setupProjectScript,
+  type ProjectScriptRunOptions,
+  type ProjectScriptRunResult,
+} from "../projectScripts";
+import { useStore } from "../store";
+import type { Project, ProjectScript, Thread } from "../types";
+
+/** Success toast for one handoff. Module scope: its ternaries live outside the caller's `try`. */
+function reportThreadHandoffSuccess(
+  targetMode: "local" | "worktree",
+  result: { conflictsDetected: boolean; message?: string | null },
+): void {
+  toastManager.add({
+    type: result.conflictsDetected ? "warning" : "success",
+    title:
+      targetMode === "worktree" ? "Thread handed off to worktree" : "Thread handed off to local",
+    ...(result.message ? { description: result.message } : {}),
+  });
+}
 
 export function useThreadWorkspaceHandoff(input: {
   activeProject: Project | undefined;
@@ -23,17 +42,11 @@ export function useThreadWorkspaceHandoff(input: {
   stopActiveThreadSession: () => Promise<void>;
   runProjectScript: (
     script: ProjectScript,
-    options?: {
-      cwd?: string;
-      worktreePath?: string | null;
-      rememberAsLastInvoked?: boolean;
-      env?: Record<string, string>;
-    },
-  ) => Promise<void>;
-  setStoreThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
-  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+    options?: ProjectScriptRunOptions,
+  ) => Promise<ProjectScriptRunResult | null>;
 }) {
   const queryClient = useQueryClient();
+  const setThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const handoffThreadMutation = useMutation(
     gitHandoffThreadMutationOptions({ cwd: input.activeProject?.cwd ?? null, queryClient }),
   );
@@ -42,9 +55,7 @@ export function useThreadWorkspaceHandoff(input: {
 
   const handoffThread = useCallback(
     async (targetMode: "local" | "worktree", options?: { preferredWorktreeName?: string }) => {
-      const api = readNativeApi();
       if (
-        !api ||
         !input.activeProject ||
         !input.activeThread ||
         !input.isServerThread ||
@@ -53,64 +64,53 @@ export function useThreadWorkspaceHandoff(input: {
         return false;
       }
 
+      // The whole payload is resolved before the `try`: React Compiler cannot lower `??` inside a
+      // try block, and this hook backs the local/worktree switch on every thread.
+      const handoffPayload = {
+        commandId: newCommandId(),
+        threadId: input.activeThread.id,
+        targetMode,
+        currentBranch: input.activeThread.branch ?? null,
+        worktreePath: input.activeThread.worktreePath ?? null,
+        associatedWorktreePath: input.activeThreadAssociatedWorktree.associatedWorktreePath,
+        associatedWorktreeBranch: input.activeThreadAssociatedWorktree.associatedWorktreeBranch,
+        associatedWorktreeRef: input.activeThreadAssociatedWorktree.associatedWorktreeRef,
+        preferredLocalBranch: input.activeRootBranch ?? input.activeThread.branch ?? null,
+        preferredWorktreeBaseBranch:
+          input.activeRootBranch ??
+          input.activeThreadAssociatedWorktree.associatedWorktreeBranch ??
+          input.activeThread.branch ??
+          null,
+        preferredNewWorktreeName: options?.preferredWorktreeName ?? null,
+      };
+
       try {
         await input.stopActiveThreadSession();
-        const result = await handoffThreadMutation.mutateAsync({
-          targetMode,
-          currentBranch: input.activeThread.branch ?? null,
-          worktreePath: input.activeThread.worktreePath ?? null,
-          associatedWorktreePath: input.activeThreadAssociatedWorktree.associatedWorktreePath,
-          associatedWorktreeBranch: input.activeThreadAssociatedWorktree.associatedWorktreeBranch,
-          associatedWorktreeRef: input.activeThreadAssociatedWorktree.associatedWorktreeRef,
-          preferredLocalBranch: input.activeRootBranch ?? input.activeThread.branch ?? null,
-          preferredWorktreeBaseBranch:
-            input.activeRootBranch ??
-            input.activeThreadAssociatedWorktree.associatedWorktreeBranch ??
-            input.activeThread.branch ??
-            null,
-          preferredNewWorktreeName: options?.preferredWorktreeName ?? null,
-        });
+        const result = await handoffThreadMutation.mutateAsync(handoffPayload);
+        // The RPC returns only after the Git result and metadata command are
+        // durable. Apply that result locally as well so cwd-bound surfaces
+        // (file preview, explorer, terminal) do not wait for the asynchronous
+        // domain-event round trip and briefly keep targeting the old checkout.
+        setThreadWorkspace(input.activeThread.id, resolveWorktreeHandoffWorkspaceMetadata(result));
 
-        const workspacePatch = {
-          envMode: result.targetMode,
-          branch: result.branch,
-          worktreePath: result.worktreePath,
-          associatedWorktreePath: result.associatedWorktreePath,
-          associatedWorktreeBranch: result.associatedWorktreeBranch,
-          associatedWorktreeRef: result.associatedWorktreeRef,
-          ...(targetMode === "worktree" ? { createBranchFlowCompleted: false } : {}),
-        } as const;
-
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: input.activeThread.id,
-          ...workspacePatch,
-        });
-        input.setStoreThreadWorkspace(input.activeThread.id, workspacePatch);
-
-        const snapshot = await api.orchestration.getShellSnapshot();
-        input.syncServerShellSnapshot(snapshot);
-
-        if (targetMode === "worktree" && result.worktreePath) {
-          const setupScript = setupProjectScript(input.activeProject.scripts);
-          if (setupScript) {
-            await input.runProjectScript(setupScript, {
-              cwd: result.worktreePath,
-              worktreePath: result.worktreePath,
-              rememberAsLastInvoked: false,
-            });
+        // Nested `if`s rather than `&&`, and the toast assembled outside: every value block —
+        // `&&`, `??`, a ternary, a conditional spread — is one React Compiler refuses to lower
+        // inside a `try`, and one is enough to drop the whole hook's memoization.
+        if (targetMode === "worktree") {
+          const worktreePath = result.worktreePath;
+          if (worktreePath) {
+            const setupScript = setupProjectScript(input.activeProject.scripts);
+            if (setupScript) {
+              await input.runProjectScript(setupScript, {
+                cwd: worktreePath,
+                worktreePath,
+                rememberAsLastInvoked: false,
+              });
+            }
           }
         }
 
-        toastManager.add({
-          type: result.conflictsDetected ? "warning" : "success",
-          title:
-            targetMode === "worktree"
-              ? "Thread handed off to worktree"
-              : "Thread handed off to local",
-          ...(result.message ? { description: result.message } : {}),
-        });
+        reportThreadHandoffSuccess(targetMode, result);
         return true;
       } catch (error) {
         toastManager.add({
@@ -125,7 +125,7 @@ export function useThreadWorkspaceHandoff(input: {
         return false;
       }
     },
-    [handoffThreadMutation, input],
+    [handoffThreadMutation, input, setThreadWorkspace],
   );
 
   const onHandoffToWorktree = useCallback(() => {

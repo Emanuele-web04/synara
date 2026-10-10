@@ -3,7 +3,13 @@
 // Layer: UI state logic test
 
 import { describe, expect, it } from "vitest";
-import { derivePinnedIds, orderPinnedItemsFirst, pinId, prunePinnedIds } from "./pinning.logic";
+import {
+  derivePinnedIds,
+  orderPinnedItemsFirst,
+  pinId,
+  prunePinnedIds,
+  reconcileOptimisticPinState,
+} from "./pinning.logic";
 
 describe("pinning.logic", () => {
   it("pins newest ids first and rejects ids beyond the configured cap", () => {
@@ -56,5 +62,36 @@ describe("pinning.logic", () => {
 
   it("prunes missing ids and removes duplicates", () => {
     expect(prunePinnedIds(["a", "b", "a", "c"], ["c", "a"])).toEqual(["a", "c"]);
+  });
+
+  it("settles confirmed and missing optimistic pins while retaining server disagreements", () => {
+    const pending = new Map([
+      ["confirmed", true],
+      ["disagrees", true],
+      ["missing", false],
+    ]);
+
+    const result = reconcileOptimisticPinState({
+      optimisticPinnedStateById: pending,
+      serverPinnedStateById: new Map([
+        ["confirmed", true],
+        ["disagrees", false],
+      ]),
+    });
+
+    expect(result.optimisticPinnedStateById).toEqual(new Map([["disagrees", true]]));
+    expect(result.settledIds).toEqual(["confirmed", "missing"]);
+  });
+
+  it("preserves map identity while no optimistic pin has settled", () => {
+    const pending = new Map([["thread", true]]);
+
+    const result = reconcileOptimisticPinState({
+      optimisticPinnedStateById: pending,
+      serverPinnedStateById: new Map([["thread", false]]),
+    });
+
+    expect(result.optimisticPinnedStateById).toBe(pending);
+    expect(result.settledIds).toEqual([]);
   });
 });

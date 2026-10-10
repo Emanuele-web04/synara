@@ -1,14 +1,22 @@
 import { spawn } from "node:child_process";
 
-import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
+import { buildAppSnapHelper } from "./build-appsnap-helper.mjs";
+import { buildWindowMaterialAddon } from "./build-window-material-addon.mjs";
+import { configureMacLauncher, desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
+import { spawnSourceDesktop } from "./source-desktop-launch.mjs";
 
-const childEnv = { ...process.env };
-delete childEnv.ELECTRON_RUN_AS_NODE;
+if (process.platform === "darwin") {
+  buildAppSnapHelper({ arch: process.arch });
+  buildWindowMaterialAddon({ arch: process.arch });
+}
 
-const child = spawn(resolveElectronPath(), ["dist-electron/main.js"], {
-  stdio: "inherit",
-  cwd: desktopDir,
-  env: childEnv,
+const electronPath = resolveElectronPath();
+if (process.platform === "darwin") configureMacLauncher(electronPath);
+const child = spawnSourceDesktop({
+  desktopDirectory: desktopDir,
+  electronPath,
+  spawnProcess: spawn,
+  launchViaMacOS: process.platform === "darwin",
 });
 
 child.on("exit", (code, signal) => {

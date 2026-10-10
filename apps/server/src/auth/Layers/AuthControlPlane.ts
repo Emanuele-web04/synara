@@ -1,4 +1,4 @@
-import type { AuthClientSession, AuthPairingLink } from "@t3tools/contracts";
+import type { AuthClientSession, AuthPairingLink } from "@synara/contracts";
 import { DateTime, Effect, Layer } from "effect";
 
 import { BootstrapCredentialService } from "../Services/BootstrapCredentialService";

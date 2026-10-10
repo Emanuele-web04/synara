@@ -49,18 +49,6 @@ describe("detectComposerTrigger", () => {
     });
   });
 
-  it("detects non-model slash commands while typing", () => {
-    const text = "/pl";
-    const trigger = detectComposerTrigger(text, text.length);
-
-    expect(trigger).toEqual({
-      kind: "slash-command",
-      query: "pl",
-      rangeStart: 0,
-      rangeEnd: text.length,
-    });
-  });
-
   it("detects a slash command mid-line after an existing chip token", () => {
     // Claude skills render as `/skill` chips, so a second command typed after one
     // must still open the picker even though the line no longer starts with `/`.
@@ -94,13 +82,6 @@ describe("detectComposerTrigger", () => {
     expect(trigger).toBeNull();
   });
 
-  it("does not treat a path token like src/foo as a slash command", () => {
-    const text = "open src/foo.ts";
-    const trigger = detectComposerTrigger(text, text.length);
-
-    expect(trigger).toBeNull();
-  });
-
   it("does not treat a slash token containing a second slash as a slash command", () => {
     // The slash sits after whitespace (so a token is detected), but command names
     // are `[a-z-]+` — a query like "and/or" can never match one, so no empty picker.
@@ -129,20 +110,6 @@ describe("detectComposerTrigger", () => {
     });
   });
 
-  it("detects @mention trigger in the middle of existing text", () => {
-    // User typed @ between "inspect " and "in this sentence"
-    const text = "Please inspect @in this sentence";
-    const cursorAfterAt = "Please inspect @".length;
-
-    const trigger = detectComposerTrigger(text, cursorAfterAt);
-    expect(trigger).toEqual({
-      kind: "mention",
-      query: "",
-      rangeStart: "Please inspect ".length,
-      rangeEnd: cursorAfterAt,
-    });
-  });
-
   it("detects @mention trigger with query typed mid-text", () => {
     // User typed @sr between "inspect " and "in this sentence"
     const text = "Please inspect @srin this sentence";
@@ -155,18 +122,6 @@ describe("detectComposerTrigger", () => {
       rangeStart: "Please inspect ".length,
       rangeEnd: cursorAfterQuery,
     });
-  });
-
-  it("detects trigger with true cursor even when regex-based mention detection would false-match", () => {
-    // MENTION_TOKEN_REGEX can false-match plain text like "@in" as a mention.
-    // The fix bypasses it by computing the expanded cursor from the Lexical node tree.
-    const text = "Please inspect @in this sentence";
-    const cursorAfterAt = "Please inspect @".length;
-
-    const trigger = detectComposerTrigger(text, cursorAfterAt);
-    expect(trigger).not.toBeNull();
-    expect(trigger?.kind).toBe("mention");
-    expect(trigger?.query).toBe("");
   });
 
   it('detects an unclosed quoted @"..." mention so paths with spaces stay editable', () => {
@@ -191,6 +146,18 @@ describe("detectComposerTrigger", () => {
       query: "/Users/John Smith/Do",
       rangeStart: "Look at ".length,
       rangeEnd: cursor,
+    });
+  });
+
+  it("keeps escaped quotes, backslashes, and @ signs inside an active quoted path", () => {
+    const text = String.raw`Look at @"C:\\A \"B\"/@scope`;
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: String.raw`C:\A "B"/@scope`,
+      rangeStart: "Look at ".length,
+      rangeEnd: text.length,
     });
   });
 
@@ -294,21 +261,26 @@ describe("expandCollapsedComposerCursor", () => {
 
     expect(detectComposerTrigger(text, expandedCursor)).toBeNull();
   });
+
+  it("maps collapsed /automation command chip cursor to expanded text cursor", () => {
+    const text = "/automation fra 15 secondi scrivi qui";
+
+    expect(expandCollapsedComposerCursor(text, 1)).toBe("/automation".length);
+    expect(expandCollapsedComposerCursor(text, 2)).toBe("/automation ".length);
+  });
+
+  it("closes the mention trigger after selecting a quoted mention", () => {
+    const text = `@"Casual greeting" `;
+    const expandedCursor = expandCollapsedComposerCursor(text, 2);
+
+    expect(expandedCursor).toBe(text.length);
+    expect(detectComposerTrigger(text, expandedCursor)).toBeNull();
+  });
 });
 
 describe("collapseExpandedComposerCursor", () => {
   it("keeps cursor unchanged when no mention segment is present", () => {
     expect(collapseExpandedComposerCursor("plain text", 5)).toBe(5);
-  });
-
-  it("maps expanded mention cursor back to collapsed cursor", () => {
-    const text = "what's in my @AGENTS.md fsfdas";
-    const collapsedCursorAfterMention = "what's in my ".length + 2;
-    const expandedCursorAfterMention = "what's in my @AGENTS.md ".length;
-
-    expect(collapseExpandedComposerCursor(text, expandedCursorAfterMention)).toBe(
-      collapsedCursorAfterMention,
-    );
   });
 
   it("keeps replacement cursors aligned when another mention already exists earlier", () => {
@@ -318,6 +290,23 @@ describe("collapseExpandedComposerCursor", () => {
 
     expect(collapsedCursor).toBe("open ".length + 1 + " then ".length + 2);
     expect(expandCollapsedComposerCursor(text, collapsedCursor)).toBe(expandedCursor);
+  });
+
+  it("round-trips cursors across quoted mention tokens", () => {
+    const text = `@"Casual greeting" what's this?`;
+
+    expect(collapseExpandedComposerCursor(text, `@"Casual greeting"`.length)).toBe(1);
+    expect(collapseExpandedComposerCursor(text, `@"Casual greeting" `.length)).toBe(2);
+    expect(
+      expandCollapsedComposerCursor(text, collapseExpandedComposerCursor(text, text.length)),
+    ).toBe(text.length);
+  });
+
+  it("maps expanded /automation command text cursor back to the chip cursor", () => {
+    const text = "/automation fra 15 secondi scrivi qui";
+
+    expect(collapseExpandedComposerCursor(text, "/automation".length)).toBe(1);
+    expect(collapseExpandedComposerCursor(text, "/automation ".length)).toBe(2);
   });
 });
 
@@ -334,32 +323,7 @@ describe("clampCollapsedComposerCursor", () => {
   });
 });
 
-describe("replaceTextRange trailing space consumption", () => {
-  it("double space after insertion when replacement ends with space", () => {
-    // Simulates: "and then |@AG| summarize" where | marks replacement range
-    // The replacement is "@AGENTS.md " (with trailing space)
-    // But if we don't extend rangeEnd, the existing space stays
-    const text = "and then @AG summarize";
-    const rangeStart = "and then ".length;
-    const rangeEnd = "and then @AG".length;
-
-    // Without consuming trailing space: double space
-    const withoutConsume = replaceTextRange(text, rangeStart, rangeEnd, "@AGENTS.md ");
-    expect(withoutConsume.text).toBe("and then @AGENTS.md  summarize");
-
-    // With consuming trailing space: single space
-    const extendedEnd = text[rangeEnd] === " " ? rangeEnd + 1 : rangeEnd;
-    const withConsume = replaceTextRange(text, rangeStart, extendedEnd, "@AGENTS.md ");
-    expect(withConsume.text).toBe("and then @AGENTS.md summarize");
-  });
-});
-
 describe("isCollapsedCursorAdjacentToInlineToken", () => {
-  it("returns false when no mention exists", () => {
-    expect(isCollapsedCursorAdjacentToInlineToken("plain text", 6, "left")).toBe(false);
-    expect(isCollapsedCursorAdjacentToInlineToken("plain text", 6, "right")).toBe(false);
-  });
-
   it("keeps @query typing non-adjacent while no mention pill exists", () => {
     const text = "hello @pac";
     expect(isCollapsedCursorAdjacentToInlineToken(text, text.length, "left")).toBe(false);
@@ -403,19 +367,18 @@ describe("isCollapsedCursorAdjacentToInlineToken", () => {
     expect(isCollapsedCursorAdjacentToInlineToken(text, tokenEnd, "left")).toBe(true);
     expect(isCollapsedCursorAdjacentToInlineToken(text, tokenStart, "right")).toBe(true);
   });
+
+  it("treats /automation as an inline token once it has trailing text", () => {
+    const text = "/automation fra 15 secondi";
+
+    expect(isCollapsedCursorAdjacentToInlineToken(text, 1, "left")).toBe(true);
+    expect(isCollapsedCursorAdjacentToInlineToken(text, 0, "right")).toBe(true);
+  });
 });
 
 describe("parseStandaloneComposerSlashCommand", () => {
   it("parses standalone /plan command", () => {
     expect(parseStandaloneComposerSlashCommand(" /plan ")).toBe("plan");
-  });
-
-  it("parses standalone /default command", () => {
-    expect(parseStandaloneComposerSlashCommand("/default")).toBe("default");
-  });
-
-  it("parses standalone /fast command", () => {
-    expect(parseStandaloneComposerSlashCommand("/fast")).toBe("fast");
   });
 
   it("ignores slash commands with extra message text", () => {

@@ -4,19 +4,20 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/apps/server/src/persistence/Migrations.ts"],
       "outputs": ["dist-electron/**"],
     },
     "dev": {
-      "dependsOn": ["t3#build"],
+      "dependsOn": ["@synara/cli#build"],
       "persistent": true,
     },
     "start": {
-      "dependsOn": ["build", "@t3tools/web#build", "t3#build"],
+      "dependsOn": ["build", "@synara/web#build", "@synara/cli#build"],
       "cache": false,
       "persistent": true,
     },
     "smoke-test": {
-      "dependsOn": ["build", "@t3tools/web#build", "t3#build"],
+      "dependsOn": ["build", "@synara/web#build", "@synara/cli#build"],
       "cache": false,
       "outputs": [],
     },

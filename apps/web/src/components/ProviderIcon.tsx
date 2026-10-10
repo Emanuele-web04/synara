@@ -4,18 +4,20 @@
  * Centralizes provider-to-icon mapping so new providers do not need repeated
  * branching across every UI surface.
  */
-import { type ProviderKind } from "@t3tools/contracts";
+import { type ProviderKind } from "@synara/contracts";
 import type { ReactNode, SVGProps } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import {
+  AntigravityIcon,
   ClaudeAI,
   CursorIcon,
-  Gemini,
+  DevinIcon,
+  DroidIcon,
   GrokIcon,
   type Icon,
-  KiloIcon,
+  OmpIcon,
   OpenAI,
   OpenCodeIcon,
   PiIcon,
@@ -66,18 +68,20 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
-  gemini: Gemini,
+  devin: DevinIcon,
+  antigravity: AntigravityIcon,
   grok: GrokIcon,
-  kilo: KiloIcon,
+  droid: DroidIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
+  omp: OmpIcon,
 };
 
 export function providerIconToneClassName(
   provider: ProviderKind | null | undefined,
   tone: ProviderIconTone = "default",
 ): string {
-  if (provider === "kilo" || provider === "opencode") {
+  if (provider === "opencode") {
     return "text-muted-foreground/70";
   }
   if (provider === "codex") {
@@ -94,12 +98,15 @@ export type ProviderIconProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
 
 export function ProviderIcon({
   provider,
-  fallback = null,
-  tone = "default",
+  fallback: fallbackProp,
+  tone: toneProp,
   className,
-  "aria-hidden": ariaHidden = true,
+  "aria-hidden": ariaHiddenProp,
   ...svgProps
 }: ProviderIconProps) {
+  const fallback = fallbackProp ?? null;
+  const tone = toneProp ?? "default";
+  const ariaHidden = ariaHiddenProp ?? true;
   if (provider === null || provider === undefined) {
     return fallback;
   }

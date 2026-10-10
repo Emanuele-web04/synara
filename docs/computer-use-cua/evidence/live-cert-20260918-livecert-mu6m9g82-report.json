@@ -1,0 +1,15 @@
+{
+  "run": "livecert-mu6m9g82",
+  "date": "2026-09-18T07:07:52.079Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-e9Prsu/host.sock",
+  "elapsedMs": 2347,
+  "rows": [],
+  "summary": {
+    "total": 0,
+    "pass": 0,
+    "fail": 0,
+    "skipped": 0,
+    "verdict": "pass"
+  }
+}

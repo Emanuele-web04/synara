@@ -16,5 +16,5 @@ export interface OpenCodeAdapterShape extends ProviderAdapterShape<ProviderAdapt
 }
 
 export class OpenCodeAdapter extends ServiceMap.Service<OpenCodeAdapter, OpenCodeAdapterShape>()(
-  "t3/provider/Services/OpenCodeAdapter",
+  "synara/provider/Services/OpenCodeAdapter",
 ) {}

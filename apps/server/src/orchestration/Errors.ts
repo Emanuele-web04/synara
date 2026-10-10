@@ -2,30 +2,6 @@ import { SchemaIssue, Schema } from "effect";
 
 import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 
-export class OrchestrationCommandJsonParseError extends Schema.TaggedErrorClass<OrchestrationCommandJsonParseError>()(
-  "OrchestrationCommandJsonParseError",
-  {
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
-  },
-) {
-  override get message(): string {
-    return `Invalid orchestration command JSON: ${this.detail}`;
-  }
-}
-
-export class OrchestrationCommandDecodeError extends Schema.TaggedErrorClass<OrchestrationCommandDecodeError>()(
-  "OrchestrationCommandDecodeError",
-  {
-    issue: Schema.String,
-    cause: Schema.optional(Schema.Defect),
-  },
-) {
-  override get message(): string {
-    return `Invalid orchestration command payload: ${this.issue}`;
-  }
-}
-
 export class OrchestrationCommandInvariantError extends Schema.TaggedErrorClass<OrchestrationCommandInvariantError>()(
   "OrchestrationCommandInvariantError",
   {
@@ -52,6 +28,18 @@ export class OrchestrationCommandPreviouslyRejectedError extends Schema.TaggedEr
   }
 }
 
+export class OrchestrationCommandIdentityCollisionError extends Schema.TaggedErrorClass<OrchestrationCommandIdentityCollisionError>()(
+  "OrchestrationCommandIdentityCollisionError",
+  {
+    commandId: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Command identity collision (${this.commandId}): ${this.detail}`;
+  }
+}
+
 export class OrchestrationCommandTimeoutError extends Schema.TaggedErrorClass<OrchestrationCommandTimeoutError>()(
   "OrchestrationCommandTimeoutError",
   {
@@ -63,6 +51,23 @@ export class OrchestrationCommandTimeoutError extends Schema.TaggedErrorClass<Or
 ) {
   override get message(): string {
     return `Orchestration command timed out (${this.commandType}, ${this.commandId}) after ${this.timeoutMs}ms`;
+  }
+}
+
+export class OrchestrationCommandAdmissionError extends Schema.TaggedErrorClass<OrchestrationCommandAdmissionError>()(
+  "OrchestrationCommandAdmissionError",
+  {
+    commandId: Schema.String,
+    commandType: Schema.String,
+    capacity: Schema.Number,
+    reservedCapacity: Schema.Number,
+    reason: Schema.Literals(["overloaded", "stopped"]),
+  },
+) {
+  override get message(): string {
+    return this.reason === "stopped"
+      ? `Orchestration command admission is stopped (${this.commandType}, ${this.commandId})`
+      : `Orchestration command queue is overloaded (${this.commandType}, ${this.commandId}); capacity ${this.capacity}, reserved ${this.reservedCapacity}`;
   }
 }
 
@@ -93,39 +98,15 @@ export class OrchestrationProjectorDecodeError extends Schema.TaggedErrorClass<O
   }
 }
 
-export class OrchestrationListenerCallbackError extends Schema.TaggedErrorClass<OrchestrationListenerCallbackError>()(
-  "OrchestrationListenerCallbackError",
-  {
-    listener: Schema.Literals(["read-model", "domain-event"]),
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect),
-  },
-) {
-  override get message(): string {
-    return `Orchestration ${this.listener} listener failed: ${this.detail}`;
-  }
-}
-
 export type OrchestrationDispatchError =
   | ProjectionRepositoryError
+  | OrchestrationCommandAdmissionError
   | OrchestrationCommandInvariantError
   | OrchestrationCommandInternalError
+  | OrchestrationCommandIdentityCollisionError
   | OrchestrationCommandPreviouslyRejectedError
   | OrchestrationCommandTimeoutError
-  | OrchestrationProjectorDecodeError
-  | OrchestrationListenerCallbackError;
-
-export type OrchestrationEngineError =
-  | OrchestrationDispatchError
-  | OrchestrationCommandJsonParseError
-  | OrchestrationCommandDecodeError;
-
-export function toOrchestrationCommandDecodeError(error: Schema.SchemaError) {
-  return new OrchestrationCommandDecodeError({
-    issue: SchemaIssue.makeFormatterDefault()(error.issue),
-    cause: error,
-  });
-}
+  | OrchestrationProjectorDecodeError;
 
 export function toProjectorDecodeError(eventType: string) {
   return (error: Schema.SchemaError): OrchestrationProjectorDecodeError =>
@@ -133,21 +114,5 @@ export function toProjectorDecodeError(eventType: string) {
       eventType,
       issue: SchemaIssue.makeFormatterDefault()(error.issue),
       cause: error,
-    });
-}
-
-export function toOrchestrationJsonParseError(cause: unknown) {
-  return new OrchestrationCommandJsonParseError({
-    detail: `Failed to parse orchestration command JSON`,
-    cause,
-  });
-}
-
-export function toListenerCallbackError(listener: "read-model" | "domain-event") {
-  return (cause: unknown): OrchestrationListenerCallbackError =>
-    new OrchestrationListenerCallbackError({
-      listener,
-      detail: `Failed to invoke orchestration ${listener} listener`,
-      cause,
     });
 }

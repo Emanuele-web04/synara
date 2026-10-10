@@ -10,9 +10,11 @@ import {
   IsoDateTime,
   ModelSelection,
   ProjectId,
+  ProjectAdditionalFolders,
   ProjectKind,
   ProjectScript,
-} from "@t3tools/contracts";
+  SpaceId,
+} from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -26,6 +28,10 @@ export const ProjectionProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  spaceId: Schema.NullOr(SpaceId).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: Schema.optional(ProjectAdditionalFolders).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -41,6 +47,13 @@ export const DeleteProjectionProjectInput = Schema.Struct({
   projectId: ProjectId,
 });
 export type DeleteProjectionProjectInput = typeof DeleteProjectionProjectInput.Type;
+
+export const ClearProjectionProjectSpaceAssignmentsInput = Schema.Struct({
+  spaceId: SpaceId,
+  updatedAt: IsoDateTime,
+});
+export type ClearProjectionProjectSpaceAssignmentsInput =
+  typeof ClearProjectionProjectSpaceAssignmentsInput.Type;
 
 /**
  * ProjectionProjectRepositoryShape - Service API for projected project records.
@@ -76,6 +89,11 @@ export interface ProjectionProjectRepositoryShape {
   readonly deleteById: (
     input: DeleteProjectionProjectInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /** Clear every active or soft-deleted project assignment for a deleted space. */
+  readonly clearSpaceAssignments: (
+    input: ClearProjectionProjectSpaceAssignmentsInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 /**
@@ -84,4 +102,4 @@ export interface ProjectionProjectRepositoryShape {
 export class ProjectionProjectRepository extends ServiceMap.Service<
   ProjectionProjectRepository,
   ProjectionProjectRepositoryShape
->()("t3/persistence/Services/ProjectionProjects/ProjectionProjectRepository") {}
+>()("synara/persistence/Services/ProjectionProjects/ProjectionProjectRepository") {}

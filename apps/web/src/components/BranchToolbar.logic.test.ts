@@ -1,4 +1,4 @@
-import type { GitBranch } from "@t3tools/contracts";
+import type { GitBranch } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   dedupeRemoteBranchesWithLocalMatches,
@@ -6,6 +6,7 @@ import {
   resolveBranchSelectionTarget,
   resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
+  resolveFixedLocalWorkspacePatch,
   resolveBranchToolbarValue,
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
@@ -15,7 +16,7 @@ describe("resolveDraftEnvModeAfterBranchChange", () => {
     expect(
       resolveDraftEnvModeAfterBranchChange({
         nextWorktreePath: null,
-        currentWorktreePath: "/repo/.dpcode/worktrees/feature-a",
+        currentWorktreePath: "/repo/.synara/worktrees/feature-a",
         effectiveEnvMode: "worktree",
       }),
     ).toBe("local");
@@ -34,17 +35,7 @@ describe("resolveDraftEnvModeAfterBranchChange", () => {
   it("uses worktree mode when selecting a branch already attached to a worktree", () => {
     expect(
       resolveDraftEnvModeAfterBranchChange({
-        nextWorktreePath: "/repo/.dpcode/worktrees/feature-a",
-        currentWorktreePath: null,
-        effectiveEnvMode: "local",
-      }),
-    ).toBe("worktree");
-  });
-
-  it("keeps legacy .t3 worktree paths working for migrated threads", () => {
-    expect(
-      resolveDraftEnvModeAfterBranchChange({
-        nextWorktreePath: "/repo/.t3/worktrees/feature-a",
+        nextWorktreePath: "/repo/.synara/worktrees/feature-a",
         currentWorktreePath: null,
         effectiveEnvMode: "local",
       }),
@@ -52,7 +43,68 @@ describe("resolveDraftEnvModeAfterBranchChange", () => {
   });
 });
 
+describe("resolveFixedLocalWorkspacePatch", () => {
+  it("preserves the selected folder for branch-only updates", () => {
+    expect(
+      resolveFixedLocalWorkspacePatch({
+        currentWorkingDirectory: "/repo/current",
+        patch: { branch: "feature/demo", worktreePath: null },
+      }),
+    ).toEqual({
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: "/repo/current",
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
+      createBranchFlowCompleted: false,
+    });
+  });
+
+  it("uses an existing worktree selection as the next concrete folder", () => {
+    expect(
+      resolveFixedLocalWorkspacePatch({
+        currentWorkingDirectory: "/repo/current",
+        patch: {
+          branch: "feature/demo",
+          worktreePath: "/repo/.worktrees/feature-demo",
+        },
+      }),
+    ).toMatchObject({
+      envMode: "local",
+      branch: null,
+      worktreePath: null,
+      workingDirectory: "/repo/.worktrees/feature-demo",
+    });
+  });
+
+  it("honors an explicit working-directory clear", () => {
+    expect(
+      resolveFixedLocalWorkspacePatch({
+        currentWorkingDirectory: "/repo/current",
+        patch: { workingDirectory: null },
+      }).workingDirectory,
+    ).toBeNull();
+  });
+});
+
 describe("resolveBranchToolbarValue", () => {
+  it.each([
+    { envMode: "local" as const, activeWorktreePath: null },
+    { envMode: "worktree" as const, activeWorktreePath: "/repo/.worktrees/feature-chat" },
+  ])("distinguishes detached $envMode checkouts from unavailable Git status", (workspace) => {
+    const input = {
+      ...workspace,
+      activeThreadBranch: "feature/former-branch",
+      currentGitBranch: null,
+    };
+    expect(resolveBranchToolbarValue({ ...input, gitStatusResolved: true })).toBeNull();
+    expect(resolveBranchToolbarValue({ ...input, gitStatusResolved: false })).toBe(
+      "feature/former-branch",
+    );
+  });
+
   it("defaults new-worktree mode to current git branch when no explicit base branch is set", () => {
     expect(
       resolveBranchToolbarValue({
@@ -60,17 +112,19 @@ describe("resolveBranchToolbarValue", () => {
         activeWorktreePath: null,
         activeThreadBranch: null,
         currentGitBranch: "main",
+        gitStatusResolved: true,
       }),
     ).toBe("main");
   });
 
-  it("keeps an explicitly selected worktree base branch", () => {
+  it.each(["main", null])("keeps the selected worktree base when Git reports %s", (branch) => {
     expect(
       resolveBranchToolbarValue({
         envMode: "worktree",
         activeWorktreePath: null,
         activeThreadBranch: "feature/base",
-        currentGitBranch: "main",
+        currentGitBranch: branch,
+        gitStatusResolved: true,
       }),
     ).toBe("feature/base");
   });
@@ -82,6 +136,7 @@ describe("resolveBranchToolbarValue", () => {
         activeWorktreePath: null,
         activeThreadBranch: "feature/base",
         currentGitBranch: "main",
+        gitStatusResolved: true,
       }),
     ).toBe("main");
   });
@@ -93,8 +148,10 @@ describe("shouldSyncLocalThreadBranch", () => {
       shouldSyncLocalThreadBranch({
         envMode: "local",
         activeWorktreePath: null,
-        activeThreadBranch: "dpcode/pi",
+        activeThreadBranch: "synara/pi",
         currentGitBranch: "main",
+        hasServerThread: true,
+        isThreadSettled: false,
         isBranchActionPending: false,
       }),
     ).toBe(true);
@@ -105,11 +162,41 @@ describe("shouldSyncLocalThreadBranch", () => {
       shouldSyncLocalThreadBranch({
         envMode: "local",
         activeWorktreePath: null,
-        activeThreadBranch: "dpcode/pi",
+        activeThreadBranch: "synara/pi",
         currentGitBranch: "main",
+        hasServerThread: true,
+        isThreadSettled: false,
         isBranchActionPending: true,
       }),
     ).toBe(false);
+  });
+
+  it("does not materialize the git checkout branch into an intentionally branchless local draft", () => {
+    expect(
+      shouldSyncLocalThreadBranch({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: null,
+        currentGitBranch: "main",
+        hasServerThread: false,
+        isThreadSettled: false,
+        isBranchActionPending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("syncs missing branch metadata for local server threads", () => {
+    expect(
+      shouldSyncLocalThreadBranch({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: null,
+        currentGitBranch: "main",
+        hasServerThread: true,
+        isThreadSettled: false,
+        isBranchActionPending: false,
+      }),
+    ).toBe(true);
   });
 
   it("keeps explicit base branch selection in new-worktree mode", () => {
@@ -119,6 +206,22 @@ describe("shouldSyncLocalThreadBranch", () => {
         activeWorktreePath: null,
         activeThreadBranch: "feature/base",
         currentGitBranch: "main",
+        hasServerThread: true,
+        isThreadSettled: false,
+        isBranchActionPending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the last branch on a settled thread until it is resumed", () => {
+    expect(
+      shouldSyncLocalThreadBranch({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "feature/finished",
+        currentGitBranch: "feature/current",
+        hasServerThread: true,
+        isThreadSettled: true,
         isBranchActionPending: false,
       }),
     ).toBe(false);
@@ -131,14 +234,14 @@ describe("resolveAssociatedWorktreeMetadataAfterWorkspacePatch", () => {
       resolveAssociatedWorktreeMetadataAfterWorkspacePatch({
         branch: "main",
         worktreePath: null,
-        existingAssociatedWorktreePath: "/repo/.worktrees/dpcode-pi",
-        existingAssociatedWorktreeBranch: "dpcode/pi",
-        existingAssociatedWorktreeRef: "dpcode/pi",
+        existingAssociatedWorktreePath: "/repo/.worktrees/synara-pi",
+        existingAssociatedWorktreeBranch: "synara/pi",
+        existingAssociatedWorktreeRef: "synara/pi",
       }),
     ).toEqual({
-      associatedWorktreePath: "/repo/.worktrees/dpcode-pi",
-      associatedWorktreeBranch: "dpcode/pi",
-      associatedWorktreeRef: "dpcode/pi",
+      associatedWorktreePath: "/repo/.worktrees/synara-pi",
+      associatedWorktreeBranch: "synara/pi",
+      associatedWorktreeRef: "synara/pi",
     });
   });
 
@@ -163,13 +266,13 @@ describe("resolveAssociatedWorktreeMetadataAfterWorkspacePatch", () => {
       resolveAssociatedWorktreeMetadataAfterWorkspacePatch({
         branch: "main",
         worktreePath: null,
-        existingAssociatedWorktreePath: "/repo/.worktrees/dpcode-pi",
-        existingAssociatedWorktreeBranch: "dpcode/pi",
-        existingAssociatedWorktreeRef: "dpcode/pi",
+        existingAssociatedWorktreePath: "/repo/.worktrees/synara-pi",
+        existingAssociatedWorktreeBranch: "synara/pi",
+        existingAssociatedWorktreeRef: "synara/pi",
         patchAssociatedWorktreeBranch: "feature/new-pair",
       }),
     ).toEqual({
-      associatedWorktreePath: "/repo/.worktrees/dpcode-pi",
+      associatedWorktreePath: "/repo/.worktrees/synara-pi",
       associatedWorktreeBranch: "feature/new-pair",
       associatedWorktreeRef: "feature/new-pair",
     });
@@ -222,30 +325,6 @@ describe("dedupeRemoteBranchesWithLocalMatches", () => {
 
     expect(dedupeRemoteBranchesWithLocalMatches(input).map((branch) => branch.name)).toEqual([
       "feature/demo",
-      "origin/feature/remote-only",
-    ]);
-  });
-
-  it("keeps all entries when no local match exists for a remote ref", () => {
-    const input: GitBranch[] = [
-      {
-        name: "feature/local",
-        current: false,
-        isDefault: false,
-        worktreePath: null,
-      },
-      {
-        name: "origin/feature/remote-only",
-        isRemote: true,
-        remoteName: "origin",
-        current: false,
-        isDefault: false,
-        worktreePath: null,
-      },
-    ];
-
-    expect(dedupeRemoteBranchesWithLocalMatches(input).map((branch) => branch.name)).toEqual([
-      "feature/local",
       "origin/feature/remote-only",
     ]);
   });
@@ -304,15 +383,15 @@ describe("resolveBranchSelectionTarget", () => {
     expect(
       resolveBranchSelectionTarget({
         activeProjectCwd: "/repo",
-        activeWorktreePath: "/repo/.dpcode/worktrees/feature-a",
+        activeWorktreePath: "/repo/.synara/worktrees/feature-a",
         branch: {
           isDefault: false,
-          worktreePath: "/repo/.dpcode/worktrees/feature-b",
+          worktreePath: "/repo/.synara/worktrees/feature-b",
         },
       }),
     ).toEqual({
-      checkoutCwd: "/repo/.dpcode/worktrees/feature-b",
-      nextWorktreePath: "/repo/.dpcode/worktrees/feature-b",
+      checkoutCwd: "/repo/.synara/worktrees/feature-b",
+      nextWorktreePath: "/repo/.synara/worktrees/feature-b",
       reuseExistingWorktree: true,
     });
   });
@@ -321,7 +400,7 @@ describe("resolveBranchSelectionTarget", () => {
     expect(
       resolveBranchSelectionTarget({
         activeProjectCwd: "/repo",
-        activeWorktreePath: "/repo/.dpcode/worktrees/feature-a",
+        activeWorktreePath: "/repo/.synara/worktrees/feature-a",
         branch: {
           isDefault: true,
           worktreePath: "/repo",
@@ -338,7 +417,7 @@ describe("resolveBranchSelectionTarget", () => {
     expect(
       resolveBranchSelectionTarget({
         activeProjectCwd: "/repo",
-        activeWorktreePath: "/repo/.dpcode/worktrees/feature-a",
+        activeWorktreePath: "/repo/.synara/worktrees/feature-a",
         branch: {
           isDefault: true,
           worktreePath: null,
@@ -355,15 +434,15 @@ describe("resolveBranchSelectionTarget", () => {
     expect(
       resolveBranchSelectionTarget({
         activeProjectCwd: "/repo",
-        activeWorktreePath: "/repo/.dpcode/worktrees/feature-a",
+        activeWorktreePath: "/repo/.synara/worktrees/feature-a",
         branch: {
           isDefault: false,
           worktreePath: null,
         },
       }),
     ).toEqual({
-      checkoutCwd: "/repo/.dpcode/worktrees/feature-a",
-      nextWorktreePath: "/repo/.dpcode/worktrees/feature-a",
+      checkoutCwd: "/repo/.synara/worktrees/feature-a",
+      nextWorktreePath: "/repo/.synara/worktrees/feature-a",
       reuseExistingWorktree: false,
     });
   });

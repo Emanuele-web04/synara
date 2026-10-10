@@ -1,0 +1,97 @@
+diff --git a/dist/src/client.js b/dist/src/client.js
+index 55deabe..747cea4 100644
+--- a/dist/src/client.js
++++ b/dist/src/client.js
+@@ -1024,7 +1024,7 @@ export class BetterWright {
+         let consentTarget;
+         try {
+             normalized = normalizeCookieSyncOptions(options);
+-            consentTarget = cookieSyncConsentTarget(this.provider);
++            consentTarget = this.hostTarget ? null : cookieSyncConsentTarget(this.provider);
+             if (consentTarget && normalized.cloudConsent !== consentTarget) {
+                 return {
+                     ok: false,
+@@ -1049,15 +1049,17 @@ export class BetterWright {
+             };
+         }
+         if (!extracted.cookies.length) {
+-            return {
++            const empty = {
+                 ok: true,
+                 synced: 0,
+                 selected: extracted.selected,
+                 skipped: extracted.skipped,
+                 source: extracted.source,
+-                target: consentTarget || "local",
++                target: consentTarget || (this.hostTarget ? "host" : "local"),
+                 warnings: extracted.warnings,
+             };
++            if (this.hostTarget) empty.cookieImportDomains = [];
++            return empty;
+         }
+         const config = await this._prepare();
+         const timeoutSeconds = Math.max(Math.ceil(normalized.timeoutMs / 1000), this.defaultTimeout, 5);
+diff --git a/dist/src/worker.js b/dist/src/worker.js
+index 654e06e..9e8c08c 100755
+--- a/dist/src/worker.js
++++ b/dist/src/worker.js
+@@ -6807,9 +6807,12 @@ async function cookieSync(message) {
+     }
+     cookieSyncActive = true;
+     try {
++        const hostOwnedTarget = message.config?.hostOwnedTarget === true;
+         let target;
+         try {
+-            target = cookieSyncConsentTarget(message.config?.provider);
++            target = hostOwnedTarget
++                ? null
++                : cookieSyncConsentTarget(message.config?.provider);
+         }
+         catch {
+             sendResult({
+@@ -6898,7 +6901,7 @@ async function cookieSync(message) {
+                 source.profile = "selected";
+             }
+         }
+-        sendResult({
++        const result = {
+             type: "result",
+             id: message.id,
+             ok: true,
+@@ -6906,13 +6909,17 @@ async function cookieSync(message) {
+             selected,
+             skipped,
+             source,
+-            target: target || "local",
++            target: target || (hostOwnedTarget ? "host" : "local"),
+             warnings: [
+                 ...sanitizedCookieSyncWarnings(message.warnings),
+                 ...(missingCookies ? [{ code: "target_not_stored", count: missingCookies }] : []),
+             ],
+             profileMode,
+-        });
++        };
++        if (hostOwnedTarget) {
++            result.cookieImportDomains = [...new Set(storedCookies.map((cookie) => String(cookie.domain)))];
++        }
++        sendResult(result);
+     }
+     finally {
+         cookieSyncActive = false;
+diff --git a/types/public.d.ts b/types/public.d.ts
+index 429dc05..7e53848 100644
+--- a/types/public.d.ts
++++ b/types/public.d.ts
+@@ -104,6 +104,12 @@ export type CookieSyncResult =
+       skipped: number;
+       source: { browser: string; profile?: string };
+       target: string;
++      /**
++       * Host-owned targets (`hostTarget`) only: deduplicated cookie domains
++       * verified present in the leased tab after the sync. Lets the host scope
++       * what session access it just granted. Absent for other targets.
++       */
++      cookieImportDomains?: string[];
+       warnings?: CookieSyncWarning[];
+       profileMode?: "persistent" | "ephemeral";
+     }

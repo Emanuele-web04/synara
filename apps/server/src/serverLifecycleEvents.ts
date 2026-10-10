@@ -1,10 +1,13 @@
 import { Effect, Layer, PubSub, Ref, ServiceMap, Stream } from "effect";
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 
 export interface ServerLifecycleWelcomePayload {
   readonly cwd: string;
   readonly homeDir: string;
+  readonly chatWorkspaceRoot: string;
+  readonly studioWorkspaceRoot: string;
+  readonly groupsWorkspaceRoot: string;
   readonly projectName: string;
   readonly bootstrapProjectId?: ProjectId;
   readonly bootstrapThreadId?: ThreadId;
@@ -16,12 +19,11 @@ export interface ServerLifecycleReadyPayload {
 
 export interface ServerLifecycleMaintenancePayload {
   readonly task: "thread-retention";
-  readonly state: "started" | "progress" | "compacting" | "completed" | "failed";
+  readonly state: "started" | "progress" | "completed" | "failed";
   readonly at: string;
+  /** Legacy wire name retained so maintenance events remain backward-compatible. */
   readonly deletedCount?: number;
-  readonly purgedCount?: number;
   readonly totalCount?: number;
-  readonly freePageCount?: number;
   readonly error?: string;
 }
 
@@ -61,7 +63,7 @@ export interface ServerLifecycleEventsShape {
 export class ServerLifecycleEvents extends ServiceMap.Service<
   ServerLifecycleEvents,
   ServerLifecycleEventsShape
->()("t3/serverLifecycleEvents") {}
+>()("synara/serverLifecycleEvents") {}
 
 export const ServerLifecycleEventsLive = Layer.effect(
   ServerLifecycleEvents,
@@ -95,9 +97,3 @@ export const ServerLifecycleEventsLive = Layer.effect(
     } satisfies ServerLifecycleEventsShape;
   }),
 );
-
-export function getWelcomeEvent(
-  snapshot: ServerLifecycleSnapshot,
-): Extract<ServerLifecycleEvent, { type: "welcome" }> | null {
-  return snapshot.events.find((event) => event.type === "welcome") ?? null;
-}

@@ -32,7 +32,9 @@ export type TypeId = "~local/sqlite-node/SqliteClient";
 /**
  * SqliteClient - Effect service tag for the sqlite SQL client.
  */
-export const SqliteClient = ServiceMap.Service<Client.SqlClient>("t3/persistence/NodeSqliteClient");
+export const SqliteClient = ServiceMap.Service<Client.SqlClient>(
+  "synara/persistence/NodeSqliteClient",
+);
 
 export interface SqliteClientConfig {
   readonly filename: string;
@@ -171,7 +173,7 @@ const makeWithDatabase = (
           return runValues(sql, params);
         },
         executeUnprepared(sql, params, rowTransform) {
-          const effect = runStatement(db.prepare(sql), params ?? [], false);
+          const effect = run(sql, params ?? []);
           return rowTransform ? Effect.map(effect, rowTransform) : effect;
         },
         executeStream(_sql, _params) {

@@ -3,7 +3,14 @@
 // Layer: Route UI logic helpers.
 // Exports: thread title fallback, deep-link bootstrap replay handling, and panel toggle helpers.
 
-import type { ThreadId, TurnId } from "@t3tools/contracts";
+import type {
+  ProjectId,
+  ThreadEnvironmentMode,
+  ThreadId,
+  ThreadSidechatContext,
+  TurnId,
+} from "@synara/contracts";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
 import type { ChatRightPanel, DiffRouteSearch } from "../diffRouteSearch";
 
@@ -24,12 +31,6 @@ export interface RoutePanelBootstrapResult {
   panelPatch: ChatPanelStatePatch | null;
 }
 
-export interface SplitPaneMaximizeDecision {
-  splitViewIdToRemove: string;
-  threadId: ThreadId;
-  panelState: ChatPanelStateSnapshot | null;
-}
-
 export type SplitPaneCloseDecision =
   | {
       kind: "single-thread";
@@ -47,6 +48,65 @@ export type SplitPaneCloseDecision =
 
 export function resolveThreadPickerTitle(title: string | null): string {
   return title || "New chat";
+}
+
+// File previews follow the thread runtime cwd so worktree chats open the files they actually edit.
+export function resolveFilePreviewWorkspaceRoot(input: {
+  projectCwd?: string | null | undefined;
+  threadEnvMode?: ThreadEnvironmentMode | null | undefined;
+  threadWorktreePath?: string | null | undefined;
+  threadWorkingDirectory?: string | null | undefined;
+}): string | null {
+  return resolveThreadWorkspaceCwd({
+    projectCwd: input.projectCwd,
+    envMode: input.threadEnvMode,
+    worktreePath: input.threadWorktreePath,
+    workingDirectory: input.threadWorkingDirectory,
+  });
+}
+
+export function resolveSingleProjectId(input: {
+  threadProjectId: ProjectId | null;
+  draftProjectId: ProjectId | null;
+}): ProjectId | null {
+  return input.threadProjectId ?? input.draftProjectId ?? null;
+}
+
+export function normalizeSingleSearchFromPane(
+  panelState: Pick<ChatPanelStateSnapshot, "panel" | "diffTurnId" | "diffFilePath">,
+): DiffRouteSearch {
+  if (panelState.panel === "browser") {
+    return { panel: "browser" };
+  }
+  if (panelState.panel === "diff") {
+    return {
+      panel: "diff",
+      diff: "1",
+      ...(panelState.diffTurnId ? { diffTurnId: panelState.diffTurnId } : {}),
+      ...(panelState.diffFilePath ? { diffFilePath: panelState.diffFilePath } : {}),
+    };
+  }
+  return {};
+}
+
+export function stripEditorViewSearchParams<T extends Record<string, unknown>>(
+  params: T,
+): Omit<T, "view" | "editorFilePath"> {
+  const { view: _view, editorFilePath: _editorFilePath, ...rest } = params;
+  return rest as Omit<T, "view" | "editorFilePath">;
+}
+
+export function collectParentDirectoryPaths(filePath: string): string[] {
+  const segments = filePath.split("/").filter(Boolean);
+  if (segments.length <= 1) {
+    return [];
+  }
+
+  const parents: string[] = [];
+  for (let index = 1; index < segments.length; index += 1) {
+    parents.push(segments.slice(0, index).join("/"));
+  }
+  return parents;
 }
 
 function createRoutePanelSearchKey(input: {
@@ -116,29 +176,13 @@ export function resolveToggledChatPanelPatch(
   };
 }
 
-// Expanding a split pane exits split mode entirely; the selected chat becomes the single surface.
-export function resolveSplitPaneMaximizeDecision(input: {
-  splitViewId: string;
-  focusedThreadId: ThreadId | null | undefined;
-  focusedPanelState: ChatPanelStateSnapshot | null | undefined;
-}): SplitPaneMaximizeDecision | null {
-  if (!input.focusedThreadId) {
-    return null;
-  }
-
-  return {
-    splitViewIdToRemove: input.splitViewId,
-    threadId: input.focusedThreadId,
-    panelState: input.focusedPanelState ?? null,
-  };
-}
-
 // Closing a sidechat is a return-to-source action; generic pane closes can still fall back normally.
 export function resolveSplitPaneCloseDecision(input: {
   splitViewId: string;
   sourceThreadId: ThreadId;
   closingThreadId: ThreadId | null | undefined;
   closingSidechatSourceThreadId: ThreadId | null | undefined;
+  closingSidechatContext?: ThreadSidechatContext | null | undefined;
   nextFocusedThreadId: ThreadId | null | undefined;
   nextLeafCount: number;
 }): SplitPaneCloseDecision {
@@ -150,7 +194,11 @@ export function resolveSplitPaneCloseDecision(input: {
     };
   }
 
-  if (input.closingThreadId && input.closingThreadId !== input.sourceThreadId) {
+  if (
+    input.closingSidechatContext &&
+    input.closingThreadId &&
+    input.closingThreadId !== input.sourceThreadId
+  ) {
     return {
       kind: "single-thread",
       threadId: input.sourceThreadId,

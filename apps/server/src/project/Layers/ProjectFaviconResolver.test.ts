@@ -13,7 +13,7 @@ const TestLayer = Layer.empty.pipe(
 
 const makeTempDir = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
-  return yield* fileSystem.makeTempDirectoryScoped({ prefix: "dpcode-project-favicon-" });
+  return yield* fileSystem.makeTempDirectoryScoped({ prefix: "synara-project-favicon-" });
 });
 
 const writeTextFile = Effect.fn(function* (cwd: string, relativePath: string, contents: string) {
@@ -52,6 +52,71 @@ it.layer(TestLayer)("ProjectFaviconResolverLive", (it) => {
 
         expect(resolved).not.toBeNull();
         expect(resolved).toContain("public/brand/logo.svg");
+      }),
+    );
+
+    it.effect("finds favicons in a workspace web app", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "apps/web/public/favicon.png", "icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toContain("apps/web/public/favicon.png");
+      }),
+    );
+
+    it.effect("finds favicons in a named dashboard app", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "vatrium-dashboard/public/favicon.png", "icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toContain("vatrium-dashboard/public/favicon.png");
+      }),
+    );
+
+    const nestedIcons = [
+      "apps/web/public/favicon.png",
+      "web/public/favicon.png",
+      "project-dashboard/public/favicon.png",
+    ];
+
+    it.effect.each(nestedIcons)("prefers the declared project icon over $0", (nestedIcon) =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "index.html", '<link rel="icon" href="/brand/logo.svg">');
+        yield* writeTextFile(cwd, "public/brand/logo.svg", "<svg>project brand</svg>");
+        yield* writeTextFile(cwd, nestedIcon, "nested icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(path.join(cwd, "public/brand/logo.svg"));
+      }),
+    );
+
+    it.effect.each(nestedIcons)("prefers the root app icon over $0", (nestedIcon) =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "app/icon.svg", "<svg>project icon</svg>");
+        yield* writeTextFile(cwd, nestedIcon, "nested icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(path.join(cwd, "app/icon.svg"));
+      }),
+    );
+
+    it.effect("resolves icon hrefs below dot-prefixed child directories", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "index.html", '<link rel="icon" href="..assets/logo.svg">');
+        yield* writeTextFile(cwd, "..assets/logo.svg", "<svg>brand</svg>");
+
+        const resolved = yield* resolver.resolvePath(cwd);
+
+        expect(resolved).not.toBeNull();
+        expect(resolved).toContain("..assets/logo.svg");
       }),
     );
 

@@ -1,14 +1,17 @@
-import { ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { DraftThreadState } from "../composerDraftStore";
 import type { Thread } from "../types";
 import {
+  buildDiffPanelCompareRefValue,
   filterRenderableFilesForSearch,
-  isDiffPanelPickerOptionSelected,
+  resolveAdjacentDiffFilePath,
+  resolveDiffChangeMarkers,
+  DIFF_CHANGE_MARKER_HEIGHT_PX,
   isStaleDiffTurnSelection,
-  resolveConversationCacheScope,
   resolveDiffPanelGitStatusQueriesEnabled,
+  resolveDiffPanelPickerLabel,
   resolveDiffPanelQueriesEnabled,
   resolveDiffPanelRepoLiveRefresh,
   resolveDiffPanelRepoLiveRefetchIntervalMs,
@@ -16,10 +19,11 @@ import {
   resolveDiffPanelScopeFileCounts,
   resolveDiffPanelScopePickerValue,
   resolveDiffPanelThread,
-  resolveDiffPanelViewSource,
-  resolveInitialDiffViewKind,
+  resolveWatchedDiffFilePath,
+  resolveDiffSelectAllArmed,
+  resolveDiffSelectAllWithinViewport,
+  parseDiffPanelCompareRefValue,
   resolveSelectedTurnSummary,
-  DIFF_PANEL_PICKER_SCOPE_OPTIONS,
   DIFF_PANEL_REPO_LIVE_REFETCH_INTERVAL_MS,
 } from "./DiffPanel.logic";
 
@@ -116,39 +120,13 @@ describe("resolveDiffPanelThread", () => {
         threadId: THREAD_ID,
         serverThread: undefined,
         draftThread: null,
-        fallbackModelSelection: null,
+        fallbackModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
       }),
     ).toBeUndefined();
   });
 });
 
 describe("diff panel view source helpers", () => {
-  it("defaults to repo view when no turn is selected", () => {
-    expect(resolveInitialDiffViewKind(null)).toBe("repo");
-  });
-
-  it("defaults to turn view when a turn is selected", () => {
-    expect(resolveInitialDiffViewKind(TurnId.makeUnsafe("turn-1"))).toBe("turn");
-  });
-
-  it("resolves repo and turn view sources", () => {
-    expect(
-      resolveDiffPanelViewSource({
-        diffViewKind: "repo",
-        repoDiffScope: "unstaged",
-        selectedTurnId: null,
-      }),
-    ).toEqual({ kind: "repo", scope: "unstaged" });
-
-    expect(
-      resolveDiffPanelViewSource({
-        diffViewKind: "turn",
-        repoDiffScope: "branch",
-        selectedTurnId: TurnId.makeUnsafe("turn-1"),
-      }),
-    ).toEqual({ kind: "turn", turnId: TurnId.makeUnsafe("turn-1") });
-  });
-
   it("gates diff queries when the pane is hidden or collapsed", () => {
     expect(resolveDiffPanelQueriesEnabled({ diffOpen: true, queriesEnabled: true })).toBe(true);
     expect(resolveDiffPanelQueriesEnabled({ diffOpen: true, queriesEnabled: false })).toBe(false);
@@ -297,37 +275,51 @@ describe("diff panel view source helpers", () => {
     ).toBeNull();
   });
 
-  it("keeps the persisted default working-tree scope available in the picker", () => {
-    expect(DIFF_PANEL_PICKER_SCOPE_OPTIONS).toContain("workingTree");
+  it("round-trips compare ref picker values", () => {
+    expect(buildDiffPanelCompareRefValue("feature/x")).toBe("ref:feature/x");
+    expect(parseDiffPanelCompareRefValue("ref:feature/x")).toBe("feature/x");
+    expect(parseDiffPanelCompareRefValue("ref:  ")).toBeNull();
+    expect(parseDiffPanelCompareRefValue("branch")).toBeNull();
   });
 
-  it("marks picker options selected only when they match the active scope", () => {
+  it("resolves the compare-ref picker value and label from the active ref", () => {
     const latestTurnId = TurnId.makeUnsafe("turn-latest");
 
     expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: null },
-        { id: "allTurns" },
+      resolveDiffPanelScopePickerValue({
+        viewSource: { kind: "repo", scope: "ref" },
         latestTurnId,
-        "all",
-      ),
-    ).toBe(true);
+        compareRef: "release/1.2",
+      }),
+    ).toBe("ref:release/1.2");
     expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: latestTurnId },
-        { id: "lastTurn" },
+      resolveDiffPanelScopePickerValue({
+        viewSource: { kind: "repo", scope: "ref" },
         latestTurnId,
-        "last",
-      ),
-    ).toBe(true);
+        compareRef: null,
+      }),
+    ).toBeNull();
     expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: TurnId.makeUnsafe("turn-older") },
-        { id: "lastTurn" },
-        latestTurnId,
-        "last",
+      resolveDiffPanelPickerLabel({ kind: "repo", scope: "ref" }, undefined, "release/1.2"),
+    ).toBe("vs release/1.2");
+    expect(
+      resolveDiffPanelPickerLabel(
+        { kind: "repo", scope: "ref" },
+        undefined,
+        "0123456789abcdef0123456789abcdef01234567",
       ),
-    ).toBe(false);
+    ).toBe("vs 0123456");
+  });
+
+  it("surfaces a ref scope file count in the picker badges", () => {
+    expect(
+      resolveDiffPanelScopeFileCounts({
+        viewSource: { kind: "repo", scope: "ref" },
+        activeScopeFileCount: 4,
+        scopePickerOpen: false,
+        pickerScopeCounts: {},
+      }),
+    ).toEqual({ ref: 4 });
   });
 
   it("detects stale turn selections and resolves summaries without fallback", () => {
@@ -349,11 +341,6 @@ describe("diff panel view source helpers", () => {
     expect(isStaleDiffTurnSelection(null, summaries)).toBe(false);
   });
 
-  it("builds compact conversation cache scopes from the latest checkpoint count", () => {
-    expect(resolveConversationCacheScope(undefined)).toBeNull();
-    expect(resolveConversationCacheScope(3)).toBe("conversation:to-3");
-  });
-
   it("filters renderable files by path query", () => {
     const files = [
       { name: "apps/web/src/components/ChatView.tsx", hunks: [] },
@@ -362,5 +349,148 @@ describe("diff panel view source helpers", () => {
 
     expect(filterRenderableFilesForSearch(files, "diffpanel")).toHaveLength(1);
     expect(filterRenderableFilesForSearch(files, "")).toHaveLength(2);
+  });
+
+  it("falls back to the first visible diff when the selected file is stale", () => {
+    const files = [
+      { name: "src/visible.ts", hunks: [] },
+      { name: "src/other.ts", hunks: [] },
+    ] as unknown as Parameters<typeof resolveWatchedDiffFilePath>[1];
+
+    expect(resolveWatchedDiffFilePath("src/other.ts", files)).toBe("src/other.ts");
+    expect(resolveWatchedDiffFilePath("src/stale.ts", files)).toBe("src/visible.ts");
+    expect(resolveWatchedDiffFilePath(null, [])).toBeNull();
+  });
+});
+
+describe("resolveDiffSelectAllArmed", () => {
+  it("arms on Cmd/Ctrl+A inside the diff viewport", () => {
+    expect(
+      resolveDiffSelectAllArmed(false, { key: "a", metaKey: true, ctrlKey: false }, true),
+    ).toBe(true);
+    expect(
+      resolveDiffSelectAllArmed(false, { key: "A", metaKey: false, ctrlKey: true }, true),
+    ).toBe(true);
+  });
+
+  it("does not arm on Cmd/Ctrl+A outside the diff viewport", () => {
+    expect(
+      resolveDiffSelectAllArmed(false, { key: "a", metaKey: true, ctrlKey: false }, false),
+    ).toBe(false);
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "a", metaKey: false, ctrlKey: true }, false),
+    ).toBe(false);
+  });
+
+  it("preserves the armed state through the copy half of the gesture", () => {
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "c", metaKey: true, ctrlKey: false }, false),
+    ).toBe(true);
+    expect(
+      resolveDiffSelectAllArmed(false, { key: "c", metaKey: true, ctrlKey: false }, false),
+    ).toBe(false);
+  });
+
+  it("preserves the armed state through bare modifier keydowns", () => {
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "Meta", metaKey: true, ctrlKey: false }, false),
+    ).toBe(true);
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "Shift", metaKey: false, ctrlKey: false }, false),
+    ).toBe(true);
+  });
+
+  it("disarms on any other key that starts a fresh selection", () => {
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "ArrowDown", metaKey: false, ctrlKey: false }, true),
+    ).toBe(false);
+    expect(
+      resolveDiffSelectAllArmed(true, { key: "x", metaKey: false, ctrlKey: false }, true),
+    ).toBe(false);
+  });
+});
+
+describe("resolveDiffSelectAllWithinViewport", () => {
+  it("uses the last pointer hit for non-focusable diff chrome", () => {
+    expect(resolveDiffSelectAllWithinViewport(false, true, false)).toBe(true);
+  });
+
+  it("does not use stale diff pointer state for an external text editor", () => {
+    expect(resolveDiffSelectAllWithinViewport(false, true, true)).toBe(false);
+  });
+
+  it("keeps direct events inside the diff authoritative", () => {
+    expect(resolveDiffSelectAllWithinViewport(true, false, true)).toBe(true);
+  });
+});
+
+describe("resolveAdjacentDiffFilePath", () => {
+  const FILE_PATHS = ["a.ts", "b.ts", "c.ts"];
+
+  it("moves to the neighbouring file in both directions", () => {
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "a.ts", "next")).toBe("b.ts");
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "b.ts", "next")).toBe("c.ts");
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "c.ts", "previous")).toBe("b.ts");
+  });
+
+  it("clamps at both ends instead of wrapping around", () => {
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "c.ts", "next")).toBeNull();
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "a.ts", "previous")).toBeNull();
+  });
+
+  it("starts at the first file when the active file is unknown", () => {
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, null, "next")).toBe("a.ts");
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "gone.ts", "next")).toBe("a.ts");
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, null, "previous")).toBeNull();
+  });
+});
+
+describe("resolveDiffChangeMarkers", () => {
+  it("returns nothing when the scroll surface has no measurable height", () => {
+    expect(
+      resolveDiffChangeMarkers({
+        files: [{ path: "a.ts", offsetTop: 0, changeType: "change" }],
+        scrollHeight: 0,
+        stripHeight: 200,
+      }),
+    ).toEqual([]);
+  });
+
+  it("positions markers proportionally within the strip", () => {
+    const markers = resolveDiffChangeMarkers({
+      files: [
+        { path: "a.ts", offsetTop: 0, changeType: "new" },
+        { path: "b.ts", offsetTop: 500, changeType: "change" },
+      ],
+      scrollHeight: 1000,
+      stripHeight: 200,
+    });
+
+    expect(markers).toEqual([
+      { path: "a.ts", kind: "added", top: 0 },
+      { path: "b.ts", kind: "modified", top: 100 },
+    ]);
+  });
+
+  it("clamps the last marker inside the strip", () => {
+    const markers = resolveDiffChangeMarkers({
+      files: [{ path: "z.ts", offsetTop: 4000, changeType: "deleted" }],
+      scrollHeight: 1000,
+      stripHeight: 200,
+    });
+
+    expect(markers).toEqual([
+      { path: "z.ts", kind: "removed", top: 200 - DIFF_CHANGE_MARKER_HEIGHT_PX },
+    ]);
+  });
+
+  it("keeps markers at the strip origin when the strip has no height", () => {
+    const markers = resolveDiffChangeMarkers({
+      files: [{ path: "a.ts", offsetTop: 250, changeType: "change" }],
+      scrollHeight: 1000,
+      stripHeight: 0,
+    });
+
+    expect(markers).toEqual([{ path: "a.ts", kind: "modified", top: 0 }]);
   });
 });

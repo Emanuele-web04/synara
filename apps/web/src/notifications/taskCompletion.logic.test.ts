@@ -6,13 +6,17 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+  type OrchestrationPendingInteraction,
+} from "@synara/contracts";
 import {
   buildInputNeededCopy,
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
   collectInputNeededThreadCandidates,
+  collectSnoozeReminderCandidates,
+  completedThreadNotificationKey,
   isNotificationRuntimeFreshTimestamp,
+  shouldAttemptSystemTaskNotification,
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 import type { Thread } from "../types";
@@ -54,6 +58,147 @@ function makeThread(overrides: Partial<Thread>): Thread {
     ...overrides,
   };
 }
+
+describe("snooze notification candidates", () => {
+  it("catches up unseen reminders on initial hydration without requiring a lifecycle transition", () => {
+    const thread = makeThread({ snoozeReminderAt: "2026-10-02T10:30:00.000Z" });
+    expect(collectSnoozeReminderCandidates([thread])).toEqual([
+      {
+        threadId: thread.id,
+        title: "Polish notifications",
+        reminderAt: "2026-10-02T10:30:00.000Z",
+      },
+    ]);
+  });
+
+  it("ignores cancelled, resnoozed and archived reminders", () => {
+    expect(
+      collectSnoozeReminderCandidates([
+        makeThread({ snoozeReminderAt: null }),
+        makeThread({ snoozeReminderAt: "invalid" }),
+        makeThread({
+          snoozeReminderAt: "2026-10-02T10:30:00.000Z",
+          snoozedUntil: "2026-10-02T11:00:00.000Z",
+        }),
+        makeThread({
+          snoozeReminderAt: "2026-10-02T10:30:00.000Z",
+          archivedAt: "2026-10-02T10:00:00.000Z",
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("suppresses normal completion notifications while a thread is snoozed", () => {
+    const before = makeThread({});
+    const completed = makeThread({
+      snoozedUntil: "2026-10-02T11:00:00.000Z",
+      session: { ...before.session!, status: "ready", orchestrationStatus: "ready" },
+      latestTurn: {
+        ...before.latestTurn!,
+        state: "completed",
+        completedAt: "2026-04-05T10:01:00.000Z",
+      },
+    });
+    expect(collectCompletedThreadCandidates([before], [completed])).toEqual([]);
+  });
+
+  it("suppresses input-needed notifications while snoozed", () => {
+    const before = makeThread({});
+    const after = makeThread({
+      snoozedUntil: "2026-10-02T11:00:00.000Z",
+      hasPendingApprovals: true,
+      activities: [
+        {
+          id: EventId.makeUnsafe("new-approval"),
+          turnId: TurnId.makeUnsafe("turn-1"),
+          kind: "approval.requested",
+          summary: "Approval needed",
+          createdAt: "2026-04-05T10:00:04.000Z",
+          tone: "approval",
+          payload: { requestId: "request-new", requestKind: "command" },
+        },
+      ],
+    });
+    expect(collectInputNeededThreadCandidates([before], [after])).toEqual([]);
+  });
+});
+
+function makeInteraction(
+  interactionKind: OrchestrationPendingInteraction["interactionKind"],
+  requestId: string,
+  status: OrchestrationPendingInteraction["status"],
+): OrchestrationPendingInteraction {
+  return {
+    interactionKind,
+    requestId: ApprovalRequestId.makeUnsafe(requestId),
+    threadId: ThreadId.makeUnsafe("thread-1"),
+    turnId: TurnId.makeUnsafe("turn-1"),
+    lifecycleGeneration: "generation-1",
+    status,
+    decision: null,
+    responseCommandId: null,
+    responseRequestedAt: null,
+    createdAt: "2026-04-05T10:00:04.000Z",
+    resolvedAt: null,
+  };
+}
+
+function buildCollectedTaskCompletionCopy(assistantText: string) {
+  const completedAt = "2026-04-05T10:00:05.000Z";
+  const candidates = collectCompletedThreadCandidates(
+    [makeThread({})],
+    [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: completedAt,
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt,
+          assistantMessageId: MessageId.makeUnsafe("msg-1"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-1"),
+            role: "assistant",
+            text: assistantText,
+            createdAt: "2026-04-05T10:00:01.000Z",
+            completedAt,
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+        ],
+      }),
+    ],
+  );
+  const candidate = candidates[0];
+  if (!candidate) {
+    throw new Error("Expected a completed thread candidate");
+  }
+  return buildTaskCompletionCopy(candidate);
+}
+
+describe("shouldAttemptSystemTaskNotification", () => {
+  it("only attempts enabled notifications while the window is in the background", () => {
+    expect(shouldAttemptSystemTaskNotification({ enabled: true, isWindowForeground: false })).toBe(
+      true,
+    );
+    expect(shouldAttemptSystemTaskNotification({ enabled: true, isWindowForeground: true })).toBe(
+      false,
+    );
+    expect(shouldAttemptSystemTaskNotification({ enabled: false, isWindowForeground: false })).toBe(
+      false,
+    );
+  });
+});
 
 describe("collectCompletedThreadCandidates", () => {
   it("returns threads that moved from working to completed", () => {
@@ -104,10 +249,325 @@ describe("collectCompletedThreadCandidates", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Polish notifications",
+        turnId: TurnId.makeUnsafe("turn-1"),
         completedAt: "2026-04-05T10:00:05.000Z",
         assistantSummary: "Finished the task and everything looks good.",
       },
     ]);
+  });
+
+  it("suppresses the completion candidate while background tasks are still running", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:05.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt: "2026-04-05T10:00:05.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-1"),
+          sourceProposedPlan: undefined,
+        },
+        activities: [
+          {
+            id: EventId.makeUnsafe("activity-task-start-1"),
+            tone: "info",
+            kind: "task.started",
+            summary: "Subagent task started",
+            payload: { taskId: "bg-task-1", taskType: "subagent" },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:02.000Z",
+          },
+          {
+            id: EventId.makeUnsafe("activity-task-bg-1"),
+            tone: "info",
+            kind: "task.updated",
+            summary: "Task moved to background",
+            payload: { taskId: "bg-task-1", status: "running", isBackgrounded: true },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:03.000Z",
+          },
+        ],
+      }),
+    ];
+
+    expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
+  });
+
+  describe("waiting for subagents", () => {
+    // The agent launched one subagent in turn-1 and was woken into turn-2 when
+    // another one finished. Shapes follow Claude's real activity stream.
+    const movedToBackground = (taskId: string) => ({
+      id: EventId.makeUnsafe(`moved-${taskId}`),
+      tone: "info" as const,
+      kind: "runtime.warning",
+      summary: "Moved to background",
+      payload: {
+        message: taskId,
+        nativeEventType: "background_tasks_changed",
+        data: { tasks: [{ task_id: taskId, task_type: "local_agent", description: taskId }] },
+      },
+      turnId: TurnId.makeUnsafe("turn-1"),
+      createdAt: "2026-04-05T10:00:01.000Z",
+    });
+    const taskCompleted = (taskId: string, createdAt: string) => ({
+      id: EventId.makeUnsafe(`done-${taskId}`),
+      tone: "info" as const,
+      kind: "task.completed",
+      summary: "Task completed",
+      payload: { taskId, status: "completed" },
+      turnId: null,
+      createdAt,
+    });
+    const wokenTurnThread = (overrides: Partial<Thread>) =>
+      makeThread({
+        session: {
+          provider: "claudeAgent",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:02:05.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:02:00.000Z",
+          startedAt: "2026-04-05T10:02:00.000Z",
+          completedAt: "2026-04-05T10:02:05.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-2"),
+          sourceProposedPlan: undefined,
+        },
+        ...overrides,
+      });
+    const previous = [makeThread({})];
+
+    it("holds the alert while a subagent launched by an earlier turn is still running", () => {
+      const next = [
+        wokenTurnThread({
+          activities: [
+            movedToBackground("agent-a"),
+            movedToBackground("agent-b"),
+            taskCompleted("agent-a", "2026-04-05T10:01:59.000Z"),
+          ],
+        }),
+      ];
+
+      expect(collectCompletedThreadCandidates(previous, next, { waitForSubagents: true })).toEqual(
+        [],
+      );
+      expect(collectCompletedThreadCandidates(previous, next)).toHaveLength(1);
+    });
+
+    it("alerts once every background subagent has finished", () => {
+      const next = [
+        wokenTurnThread({
+          activities: [
+            movedToBackground("agent-a"),
+            movedToBackground("agent-b"),
+            taskCompleted("agent-a", "2026-04-05T10:01:00.000Z"),
+            taskCompleted("agent-b", "2026-04-05T10:01:59.000Z"),
+          ],
+        }),
+      ];
+
+      expect(
+        collectCompletedThreadCandidates(previous, next, { waitForSubagents: true }),
+      ).toHaveLength(1);
+    });
+
+    it.each(["completed", "stopped", "error"] as const)(
+      "releases a held settled turn when background work becomes %s without a new turn",
+      (outcome) => {
+        const held = wokenTurnThread({ activities: [movedToBackground("agent-a")] });
+        const released = wokenTurnThread({
+          activities:
+            outcome === "completed"
+              ? [...held.activities, taskCompleted("agent-a", "2026-04-05T10:02:06.000Z")]
+              : held.activities,
+          session:
+            outcome === "completed"
+              ? held.session
+              : { ...held.session!, orchestrationStatus: outcome },
+        });
+
+        expect(
+          collectCompletedThreadCandidates(previous, [held], { waitForSubagents: true }),
+        ).toEqual([]);
+        const candidates = collectCompletedThreadCandidates([held], [released], {
+          waitForSubagents: true,
+        });
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]?.turnId).toBe(held.latestTurn?.turnId);
+        expect(
+          collectCompletedThreadCandidates([released], [released], { waitForSubagents: true }),
+        ).toEqual([]);
+      },
+    );
+
+    it("does not alert for a subagent's own thread", () => {
+      const parentThreadId = ThreadId.makeUnsafe("parent-thread");
+      const next = [wokenTurnThread({ parentThreadId })];
+      const previousChild = [makeThread({ parentThreadId })];
+
+      expect(
+        collectCompletedThreadCandidates(previousChild, next, { waitForSubagents: true }),
+      ).toEqual([]);
+      expect(collectCompletedThreadCandidates(previousChild, next)).toHaveLength(1);
+    });
+  });
+
+  it("summarizes the turn's final assistant message, not the opening preamble", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:06.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt: "2026-04-05T10:00:06.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-final"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-preamble"),
+            role: "assistant",
+            text: "Alright, I'll take the hint and start inspecting the work.",
+            createdAt: "2026-04-05T10:00:01.000Z",
+            completedAt: "2026-04-05T10:00:01.500Z",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("msg-final"),
+            role: "assistant",
+            text: "Done — separated the risky changes from the in-progress ones.",
+            createdAt: "2026-04-05T10:00:05.500Z",
+            completedAt: "2026-04-05T10:00:06.000Z",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+        ],
+      }),
+    ];
+
+    expect(collectCompletedThreadCandidates(previous, next)[0]?.assistantSummary).toBe(
+      "Done — separated the risky changes from the in-progress ones.",
+    );
+  });
+
+  it("falls back to the turn's last non-empty reply when the final message is still empty", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:06.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt: "2026-04-05T10:00:06.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-final"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-preamble"),
+            role: "assistant",
+            text: "Working on it now.",
+            createdAt: "2026-04-05T10:00:01.000Z",
+            completedAt: "2026-04-05T10:00:01.500Z",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("msg-final"),
+            role: "assistant",
+            text: "   ",
+            createdAt: "2026-04-05T10:00:05.500Z",
+            completedAt: "2026-04-05T10:00:06.000Z",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+        ],
+      }),
+    ];
+
+    expect(collectCompletedThreadCandidates(previous, next)[0]?.assistantSummary).toBe(
+      "Working on it now.",
+    );
+  });
+
+  it("does not reuse a legacy null-turn reply for a newer completed turn", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:06.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:04.000Z",
+          startedAt: "2026-04-05T10:00:04.000Z",
+          completedAt: "2026-04-05T10:00:06.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-final"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-legacy"),
+            role: "assistant",
+            text: "Stale answer from an imported turn.",
+            createdAt: "2026-04-05T09:00:00.000Z",
+            completedAt: "2026-04-05T09:00:01.000Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("msg-final"),
+            role: "assistant",
+            text: "   ",
+            createdAt: "2026-04-05T10:00:05.500Z",
+            completedAt: "2026-04-05T10:00:06.000Z",
+            turnId: TurnId.makeUnsafe("turn-2"),
+            streaming: false,
+          },
+        ],
+      }),
+    ];
+
+    const candidate = collectCompletedThreadCandidates(previous, next)[0];
+    expect(candidate?.assistantSummary).toBeNull();
+    expect(candidate && buildTaskCompletionCopy(candidate)).toEqual({
+      title: "Polish notifications",
+      body: "Finished working.",
+    });
   });
 
   it("returns threads that settle after skipping the visible running-to-ready transition", () => {
@@ -168,6 +628,7 @@ describe("collectCompletedThreadCandidates", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Polish notifications",
+        turnId: TurnId.makeUnsafe("turn-1"),
         completedAt: "2026-04-05T10:00:05.000Z",
         assistantSummary: "Done and verified.",
       },
@@ -290,10 +751,103 @@ describe("collectCompletedThreadCandidates", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         projectId: ProjectId.makeUnsafe("project-1"),
         title: "Polish notifications",
+        turnId: TurnId.makeUnsafe("turn-1"),
         completedAt: "2026-04-05T10:00:05.000Z",
         assistantSummary: "First block is done.",
       },
     ]);
+  });
+
+  it.each([{ state: "interrupted" }] as const)(
+    "does not notify a settled $state turn as a completion",
+    ({ state }) => {
+      const previous = [
+        makeThread({
+          session: {
+            provider: "codex",
+            status: "running",
+            orchestrationStatus: "running",
+            activeTurnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:00.000Z",
+            updatedAt: "2026-04-05T10:00:01.000Z",
+          },
+        }),
+      ];
+      const next = [
+        makeThread({
+          session: {
+            provider: "codex",
+            status: "ready",
+            orchestrationStatus: "ready",
+            createdAt: "2026-04-05T10:00:00.000Z",
+            updatedAt: "2026-04-05T10:00:05.000Z",
+          },
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-1"),
+            state,
+            requestedAt: "2026-04-05T10:00:00.000Z",
+            startedAt: "2026-04-05T10:00:00.000Z",
+            completedAt: "2026-04-05T10:00:05.000Z",
+            assistantMessageId: null,
+            sourceProposedPlan: undefined,
+          },
+        }),
+      ];
+
+      expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
+    },
+  );
+
+  it("keeps the dedup key stable when a checkpoint diff rewrites the turn's completedAt", () => {
+    // thread.turn-diff-completed rebuilds latestTurn with the checkpoint's own
+    // timestamp, so the same turn can re-settle under a different completedAt
+    // than the one originally notified. The key must not depend on it.
+    const settledTurnAt = (completedAt: string) =>
+      ({
+        turnId: TurnId.makeUnsafe("turn-1"),
+        state: "completed",
+        requestedAt: "2026-04-05T10:00:00.000Z",
+        startedAt: "2026-04-05T10:00:00.000Z",
+        completedAt,
+        assistantMessageId: null,
+        sourceProposedPlan: undefined,
+      }) as const;
+    const idleSession = {
+      provider: "codex",
+      status: "ready",
+      orchestrationStatus: "ready",
+      createdAt: "2026-04-05T10:00:00.000Z",
+      updatedAt: "2026-04-05T10:00:05.000Z",
+    } as const;
+    const followUpStartingSession = {
+      provider: "codex",
+      status: "running",
+      orchestrationStatus: "running",
+      createdAt: "2026-04-05T10:00:00.000Z",
+      updatedAt: "2026-04-05T10:00:09.000Z",
+    } as const;
+
+    const [original] = collectCompletedThreadCandidates(
+      [makeThread({})],
+      [makeThread({ session: idleSession, latestTurn: settledTurnAt("2026-04-05T10:00:05.000Z") })],
+    );
+    const [reEmitted] = collectCompletedThreadCandidates(
+      [
+        makeThread({
+          session: followUpStartingSession,
+          latestTurn: settledTurnAt("2026-04-05T10:00:05.250Z"),
+        }),
+      ],
+      [makeThread({ session: idleSession, latestTurn: settledTurnAt("2026-04-05T10:00:05.250Z") })],
+    );
+    if (!original || !reEmitted) {
+      throw new Error("Expected both snapshots to emit a completion candidate");
+    }
+
+    expect(reEmitted.completedAt).not.toBe(original.completedAt);
+    expect(completedThreadNotificationKey(reEmitted)).toBe(
+      completedThreadNotificationKey(original),
+    );
   });
 
   it("ignores initial hydrated threads and non-completion updates", () => {
@@ -344,27 +898,209 @@ describe("shouldShowThreadNotificationToast", () => {
 });
 
 describe("buildTaskCompletionCopy", () => {
-  it("prefers assistant output when available", () => {
+  it("keeps compact context while stripping assistant Markdown", () => {
     expect(
-      buildTaskCompletionCopy({
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        completedAt: "2026-04-05T10:00:05.000Z",
-        assistantSummary: "Finished the task and everything looks good.",
-      }),
+      buildCollectedTaskCompletionCopy(
+        "Sì, esattamente così:\n- menu principale con `Model`, **Effort** e Speed\n- slider dentro [Advanced](https://example.com)",
+      ),
     ).toEqual({
       title: "Polish notifications",
-      body: "Finished the task and everything looks good.",
+      body: "Sì, esattamente così: · menu principale con Model, Effort e Speed · slider dentro Advanced",
+    });
+  });
+
+  it("preserves technical underscores and cleans an unclosed code fence", () => {
+    expect(
+      buildCollectedTaskCompletionCopy(
+        "Updated `apps/web/src/foo_bar.ts`.\n```ts\nconst result_value = true;",
+      ),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Updated apps/web/src/foo_bar.ts. const result_value = true;",
+    });
+  });
+
+  it("does not reinterpret Markdown-shaped syntax inside fenced code", () => {
+    expect(
+      buildCollectedTaskCompletionCopy(
+        "Result:\n```python\ndef __init__(self):\n  return x - y\n```",
+      ),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Result: def __init__(self): return x - y",
+    });
+  });
+
+  it.each([
+    ["four-backtick", "Result:\n````python\ndef __init__(self):\n  return x * y * z\n````"],
+    ["tilde", "Result:\n~~~python\ndef __init__(self):\n  return x * y * z\n~~~"],
+  ])("preserves Markdown-shaped syntax inside a %s fence", (_label, assistantText) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: "Result: def __init__(self): return x * y * z",
+    });
+  });
+
+  it("recognizes CRLF fenced blocks without swallowing following prose", () => {
+    expect(
+      buildCollectedTaskCompletionCopy(
+        "Result:\r\n```ts\r\nconst foo__bar__ = true;\r\n```\r\n**Done**",
+      ),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Result: const foo__bar__ = true; Done",
+    });
+  });
+
+  it("only normalizes list markers at the start of a line", () => {
+    expect(buildCollectedTaskCompletionCopy("Computed 7 * 6 = 42; auth - tests pass.")).toEqual({
+      title: "Polish notifications",
+      body: "Computed 7 * 6 = 42; auth - tests pass.",
+    });
+  });
+
+  it("preserves spaced multiplication operators", () => {
+    expect(buildCollectedTaskCompletionCopy("Computed 2 * 3 * 4 = 24.")).toEqual({
+      title: "Polish notifications",
+      body: "Computed 2 * 3 * 4 = 24.",
+    });
+  });
+
+  it("removes GFM task-list markers with their list prefix", () => {
+    expect(buildCollectedTaskCompletionCopy("- [x] Tests passed\n- [ ] Release pending")).toEqual({
+      title: "Polish notifications",
+      body: "· Tests passed · Release pending",
+    });
+  });
+
+  it("preserves numeric prefixes longer than Markdown ordered-list markers", () => {
+    expect(buildCollectedTaskCompletionCopy("1234567890. tests passed")).toEqual({
+      title: "Polish notifications",
+      body: "1234567890. tests passed",
+    });
+  });
+
+  it("consumes balanced parentheses in Markdown link destinations", () => {
+    expect(
+      buildCollectedTaskCompletionCopy("Read the [docs](https://example.com/a_(b)) for details."),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Read the docs for details.",
+    });
+  });
+
+  it.each([
+    ["full", "Read [the guide][docs].\n[docs]: https://example.com", "Read the guide."],
+    ["collapsed", "Read [the guide][].\n[the guide]: https://example.com", "Read the guide."],
+    ["shortcut", "Read [docs].\n[docs]: https://example.com", "Read docs."],
+  ])("strips %s reference links and their definitions", (_label, assistantText, expectedBody) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: expectedBody,
+    });
+  });
+
+  it("preserves bracketed status text that is not a valid reference definition", () => {
+    expect(buildCollectedTaskCompletionCopy("[status]: all tests passed")).toEqual({
+      title: "Polish notifications",
+      body: "[status]: all tests passed",
+    });
+  });
+
+  it("handles bracket-heavy generated output without recursive rescanning", () => {
+    expect(buildCollectedTaskCompletionCopy("[".repeat(16_000))).toEqual({
+      title: "Polish notifications",
+      body: `${"[".repeat(119)}…`,
+    });
+  });
+
+  it("keeps separate triple-backtick inline spans independent", () => {
+    expect(buildCollectedTaskCompletionCopy("Use ```foo``` now.\nThen ```bar``` next.")).toEqual({
+      title: "Polish notifications",
+      body: "Use foo now. Then bar next.",
+    });
+  });
+
+  it("preserves shorter backtick runs inside multi-backtick code spans", () => {
+    expect(buildCollectedTaskCompletionCopy("Use ``foo ` bar`` now.")).toEqual({
+      title: "Polish notifications",
+      body: "Use foo ` bar now.",
+    });
+  });
+
+  it("preserves Markdown-shaped syntax inside code spans that cross line breaks", () => {
+    expect(buildCollectedTaskCompletionCopy("Use `foo\n__bar__` now.")).toEqual({
+      title: "Polish notifications",
+      body: "Use foo __bar__ now.",
+    });
+  });
+
+  it("does not treat intraword double underscores as emphasis", () => {
+    expect(buildCollectedTaskCompletionCopy("Updated foo__bar__ successfully.")).toEqual({
+      title: "Polish notifications",
+      body: "Updated foo__bar__ successfully.",
+    });
+  });
+
+  it("does not treat double underscores beside Unicode identifier characters as emphasis", () => {
+    expect(buildCollectedTaskCompletionCopy("Updated café__menu__ and 变量__名称__.")).toEqual({
+      title: "Polish notifications",
+      body: "Updated café__menu__ and 变量__名称__.",
+    });
+  });
+
+  it("renders escaped Markdown punctuation literally", () => {
+    expect(
+      buildCollectedTaskCompletionCopy("Use \\*literal\\*, \\_name\\_, and \\[raw\\]."),
+    ).toEqual({
+      title: "Polish notifications",
+      body: "Use *literal*, _name_, and [raw].",
+    });
+  });
+
+  it.each([
+    [
+      "blockquote",
+      "Result:\n> ```python\n> def __init__(self):\n>   return value\n> ```",
+      "Result: def __init__(self): return value",
+    ],
+    [
+      "ordered list",
+      "Result:\n10. ```python\n    def __init__(self):\n    return value\n    ```\n**Done**",
+      "Result: def __init__(self): return value Done",
+    ],
+    [
+      "ordered list with an over-indented fence-like code line",
+      "Result:\n10. ```python\n    def __init__(self):\n        ```\n    return value\n    ```\n**Done**",
+      "Result: def __init__(self): ``` return value Done",
+    ],
+  ])(
+    "preserves Markdown-shaped syntax inside a fence nested in a %s",
+    (_label, assistantText, expectedBody) => {
+      expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+        title: "Polish notifications",
+        body: expectedBody,
+      });
+    },
+  );
+
+  it.each([
+    ["blockquote", "Result:\n> ```\n> code\n\n**Done**"],
+    ["list", "Result:\n- ```\n  code\n\n**Done**"],
+  ])("stops an unclosed fence at its %s container boundary", (_label, assistantText) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
+      title: "Polish notifications",
+      body: "Result: code Done",
     });
   });
 });
 
 describe("collectInputNeededThreadCandidates", () => {
   it("returns threads with newly opened approval requests", () => {
-    const previous = [makeThread({ activities: [] })];
+    const previous = [makeThread({ activities: [], hasPendingApprovals: false })];
     const next = [
       makeThread({
+        hasPendingApprovals: true,
         activities: [
           {
             id: EventId.makeUnsafe("activity-approval-1"),
@@ -396,9 +1132,10 @@ describe("collectInputNeededThreadCandidates", () => {
   });
 
   it("returns threads with newly opened user-input requests", () => {
-    const previous = [makeThread({ activities: [] })];
+    const previous = [makeThread({ activities: [], hasPendingUserInput: false })];
     const next = [
       makeThread({
+        hasPendingUserInput: true,
         activities: [
           {
             id: EventId.makeUnsafe("activity-user-input-1"),
@@ -456,10 +1193,112 @@ describe("collectInputNeededThreadCandidates", () => {
 
     expect(
       collectInputNeededThreadCandidates(
-        [makeThread({ activities })],
-        [makeThread({ activities })],
+        [makeThread({ activities, hasPendingApprovals: true })],
+        [makeThread({ activities, hasPendingApprovals: true })],
       ),
     ).toEqual([]);
+  });
+
+  it("does not notify for a historical request when only the aggregate flag revives", () => {
+    const historicalActivity = {
+      id: EventId.makeUnsafe("activity-stale-user-input"),
+      tone: "info" as const,
+      kind: "user-input.requested",
+      summary: "User input requested",
+      payload: {
+        requestId: "stale-user-input-request",
+        questions: [
+          {
+            id: "question-stale",
+            header: "Question",
+            question: "Continue?",
+            options: [{ label: "Yes", description: "Continue" }],
+          },
+        ],
+      },
+      turnId: TurnId.makeUnsafe("turn-old"),
+      createdAt: "2026-04-05T09:00:00.000Z",
+    };
+
+    expect(
+      collectInputNeededThreadCandidates(
+        [makeThread({ activities: [historicalActivity], hasPendingUserInput: false })],
+        [makeThread({ activities: [historicalActivity], hasPendingUserInput: true })],
+      ),
+    ).toEqual([]);
+  });
+
+  it("notifies when a detailed approval becomes retryable", () => {
+    const activity = {
+      id: EventId.makeUnsafe("activity-retryable-approval"),
+      tone: "approval" as const,
+      kind: "approval.requested",
+      summary: "Command approval requested",
+      payload: {
+        requestId: "retryable-approval",
+        lifecycleGeneration: "generation-1",
+        requestKind: "command",
+      },
+      turnId: TurnId.makeUnsafe("turn-1"),
+      createdAt: "2026-04-05T10:00:04.000Z",
+    };
+
+    expect(
+      collectInputNeededThreadCandidates(
+        [
+          makeThread({
+            activities: [activity],
+            pendingInteractions: [makeInteraction("approval", "retryable-approval", "responding")],
+          }),
+        ],
+        [
+          makeThread({
+            activities: [activity],
+            pendingInteractions: [makeInteraction("approval", "retryable-approval", "retryable")],
+          }),
+        ],
+      ).map((candidate) => candidate.requestId),
+    ).toEqual([ApprovalRequestId.makeUnsafe("retryable-approval")]);
+  });
+
+  it("notifies when detailed user input becomes retryable", () => {
+    const activity = {
+      id: EventId.makeUnsafe("activity-retryable-input"),
+      tone: "info" as const,
+      kind: "user-input.requested",
+      summary: "User input requested",
+      payload: {
+        requestId: "retryable-input",
+        lifecycleGeneration: "generation-1",
+        questions: [
+          {
+            id: "question-retryable",
+            header: "Question",
+            question: "Try again?",
+            options: [{ label: "Yes", description: "Retry" }],
+          },
+        ],
+      },
+      turnId: TurnId.makeUnsafe("turn-1"),
+      createdAt: "2026-04-05T10:00:04.000Z",
+    };
+
+    expect(
+      collectInputNeededThreadCandidates(
+        [
+          makeThread({
+            activities: [activity],
+            pendingInteractions: [makeInteraction("userInput", "retryable-input", "responding")],
+          }),
+        ],
+        [
+          makeThread({
+            activities: [activity],
+            pendingInteractions: [makeInteraction("userInput", "retryable-input", "retryable")],
+          }),
+        ],
+      ).map((candidate) => candidate.requestId),
+    ).toEqual([ApprovalRequestId.makeUnsafe("retryable-input")]);
   });
 });
 
@@ -478,22 +1317,6 @@ describe("buildInputNeededCopy", () => {
     ).toEqual({
       title: "Input needed",
       body: "Polish notifications: Command approval requested.",
-    });
-  });
-
-  it("describes user-input requests succinctly", () => {
-    expect(
-      buildInputNeededCopy({
-        kind: "user-input",
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        createdAt: "2026-04-05T10:00:06.000Z",
-        requestId: ApprovalRequestId.makeUnsafe("user-input-request-1"),
-      }),
-    ).toEqual({
-      title: "Input needed",
-      body: "Polish notifications: User input requested.",
     });
   });
 });
