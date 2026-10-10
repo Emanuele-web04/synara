@@ -716,6 +716,9 @@ function toProjectedThreadShellFromStoredSummary(input: {
     subagentNickname: threadRow.subagentNickname ?? null,
     subagentRole: threadRow.subagentRole ?? null,
     forkSourceThreadId: threadRow.forkSourceThreadId ?? null,
+    ...(threadRow.forkSourceMessageId
+      ? { forkSourceMessageId: threadRow.forkSourceMessageId }
+      : {}),
     sidechatSourceThreadId: threadRow.sidechatSourceThreadId ?? null,
     sidechatContext: threadRow.sidechatContext ?? null,
     sidechatLastActivityAt: threadRow.sidechatLastActivityAt ?? null,

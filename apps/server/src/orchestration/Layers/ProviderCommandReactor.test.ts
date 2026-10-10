@@ -8918,13 +8918,13 @@ describe("ProviderCommandReactor", () => {
       });
     });
 
-    it("keeps forking at the latest point when the chosen turn is the latest", async () => {
+    it("pins the chosen latest message even if native history advances before fork", async () => {
       const harness = await createHarness();
       await seedSourceTurns(harness);
       await forkAndSend(harness, "assistant:banana");
 
       expect(harness.forkThread).toHaveBeenCalledTimes(1);
-      expect(harness.forkThread.mock.calls[0]?.[0]).not.toHaveProperty("throughTurnId");
+      expect(harness.forkThread.mock.calls[0]?.[0]).toHaveProperty("throughTurnId", "turn-banana");
     });
   });
 

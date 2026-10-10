@@ -39,8 +39,10 @@ export function resolveForkSourceCutoff(input: {
     return { kind: "unavailable", reason: "fork message is no longer in the source thread" };
   }
   const laterMessages = messages.slice(index + 1).filter(isConversationMessage);
-  if (laterMessages.length === 0) {
-    return { kind: "latest" };
+  // An explicit message stays pinned even when currently latest: the source
+  // can advance between reading this projection and the native fork call.
+  if (message.role !== "assistant") {
+    return { kind: "unavailable", reason: "fork message is not an assistant turn boundary" };
   }
   const turnId = message.turnId;
   if (!turnId) {

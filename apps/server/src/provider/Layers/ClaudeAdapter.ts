@@ -275,6 +275,8 @@ interface ClaudeTurnState {
     { itemId: string; text: string; completed: boolean; snapshotReceived?: boolean }
   >;
   reasoningMessageId?: string;
+  // Native fork boundaries must belong to this turn, never the prior session message.
+  lastAssistantUuid?: string;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
@@ -3531,13 +3533,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         };
         // Only a completed turn ends at a self-contained native message; an
         // interrupted or failed one can stop on a tool_use without its result.
-        if (status === "completed" && context.lastAssistantUuid && context.resumeSessionId) {
+        if (status === "completed" && turnState.lastAssistantUuid && context.resumeSessionId) {
           context.turnBoundaries = [
             ...context.turnBoundaries.filter((entry) => entry.turnId !== turnState.turnId),
             {
               turnId: turnState.turnId,
               sessionId: context.resumeSessionId,
-              assistantUuid: context.lastAssistantUuid,
+              assistantUuid: turnState.lastAssistantUuid,
             },
           ].slice(-CLAUDE_TURN_BOUNDARY_LIMIT);
         }
@@ -4487,6 +4489,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         context.lastAssistantUuid = message.uuid;
+        if (context.turnState) context.turnState.lastAssistantUuid = message.uuid;
         yield* updateResumeCursor(context);
       });
 
@@ -7493,7 +7496,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 cause,
               }),
           });
-          const lastMessage = messages.at(-1);
+          const cutoffIndex =
+            input.throughTurnId === undefined
+              ? messages.length - 1
+              : messages.findIndex((message) => message.uuid === upToMessageId);
+          if (input.throughTurnId !== undefined && cutoffIndex < 0) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "forkThread",
+              issue:
+                "The chosen Claude turn is no longer in the native transcript; Synara will rebuild the fork from its retained transcript.",
+            });
+          }
+          const completedMessages = messages.slice(0, cutoffIndex + 1);
+          const lastMessage = completedMessages.at(-1);
           const message = lastMessage?.message;
           const stopReason =
             message && typeof message === "object" && "stop_reason" in message
@@ -7531,7 +7547,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // Freeze the boundary before the SDK copies the file: new messages
           // appended concurrently by Claude must not enter the imported copy.
           upToMessageId = lastMessage.uuid;
-          importedSourceMessages = messages;
+          importedSourceMessages = completedMessages;
         }
         const forked = yield* Effect.tryPromise({
           try: () =>
