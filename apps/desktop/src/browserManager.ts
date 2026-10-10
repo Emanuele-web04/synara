@@ -1682,6 +1682,10 @@ export class DesktopBrowserManager {
     // A hidden browser must never leave the miniature presentation zoom on a
     // runtime that automation or a later screenshot can reacquire.
     this.resetRuntimePageZoomForThread(input.threadId);
+    // The panel is gone, so its last rectangle is no longer on screen. Keeping it
+    // would let open(), navigate() or a screenshot repaint the native page over
+    // whatever chat is showing now, where no later hide() can take it down.
+    this.clearActiveBoundsForThread(input.threadId);
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
