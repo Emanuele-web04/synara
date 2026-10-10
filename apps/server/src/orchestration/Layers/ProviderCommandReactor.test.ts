@@ -13,6 +13,7 @@ import type {
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
+  OrchestrationSession,
   ProviderKind,
   ProviderForkThreadResult,
   ProviderRuntimeEvent,
@@ -51,6 +52,7 @@ import {
   Option,
   PubSub,
   Scope,
+  Semaphore,
   ServiceMap,
   Stream,
 } from "effect";
@@ -645,8 +647,10 @@ describe("ProviderCommandReactor", () => {
             : "renamed-branch",
       }),
     );
-    const publishBranch = vi.fn(() => Effect.void);
-    const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) => effect;
+    const publishBranch = vi.fn<GitCoreShape["publishBranch"]>(() => Effect.void);
+    const mutationLock = await Effect.runPromise(Semaphore.make(1));
+    const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) =>
+      mutationLock.withPermit(effect);
     const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
       Effect.fail(
         new TextGenerationError({
@@ -988,6 +992,7 @@ describe("ProviderCommandReactor", () => {
       clearSessionResumeCursor,
       renameBranch,
       publishBranch,
+      withMutation,
       generateBranchName,
       generateThreadTitle,
       captureStudioOutputBaseline,
@@ -8000,7 +8005,13 @@ describe("ProviderCommandReactor", () => {
     );
     expect(Option.getOrThrow(delivery).state).toBe(recovered ? "succeeded" : "uncertain");
     const thread = await readHarnessThread(harness);
-    expect(thread?.session?.lastError).toBe(scenario === "proven quit" ? null : sessionError);
+    expect(thread?.session?.lastError).toBe(
+      scenario === "proven quit"
+        ? null
+        : scenario === "another blocker"
+          ? formatProviderDeliveryBlockDetail("Acceptance unknown")
+          : sessionError,
+    );
     expect(
       thread?.activities.some((activity) => activity.summary === "Previous messages were not sent"),
     ).toBe(recovered);
@@ -8055,7 +8066,7 @@ describe("ProviderCommandReactor", () => {
             providerName: "codex",
             runtimeMode: "approval-required",
             activeTurnId: asTurnId(`turn-settle-${terminalState}`),
-            lastError: null,
+            lastError: formatProviderDeliveryBlockDetail("previously reconciled failure"),
             updatedAt: now,
           },
           createdAt: now,
@@ -8087,7 +8098,11 @@ describe("ProviderCommandReactor", () => {
         ),
       );
       await waitFor(async () =>
-        isProviderDeliveryBlockDetail((await readHarnessThread(harness))?.session?.lastError),
+        Boolean(
+          (await readHarnessThread(harness))?.session?.lastError?.includes(
+            terminalState === "dead" ? "durability probe failed" : "connection closed",
+          ),
+        ),
       );
       const thread = await readHarnessThread(harness);
       // The block detail merges over the session as it stands: quarantining a
@@ -8100,93 +8115,198 @@ describe("ProviderCommandReactor", () => {
       expect(thread?.session?.lastError).toContain(
         terminalState === "dead" ? "durability probe failed" : "connection closed",
       );
+      expect(thread?.session?.lastError).not.toContain("previously reconciled failure");
     },
   );
 
   // A blocker that survives startup recovery keeps the thread quarantined but
   // stayed invisible until a later turn start was skipped. Surface the block
   // once per thread so a restart still offers "Unblock thread".
-  it("REL-01B gate: surfaces a surviving startup blocker once per thread", async () => {
-    const harness = await createHarness({ startReactor: false });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const createdAt = "2026-10-04T10:00:00.000Z";
-    const failedAt = "2026-10-04T10:00:01.000Z";
+  it.each(["inactive error", "live turn", "unrelated error", "concurrent update"] as const)(
+    "REL-01B gate: reconciles surviving blockers without replay while preserving %s",
+    async (scenario) => {
+      const harness = await createHarness({ startReactor: false });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const createdAt = "2026-10-04T10:00:00.000Z";
+      const failedAt = "2026-10-04T10:00:01.000Z";
 
-    const seedSurvivingBlocker = async (commandId: string, lastError: string) => {
-      const requested = await Effect.runPromise(
+      const seedSurvivingBlocker = async (commandId: string, lastError: string) => {
+        const requested = await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.task.stop",
+            commandId: CommandId.makeUnsafe(commandId),
+            threadId,
+            taskId: `task-${commandId}`,
+            createdAt,
+          }),
+        );
+        await Effect.runPromise(
+          harness.deliveryRepository.claim({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: requested.sequence,
+            threadId,
+            claimOwner: "old-process",
+            claimedAt: createdAt,
+            claimExpiresAt: createdAt,
+          }),
+        );
+        await Effect.runPromise(
+          harness.deliveryRepository.markTerminalFailure({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: requested.sequence,
+            expectedClaimOwner: "old-process",
+            state: "uncertain",
+            error: lastError,
+            updatedAt: failedAt,
+          }),
+        );
+        return requested;
+      };
+      const first = await seedSurvivingBlocker(
+        "blocker-earlier",
+        "Provider process tree did not prove exit.",
+      );
+      const second = await seedSurvivingBlocker("blocker-later", "Provider acceptance is unknown.");
+      for (const event of await Effect.runPromise(
+        Stream.runCollect(harness.engine.readEvents(0)),
+      )) {
+        await Effect.runPromise(
+          harness.deliveryRepository.advanceCursor({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: event.sequence,
+            updatedAt: failedAt,
+          }),
+        );
+      }
+
+      await harness.startReactor();
+      await harness.drain();
+
+      const delivery = (sequence: number) =>
+        Effect.runPromise(
+          harness.deliveryRepository.getDelivery({
+            consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+            eventSequence: sequence,
+          }),
+        );
+      expect(Option.getOrThrow(await delivery(first.sequence)).state).toBe("uncertain");
+      expect(Option.getOrThrow(await delivery(second.sequence)).state).toBe("uncertain");
+      const thread = await readHarnessThread(harness);
+      // Exactly one surfacing write per thread: the earliest surviving blocker's
+      // detail wins and a second blocker must not rewrite or double it.
+      expect(thread?.session?.status).toBe("error");
+      expect(thread?.session?.lastError).toBe(
+        formatProviderDeliveryBlockDetail("Provider process tree did not prove exit."),
+      );
+      const blockDetailWrites = Array.from(
+        await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+      ).filter(
+        (event) =>
+          event.type === "thread.session-set" &&
+          isProviderDeliveryBlockDetail(event.payload.session.lastError),
+      );
+      expect(blockDetailWrites).toHaveLength(1);
+
+      await Effect.runPromise(
+        harness.reactor.reconcileDelivery({
+          eventSequence: first.sequence,
+          threadId,
+          expectedState: "uncertain",
+          outcome: "abandon",
+          reconciledBy: "test-operator",
+        }),
+      );
+      await harness.drain();
+      const remainingSession = (await readHarnessThread(harness))!.session!;
+      expect(remainingSession.lastError).toBe(
+        formatProviderDeliveryBlockDetail("Provider acceptance is unknown."),
+      );
+      expect(
+        Option.getOrThrow(
+          await Effect.runPromise(
+            harness.deliveryRepository.firstBlockingDeliveryForThread({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              threadId,
+            }),
+          ),
+        ).eventSequence,
+      ).toBe(second.sequence);
+
+      const updatedAt = "2026-10-05T10:00:00.000Z";
+      const beforeReconcile = {
+        ...remainingSession,
+        ...(scenario === "live turn"
+          ? { status: "running" as const, activeTurnId: asTurnId("still-running") }
+          : {}),
+        ...(scenario === "unrelated error" ? { lastError: "Unrelated session failure" } : {}),
+        updatedAt,
+      };
+      await Effect.runPromise(
         harness.engine.dispatch({
-          type: "thread.task.stop",
-          commandId: CommandId.makeUnsafe(commandId),
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("session-before-reconcile"),
           threadId,
-          taskId: `task-${commandId}`,
-          createdAt,
+          session: beforeReconcile,
+          createdAt: updatedAt,
         }),
       );
-      await Effect.runPromise(
-        harness.deliveryRepository.claim({
-          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-          eventSequence: requested.sequence,
+      let concurrentSession: OrchestrationSession | undefined;
+      if (scenario === "concurrent update") {
+        const dispatch = harness.engine.dispatch;
+        harness.interceptEngineDispatch((command) => {
+          if (
+            command.type !== "thread.session.set" ||
+            command.expectedSessionUpdatedAt !== updatedAt ||
+            command.session.lastError !== null
+          )
+            return;
+          const newerAt = "2026-10-06T10:00:00.000Z";
+          concurrentSession = {
+            ...beforeReconcile,
+            status: "running",
+            activeTurnId: asTurnId("newer-running-turn"),
+            lastError: "Newer session failure",
+            updatedAt: newerAt,
+          };
+          return dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("session-moved-before-clear"),
+            threadId,
+            session: concurrentSession,
+            createdAt: newerAt,
+          }).pipe(Effect.andThen(dispatch(command)));
+        });
+      }
+      const outcome = scenario === "inactive error" ? "abandon" : "accepted";
+      const reconciled = await Effect.runPromise(
+        harness.reactor.reconcileDelivery({
+          eventSequence: second.sequence,
           threadId,
-          claimOwner: "old-process",
-          claimedAt: createdAt,
-          claimExpiresAt: createdAt,
+          expectedState: "uncertain",
+          outcome,
+          reconciledBy: "test-operator",
         }),
       );
-      await Effect.runPromise(
-        harness.deliveryRepository.markTerminalFailure({
-          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-          eventSequence: requested.sequence,
-          expectedClaimOwner: "old-process",
-          state: "uncertain",
-          error: lastError,
-          updatedAt: failedAt,
-        }),
-      );
-      return requested;
-    };
-    const first = await seedSurvivingBlocker(
-      "blocker-earlier",
-      "Provider process tree did not prove exit.",
-    );
-    const second = await seedSurvivingBlocker("blocker-later", "Provider acceptance is unknown.");
-    for (const event of await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)))) {
-      await Effect.runPromise(
-        harness.deliveryRepository.advanceCursor({
-          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-          eventSequence: event.sequence,
-          updatedAt: failedAt,
-        }),
-      );
-    }
-
-    await harness.startReactor();
-    await harness.drain();
-
-    const delivery = (sequence: number) =>
-      Effect.runPromise(
-        harness.deliveryRepository.getDelivery({
-          consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-          eventSequence: sequence,
-        }),
-      );
-    expect(Option.getOrThrow(await delivery(first.sequence)).state).toBe("uncertain");
-    expect(Option.getOrThrow(await delivery(second.sequence)).state).toBe("uncertain");
-    const thread = await readHarnessThread(harness);
-    // Exactly one surfacing write per thread: the earliest surviving blocker's
-    // detail wins and a second blocker must not rewrite or double it.
-    expect(thread?.session?.status).toBe("error");
-    expect(thread?.session?.lastError).toBe(
-      formatProviderDeliveryBlockDetail("Provider process tree did not prove exit."),
-    );
-    const blockDetailWrites = Array.from(
-      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
-    ).filter(
-      (event) =>
-        event.type === "thread.session-set" &&
-        isProviderDeliveryBlockDetail(event.payload.session.lastError),
-    );
-    expect(blockDetailWrites).toHaveLength(1);
-  });
+      await harness.drain();
+      expect(reconciled).toMatchObject({ outcome, state: "succeeded" });
+      const finalSession = (await readHarnessThread(harness))!.session!;
+      if (scenario === "concurrent update") {
+        expect(concurrentSession).toBeDefined();
+        expect(finalSession).toEqual(concurrentSession);
+      } else if (scenario === "unrelated error") {
+        expect(finalSession).toEqual(beforeReconcile);
+      } else {
+        expect(finalSession).toMatchObject({
+          ...beforeReconcile,
+          status: scenario === "live turn" ? "running" : "stopped",
+          lastError: null,
+          updatedAt: expect.any(String),
+        });
+      }
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.stopTask).not.toHaveBeenCalled();
+    },
+  );
 
   // The lazy skip path already wrote the block detail; the settle-time write
   // must not regress it — a skipped turn start still surfaces the same contract.
@@ -8685,6 +8805,127 @@ describe("ProviderCommandReactor", () => {
       expect(prompt).toContain("<thread_context>");
       expect(prompt).toContain("audit prompt 1");
     }
+  });
+
+  describe("fork from an earlier turn", () => {
+    async function seedSourceTurns(harness: Awaited<ReturnType<typeof createHarness>>) {
+      const now = new Date().toISOString();
+      for (const word of ["apple", "banana"]) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.message.assistant.complete",
+            commandId: CommandId.makeUnsafe(`cmd-source-${word}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            messageId: MessageId.makeUnsafe(`assistant:${word}`),
+            turnId: asTurnId(`turn-${word}`),
+            createdAt: now,
+          }),
+        );
+      }
+    }
+
+    async function forkAndSend(
+      harness: Awaited<ReturnType<typeof createHarness>>,
+      throughMessageId: string,
+    ) {
+      const now = new Date().toISOString();
+      const threadId = ThreadId.makeUnsafe("thread-fork-from-turn");
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.fork.create",
+          commandId: CommandId.makeUnsafe("cmd-fork-from-turn"),
+          threadId,
+          sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+          projectId: asProjectId("project-1"),
+          title: "Words",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          throughMessageId: MessageId.makeUnsafe(throughMessageId),
+          importedMessages: [
+            {
+              messageId: asMessageId("fork-imported-user"),
+              role: "user",
+              text: "Remember the word APPLE.",
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              messageId: asMessageId("fork-imported-assistant"),
+              role: "assistant",
+              text: "ok",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-fork-from-turn-start"),
+          threadId,
+          message: {
+            messageId: asMessageId("fork-from-turn-user"),
+            role: "user",
+            text: "Which words do I want you to remember?",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      return threadId;
+    }
+
+    it("asks the provider to fork only through the chosen turn", async () => {
+      const harness = await createHarness();
+      await seedSourceTurns(harness);
+      const threadId = await forkAndSend(harness, "assistant:apple");
+
+      expect(harness.forkThread).toHaveBeenCalledTimes(1);
+      expect(harness.forkThread.mock.calls[0]?.[0]).toMatchObject({
+        sourceThreadId: "thread-1",
+        threadId,
+        throughTurnId: "turn-apple",
+      });
+      // The provider could not cut there, so the fork is rebuilt from its
+      // imported transcript and the user is told why.
+      const input = (harness.sendTurn.mock.calls[0]?.[0] as { input?: string }).input;
+      expect(input).toContain("<thread_context>");
+      expect(input).toContain("Remember the word APPLE.");
+      await waitFor(async () => {
+        const readModel = await Effect.runPromise(harness.engine.getReadModel());
+        return (
+          readModel.threads
+            .find((thread) => thread.id === threadId)
+            ?.activities.some((activity) => activity.kind === "provider.context.changed") === true
+        );
+      });
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const notice = readModel.threads
+        .find((thread) => thread.id === threadId)
+        ?.activities.find((activity) => activity.kind === "provider.context.changed");
+      expect(notice).toMatchObject({
+        tone: "info",
+        payload: { restartReason: "fork-from-earlier-turn", recapInjected: true },
+      });
+    });
+
+    it("pins the chosen latest message even if native history advances before fork", async () => {
+      const harness = await createHarness();
+      await seedSourceTurns(harness);
+      await forkAndSend(harness, "assistant:banana");
+
+      expect(harness.forkThread).toHaveBeenCalledTimes(1);
+      expect(harness.forkThread.mock.calls[0]?.[0]).toHaveProperty("throughTurnId", "turn-banana");
+    });
   });
 
   it("bootstraps sidechat context when the provider cannot fork natively", async () => {
@@ -13453,6 +13694,58 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it.each(["send", "review"] as const)(
+    "waits for workspace restore before %s even after the baseline deadline",
+    async (mode) => {
+      const harness = await createHarness({
+        preTurnBaselineTimeout: Duration.millis(30),
+        checkpointStore: { isGitRepository: () => Effect.succeed(true) },
+      });
+      const acquired = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const restore = Effect.runFork(
+        harness.checkpointCoordinator.withWorkspaceLease(
+          "/tmp/provider-project",
+          Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ),
+      );
+      await Effect.runPromise(Deferred.await(acquired));
+      try {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`restore-gate-${mode}`),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            message: {
+              messageId: MessageId.makeUnsafe(`restore-gate-message-${mode}`),
+              role: "user",
+              text: "Start after restore",
+              attachments: [],
+            },
+            ...(mode === "review" ? { reviewTarget: { type: "uncommittedChanges" as const } } : {}),
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: new Date().toISOString(),
+          }),
+        );
+        await waitFor(
+          async () =>
+            (await readHarnessThread(harness))?.activities.some(
+              (activity) => activity.kind === "checkpoint.baseline.skipped",
+            ) ?? false,
+        );
+        const dispatch = mode === "review" ? harness.startReview : harness.sendTurn;
+        expect(dispatch).not.toHaveBeenCalled();
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+        await waitFor(() => dispatch.mock.calls.length === 1);
+        await harness.drain();
+      } finally {
+        await Effect.runPromise(Deferred.succeed(release, undefined));
+        await Effect.runPromise(Effect.exit(Fiber.join(restore)));
+      }
+    },
+  );
+
   it("does not report a missing baseline when capture publishes during timeout cleanup", async () => {
     const release = Deferred.makeUnsafe<void>();
     let published = false;
@@ -14607,6 +14900,86 @@ describe("ProviderCommandReactor", () => {
     } finally {
       await harness.completeGatewayOperation(operationId);
     }
+  });
+
+  it("releases the repository lock and updates metadata while automatic publication is stalled", async () => {
+    const harness = await createHarness();
+    const publishGate = await Effect.runPromise(Deferred.make<void>());
+    let publicationSettled = false;
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "slow-publication" }),
+    );
+    harness.publishBranch.mockImplementation(() =>
+      Deferred.await(publishGate).pipe(
+        Effect.andThen(
+          Effect.fail(
+            new GitCommandError({
+              operation: "GitCore.publishBranch",
+              command: "git push",
+              cwd: "/tmp/provider-project/.worktrees/slow",
+              detail: "git push timed out",
+            }),
+          ),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            publicationSettled = true;
+          }),
+        ),
+      ),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-slow-publication-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/slow",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-slow-publication-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-slow-publication"),
+          role: "user",
+          text: "Fix slow worktree creation",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await waitFor(() => harness.publishBranch.mock.calls.length === 1);
+    let localMutationCompleted = false;
+    const localMutation = Effect.runPromise(
+      harness.withMutation(
+        "/tmp/provider-project",
+        Effect.sync(() => {
+          localMutationCompleted = true;
+        }),
+      ),
+    );
+    try {
+      await waitFor(() => localMutationCompleted);
+      await waitFor(async () => {
+        const thread = await readHarnessThread(harness);
+        return (
+          thread?.branch === "synara/slow-publication" &&
+          thread.associatedWorktreeBranch === "synara/slow-publication"
+        );
+      });
+      expect(publicationSettled).toBe(false);
+    } finally {
+      await Effect.runPromise(Deferred.succeed(publishGate, undefined));
+      await localMutation;
+    }
+    await waitFor(() => publicationSettled);
+    expect((await readHarnessThread(harness))?.branch).toBe("synara/slow-publication");
   });
 
   it("waits for gateway operation completion before renaming its temporary branch", async () => {
@@ -22057,6 +22430,10 @@ describe("ProviderCommandReactor", () => {
       );
       return state.pipe(Option.getOrThrow).lastAckedSequence >= midTurn.sequence;
     });
+    const changedThread = await readHarnessThread(harness);
+    expect(changedThread?.runtimeMode).toBe("full-access");
+    expect(changedThread?.session?.runtimeMode).toBe("approval-required");
+    expect(changedThread?.session?.activeTurnId).toBe("turn-mode-active");
     // The in-flight turn must survive the mode change: ensuring the session
     // now would restart the provider and kill the running turn.
     expect(harness.startSession.mock.calls.length).toBe(0);

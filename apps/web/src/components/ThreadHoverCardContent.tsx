@@ -13,7 +13,8 @@ import { useQuery } from "@tanstack/react-query";
 import type { MouseEvent, ReactNode } from "react";
 
 import { useThreadDraftPreviewText } from "~/composerDraftStore";
-import { FastModeIcon, GitBranchIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
+import { useThreadFastModeNotice } from "~/hooks/useThreadFastModeNotice";
+import { GitBranchIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import type { providerModelsQueryOptions } from "~/lib/providerDiscoveryReactQuery";
 import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
@@ -25,6 +26,7 @@ import {
   PR_STATE_PRESENTATION_ICONS,
   resolvePrStatePresentation,
 } from "./pullRequest/pullRequestStatePresentation";
+import { FastModeBadgeIcon } from "./chat/FastModeBadgeIcon";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarDraftGlyph, SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import {
@@ -72,9 +74,11 @@ function MetaRow({ icon, children }: { icon: ReactNode; children: string }) {
 // Model row: provider glyph, model name, then the reasoning/effort label so the
 // line reads like the composer's model trigger.
 function ModelRow({
+  threadId,
   modelSelection,
   catalogQueryOptions,
 }: {
+  threadId: ThreadId;
   modelSelection: ModelSelection;
   catalogQueryOptions: ThreadHoverCardContentProps["modelCatalogQueryOptions"];
 }) {
@@ -92,14 +96,17 @@ function ModelRow({
       runtimeModels: catalog.data?.models,
     }),
   );
+  const fastModeNotice = useThreadFastModeNotice(
+    modelSelection.provider === "claudeAgent" ? threadId : null,
+  );
   if (!model) return null;
   return (
     <span className={META_ROW_CLASS_NAME}>
       <ProviderIcon provider={model.provider} className={META_ICON_CLASS_NAME} />
       <span className="min-w-0 truncate">{model.modelLabel}</span>
       {model.fastMode ? (
-        <FastModeIcon
-          aria-label="Fast mode"
+        <FastModeBadgeIcon
+          notice={fastModeNotice}
           className="size-3.5 shrink-0 text-muted-foreground/75"
         />
       ) : null}
@@ -202,7 +209,11 @@ export function ThreadHoverCardContent({
           ) : null}
           {pullRequest ? <PullRequestRow pr={pullRequest} onOpen={onOpenPullRequest} /> : null}
           {model ? (
-            <ModelRow modelSelection={model} catalogQueryOptions={modelCatalogQueryOptions} />
+            <ModelRow
+              threadId={threadId}
+              modelSelection={model}
+              catalogQueryOptions={modelCatalogQueryOptions}
+            />
           ) : null}
         </div>
       ) : null}
