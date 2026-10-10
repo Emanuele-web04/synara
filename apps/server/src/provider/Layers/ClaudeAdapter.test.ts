@@ -3918,6 +3918,42 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
+  it.effect("still interrupts the CLI when Stop names a turn that already settled", () => {
+    const harness = makeMultiQueryHarness();
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const completed = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runDrain,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "answer at length",
+        attachments: [],
+      });
+      const query = harness.queries[0]!;
+      // The result clears the adapter turn before ProviderService persists the
+      // terminal event, so a Stop in that window still names the turn.
+      emitSuccessResult(query, "sdk-session-settled-stop", "result-settled-stop", {
+        input_tokens: 1,
+      });
+      yield* Fiber.join(completed);
+
+      yield* adapter.interruptTurn(session.threadId, turn.turnId);
+      assert.equal(query.interruptCalls.length, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("revokes the shared gateway when a background child outlives its parent turn", () => {
     const gateway = makeGatewayCredentialsHarness();
     const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
