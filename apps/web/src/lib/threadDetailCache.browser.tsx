@@ -63,6 +63,9 @@ describe("durable coherent thread detail", () => {
 });
 
 it("bounds durable entries and treats corrupt schema, quota and disabled storage as cache misses", async () => {
+  // Rapid writes from separate opens share a wall-clock tick; transaction order
+  // must decide eviction rather than IndexedDB's lexicographic key order.
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
   for (let index = 0; index < 34; index++)
     await writeThreadDetailCache(namespace, {
       ...snapshot(index, `entry ${index}`),
@@ -143,6 +146,7 @@ it("captures applied detail rather than an enqueued cursor, restores privately, 
 });
 
 it("bounds tombstones even when deletion is the only durable activity", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
   for (let index = 0; index < 514; index++)
     await deleteThreadDetailCache(namespace, ThreadId.makeUnsafe(`deleted-${index}`));
   const database = await openIndexedDbDatabase({

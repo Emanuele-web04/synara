@@ -20,6 +20,8 @@ interface RecordEntry {
   namespace: string;
   version: number;
   updatedAt: number;
+  /** Transaction order breaks same-millisecond recency ties across windows. */
+  writeOrder?: number;
   bytes: number;
   sequence: number;
   payload: string | null;
@@ -41,7 +43,7 @@ const open = () =>
 function pruneTombstones(store: IDBObjectStore, records: RecordEntry[]) {
   records
     .filter((record) => record.payload === null)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .sort((a, b) => b.updatedAt - a.updatedAt || (b.writeOrder ?? 0) - (a.writeOrder ?? 0))
     .slice(MAX_TOMBSTONES)
     .forEach((record) => store.delete(record.key));
 }
@@ -122,6 +124,8 @@ export async function writeThreadDetailCache(
           namespace: namespaceKey(namespace),
           version: SCHEMA_VERSION,
           updatedAt: Date.now(),
+          writeOrder:
+            records.reduce((order, record) => Math.max(order, record.writeOrder ?? 0), 0) + 1,
           bytes,
           sequence: snapshot.snapshotSequence,
           payload,
@@ -130,7 +134,7 @@ export async function writeThreadDetailCache(
         const details = [
           entry,
           ...records.filter((record) => record.key !== key && record.payload !== null),
-        ].sort((a, b) => b.updatedAt - a.updatedAt);
+        ].sort((a, b) => b.updatedAt - a.updatedAt || (b.writeOrder ?? 0) - (a.writeOrder ?? 0));
         let used = 0;
         details.forEach((record, index) => {
           used += record.bytes;
@@ -176,11 +180,11 @@ export async function deleteThreadDetailCache(
     const request = store.getAll();
     request.addEventListener("success", () => {
       try {
+        const records = request.result as RecordEntry[];
+        entry.writeOrder =
+          records.reduce((order, record) => Math.max(order, record.writeOrder ?? 0), 0) + 1;
         store.put(entry);
-        pruneTombstones(store, [
-          entry,
-          ...(request.result as RecordEntry[]).filter((record) => record.key !== entry.key),
-        ]);
+        pruneTombstones(store, [entry, ...records.filter((record) => record.key !== entry.key)]);
       } catch {
         transaction.abort();
       }
