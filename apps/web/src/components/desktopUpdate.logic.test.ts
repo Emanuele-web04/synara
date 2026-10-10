@@ -5,7 +5,6 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateAlreadyCurrentNotice,
-  getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
@@ -99,7 +98,6 @@ describe("desktop update button state", () => {
 
     expect(resolveDesktopUpdateButtonAction(state)).toBe("download");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(false);
-    expect(getDesktopUpdateButtonPresentation(state).label).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(state)).toBe(
       "Synara restarted, but update 1.1.0 was not installed. Click to try again.",
     );
@@ -166,10 +164,6 @@ describe("desktop update button state", () => {
     expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
-    expect(getDesktopUpdateButtonPresentation(state)).toEqual({
-      label: "Preparing",
-      secondaryLabel: null,
-    });
     expect(getDesktopUpdateDownloadPercent(state)).toBe(42);
   });
 
@@ -215,10 +209,9 @@ describe("desktop update button state", () => {
     expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Checking for updates");
-    expect(getDesktopUpdateButtonPresentation(state).label).toBe("Checking...");
   });
 
-  it("shows failure labels while keeping retryable updater states actionable", () => {
+  it("shows retry tooltips while keeping retryable updater states actionable", () => {
     const downloadFailure: DesktopUpdateState = {
       ...baseState,
       status: "available",
@@ -228,7 +221,6 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(downloadFailure)).toBe("download");
-    expect(getDesktopUpdateButtonPresentation(downloadFailure).label).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(downloadFailure)).toContain("Click to retry");
 
     const installFailure: DesktopUpdateState = {
@@ -241,7 +233,6 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(installFailure)).toBe("install");
-    expect(getDesktopUpdateButtonPresentation(installFailure).label).toBe("Retry");
     expect(getDesktopUpdateButtonTooltip(installFailure)).toContain("Click to retry");
   });
 });

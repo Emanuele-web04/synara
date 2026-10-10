@@ -1,3 +1,4 @@
+import { readEventLoopStatus } from "./eventLoopMonitor";
 import * as fs from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -335,6 +336,7 @@ export function makeHealthEffectRouteLayer(readiness: ServerReadiness) {
       return HttpServerResponse.jsonUnsafe(
         {
           status: "ok",
+          eventLoop: yield* readEventLoopStatus,
           startupReady: snapshot.startupReady,
           pushBusReady: snapshot.pushBusReady,
           keybindingsReady: snapshot.keybindingsReady,
@@ -824,7 +826,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
         status: 200,
         contentType: "application/zip",
         headers: {
-          "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
+          "Content-Disposition": attachmentContentDisposition(fileName),
           "Cache-Control": "no-store",
           ...corsHeaders,
           "Access-Control-Expose-Headers": "Content-Disposition",
@@ -856,6 +858,25 @@ export const editorIconEffectRouteLayer = HttpRouter.add(
     return toEffectHttpResponse(payload);
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
+
+// Node rejects header values outside Latin-1 (ERR_INVALID_CHAR) inside the
+// platform's writeHead, which leaves the response hanging. Printable ASCII names
+// keep the quoted form. Anything else goes only in the RFC 5987 `filename*` form,
+// because browserDownload.ts reads only `filename=` and would prefer a lossy
+// ASCII fallback over the full name the web client already has.
+function attachmentContentDisposition(fileName: string): string {
+  const safeFileName = fileName.replaceAll('"', "");
+  if (/^[\x20-\x7e]*$/.test(safeFileName)) {
+    return `attachment; filename="${safeFileName}"`;
+  }
+  // encodeURIComponent throws on lone surrogates and leaves `'()*` bare, which
+  // RFC 5987 does not allow unencoded.
+  const encoded = encodeURIComponent(safeFileName.replace(/\p{Cs}/gu, "\uFFFD")).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename*=UTF-8''${encoded}`;
+}
 
 // Streams a disk file as the response body instead of buffering it in memory:
 // preview files can be large (PDFs especially), and a full-file buffer per
@@ -947,7 +968,6 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     // Etag.Generator/Path services and was failing with a 500 here).
     const fileSystem = yield* FileSystem.FileSystem;
     const isDownload = url.searchParams.get("download") === "1";
-    const safeFileName = previewFile.fileName.replaceAll('"', "");
     const isSvg = nodePath.extname(previewFile.path).toLowerCase() === ".svg";
     return streamedFileResponse({
       fileSystem,
@@ -964,7 +984,9 @@ export const localImageEffectRouteLayer = HttpRouter.add(
         // browser second-guess the declared content type.
         "X-Content-Type-Options": "nosniff",
         ...(isSvg ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
-        ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
+        ...(isDownload
+          ? { "Content-Disposition": attachmentContentDisposition(previewFile.fileName) }
+          : {}),
       },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
@@ -1312,24 +1334,32 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });
 }).pipe(
   Effect.catch((error) =>
-    Effect.succeed(
-      error instanceof AuthError
-        ? authErrorResponse(error)
-        : HttpServerResponse.jsonUnsafe(
-            {
-              error:
-                error instanceof Error
-                  ? error.message
-                  : String((error as { readonly message?: unknown }).message ?? error),
-            },
-            {
-              status:
-                typeof (error as { readonly status?: unknown }).status === "number"
-                  ? (error as { readonly status: number }).status
-                  : 500,
-            },
-          ),
-    ),
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const url = HttpServerRequest.toURL(request);
+      const headers = url ? trustedMutationCorsHeaders({ request, url, config }) : null;
+      const response =
+        error instanceof AuthError
+          ? authErrorResponse(error)
+          : HttpServerResponse.jsonUnsafe(
+              {
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : String((error as { readonly message?: unknown }).message ?? error),
+              },
+              {
+                status:
+                  typeof (error as { readonly status?: unknown }).status === "number"
+                    ? (error as { readonly status: number }).status
+                    : 500,
+              },
+            );
+      // Browser clients need the original error body, including authentication
+      // and provider failures. Never reflect an untrusted origin here.
+      return HttpServerResponse.setHeaders(response, headers ?? {});
+    }),
   ),
 );
 

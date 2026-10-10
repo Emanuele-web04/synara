@@ -11,13 +11,15 @@ import {
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
 } from "@synara/shared/providerInstances";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 
 import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { TextGenerationError } from "../Errors.ts";
 import * as TextGen from "../Services/TextGeneration.ts";
 import * as Selection from "../textGenerationSelection.ts";
+import { GitCore } from "../Services/GitCore.ts";
+import { GitHubCli } from "../Services/GitHubCli.ts";
 
 const parseDroidModelSlug = (model: string | undefined): { readonly model: string } | null => {
   const match = model && /^droid[:/](.+)$/.exec(model);
@@ -28,6 +30,7 @@ interface RoutableTextGenerationInput {
   readonly model?: string;
   readonly modelSelection?: ModelSelection;
   readonly providerOptions?: ProviderStartOptions;
+  readonly cwd: string;
 }
 
 const makeProviderTextGeneration = Effect.gen(function* () {
@@ -37,6 +40,53 @@ const makeProviderTextGeneration = Effect.gen(function* () {
   const droidTextGeneration = yield* TextGen.DroidTextGeneration;
   const openCodeTextGeneration = yield* TextGen.OpenCodeTextGeneration;
   const serverSettings = yield* ServerSettingsService;
+  const gitCore = yield* GitCore;
+  const gitHubCli = yield* GitHubCli;
+
+  // Optional style references must not block generation in empty/offline repositories.
+  const readRepositoryWritingExamples = (cwd: string) =>
+    Effect.all(
+      {
+        recentCommitSubjects: gitCore.listRecentCommits({ cwd, limit: 10 }).pipe(
+          Effect.map(({ commits }) => commits.map((commit) => commit.subject)),
+          Effect.catch(() => Effect.succeed([] as string[])),
+          Effect.timeoutOption("3 seconds"),
+          Effect.map(Option.getOrElse(() => [] as string[])),
+        ),
+        recentPrTitles: gitHubCli
+          .withRead(
+            gitHubCli.execute({
+              cwd,
+              args: ["pr", "list", "--state", "all", "--limit", "10", "--json", "title"],
+              timeoutMs: 2500,
+              maxBufferBytes: 16_000,
+            }),
+          )
+          .pipe(
+            Effect.map((result) => {
+              try {
+                const rows: unknown = JSON.parse(result.stdout);
+                return Array.isArray(rows)
+                  ? rows.flatMap((row: unknown) =>
+                      typeof row === "object" &&
+                      row !== null &&
+                      "title" in row &&
+                      typeof row.title === "string"
+                        ? [row.title]
+                        : [],
+                    )
+                  : [];
+              } catch {
+                return [];
+              }
+            }),
+            Effect.catch(() => Effect.succeed([] as string[])),
+            Effect.timeoutOption("3 seconds"),
+            Effect.map(Option.getOrElse(() => [] as string[])),
+          ),
+      },
+      { concurrency: "unbounded" },
+    );
 
   const implementations = {
     claudeAgent: claudeTextGeneration,
@@ -141,10 +191,21 @@ const makeProviderTextGeneration = Effect.gen(function* () {
         input.providerOptions,
         providerStartOptionsFromInstance(instance),
       );
+      const writingPreferences =
+        operation === "generateCommitMessage" || operation === "generatePrContent"
+          ? {
+              style: settings.sourceControlWritingStyle,
+              customInstructions: settings.sourceControlCustomInstructions,
+              ...(settings.sourceControlWritingStyle === "repository"
+                ? yield* readRepositoryWritingExamples(input.cwd)
+                : { recentCommitSubjects: [], recentPrTitles: [] }),
+            }
+          : undefined;
       return {
         implementation,
         input: {
           ...input,
+          ...(writingPreferences ? { writingPreferences } : {}),
           ...(selectedModelSelection ? { model: selectedModelSelection.model } : {}),
           ...(routedSelection ? { modelSelection: routedSelection } : {}),
           ...(providerOptions ? { providerOptions } : {}),

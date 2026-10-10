@@ -77,6 +77,26 @@ describe("windowsProcess", () => {
     ).toBe(`${command}.CMD`);
   });
 
+  it.runIf(process.platform === "win32")(
+    "resolves project-relative shims against the launch working directory",
+    () => {
+      writeFileSync(Path.join(root, "codex.CMD"), "@echo off\r\n");
+      expect(
+        prepareWindowsSafeProcess(".\\codex", ["app-server"], {
+          platform: "win32",
+          cwd: root,
+          env: { PATH: "", PATHEXT: ".CMD", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        }),
+      ).toEqual({
+        command: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/s", "/v:off", "/c", 'call ".\\codex.CMD" "app-server"'],
+        shell: false,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      });
+    },
+  );
+
   it("keeps explicit path-like Windows executables without resolving", () => {
     expect(
       resolveWindowsCommandPath("C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd", {

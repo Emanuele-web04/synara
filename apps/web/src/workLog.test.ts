@@ -13,6 +13,404 @@ import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
+  it("pairs an answered question with its answers in one exchange row", () => {
+    const questions = [
+      {
+        id: "icon",
+        header: "Icon",
+        question: "Which icon should mark background work?",
+        options: [
+          { label: "Tray", description: "Tray icon" },
+          { label: "Dimmed spinner", description: "Spinner at reduced opacity" },
+        ],
+      },
+      {
+        id: "scope",
+        header: "Scope",
+        question: "Where should it apply?",
+        options: [{ label: "Sidebar", description: "Sidebar rows" }],
+        multiSelect: true,
+      },
+    ];
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          sequence: 1,
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: { requestId: "req-1", questions },
+        }),
+        makeActivity({
+          id: "answered",
+          sequence: 2,
+          kind: "user-input.resolved",
+          summary: "User input submitted",
+          // Claude keys answers by question text; Codex and Synara by question id.
+          payload: {
+            requestId: "req-1",
+            answers: {
+              "Which icon should mark background work?": "Dimmed spinner",
+              scope: ["Sidebar", "Menu"],
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "answered",
+      activityKind: "user-input.resolved",
+      userInputExchange: [
+        {
+          id: "icon",
+          header: "Icon",
+          question: "Which icon should mark background work?",
+          options: ["Tray", "Dimmed spinner"],
+          answer: "Dimmed spinner",
+        },
+        { id: "scope", options: ["Sidebar"], answer: "Sidebar, Menu" },
+      ],
+    });
+  });
+
+  it.each([undefined, "generation-one"])(
+    "keeps a reused request ID paired with its original question (%s)",
+    (lifecycleGeneration) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "first-question",
+            sequence: 1,
+            kind: "user-input.requested",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration } : {}),
+              questions: [{ id: "q", header: "Q", question: "First question?", options: [] }],
+            },
+          }),
+          makeActivity({
+            id: "first-answer",
+            sequence: 2,
+            kind: "user-input.resolved",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration } : {}),
+              answers: { q: "First answer" },
+            },
+          }),
+          makeActivity({
+            id: "second-question",
+            sequence: 3,
+            kind: "user-input.requested",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration: "generation-two" } : {}),
+              questions: [{ id: "q", header: "Q", question: "Second question?", options: [] }],
+            },
+          }),
+        ],
+        undefined,
+      );
+      expect(entries).toHaveLength(2);
+      expect(entries[0]).toMatchObject({
+        id: "first-answer",
+        userInputExchange: [{ question: "First question?", answer: "First answer" }],
+      });
+      expect(entries[1]).toMatchObject({
+        id: "second-question",
+        activityKind: "user-input.requested",
+      });
+    },
+  );
+
+  it("does not settle a question from another lifecycle generation", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          sequence: 1,
+          kind: "user-input.requested",
+          payload: {
+            requestId: "reused",
+            lifecycleGeneration: "new",
+            questions: [{ id: "q", header: "Q", question: "New question?", options: [] }],
+          },
+        }),
+        makeActivity({
+          id: "stale-answer",
+          sequence: 2,
+          kind: "user-input.resolved",
+          payload: {
+            requestId: "reused",
+            lifecycleGeneration: "old",
+            answers: { q: "Old answer" },
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["asked", "stale-answer"]);
+    expect(entries[1]?.userInputExchange).toBeUndefined();
+  });
+
+  it("refreshes a cached exchange when its requested activity is hydrated", () => {
+    const requested = makeActivity({
+      id: "asked",
+      sequence: 1,
+      kind: "user-input.requested",
+      payload: {
+        requestId: "req",
+        questions: [{ id: "q", header: "Q", question: "Original?", options: [] }],
+      },
+    });
+    const resolved = makeActivity({
+      id: "answered",
+      sequence: 2,
+      kind: "user-input.resolved",
+      payload: { requestId: "req", answers: { q: "Yes" } },
+    });
+    const first = deriveWorkLogEntries([requested, resolved], undefined);
+    expect(first[0]?.userInputExchange?.[0]?.question).toBe("Original?");
+    const hydrated = {
+      ...requested,
+      payload: {
+        requestId: "req",
+        questions: [{ id: "q", header: "Q", question: "Hydrated question?", options: [] }],
+      },
+    };
+    expect(
+      deriveWorkLogEntries([hydrated, resolved], undefined)[0]?.userInputExchange?.[0]?.question,
+    ).toBe("Hydrated question?");
+  });
+
+  it("keeps an unanswered question as a plain row", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "req-1",
+            questions: [{ id: "q", header: "Q", question: "Continue?", options: [] }],
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ id: "asked", activityKind: "user-input.requested" });
+    expect(entries[0]?.userInputExchange).toBeUndefined();
+  });
+
+  it("keeps skipped baseline feedback visible before a provider turn id exists", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        ...makeActivity({
+          id: "baseline-skipped",
+          kind: "checkpoint.baseline.skipped",
+          tone: "info",
+          summary: "Turn continued without a checkpoint baseline",
+          payload: { detail: "Checkpoint diff and file undo are unavailable." },
+        }),
+        turnId: null,
+      },
+      {
+        ...makeActivity({
+          id: "hidden-other",
+          kind: "tool.completed",
+          summary: "Hidden tool",
+        }),
+        turnId: null,
+      },
+    ];
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("visible-turn"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]),
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "baseline-skipped",
+      activityKind: "checkpoint.baseline.skipped",
+      tone: "info",
+    });
+    const timeline = deriveTimelineEntries([], [], entries);
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.kind).toBe("work");
+  });
+
+  it("omits routine approval resolutions between tool lifecycle updates", () => {
+    const activities = [
+      makeActivity({
+        id: "command-start",
+        sequence: 1,
+        kind: "tool.started",
+        summary: "Running checks",
+        payload: {
+          itemType: "command_execution",
+          data: { toolCallId: "checks", command: "bun run lint" },
+        },
+      }),
+      ...Array.from({ length: 12 }, (_, index) =>
+        makeActivity({
+          id: `approval-${index}`,
+          sequence: index + 2,
+          kind: "approval.resolved",
+          summary: "Approval resolved",
+          tone: "approval",
+          payload: {
+            requestId: `req-${index}`,
+            requestType: "command_execution_approval",
+            decision: "accept",
+          },
+        }),
+      ),
+      makeActivity({
+        id: "command-completed",
+        sequence: 14,
+        kind: "tool.completed",
+        summary: "Checks passed",
+        payload: {
+          itemType: "command_execution",
+          data: { toolCallId: "checks", command: "bun run lint" },
+        },
+      }),
+    ];
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toMatchObject([
+      { id: "command-start", label: "Checks passed", activityKind: "tool.completed" },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(deriveTimelineEntries([], [], entries)).toHaveLength(1);
+    expect(activities.filter((activity) => activity.kind === "approval.resolved")).toHaveLength(12);
+  });
+
+  it.each([
+    ["declined command", { decision: "decline" }],
+    ["cancelled command", { decision: "cancel" }],
+    ["session-wide grant", { decision: "acceptForSession" }],
+    ["unknown outcome", {}],
+    ["clipboard consent", { decision: "accept", toolName: "computer_read_clipboard" }],
+    [
+      "wrapped clipboard consent",
+      { decision: "accept", toolName: "mcp__synara__computer_read_clipboard" },
+    ],
+    ["scoped consent", { decision: "accept", approvalScope: "device-task" }],
+  ])("keeps the %s outcome visible", (_name, payload) => {
+    const activity = makeActivity({
+      id: "approval-outcome",
+      kind: "approval.resolved",
+      summary: "Approval resolved",
+      tone: "info",
+      payload: { requestId: "request-outcome", ...payload },
+    });
+    expect(deriveWorkLogEntries([activity], undefined).map((entry) => entry.id)).toEqual([
+      "approval-outcome",
+    ]);
+  });
+
+  it("keeps pending approvals, questions and errors alongside quiet resolutions", () => {
+    const activities = [
+      makeActivity({
+        id: "approval-pending",
+        sequence: 1,
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: { requestId: "req-pending", requestKind: "command", detail: "bun run lint" },
+      }),
+      makeActivity({
+        id: "question-pending",
+        sequence: 2,
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: { requestId: "question-pending" },
+      }),
+      makeActivity({
+        id: "approval-quiet",
+        sequence: 3,
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        tone: "info",
+        payload: { requestId: "req-other", decision: "accept" },
+      }),
+      makeActivity({
+        id: "approval-error",
+        sequence: 4,
+        kind: "approval.resolved",
+        summary: "Approval failed",
+        tone: "error",
+      }),
+      makeActivity({
+        id: "turn-error",
+        sequence: 5,
+        kind: "turn.completed",
+        summary: "Turn failed",
+        tone: "error",
+      }),
+    ];
+    expect(deriveWorkLogEntries(activities, undefined).map((entry) => entry.id)).toEqual([
+      "approval-pending",
+      "question-pending",
+      "approval-error",
+      "turn-error",
+    ]);
+  });
+
+  it.each([false, true])(
+    "keeps the latest authentication state visible between turns (finished: %s)",
+    (finished) => {
+      const rows = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "auth-start",
+            sequence: 1,
+            tone: "info",
+            kind: "auth.status",
+            summary: "Claude authentication started",
+            payload: { provider: "claudeAgent" },
+          }),
+          makeActivity({
+            id: "auth-error",
+            sequence: 2,
+            kind: "auth.status",
+            summary: "Claude authentication needs attention.",
+            tone: "error",
+            payload: { provider: "claudeAgent", detail: "Check your Claude account in Settings." },
+          }),
+          ...(finished
+            ? [
+                makeActivity({
+                  id: "auth-finished",
+                  sequence: 3,
+                  tone: "info",
+                  kind: "auth.status",
+                  summary: "Claude authentication finished",
+                  payload: { provider: "claudeAgent" },
+                }),
+              ]
+            : []),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+        { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]) },
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject(
+        finished
+          ? { label: "Claude authentication finished", tone: "info" }
+          : {
+              label: "Claude authentication needs attention.",
+              detail: "Check your Claude account in Settings.",
+              tone: "error",
+            },
+      );
+      if (finished) expect(rows[0]?.detail).toBeUndefined();
+    },
+  );
+
   it("strips terminal formatting from persisted provider activity details", () => {
     const [entry] = deriveWorkLogEntries(
       [
@@ -120,6 +518,59 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress"]);
+  });
+
+  it("adds a visible row when a task moved to the background finishes", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "moved",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "Moved to background",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message: "Server startup",
+          detail: "Server startup",
+          nativeEventType: "background_tasks_changed",
+          data: {
+            subtype: "background_tasks_changed",
+            tasks: [
+              { task_id: "agent-1", task_type: "local_agent", description: "Server startup" },
+            ],
+          },
+        },
+      }),
+      // A foreground command task finishing must not add a row.
+      makeActivity({
+        id: "bash-done",
+        createdAt: "2026-02-23T00:00:30.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        payload: { taskId: "bash-1", status: "completed" },
+      }),
+      makeActivity({
+        id: "agent-done",
+        createdAt: "2026-02-23T00:01:00.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        payload: { taskId: "agent-1", status: "completed", detail: "Report" },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+    const completion = entries.find((entry) => entry.backgroundTaskCompletion);
+    expect(entries.map((entry) => entry.id)).toEqual(["moved", "agent-done"]);
+    expect(completion?.label).toBe("Subagent finished: Server startup");
+    expect(completion?.backgroundTaskCompletion).toEqual({
+      taskId: "agent-1",
+      taskType: "local_agent",
+      description: "Server startup",
+    });
   });
 
   it("collapses task-list snapshots into one progressing row per turn", () => {
@@ -389,6 +840,123 @@ describe("deriveWorkLogEntries", () => {
       },
     });
     expect(entry?.providerContextLifecycle?.recapPreview?.length).toBeLessThanOrEqual(600);
+  });
+
+  it("marks each side of a handoff with the fast mode state its own session reported", () => {
+    const handoffPayload = {
+      sourceProvider: "claudeAgent",
+      sourceModel: "claude-opus-4-6",
+      targetProvider: "claudeAgent",
+      targetModel: "claude-opus-4-6",
+    };
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "fast-blocked",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:01.000Z",
+          payload: { state: "off", disabledReason: "extra_usage_disabled" },
+        }),
+        makeActivity({
+          id: "handoff-1",
+          kind: "provider.handoff",
+          createdAt: "2026-10-10T00:00:02.000Z",
+          payload: handoffPayload,
+        }),
+        makeActivity({
+          id: "fast-on",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:03.000Z",
+          payload: { state: "on" },
+        }),
+        makeActivity({
+          id: "handoff-2",
+          kind: "provider.handoff",
+          createdAt: "2026-10-10T00:00:04.000Z",
+          payload: handoffPayload,
+        }),
+        makeActivity({
+          id: "fast-cooldown",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:05.000Z",
+          payload: { state: "cooldown" },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-visible"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]) },
+    );
+
+    expect(
+      entries.map((entry) => [
+        entry.id,
+        entry.providerHandoff?.sourceFastModeNotice?.kind ?? null,
+        entry.providerHandoff?.targetFastModeNotice?.kind ?? null,
+      ]),
+    ).toEqual([
+      ["handoff-1", "blocked", null],
+      ["handoff-2", null, "cooldown"],
+    ]);
+  });
+
+  it("derives same-thread handoff rows with source, target, and transferred context", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "provider-handoff",
+          kind: "provider.handoff",
+          summary: "Handed off from Codex (gpt-5.4) to Claude (claude-sonnet-4-6)",
+          tone: "info",
+          payload: {
+            sourceProvider: "codex",
+            sourceModel: "gpt-5.4",
+            targetProvider: "claudeAgent",
+            targetModel: "claude-sonnet-4-6",
+            contextText: "User:\nfix the flaky test",
+            contextCharacters: 24,
+          },
+        }),
+        makeActivity({
+          id: "provider-handoff-failed",
+          kind: "provider.handoff.failed",
+          summary: "Handoff to Claude (claude-sonnet-4-6) failed",
+          tone: "error",
+          payload: {
+            sourceProvider: "codex",
+            sourceModel: "gpt-5.4",
+            targetProvider: "claudeAgent",
+            targetModel: "claude-sonnet-4-6",
+            detail: "Claude could not start.",
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-visible"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]) },
+    );
+
+    expect(entries.map((entry) => entry.providerHandoff)).toEqual([
+      {
+        status: "completed",
+        sourceProvider: "codex",
+        sourceModel: "gpt-5.4",
+        targetProvider: "claudeAgent",
+        targetModel: "claude-sonnet-4-6",
+        sourceModelSelection: { provider: "codex", model: "gpt-5.4" },
+        targetModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        contextText: "User:\nfix the flaky test",
+        failureDetail: null,
+      },
+      {
+        status: "failed",
+        sourceProvider: "codex",
+        sourceModel: "gpt-5.4",
+        targetProvider: "claudeAgent",
+        targetModel: "claude-sonnet-4-6",
+        sourceModelSelection: { provider: "codex", model: "gpt-5.4" },
+        targetModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        contextText: null,
+        failureDetail: "Claude could not start.",
+      },
+    ]);
   });
 
   it("keeps native-history loss visible when the provider sent no recap", () => {
@@ -1221,6 +1789,40 @@ describe("deriveWorkLogEntries", () => {
       });
     },
   );
+
+  it("keeps per-turn provider tool ids from merging calls of different turns", () => {
+    // ACP providers (Grok, Devin, Droid, OMP) restart their tool-call ids every
+    // turn; the server scopes the runtime item id and marks the raw id as
+    // `providerToolCallId`, but activity data still carries the raw `toolCallId`.
+    const call = (id: string, turnId: string, sequence: number, kind: string, command: string) =>
+      makeActivity({
+        id,
+        createdAt: `2026-02-23T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+        sequence,
+        turnId,
+        kind,
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: { toolCallId: "call-1", providerToolCallId: "call-1", command },
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        call("turn-1-start", "turn-1", 1, "tool.started", "ls"),
+        call("turn-1-done", "turn-1", 2, "tool.completed", "ls"),
+        call("turn-2-start", "turn-2", 3, "tool.started", "pwd"),
+        call("turn-2-done", "turn-2", 4, "tool.completed", "pwd"),
+      ],
+      undefined,
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1"), TurnId.makeUnsafe("turn-2")]) },
+    );
+    expect(entries.map((entry) => [entry.id, entry.turnId, entry.command])).toEqual([
+      ["turn-1-start", TurnId.makeUnsafe("turn-1"), "ls"],
+      ["turn-2-start", TurnId.makeUnsafe("turn-2"), "pwd"],
+    ]);
+  });
 
   it("keeps distinct calls of the same tool separate by tool-call id", () => {
     const activities: OrchestrationThreadActivity[] = [
@@ -3866,6 +4468,87 @@ describe("deriveTimelineEntries", () => {
     },
   );
 
+  it("keeps a block chronological when a server-written row carries an unrelated low sequence", () => {
+    // Provider rows carry the runtime journal sequence; server-written rows
+    // (checkpoint feedback) carry the orchestration sequence, which here is
+    // lower although the row is the latest one of the block.
+    const questionTurnId = TurnId.makeUnsafe("question-turn");
+    const backgroundTurnId = TurnId.makeUnsafe("background-subagent-turn");
+    const at = (time: string) => `2026-10-08T${time}Z`;
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Do steps 8 and 9",
+          createdAt: at("09:40:09.000"),
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("progress"),
+          role: "assistant",
+          turnId: questionTurnId,
+          text: "Starting step 8",
+          createdAt: at("09:42:23.000"),
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("final-summary"),
+          role: "assistant",
+          turnId: backgroundTurnId,
+          text: "Steps 8 and 9 are done",
+          createdAt: at("09:57:07.000"),
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "question",
+          turnId: questionTurnId,
+          createdAt: at("09:40:20.239"),
+          sequence: 155_732,
+          tone: "info",
+          label: "Asked a question",
+        },
+        {
+          id: "answer",
+          turnId: questionTurnId,
+          createdAt: at("09:40:48.588"),
+          sequence: 155_739,
+          tone: "info",
+          label: "Answered",
+        },
+        {
+          id: "tool",
+          turnId: questionTurnId,
+          createdAt: at("09:44:00.000"),
+          sequence: 156_000,
+          tone: "tool",
+          label: "Ran command",
+        },
+        {
+          id: "checkpoint-baseline-skipped",
+          turnId: backgroundTurnId,
+          createdAt: at("09:57:12.611"),
+          sequence: 145_293,
+          tone: "info",
+          label: "Checkpoint baseline unavailable for this turn",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "request",
+      "question",
+      "answer",
+      "progress",
+      "tool",
+      "final-summary",
+      "checkpoint-baseline-skipped",
+    ]);
+  });
+
   it("keeps late interrupted-turn tools before a non-native steer turn", () => {
     const interruptedTurnId = TurnId.makeUnsafe("interrupted-turn");
     const queuedSteerTurnId = TurnId.makeUnsafe("queued-steer-turn");
@@ -4342,6 +5025,18 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries[0]?.label).toBe("Ran command");
   });
 
+  it.each(["pull-request.auto-fix.paused", "pull-request.auto-fix.stopped"])(
+    "keeps thread-level %s notices in a turn-filtered transcript",
+    (kind) => {
+      const entries = deriveWorkLogEntries(
+        [makeActivity({ id: kind, kind, summary: "Auto-fix CI needs attention" })],
+        TurnId.makeUnsafe("visible-turn"),
+        { visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]) },
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.label).toBe("Auto-fix CI needs attention");
+    },
+  );
   it("keeps thread-level compaction progress entries visible without a turn id", () => {
     const entries = deriveWorkLogEntries(
       [

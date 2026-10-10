@@ -1,4 +1,4 @@
-import type { PullRequestDetailInput } from "@synara/contracts";
+import type { PullRequestDetailInput, ThreadId } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
 import { ensureNativeApi } from "~/nativeApi";
@@ -27,6 +27,7 @@ export const pullRequestQueryKeys = {
       input?.repository ?? null,
       input?.number ?? null,
     ] as const,
+  autoFix: (threadId: ThreadId | null) => ["pull-requests", "auto-fix", threadId] as const,
 };
 
 /** Distinguish a cold-load failure from a background failure with usable cached data. */
@@ -72,5 +73,20 @@ export function pullRequestDiffQueryOptions(input: PullRequestDetailInput | null
     gcTime: 60_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
+  });
+}
+
+/** Auto-fix CI state for a thread. The server watcher changes it every minute at most. */
+export function pullRequestAutoFixQueryOptions(threadId: ThreadId | null, enabled: boolean) {
+  return queryOptions({
+    queryKey: pullRequestQueryKeys.autoFix(threadId),
+    queryFn: () => {
+      if (!threadId) throw new Error("Auto-fix CI is unavailable.");
+      return ensureNativeApi().pullRequests.getAutoFix({ threadId });
+    },
+    enabled: enabled && threadId !== null,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 }

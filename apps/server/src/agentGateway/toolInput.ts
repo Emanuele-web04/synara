@@ -27,6 +27,11 @@ export const MODEL_SELECTION_INPUT_SCHEMA = {
   description: AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
   properties: {
     provider: { type: "string", enum: [...PROVIDER_KINDS] },
+    instanceId: {
+      type: "string",
+      description:
+        "Exact provider instance ID from synara_capabilities providers[].instances[].instanceId. Omit to use the provider's default account.",
+    },
     model: {
       type: "string",
       description: "Exact model slug from synara_capabilities providers[].models[].slug.",
@@ -153,7 +158,7 @@ export function parseProviderKind(raw: string): ProviderKind {
 }
 
 /**
- * Read an exact `{ provider, model, options? }` target argument. Unknown option
+ * Read an exact `{ provider, instanceId?, model, options? }` target argument. Unknown option
  * keys are preserved so `resolveAgentGatewayTarget` rejects them instead of the
  * decoder silently dropping a typo.
  */
@@ -164,24 +169,41 @@ export function readModelSelectionArg(
   const raw = readRecordArg(args, name);
   if (raw === undefined) return undefined;
   const provider = parseProviderKind(readStringArg(raw, "provider", { required: true })!);
+  const instanceId = readStringArg(raw, "instanceId");
   const model = readStringArg(raw, "model", { required: true })!;
   const options = readRecordArg(raw, "options");
-  return { provider, model, ...(options !== undefined ? { options } : {}) } as ModelSelection;
+  return {
+    provider,
+    ...(instanceId !== undefined ? { instanceId } : {}),
+    model,
+    ...(options !== undefined ? { options } : {}),
+  } as ModelSelection;
 }
 
 export function buildModelSelection(
   provider: ProviderKind,
   model: string | undefined,
+  fallbackSelection?: ModelSelection,
 ): ModelSelection {
+  // Explicit argument wins, then the caller's own thread model, and only then
+  // the provider default — an agent on a non-default model must not silently
+  // spawn work on that provider's default model.
+  const inherited = fallbackSelection?.provider === provider ? fallbackSelection : undefined;
   const effectiveModel =
     model ??
+    inherited?.model ??
     (provider === "pi" || provider === "omp" ? undefined : DEFAULT_MODEL_BY_PROVIDER[provider]);
   if (!effectiveModel) {
     throw new ToolInputError(
       `Provider "${provider}" has no default model; pass an explicit "model" argument.`,
     );
   }
-  return { provider, model: effectiveModel } as ModelSelection;
+  return {
+    ...inherited,
+    provider,
+    model: effectiveModel,
+    ...(model !== undefined && model !== inherited?.model ? { options: undefined } : {}),
+  } as ModelSelection;
 }
 
 export function decodeCreateThreadsInput(value: unknown) {

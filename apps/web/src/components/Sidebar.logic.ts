@@ -2,7 +2,12 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import { MAX_PINNED_PROJECTS, type ProjectId, type ThreadId } from "@synara/contracts";
+import {
+  MAX_PINNED_PROJECTS,
+  type ProjectId,
+  type SpaceId,
+  type ThreadId,
+} from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
@@ -21,9 +26,12 @@ import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
+import { isThreadReachableFromSpace } from "../lib/spaceNavigation";
+import type { ServerWorkspacePaths } from "../lib/serverWorkspacePaths";
 import {
   canSessionAnswerPendingRequests,
   hasLiveLatestTurn,
@@ -180,6 +188,7 @@ type SidebarThreadSortInput = {
   createdAt: string;
   updatedAt?: string | undefined;
   latestUserMessageAt?: string | null | undefined;
+  snoozeReminderAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
   // Present on real thread summaries; lets finished-but-unseen threads float to
   // the top of the sort (see sortThreadsForSidebar). Optional so minimal test
@@ -357,16 +366,20 @@ export interface ThreadStatusPill {
   label:
     | "Working"
     | "Connecting"
+    | "Preparing worktree"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
     | "Plan Ready"
-    | "In Background";
+    | "In Background"
+    | "Reminder";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
   dismissible?: boolean;
   dismissalKey?: string;
+  /** Outstanding background tasks behind an "In Background" status. */
+  backgroundTaskCount?: number;
 }
 
 /**
@@ -393,7 +406,7 @@ export function resolveThreadStatusTrailingIndicator(input: {
   if (status === null || input.slotOccupied === true) {
     return null;
   }
-  if (status.label === "Completed" && input.isActive === true) {
+  if ((status.label === "Completed" || status.label === "Reminder") && input.isActive === true) {
     return null;
   }
   return status;
@@ -404,8 +417,10 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Awaiting Input": 4,
   Working: 3,
   Connecting: 3,
+  "Preparing worktree": 3,
   "Plan Ready": 2,
   "In Background": 2,
+  Reminder: 2,
   Completed: 1,
 };
 
@@ -418,6 +433,8 @@ type ThreadStatusInput = Pick<
   hasLiveTailWork?: boolean | undefined;
   pendingBackgroundWorkCount?: number | undefined;
   dismissedStatusKey?: string | undefined;
+  snoozedUntil?: string | null | undefined;
+  snoozeReminderAt?: string | null | undefined;
 };
 
 function createThreadStatusDismissalKey(
@@ -450,6 +467,20 @@ export function hasUnseenCompletion(thread: Pick<Thread, "latestTurn" | "lastVis
   const lastVisitedAt = Date.parse(thread.lastVisitedAt);
   if (Number.isNaN(lastVisitedAt)) return true;
   return completedAt > lastVisitedAt;
+}
+
+/** A chat that came back from snooze stays unread until it is opened after the reminder. */
+export function hasUnseenSnoozeReturn(thread: {
+  snoozedUntil?: string | null | undefined;
+  snoozeReminderAt?: string | null | undefined;
+  lastVisitedAt?: string | undefined;
+}): boolean {
+  if (thread.snoozedUntil != null || thread.snoozeReminderAt == null) return false;
+  const reminderAt = Date.parse(thread.snoozeReminderAt);
+  if (Number.isNaN(reminderAt)) return false;
+  if (!thread.lastVisitedAt) return true;
+  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
+  return Number.isNaN(lastVisitedAt) || reminderAt > lastVisitedAt;
 }
 
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
@@ -537,50 +568,12 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
   return changed ? nextThreadListExtraPagesByProjectCwd : threadListExtraPagesByProjectCwd;
 }
 
-/**
- * Trailing padding that protects the title from the absolutely-positioned
- * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
- * far right as the on-screen content allows:
- *
- * - The relative time now lives in the row hover card, so an idle row with no
- *   status/jump glyph and no meta chips reserves almost nothing — the title runs
- *   to the row edge instead of truncating against permanently reserved space.
- * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
- *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
- *   badges that are present.
- * - The wider reserve that clears the hover pin/archive actions is applied only
- *   on hover/focus (mirroring the project header row), so the title gives up that
- *   width exactly when those actions appear and not a moment sooner.
- *
- * Literal class strings are required so Tailwind's JIT scanner emits them.
- */
-export function resolveThreadRowTrailingReserveClass(input: {
-  metaChipCount: number;
-  hasTrailingGlyph: boolean;
-}): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
-  // at the same time, so the hover reserve is constant regardless of rest content.
-  const hoverReserve =
-    "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
-  const { metaChipCount, hasTrailingGlyph } = input;
-  if (metaChipCount <= 0) {
-    return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
-  }
-  if (metaChipCount === 1) {
-    return cn(hasTrailingGlyph ? "pr-[3rem]" : "pr-[1.75rem]", hoverReserve);
-  }
-  if (metaChipCount === 2) {
-    return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
-  }
-  return cn(hasTrailingGlyph ? "pr-[4.5rem]" : "pr-[4.25rem]", hoverReserve);
-}
-
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
+  isSnoozeReminder?: boolean;
 }): string {
-  // Trailing reserve for the absolute cluster is applied separately by callers
-  // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
+  // The in-flow trailing cluster keeps metadata and shortcut hints clear of the title.
   const baseClassName = SIDEBAR_THREAD_ROW_BASE_CLASS_NAME;
 
   if (input.isSelected && input.isActive) {
@@ -595,7 +588,12 @@ export function resolveThreadRowClassName(input: {
     return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
-  return cn(baseClassName, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME);
+  return cn(
+    baseClassName,
+    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+    SIDEBAR_ROW_HOVER_CLASS_NAME,
+    input.isSnoozeReminder === true && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
+  );
 }
 
 // Single definition of "this thread is actively doing work" shared by the
@@ -620,6 +618,7 @@ export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
+  isPreparingWorktree?: boolean;
 }): ThreadStatusPill | null {
   const { thread } = input;
   // A dead session can't receive approval/input answers anymore — drop the
@@ -679,6 +678,16 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  if (input.isPreparingWorktree) {
+    return {
+      label: "Preparing worktree",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
+      dismissible: false,
+    };
+  }
+
   if (!isThreadActivelyWorking(thread) && (thread.pendingBackgroundWorkCount ?? 0) > 0) {
     return {
       label: "In Background",
@@ -686,6 +695,7 @@ export function resolveThreadStatusPill(input: {
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: false,
       dismissible: false,
+      backgroundTaskCount: thread.pendingBackgroundWorkCount ?? 0,
     };
   }
 
@@ -711,6 +721,20 @@ export function resolveThreadStatusPill(input: {
       dismissible: true,
       dismissalKey,
     };
+  }
+
+  if (hasUnseenSnoozeReturn(thread)) {
+    const dismissalKey = ["Reminder", thread.snoozeReminderAt].join(":");
+    if (thread.dismissedStatusKey !== dismissalKey) {
+      return {
+        label: "Reminder",
+        colorClass: "text-info",
+        dotClass: "bg-info",
+        pulse: false,
+        dismissible: true,
+        dismissalKey,
+      };
+    }
   }
 
   if (!thread.hasLiveTailWork && hasUnseenCompletion(thread)) {
@@ -1257,10 +1281,12 @@ function getThreadSortTimestamp(
   thread: SidebarThreadSortInput,
   sortOrder: SidebarThreadSortOrder | Exclude<SidebarProjectSortOrder, "manual">,
 ): number {
+  const reminderAt =
+    toSortableTimestamp(thread.snoozeReminderAt ?? undefined) ?? Number.NEGATIVE_INFINITY;
   if (sortOrder === "created_at") {
-    return toSortableTimestamp(thread.createdAt) ?? Number.NEGATIVE_INFINITY;
+    return Math.max(reminderAt, toSortableTimestamp(thread.createdAt) ?? Number.NEGATIVE_INFINITY);
   }
-  return getLatestUserMessageTimestamp(thread);
+  return Math.max(reminderAt, getLatestUserMessageTimestamp(thread));
 }
 
 // A finished chat the user hasn't opened yet floats above the plain timestamp
@@ -1271,10 +1297,13 @@ function isUnseenFinishedThread(thread: SidebarThreadSortInput): boolean {
   if (thread.hasLiveTailWork === true) {
     return false;
   }
-  return hasUnseenCompletion({
-    latestTurn: thread.latestTurn ?? null,
-    lastVisitedAt: thread.lastVisitedAt,
-  });
+  return (
+    hasUnseenSnoozeReturn(thread) ||
+    hasUnseenCompletion({
+      latestTurn: thread.latestTurn ?? null,
+      lastVisitedAt: thread.lastVisitedAt,
+    })
+  );
 }
 
 // Attention groups for the sidebar order: threads doing live work first so you
@@ -1334,6 +1363,41 @@ export function getFallbackThreadIdAfterDelete<
       sortOrder,
     )[0]?.id ?? null
   );
+}
+
+/**
+ * Where focus goes after snoozing the open chat: the most recently visited
+ * eligible chat, then the most recent human activity. Snoozed and archived
+ * chats are skipped; null means the caller should open a new chat.
+ */
+export function getFallbackThreadIdAfterSnooze<
+  T extends {
+    id: ThreadId;
+    createdAt: string;
+    archivedAt?: string | null | undefined;
+    snoozedUntil?: string | null | undefined;
+    lastVisitedAt?: string | undefined;
+    latestHumanMessageAt?: string | null | undefined;
+  },
+>(input: { threads: readonly T[]; snoozedThreadId: ThreadId }): ThreadId | null {
+  let best: { id: ThreadId; visitedAt: number; activityAt: number } | null = null;
+  for (const thread of input.threads) {
+    if (thread.id === input.snoozedThreadId) continue;
+    if (thread.archivedAt != null || thread.snoozedUntil != null) continue;
+    const visitedAt = toSortableTimestamp(thread.lastVisitedAt) ?? Number.NEGATIVE_INFINITY;
+    const activityAt =
+      toSortableTimestamp(thread.latestHumanMessageAt ?? undefined) ??
+      toSortableTimestamp(thread.createdAt) ??
+      Number.NEGATIVE_INFINITY;
+    if (
+      best === null ||
+      visitedAt > best.visitedAt ||
+      (visitedAt === best.visitedAt && activityAt > best.activityAt)
+    ) {
+      best = { id: thread.id, visitedAt, activityAt };
+    }
+  }
+  return best?.id ?? null;
 }
 
 export function getProjectSortTimestamp(
@@ -1450,6 +1514,25 @@ export function partitionSidebarThreadsByProjectIds<
     }
   }
   return { groupThreads, nonGroupThreads };
+}
+
+/** Classic thread sections share the active Space; container chats remain global. */
+export function filterSidebarThreadsBySpace<
+  T extends Pick<SidebarThreadSummary, "projectId">,
+>(input: {
+  readonly threads: readonly T[];
+  readonly projectById: ReadonlyMap<ProjectId, Project>;
+  readonly spaceId: SpaceId | null;
+  readonly paths: ServerWorkspacePaths;
+}): T[] {
+  return input.threads.filter((thread) => {
+    const project = input.projectById.get(thread.projectId);
+    // Preserve the sidebar's existing rows while their projects hydrate.
+    return (
+      project === undefined ||
+      isThreadReachableFromSpace({ project, spaceId: input.spaceId, paths: input.paths })
+    );
+  });
 }
 
 // A thread's projectId says where it runs; a group's member set says who it

@@ -57,10 +57,15 @@ static bool setBlurRadius(NSWindow* window, int32_t radius) {
   }
   if (mainConnectionID == NULL || setWindowBlurRadius == NULL) return false;
 
-  // The blur only shows through a non-opaque window with a clear background.
+  // The blur only shows through a non-opaque window with a clear background. A fully clear
+  // background (alpha 0) with a native shadow makes macOS draw a gap between the window
+  // border and its contents, so keep a sliver of alpha and have the shadow recomputed.
   [window setOpaque:NO];
-  [window setBackgroundColor:[NSColor clearColor]];
-  return setWindowBlurRadius(mainConnectionID(), (int32_t)[window windowNumber], radius) == 0;
+  [window setBackgroundColor:[[NSColor clearColor] colorWithAlphaComponent:0.01]];
+  bool ok = setWindowBlurRadius(mainConnectionID(), (int32_t)[window windowNumber], radius) == 0;
+  [window setHasShadow:YES];
+  [window invalidateShadow];
+  return ok;
 }
 
 static napi_value SetBackgroundBlurRadius(napi_env env, napi_callback_info info) {

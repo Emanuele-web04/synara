@@ -1,6 +1,6 @@
 // FILE: InboxView.tsx
-// Purpose: The Inbox page (Beta-only): a task column (what needs the user, what is running,
-//          what finished) beside the day told as short written cards ("Your best model
+// Purpose: The Inbox page (Stable and Beta): a task column (what needs the user, what is running,
+//          what finished, and today's to-dos) beside the day told as short written cards ("Your best model
 //          was ..."). Cards and groups exist only when the user's data does, and the grid
 //          closes the gaps they leave. Colors come from the theme.
 // Layer: Inbox route surface
@@ -40,6 +40,7 @@ import { automationAttentionCount, automationQueryKey } from "~/routes/-automati
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createAccountRateLimitThreadsSelector } from "~/storeSelectors";
+import { useTasksSurfaceEnabled } from "~/tasksSurface";
 import type { Project } from "~/types";
 import { formatNumber } from "../profile/profileFormatting";
 import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
@@ -47,7 +48,13 @@ import { ProviderIcon } from "../ProviderIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { RouteSurfaceHeader } from "../RouteSurface";
 import { resolvePullRequestReviewBadge } from "../Sidebar.logic";
-import { collectUnreadActivityThreads } from "../SidebarActivityView.logic";
+import {
+  collectUnreadActivityThreads,
+  resolveActivityThreadReadAt,
+} from "../SidebarActivityView.logic";
+import { TaskCardSurface, useTaskSelection } from "../tasks/TaskCardSurface";
+import { toLocalDueDate } from "../tasks/tasks.logic";
+import { useTaskRows, useTodoList, useTodoMutations } from "../tasks/useTodos";
 import { UsageProgressTrack } from "../UsageProgressTrack";
 import {
   groupInboxThreads,
@@ -56,6 +63,7 @@ import {
   recapTokens,
   previousDayCutoffMs,
   resolveInboxDay,
+  selectInboxTasks,
   sumRecapBefore,
   summarizeInboxSlots,
   type InboxDay,
@@ -65,14 +73,17 @@ import {
 import {
   buildInboxDigest,
   buildInboxTiles,
+  buildTaskDigest,
   type DigestPart,
   type DigestSentence,
   type InboxIcon,
   type InboxQuotaSummary,
+  type InboxTaskCounts,
   type InboxTile,
   type InboxTone,
 } from "./inboxStories";
 import { InboxTaskList } from "./InboxTaskList";
+import { InboxTasks } from "./InboxTasks";
 
 // A turn finishing refreshes the recap, at most this often, so busy automations cannot
 // keep the server's recap query running back to back.
@@ -233,14 +244,15 @@ function DigestCard({
 }: {
   sentences: readonly DigestSentence[];
   slots: readonly InboxSlotSummary[];
-  updatedAt: string;
+  /** Left out when the sentences do not come from a recap. */
+  updatedAt?: string | undefined;
   projectById: ReadonlyMap<string, Project>;
 }) {
   return (
     <Tile className="flex flex-col gap-5 p-5 @lg:px-7 @lg:py-6">
       <div className="flex items-baseline justify-between gap-3 text-ui-sm text-muted-foreground">
         <span>Your day so far</span>
-        <span className="tabular-nums opacity-80">Updated {updatedAt}</span>
+        {updatedAt ? <span className="tabular-nums opacity-80">Updated {updatedAt}</span> : null}
       </div>
       <p className="max-w-[62ch] text-ui-xl leading-relaxed text-pretty text-muted-foreground">
         {sentences.map((sentence, sentenceIndex) => (
@@ -405,6 +417,7 @@ function RecapDigest({
   recap,
   previousRecap,
   quota,
+  tasks,
   projectById,
 }: {
   day: InboxDay;
@@ -412,6 +425,7 @@ function RecapDigest({
   recap: StatsGetRecapResult;
   previousRecap: StatsGetRecapResult | undefined;
   quota: readonly InboxQuotaSummary[];
+  tasks: InboxTaskCounts | undefined;
   projectById: ReadonlyMap<string, Project>;
 }) {
   const slots = summarizeInboxSlots(recap, day, nowMs);
@@ -421,7 +435,7 @@ function RecapDigest({
   const yesterdaySoFar = previousRecap
     ? sumRecapBefore(previousRecap, day.previousDay, previousDayCutoffMs(asOfMs))
     : null;
-  const input = { recap, previousRecap, yesterdaySoFar, slots };
+  const input = { recap, previousRecap, yesterdaySoFar, slots, tasks };
   const sentences = buildInboxDigest(input);
   const tiles = buildInboxTiles({ ...input, quota });
   const bucketByStart = recapBucketsByStart(recap);
@@ -543,7 +557,7 @@ export default function InboxView() {
   );
   // Only asked when there is a GitHub-backed project to ask about.
   const reviewRequestQuery = useQuery({
-    ...githubInboxReviewBadgeQueryOptions(),
+    ...githubInboxReviewBadgeQueryOptions(settings.githubInboxSort),
     enabled: inboxAvailable && projects.some((project) => project.kind === "project"),
   });
   // Shares the ["automations"] cache the sidebar keeps live.
@@ -591,19 +605,48 @@ export default function InboxView() {
   );
   const markAllRead = () => {
     for (const thread of unreadThreads) {
-      markThreadVisited(thread.id, thread.latestTurn?.completedAt ?? undefined);
+      markThreadVisited(thread.id, resolveActivityThreadReadAt(thread));
     }
   };
   const dateLabel = LONG_DATE_FORMAT.format(nowMs);
+
+  // Today's to-dos, where the connected server offers Tasks.
+  const tasksAvailable = useTasksSurfaceEnabled() && inboxAvailable;
+  const { todos } = useTodoList(tasksAvailable);
+  const todoMutations = useTodoMutations();
+  // Ticks faster than the page: a just-linked chat settles from Starting to missing.
+  const taskNowMs = useNowMs(tasksAvailable, 15_000);
+  const now = useMemo(() => new Date(taskNowMs), [taskNowMs]);
+  const taskRows = useTaskRows(todos, now);
+  const dayEndMs = day.toMs;
+  const inboxTasks = useMemo(
+    () => selectInboxTasks(taskRows, { fromMs: dayStartMs, toMs: dayEndMs }, taskNowMs),
+    [dayEndMs, dayStartMs, taskNowMs, taskRows],
+  );
+  const taskCounts = tasksAvailable
+    ? {
+        open: inboxTasks.open.length,
+        done: inboxTasks.doneToday.length,
+        overdue: inboxTasks.overdue,
+      }
+    : undefined;
+  // Any to-do, not only today's: one whose due day was just moved keeps its card open.
+  const taskSelection = useTaskSelection(taskRows, todoMutations);
+  // Without a recap to tell, today's to-dos are still worth their sentence.
+  const taskDigest = buildTaskDigest(taskCounts);
+  const openTaskCount = tasksAvailable ? inboxTasks.open.length : 0;
+  const taskSummary =
+    openTaskCount > 0 ? ` ${openTaskCount} ${pluralize(openTaskCount, "task")} to do.` : "";
+  const showsTaskColumn = hasTasks || tasksAvailable;
 
   if (!inboxAvailable) return null;
 
   const summary = !threadsHydrated
     ? `${dateLabel}.`
     : needsYouCount > 0
-      ? `${dateLabel}. ${needsYouCount} ${needsYouCount === 1 ? "thing needs" : "things need"} you.`
-      : hasTasks
-        ? `${dateLabel}.`
+      ? `${dateLabel}. ${needsYouCount} ${needsYouCount === 1 ? "thing needs" : "things need"} you.${taskSummary}`
+      : hasTasks || openTaskCount > 0
+        ? `${dateLabel}.${taskSummary}`
         : `${dateLabel}. You’re all caught up.`;
 
   return (
@@ -615,8 +658,14 @@ export default function InboxView() {
         )}
       >
         <RouteSurfaceHeader divider={false} className="shrink-0" rowClassName="sm:gap-2" />
-        <div className="@container min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pt-1 pb-12 @2xl:gap-6 @2xl:px-6 @2xl:pt-2 @5xl:px-8">
+        <TaskCardSurface
+          selection={taskSelection}
+          now={now}
+          mutations={todoMutations}
+          className="@container"
+        >
+          {/* Nearly the whole page, with the same room on every side. */}
+          <div className="mx-auto flex w-full max-w-[1760px] flex-col gap-5 p-5 @2xl:gap-7 @2xl:p-8 @5xl:p-10">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
                 <h1 className="text-2xl font-medium tracking-tight text-foreground @2xl:text-3xl">
@@ -633,30 +682,46 @@ export default function InboxView() {
               ) : null}
             </div>
 
-            <div className={cn("grid gap-3 @2xl:gap-4", hasTasks && "@5xl:grid-cols-12")}>
-              {hasTasks ? (
-                <Tile className="self-start px-2 py-3 @5xl:col-span-4">
-                  <InboxTaskList
-                    groups={groups}
-                    projectById={projectById}
-                    reviewRequests={reviewRequests}
-                    automationAttention={automationAttention}
-                    onOpenThread={openThread}
-                    onOpenPullRequests={() =>
-                      void navigate({
-                        to: "/pull-requests",
-                        search: {
-                          type: "pullRequest",
-                          involvement: "reviewRequested",
-                          state: "open",
-                        },
-                      })
-                    }
-                    onOpenAutomations={() => void navigate({ to: "/automations" })}
-                  />
-                </Tile>
+            <div className={cn("grid gap-3 @2xl:gap-4", showsTaskColumn && "@5xl:grid-cols-12")}>
+              {showsTaskColumn ? (
+                <div className="flex min-w-0 flex-col gap-3 self-start @2xl:gap-4 @5xl:col-span-4">
+                  {hasTasks ? (
+                    <Tile className="px-2 py-3">
+                      <InboxTaskList
+                        groups={groups}
+                        projectById={projectById}
+                        reviewRequests={reviewRequests}
+                        automationAttention={automationAttention}
+                        onOpenThread={openThread}
+                        onOpenPullRequests={() =>
+                          void navigate({
+                            to: "/pull-requests",
+                            search: {
+                              type: "pullRequest",
+                              involvement: "reviewRequested",
+                              state: "open",
+                            },
+                          })
+                        }
+                        onOpenAutomations={() => void navigate({ to: "/automations" })}
+                      />
+                    </Tile>
+                  ) : null}
+                  {tasksAvailable ? (
+                    <Tile className="px-2 py-3">
+                      <InboxTasks
+                        tasks={inboxTasks}
+                        today={toLocalDueDate(now)}
+                        now={now}
+                        selection={taskSelection}
+                        onUpdate={todoMutations.updateTodo}
+                        onOpenTasks={() => void navigate({ to: "/tasks" })}
+                      />
+                    </Tile>
+                  ) : null}
+                </div>
               ) : null}
-              <div className={cn("@container min-w-0", hasTasks && "@5xl:col-span-8")}>
+              <div className={cn("@container min-w-0", showsTaskColumn && "@5xl:col-span-8")}>
                 {/* A failed refresh keeps the last good recap on screen. */}
                 {recapQuery.data ? (
                   <RecapDigest
@@ -665,28 +730,42 @@ export default function InboxView() {
                     recap={recapQuery.data}
                     previousRecap={previousRecapQuery.data}
                     quota={quota}
+                    tasks={taskCounts}
                     projectById={projectById}
                   />
-                ) : isRecapUnavailableError(recapQuery.error) ? (
-                  <Tile className="p-5 @lg:px-7 @lg:py-6">
-                    <span className="text-ui text-muted-foreground">
-                      The day recap needs a server running Synara Beta.
-                    </span>
-                  </Tile>
                 ) : recapQuery.isError ? (
-                  <Tile className="flex items-center justify-between gap-3 p-5 @lg:px-7 @lg:py-6">
-                    <span className="text-ui text-muted-foreground">The recap didn’t load.</span>
-                    <Button size="xs" variant="outline" onClick={() => void recapQuery.refetch()}>
-                      Try again
-                    </Button>
-                  </Tile>
+                  <div className="flex flex-col gap-3">
+                    {taskDigest ? (
+                      <DigestCard sentences={[taskDigest]} slots={[]} projectById={projectById} />
+                    ) : null}
+                    {isRecapUnavailableError(recapQuery.error) ? (
+                      <Tile className="p-5 @lg:px-7 @lg:py-6">
+                        <span className="text-ui text-muted-foreground">
+                          The day recap needs a newer Synara server.
+                        </span>
+                      </Tile>
+                    ) : (
+                      <Tile className="flex items-center justify-between gap-3 p-5 @lg:px-7 @lg:py-6">
+                        <span className="text-ui text-muted-foreground">
+                          The recap didn’t load.
+                        </span>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => void recapQuery.refetch()}
+                        >
+                          Try again
+                        </Button>
+                      </Tile>
+                    )}
+                  </div>
                 ) : (
                   <RecapSkeleton />
                 )}
               </div>
             </div>
           </div>
-        </div>
+        </TaskCardSurface>
       </div>
     </RouteInsetSurface>
   );

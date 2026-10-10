@@ -16,6 +16,7 @@ import type {
 } from "@synara/contracts";
 import {
   AutomationId,
+  CommandId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   DEFAULT_MODEL_BY_PROVIDER,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
@@ -48,6 +49,15 @@ import {
 } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { OrchestrationEngineLive } from "../../orchestration/Layers/OrchestrationEngine.ts";
+import { OrchestrationProjectionPipelineLive } from "../../orchestration/Layers/ProjectionPipeline.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "../../orchestration/Layers/ProjectionSnapshotQuery.ts";
+import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
+import { HubWorkRepositoryLive } from "../../persistence/Layers/HubWorkRepository.ts";
+import { ProjectAgentRepositoryLive } from "../../persistence/Layers/ProjectAgentRepository.ts";
+import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
 import {
@@ -371,10 +381,14 @@ function makeHarnessLayer(
   options: {
     readonly listModels?: (typeof ProviderDiscoveryService)["Service"]["listModels"];
     readonly threadDetails?: ReadonlyMap<string, OrchestrationThread>;
+    readonly hubCoordinator?: boolean;
+    readonly dispatch?: (typeof OrchestrationEngineService)["Service"]["dispatch"];
+    readonly commandReceipts?: (typeof OrchestrationCommandReceiptRepository)["Service"];
     readonly failDispatch?: (command: OrchestrationCommand) => boolean;
     readonly dispatchDelayMs?: number;
     readonly interruptedOperations?: ReadonlyArray<AgentGatewayOperationRecord>;
     readonly providerStatuses?: ReadonlyArray<ServerProviderStatus>;
+    readonly serverSettings?: Parameters<typeof ServerSettingsService.layerTest>[0];
     readonly existingBranches?: ReadonlyArray<string>;
     readonly existingWorktrees?: Readonly<Record<string, string>>;
     readonly verifiedOwnershipTokens?: ReadonlyArray<string>;
@@ -738,9 +752,11 @@ function makeHarnessLayer(
                 }),
               );
             }
-            const result = options.failDispatch?.(command)
-              ? Effect.fail(new Error("injected dispatch failure"))
-              : Effect.succeed({ sequence: dispatched.length });
+            const result = options.dispatch
+              ? options.dispatch(command)
+              : options.failDispatch?.(command)
+                ? Effect.fail(new Error("injected dispatch failure"))
+                : Effect.succeed({ sequence: dispatched.length });
             if (options.pauseAfterDispatch?.commandType !== command.type) return result;
             return Deferred.succeed(options.pauseAfterDispatch.entered, undefined).pipe(
               Effect.andThen(Deferred.await(options.pauseAfterDispatch.release)),
@@ -819,7 +835,12 @@ function makeHarnessLayer(
   } as unknown as (typeof AutomationService)["Service"]);
 
   const projectAgentLayer = Layer.succeed(ProjectAgentService, {
-    resolvePrincipalForThread: () => Effect.succeed({ kind: "user" as const }),
+    resolvePrincipalForThread: () =>
+      Effect.succeed(
+        options.hubCoordinator
+          ? { kind: "coordinator" as const, projectId: PROJECT_ID }
+          : { kind: "user" as const },
+      ),
     assertCallerMayDriveManagedThread: () => Effect.void,
     getOverview: () =>
       Effect.succeed({
@@ -1323,7 +1344,7 @@ function makeHarnessLayer(
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
     Layer.provide(providerHealthLayer),
-    Layer.provide(ServerSettingsService.layerTest()),
+    Layer.provide(ServerSettingsService.layerTest(options.serverSettings ?? {})),
     Layer.provide(operationLayer),
     Layer.provide(projectionTurnsLayer),
     Layer.provide(diagnosticsLayer),
@@ -1332,7 +1353,23 @@ function makeHarnessLayer(
     Layer.provide(providerRuntimeEventsLayer),
     Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provide(NodeServices.layer),
-    Layer.provide(options.computerService ?? Layer.empty),
+    Layer.provide(
+      Layer.mergeAll(
+        options.computerService ?? Layer.empty,
+        options.commandReceipts
+          ? Layer.succeed(OrchestrationCommandReceiptRepository, options.commandReceipts)
+          : Layer.empty,
+      ),
+    ),
+    Layer.provide(
+      options.hubCoordinator
+        ? Layer.mergeAll(
+            HubWorkRepositoryLive,
+            ProjectAgentRepositoryLive,
+            ManagedAttachmentRepositoryLive,
+          ).pipe(Layer.provide(SqlitePersistenceMemory))
+        : Layer.empty,
+    ),
   );
 
   const makeHarness = Effect.gen(function* () {
@@ -2016,6 +2053,51 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("wires the kanban draft/update/delete helpers through the gateway", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+
+      // Draft creation dispatches thread.create but starts no turn.
+      const draft = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_kanban_draft",
+        args: { title: "Draft it", requestId: "wiring-draft" },
+      });
+      assert.isFalse(isToolError(draft.result), toolErrorText(draft.result));
+      assert.isString(toolResultJson(draft.result).threadId);
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.create"),
+        1,
+      );
+      assert.isTrue(harness.dispatched.every((command) => command.type !== "thread.turn.start"));
+
+      // Metadata update dispatches a patch and settles no work.
+      const updated = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_kanban_card",
+        args: { threadId: "thread-child", title: "Child v2" },
+      });
+      assert.isFalse(isToolError(updated.result), toolErrorText(updated.result));
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.meta.update"),
+        1,
+      );
+
+      // Delete dispatches thread removal.
+      const deleted = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_delete_kanban_card",
+        args: { threadId: "thread-child" },
+      });
+      assert.isFalse(isToolError(deleted.result), toolErrorText(deleted.result));
+      assert.lengthOf(
+        harness.dispatched.filter((command) => command.type === "thread.delete"),
+        1,
+      );
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("drives a second app on a full-access thread without a second-app card", () => {
     // The packaged E2E was full-access and stalled behind "Allow the agent to
     // drive Google Chrome?" for the driver-owned isolated Chromium it had
@@ -2160,6 +2242,14 @@ describe("AgentGateway", () => {
         "synara_cancel_automation",
         "synara_update_automation_memory",
         "synara_report_automation_result",
+        "synara_read_kanban_board",
+        "synara_read_kanban_card",
+        "synara_create_kanban_task",
+        "synara_create_kanban_draft",
+        "synara_update_kanban_card",
+        "synara_set_kanban_goal",
+        "synara_delete_kanban_card",
+        "synara_move_kanban_card",
         // Group tools the coordinator delegates through — the playbook names
         // these, so a capability regression would silently gut delegation.
         "synara_project_get_overview",
@@ -2430,6 +2520,53 @@ describe("AgentGateway", () => {
 
       const serialized = JSON.stringify(payload);
       assert.isBelow(serialized.indexOf('"targetConstruction"'), serialized.indexOf('"providers"'));
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("advertises configured provider instances in capabilities", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      serverSettings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            displayName: "Work Codex",
+            enabled: true,
+            config: {},
+          },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_capabilities",
+        args: {},
+      });
+      const payload = toolResultJson(response.result);
+      const providers = payload.providers as Array<{
+        provider: string;
+        instances?: Array<{
+          instanceId: string;
+          displayName: string;
+          isDefault: boolean;
+          enabled: boolean;
+        }>;
+      }>;
+      assert.deepEqual(providers.find((provider) => provider.provider === "codex")?.instances, [
+        {
+          instanceId: "codex",
+          displayName: "Codex",
+          isDefault: true,
+          enabled: true,
+        },
+        {
+          instanceId: "codex_work",
+          displayName: "Work Codex",
+          isDefault: false,
+          enabled: true,
+        },
+      ]);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -4910,6 +5047,109 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect(
+    "dates coordinator sends at dispatch and replays accepted ordinary turns without hiding collisions",
+    () => {
+      const sourceId = MessageId.makeUnsafe("old-human-context");
+      const caller = makeThreadDetail(makeThreadShell("thread-parent"));
+      const target = makeThreadDetail(makeThreadShell("thread-child"));
+      const source = {
+        id: sourceId,
+        role: "user" as const,
+        text: "Original constraints",
+        attachments: [],
+        turnId: null,
+        streaming: false,
+        source: "native" as const,
+        createdAt: NOW,
+        updatedAt: NOW,
+      };
+      const engineLayer = OrchestrationEngineLive.pipe(
+        Layer.provide(OrchestrationProjectionPipelineLive),
+        Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+        Layer.provide(OrchestrationEventStoreLive),
+        Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
+        Layer.provide(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const receipts = yield* OrchestrationCommandReceiptRepository;
+        const snapshots = yield* ProjectionSnapshotQuery;
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("setup-project"),
+          projectId: PROJECT_ID,
+          title: "Demo",
+          workspaceRoot: "/tmp/demo",
+          defaultModelSelection: null,
+          createdAt: NOW,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("setup-thread"),
+          threadId: target.id,
+          projectId: PROJECT_ID,
+          title: target.title,
+          modelSelection: target.modelSelection,
+          runtimeMode: target.runtimeMode,
+          interactionMode: target.interactionMode,
+          branch: null,
+          worktreePath: null,
+          createdAt: NOW,
+        });
+        const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+          hubCoordinator: true,
+          dispatch: engine.dispatch,
+          commandReceipts: receipts,
+          // Hold the gateway's read snapshot behind the real engine's committed projection.
+          threadDetails: new Map([[caller.id, { ...caller, messages: [source] }]]),
+        });
+        yield* Effect.gen(function* () {
+          const harness = yield* makeHarness;
+          const before = Date.now();
+          const input = {
+            token: "token-parent",
+            name: "synara_send_message",
+            args: {
+              threadId: target.id,
+              message: "Continue this task",
+              contextMessageIds: [sourceId],
+            },
+          };
+          const response = yield* harness.callTool(input);
+          assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+          const turn = harness.dispatched[0]!;
+          if (turn.type !== "thread.turn.start") throw new Error("Expected dispatched turn");
+          assert.isAtLeast(Date.parse(turn.createdAt), before);
+          assert.isAtMost(Date.parse(turn.createdAt), Date.now());
+          assert.include(turn.message.text, NOW);
+          // Cross a real timestamp tick before replaying against the stale read snapshot.
+          yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 5)));
+          const replay = yield* harness.callTool(input);
+          assert.isFalse(isToolError(replay.result), toolErrorText(replay.result));
+          const accepted = yield* snapshots.getThreadDetailById(target.id);
+          assert.isTrue(Option.isSome(accepted));
+          if (Option.isNone(accepted)) throw new Error("Missing accepted thread");
+          assert.lengthOf(accepted.value.messages, 1);
+          assert.equal(accepted.value.messages[0]?.createdAt, turn.createdAt);
+          // A changed target interaction mode must still fail the complete command fingerprint.
+          harness.setThreadDetail({ ...target, interactionMode: "plan" });
+          const collision = yield* harness.callTool(input);
+          assert.isTrue(isToolError(collision.result));
+          assert.include(toolErrorText(collision.result), "different command content");
+          harness.setThreadDetail(accepted.value);
+          const dispatchCount = harness.dispatched.length;
+          const projectedReplay = yield* harness.callTool(input);
+          assert.equal(toolResultJson(projectedReplay.result).replayed, true);
+          assert.equal(harness.dispatched.length, dispatchCount);
+        }).pipe(Effect.provide(gatewayLayer));
+      }).pipe(Effect.provide(engineLayer));
+    },
+  );
+
   it.effect("passes an idle steer through so the reactor's live-state guard decides", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -5017,6 +5257,33 @@ describe("AgentGateway", () => {
       assert.isTrue(isToolError(response.result));
       assert.include(toolErrorText(response.result), "local");
       assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects Kanban draft creation from a worktree before writing local state", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent", {
+        envMode: "worktree",
+        worktreePath: "/tmp/worktrees/caller",
+        branch: "agent/caller",
+      }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_kanban_draft",
+        args: {
+          title: "Keep this work isolated",
+          description: "Do not write a local draft or its notes.",
+          requestId: "isolated-draft",
+        },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "worktree");
+      assert.include(toolErrorText(response.result), "synara_create_kanban_task");
+      assert.lengthOf(harness.dispatched, 0);
+      assert.lengthOf(harness.worktreeCreates, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

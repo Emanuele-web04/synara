@@ -5,7 +5,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { EditorWorkspaceView } from "./EditorWorkspaceView";
@@ -13,8 +13,31 @@ import { WorkspaceSearchSidebar } from "./chat/workspaceExplorer";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { SidebarProvider } from "./ui/sidebar";
 
-function renderToStaticMarkup(node: ReactNode) {
-  return renderMarkup(<QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>);
+function renderToStaticMarkup(node: ReactNode, queryClient = new QueryClient()) {
+  return renderMarkup(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>);
+}
+
+function makeEditorBaseProps(): ComponentProps<typeof EditorWorkspaceView> {
+  return {
+    workspaceRoot: "/Users/tester/project",
+    projectName: "project",
+    selectedFilePath: null,
+    expandedDirectories: new Set(),
+    centerMode: "file",
+    diffFiles: [],
+    selectedDiffFilePath: null,
+    diffPanel: <div>Diff panel</div>,
+    chatPanel: <div>Chat panel</div>,
+    onSelectFile: vi.fn(),
+    onSelectDiffFile: vi.fn(),
+    onToggleDirectory: vi.fn(),
+    onCenterModeChange: vi.fn(),
+    editFilePath: null,
+    editDiffBaseRev: null,
+    onEditFile: vi.fn(),
+    onCloseEdit: vi.fn(),
+    onExitEditorView: vi.fn(),
+  };
 }
 
 vi.mock("../hooks/useTheme", () => ({
@@ -30,27 +53,7 @@ describe("EditorWorkspaceView", () => {
   it("shows skeleton rows instead of the empty message while the diff loads", () => {
     const markup = renderToStaticMarkup(
       <SidebarProvider>
-        <EditorWorkspaceView
-          workspaceRoot="/Users/tester/project"
-          projectName="project"
-          selectedFilePath={null}
-          expandedDirectories={new Set()}
-          centerMode="diff"
-          diffFiles={[]}
-          diffFilesLoading={true}
-          selectedDiffFilePath={null}
-          diffPanel={<div>Diff panel</div>}
-          chatPanel={<div>Chat panel</div>}
-          onSelectFile={vi.fn()}
-          onSelectDiffFile={vi.fn()}
-          onToggleDirectory={vi.fn()}
-          onCenterModeChange={vi.fn()}
-          editFilePath={null}
-          editDiffBaseRev={null}
-          onEditFile={vi.fn()}
-          onCloseEdit={vi.fn()}
-          onExitEditorView={vi.fn()}
-        />
+        <EditorWorkspaceView {...makeEditorBaseProps()} centerMode="diff" diffFilesLoading={true} />
       </SidebarProvider>,
     );
 
@@ -59,32 +62,14 @@ describe("EditorWorkspaceView", () => {
   });
 
   it("keeps the diff panel mounted but hidden while browsing files", () => {
-    const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <SidebarProvider>
-          <EditorWorkspaceView
-            workspaceRoot={null}
-            projectName="project"
-            selectedFilePath={null}
-            expandedDirectories={new Set()}
-            centerMode="file"
-            diffFiles={[]}
-            selectedDiffFilePath={null}
-            diffPanel={<div>Diff panel body</div>}
-            chatPanel={<div>Chat panel</div>}
-            onSelectFile={vi.fn()}
-            onSelectDiffFile={vi.fn()}
-            onToggleDirectory={vi.fn()}
-            onCenterModeChange={vi.fn()}
-            editFilePath={null}
-            editDiffBaseRev={null}
-            onEditFile={vi.fn()}
-            onCloseEdit={vi.fn()}
-            onExitEditorView={vi.fn()}
-          />
-        </SidebarProvider>
-      </QueryClientProvider>,
+      <SidebarProvider>
+        <EditorWorkspaceView
+          {...makeEditorBaseProps()}
+          workspaceRoot={null}
+          diffPanel={<div>Diff panel body</div>}
+        />
+      </SidebarProvider>,
     );
 
     expect(markup).toContain("Diff panel body");
@@ -94,30 +79,8 @@ describe("EditorWorkspaceView", () => {
   });
 
   it("renders image files through the local image preview instead of text preview", () => {
-    const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <EditorWorkspaceView
-          workspaceRoot="/Users/tester/project"
-          projectName="project"
-          selectedFilePath="assets/screenshot.png"
-          expandedDirectories={new Set()}
-          centerMode="file"
-          diffFiles={[]}
-          selectedDiffFilePath={null}
-          diffPanel={<div>Diff panel</div>}
-          chatPanel={<div>Chat panel</div>}
-          onSelectFile={vi.fn()}
-          onSelectDiffFile={vi.fn()}
-          onToggleDirectory={vi.fn()}
-          onCenterModeChange={vi.fn()}
-          editFilePath={null}
-          editDiffBaseRev={null}
-          onEditFile={vi.fn()}
-          onCloseEdit={vi.fn()}
-          onExitEditorView={vi.fn()}
-        />
-      </QueryClientProvider>,
+      <EditorWorkspaceView {...makeEditorBaseProps()} selectedFilePath="assets/screenshot.png" />,
     );
 
     expect(markup).toContain("local-image-preview");
@@ -129,30 +92,8 @@ describe("EditorWorkspaceView", () => {
   });
 
   it("renders PDF files through the in-app PDF viewer instead of the text preview", () => {
-    const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <EditorWorkspaceView
-          workspaceRoot="/Users/tester/project"
-          projectName="project"
-          selectedFilePath="docs/spec.pdf"
-          expandedDirectories={new Set()}
-          centerMode="file"
-          diffFiles={[]}
-          selectedDiffFilePath={null}
-          diffPanel={<div>Diff panel</div>}
-          chatPanel={<div>Chat panel</div>}
-          onSelectFile={vi.fn()}
-          onSelectDiffFile={vi.fn()}
-          onToggleDirectory={vi.fn()}
-          onCenterModeChange={vi.fn()}
-          editFilePath={null}
-          editDiffBaseRev={null}
-          onEditFile={vi.fn()}
-          onCloseEdit={vi.fn()}
-          onExitEditorView={vi.fn()}
-        />
-      </QueryClientProvider>,
+      <EditorWorkspaceView {...makeEditorBaseProps()} selectedFilePath="docs/spec.pdf" />,
     );
 
     // The custom viewer renders its own surface (here the initial loading state
@@ -165,30 +106,12 @@ describe("EditorWorkspaceView", () => {
   });
 
   it("renders scratch-workspace PDF previews without an attached workspace", () => {
-    const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <EditorWorkspaceView
-          workspaceRoot={null}
-          projectName="project"
-          selectedFilePath="/tmp/synara-codex-workspaces/thread-1/report.pdf"
-          expandedDirectories={new Set()}
-          centerMode="file"
-          diffFiles={[]}
-          selectedDiffFilePath={null}
-          diffPanel={<div>Diff panel</div>}
-          chatPanel={<div>Chat panel</div>}
-          onSelectFile={vi.fn()}
-          onSelectDiffFile={vi.fn()}
-          onToggleDirectory={vi.fn()}
-          onCenterModeChange={vi.fn()}
-          editFilePath={null}
-          editDiffBaseRev={null}
-          onEditFile={vi.fn()}
-          onCloseEdit={vi.fn()}
-          onExitEditorView={vi.fn()}
-        />
-      </QueryClientProvider>,
+      <EditorWorkspaceView
+        {...makeEditorBaseProps()}
+        workspaceRoot={null}
+        selectedFilePath="/tmp/synara-codex-workspaces/thread-1/report.pdf"
+      />,
     );
 
     expect(markup).toContain('aria-label="Loading PDF..."');
@@ -196,30 +119,12 @@ describe("EditorWorkspaceView", () => {
   });
 
   it("renders scratch-workspace image previews without an attached workspace", () => {
-    const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <EditorWorkspaceView
-          workspaceRoot={null}
-          projectName="project"
-          selectedFilePath="/tmp/synara-codex-workspaces/thread-1/shot.png"
-          expandedDirectories={new Set()}
-          centerMode="file"
-          diffFiles={[]}
-          selectedDiffFilePath={null}
-          diffPanel={<div>Diff panel</div>}
-          chatPanel={<div>Chat panel</div>}
-          onSelectFile={vi.fn()}
-          onSelectDiffFile={vi.fn()}
-          onToggleDirectory={vi.fn()}
-          onCenterModeChange={vi.fn()}
-          editFilePath={null}
-          editDiffBaseRev={null}
-          onEditFile={vi.fn()}
-          onCloseEdit={vi.fn()}
-          onExitEditorView={vi.fn()}
-        />
-      </QueryClientProvider>,
+      <EditorWorkspaceView
+        {...makeEditorBaseProps()}
+        workspaceRoot={null}
+        selectedFilePath="/tmp/synara-codex-workspaces/thread-1/shot.png"
+      />,
     );
 
     expect(markup).toContain("local-image-preview");
@@ -231,30 +136,12 @@ describe("EditorWorkspaceView", () => {
   });
 
   it("renders absolute local image previews without an attached workspace", () => {
-    const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <EditorWorkspaceView
-          workspaceRoot={null}
-          projectName="project"
-          selectedFilePath="/Users/tester/Downloads/shot.png"
-          expandedDirectories={new Set()}
-          centerMode="file"
-          diffFiles={[]}
-          selectedDiffFilePath={null}
-          diffPanel={<div>Diff panel</div>}
-          chatPanel={<div>Chat panel</div>}
-          onSelectFile={vi.fn()}
-          onSelectDiffFile={vi.fn()}
-          onToggleDirectory={vi.fn()}
-          onCenterModeChange={vi.fn()}
-          editFilePath={null}
-          editDiffBaseRev={null}
-          onEditFile={vi.fn()}
-          onCloseEdit={vi.fn()}
-          onExitEditorView={vi.fn()}
-        />
-      </QueryClientProvider>,
+      <EditorWorkspaceView
+        {...makeEditorBaseProps()}
+        workspaceRoot={null}
+        selectedFilePath="/Users/tester/Downloads/shot.png"
+      />,
     );
 
     expect(markup).toContain('aria-label="Loading file..."');
@@ -273,16 +160,15 @@ describe("EditorWorkspaceView", () => {
       },
     );
     const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <WorkspaceSearchSidebar
-          workspaceRoot="/Users/tester/project"
-          query="editor"
-          onQueryChange={vi.fn()}
-          selectedFilePath="apps/web/src/components/EditorWorkspaceView.tsx"
-          onSelectFile={vi.fn()}
-          onReferenceInChat={undefined}
-        />
-      </QueryClientProvider>,
+      <WorkspaceSearchSidebar
+        workspaceRoot="/Users/tester/project"
+        query="editor"
+        onQueryChange={vi.fn()}
+        selectedFilePath="apps/web/src/components/EditorWorkspaceView.tsx"
+        onSelectFile={vi.fn()}
+        onReferenceInChat={undefined}
+      />,
+      queryClient,
     );
 
     expect(markup).toContain('title="apps/web/src/components/EditorWorkspaceView.tsx"');

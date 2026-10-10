@@ -70,7 +70,7 @@ export function RouteSurfaceHeader({
           rowClassName,
         )}
       >
-        <SidebarHeaderNavigationControls />
+        <SidebarHeaderNavigationControls collapsedGapClassName="-me-2 sm:-me-3" />
         {children}
       </div>
     </header>

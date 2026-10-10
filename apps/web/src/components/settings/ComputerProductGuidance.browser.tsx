@@ -11,7 +11,10 @@ import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 
 const api = vi.hoisted(() => ({ getAuditHistory: vi.fn(), getStatus: vi.fn() }));
-vi.mock("~/nativeApi", () => ({ ensureNativeApi: () => ({ computer: api }) }));
+vi.mock("~/nativeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../nativeApi")>()),
+  ensureNativeApi: () => ({ computer: api }),
+}));
 
 beforeEach(() => {
   api.getAuditHistory.mockReset();

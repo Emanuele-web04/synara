@@ -7,6 +7,7 @@
 // Layer: Pull request presentation
 // Exports: PullRequestCommentComposer, GitHubCommentTarget, GitHubCommentMutation
 
+import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { PullRequestDetailInput } from "@synara/contracts";
 import { useRef, useState } from "react";
 
@@ -70,7 +71,9 @@ export function PullRequestCommentComposer({
   };
 
   return (
-    <div className="flex items-center gap-2 rounded-3xl border border-border/60 bg-background py-1 pl-3 pr-1.5 shadow-sm">
+    <div
+      className={`${GLASS_RAISED_SURFACE_CLASS_NAME} flex items-center gap-2 rounded-3xl border border-border/60 bg-background py-1 pl-3 pr-1.5 shadow-sm`}
+    >
       <span
         className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-background-elevated-secondary)] text-muted-foreground"
         title="Commenting as your GitHub account"

@@ -35,6 +35,124 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("returns a multi-folder project's extra folders from every project read", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-06T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, additional_folders_json, created_at, updated_at)
+        VALUES ('multi-folder-project', 'Product', '/tmp/multi-web', '[]', '["/tmp/multi-api"]', ${now}, ${now})`;
+
+      const byRoot = yield* query.getActiveProjectByWorkspaceRoot("/tmp/multi-web");
+      const shell = yield* query.getProjectShellById(asProjectId("multi-folder-project"));
+      const snapshot = yield* query.getShellSnapshot();
+      assert.deepEqual(Option.getOrUndefined(byRoot)?.additionalFolders, ["/tmp/multi-api"]);
+      assert.deepEqual(Option.getOrUndefined(shell)?.additionalFolders, ["/tmp/multi-api"]);
+      assert.deepEqual(
+        snapshot.projects.find((project) => project.id === "multi-folder-project")
+          ?.additionalFolders,
+        ["/tmp/multi-api"],
+      );
+    }),
+  );
+
+  it.effect(
+    "retains terminal failure evidence beyond the activity window without losing voluntary outcomes",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-10-05T08:10:40.000Z";
+        yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('failure-history-project', 'Failure history', '/tmp/failure-history', '[]', ${now}, ${now})`;
+        for (const state of ["failed", "cancelled", "completed"]) {
+          const threadId = asThreadId(`failure-history-${state}`);
+          yield* sql`INSERT INTO projection_threads
+          (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+          VALUES (${threadId}, 'failure-history-project', 'Failure history', '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+          yield* sql`INSERT INTO projection_thread_activities
+          (thread_id, activity_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (${threadId}, ${`${state}-error`}, 'old-turn', 'error', 'runtime.error', 'Provider error', '{"message":"Selected model is at capacity."}', 1, ${now}),
+          (${threadId}, ${`${state}-terminal`}, 'old-turn', ${state === "failed" ? "error" : "info"}, 'turn.completed', 'Turn settled', ${JSON.stringify({ state })}, 2, ${now}),
+          (${threadId}, ${`${state}-session-error`}, NULL, 'error', 'runtime.error', 'Session error', '{"message":"Session startup failed."}', 3, ${now}),
+          (${threadId}, ${`${state}-ambiguous-terminal`}, NULL, 'error', 'turn.completed', 'Unscoped failure', '{"state":"failed"}', 4, ${now})`;
+          yield* sql`INSERT INTO projection_thread_activities
+          (thread_id, activity_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          WITH RECURSIVE entries(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM entries WHERE n < 2100)
+          SELECT ${threadId}, ${state} || '-work-' || n, 'new-turn', 'tool', 'tool.completed', 'Tool completed', '{}', n + 10, ${now} FROM entries`;
+          const detail = Option.getOrThrow(yield* query.getThreadDetailById(threadId));
+          const snapshot = (yield* query.getSnapshot()).threads.find(
+            (thread) => thread.id === threadId,
+          )!;
+          for (const thread of [detail, snapshot]) {
+            assert.isFalse(thread.activities.some((activity) => activity.turnId === null));
+            assert.deepEqual(
+              thread.activities
+                .filter((activity) => activity.turnId === "old-turn")
+                .map((activity) => activity.kind),
+              ["runtime.error", "turn.completed"],
+            );
+            assert.equal(
+              (
+                thread.activities.find((activity) => activity.id === `${state}-terminal`)
+                  ?.payload as { state?: string }
+              ).state,
+              state,
+            );
+          }
+        }
+      }),
+  );
+
+  it.effect("identifies project imports from durable provenance in full and shell snapshots", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-04T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('import-flag-project', 'Import flag', '/tmp/import-flag', '[]', ${now}, ${now})`;
+      for (const [id, status] of [
+        ["native-history-thread", null],
+        ["imported-history-thread", "completed"],
+        ["pending-history-thread", "pending"],
+      ] as const) {
+        const threadId = asThreadId(id);
+        yield* sql`INSERT INTO projection_threads
+          (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+          VALUES (${threadId}, 'import-flag-project', ${id}, '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+        if (status)
+          yield* sql`INSERT INTO project_import_origins
+          (source_key, provider, source_home, external_id, project_id, thread_id, status, created_at)
+          VALUES (${id}, 'codex', '/tmp/codex', ${id}, 'import-flag-project', ${threadId}, ${status}, ${now})`;
+        const snapshots = [
+          yield* query.getSnapshot(),
+          yield* query.getShellSnapshot(),
+          yield* query.getCommandReadModel(),
+        ];
+        const threads = [
+          ...snapshots.map((snapshot) => snapshot.threads.find((thread) => thread.id === threadId)),
+          Option.getOrUndefined(yield* query.getThreadDetailById(threadId)),
+          Option.getOrUndefined(yield* query.getThreadShellById(threadId)),
+        ];
+        for (const thread of threads) {
+          assert.isDefined(thread);
+          assert.strictEqual(thread?.isProjectImport ?? false, status === "completed");
+        }
+        if (status === "pending") {
+          yield* sql`UPDATE project_import_origins SET status = 'completed' WHERE thread_id = ${threadId}`;
+          const completed = yield* query.getShellSnapshot();
+          assert.strictEqual(
+            completed.threads.find((thread) => thread.id === threadId)?.isProjectImport,
+            true,
+          );
+        }
+      }
+    }),
+  );
+
   it.effect("rehydrates pending cache decisions in snapshots and thread detail after restart", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
@@ -534,6 +652,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               runOnWorktreeCreate: false,
             },
           ],
+          additionalFolders: [],
           createdAt: "2026-02-24T00:00:00.000Z",
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
@@ -599,6 +718,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-02-24T00:00:03.000Z",
           archivedAt: null,
           settledAt: null,
+          snoozedUntil: null,
+          snoozeReminderAt: null,
           deletedAt: null,
           handoff: null,
           messages: [
@@ -2051,6 +2172,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-03-03T00:00:03.000Z",
           archivedAt: null,
           settledAt: null,
+          snoozedUntil: null,
+          snoozeReminderAt: null,
           handoff: null,
           session: {
             threadId: ThreadId.makeUnsafe("thread-shell"),
@@ -2073,6 +2196,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (threadShell._tag === "Some") {
         assert.deepEqual(threadShell.value, shellSnapshot.threads[0]);
       }
+
+      // Regression: the batched session lookup must select provider_instance_id
+      // so threads with a session row decode (Hub work reconcile relies on it).
+      const shellsByIds = yield* snapshotQuery.getThreadShellsByIds([
+        ThreadId.makeUnsafe("thread-shell"),
+      ]);
+      assert.deepEqual(shellsByIds, shellSnapshot.threads);
     }),
   );
 

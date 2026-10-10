@@ -20,7 +20,7 @@ import {
 import { PROJECT_EMOJI_OPTIONS } from "~/lib/projectEmoji";
 import { handleRadioGridKeyDown } from "~/lib/radioGridKeyboard";
 import { cn } from "~/lib/utils";
-import { FolderClosed } from "./FolderClosed";
+import { FolderIcon } from "~/lib/icons";
 import { ProjectEmojiGlyph } from "./ProjectSidebarIcon";
 import { Input } from "./ui/input";
 import { toggleVariants } from "./ui/toggle";
@@ -250,7 +250,7 @@ export function ProjectAppearancePicker({
                       )}
                     >
                       {option.name === DEFAULT_PROJECT_ICON ? (
-                        <FolderClosed className="size-5" style={tintStyle} />
+                        <FolderIcon className="size-5" style={tintStyle} />
                       ) : (
                         <CentralIcon name={option.name} className="size-5" style={tintStyle} />
                       )}

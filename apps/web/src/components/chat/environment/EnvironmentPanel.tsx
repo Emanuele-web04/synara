@@ -8,6 +8,7 @@
 //          use floating overlay only. The card surface and content are identical either way.
 // Layer: Environment panel container
 
+import { SidePanelOverlay } from "~/components/chat/SidePanelOverlay";
 import type {
   AutomationDefinition,
   EditorId,
@@ -24,14 +25,8 @@ import type { ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
-import {
-  ENVIRONMENT_PANEL_MOTION_CLASS,
-  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME as BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
-  ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-} from "~/components/chat/composerPickerStyles";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
 import ChatMarkdown from "~/components/ChatMarkdown";
-import { FolderClosed } from "~/components/FolderClosed";
 import GitActionsControl from "~/components/GitActionsControl";
 import { DiffStat } from "~/components/ui/diff-stat";
 import { IconButton } from "~/components/ui/icon-button";
@@ -39,8 +34,7 @@ import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
+import { ChangesIcon, ExternalLinkIcon, GitHubIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { revealFolderInShell } from "~/lib/revealFolder";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
@@ -87,11 +81,6 @@ import {
 // scrollbar pinned to the viewport's far right.
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
-const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME = cn(
-  BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
-  "items-end gap-3 overflow-y-auto",
-);
-
 export interface EnvironmentPanelProps {
   /** Drives the slide-in/out transition; the panel stays mounted so CSS can interpolate. */
   open: boolean;
@@ -134,8 +123,8 @@ export interface EnvironmentPanelProps {
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
   diffTotals: RepoDiffTotals;
-  /** Env/branch picker config — `variant` is supplied by the panel. */
-  branchToolbar: Omit<BranchToolbarProps, "variant">;
+  /** Env/branch picker config; null for sidechats that keep their assigned workspace. */
+  branchToolbar: Omit<BranchToolbarProps, "variant"> | null;
   /** Compact idle-generated chat memory for the top of the panel. */
   recap?: {
     readonly text: string | null;
@@ -324,13 +313,13 @@ export function EnvironmentPanel({
 
       {showGroupFolderRow && groupFolderPath ? (
         <EnvironmentRow
-          icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          icon={<FolderIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
             <span className="truncate" title={groupFolderPath}>
               {basenameOfPath(groupFolderPath) || groupFolderPath}
             </span>
           }
-          trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
             revealFolderInShell({ path: groupFolderPath, onRevealed: onClose });
           }}
@@ -350,7 +339,7 @@ export function EnvironmentPanel({
         />
       ) : null}
 
-      {isGitRepo ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
+      {isGitRepo && branchToolbar ? <BranchToolbar {...branchToolbar} variant="panel" /> : null}
 
       {showGitActions ? (
         <GitActionsControl
@@ -453,7 +442,7 @@ export function EnvironmentPanel({
           <EnvironmentRow
             icon={<GitHubIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             label={<span className="truncate">{githubRepository.nameWithOwner}</span>}
-            trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
             onClick={() => {
               onOpenGithubRepository(githubRepository.url);
               onClose();
@@ -549,25 +538,14 @@ export function EnvironmentPanel({
   // split panes and when the right dock is open). Docked mode additionally insets transcript
   // content; floating overlays only without stealing flex width from the narrow chat pane.
   return (
-    <div
-      className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
-      data-environment-panel-variant={variant}
-      aria-hidden={!open}
-      inert={!open}
+    <SidePanelOverlay
+      open={open}
+      variant={variant}
+      className="items-end gap-3 overflow-y-auto"
+      cardClassName="max-h-full w-72"
+      trailing={railBottom}
     >
-      <div
-        className={cn(
-          ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-          ENVIRONMENT_PANEL_MOTION_CLASS,
-          "flex max-h-full w-72 flex-col",
-          open
-            ? "pointer-events-auto translate-x-0 opacity-100"
-            : "pointer-events-none translate-x-full opacity-0",
-        )}
-      >
-        <div className="min-h-0 overflow-y-auto">{content}</div>
-      </div>
-      {railBottom}
-    </div>
+      <div className="min-h-0 overflow-y-auto">{content}</div>
+    </SidePanelOverlay>
   );
 }

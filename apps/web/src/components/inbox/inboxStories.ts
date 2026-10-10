@@ -3,7 +3,7 @@
 //          compact tiles (a lead, one value, a short detail) for a glance at each part of it.
 //          A sentence or tile exists only when its data does.
 // Layer: Web inbox logic
-// Exports: buildInboxDigest, buildInboxTiles, digest and tile types
+// Exports: buildInboxDigest, buildTaskDigest, buildInboxTiles, digest and tile types
 
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -41,7 +41,7 @@ export type DigestPart =
     };
 
 export interface DigestSentence {
-  readonly id: "sent" | "work" | "agents" | "yesterday";
+  readonly id: "sent" | "work" | "agents" | "yesterday" | "tasks";
   readonly parts: readonly DigestPart[];
 }
 
@@ -74,6 +74,14 @@ export interface InboxRecapInput {
   /** Yesterday's totals up to this same time of day. */
   readonly yesterdaySoFar: RecapTotals | null;
   readonly slots: readonly InboxSlotSummary[];
+  /** Today's to-dos (see selectInboxTasks); left out where Tasks is not offered. */
+  readonly tasks?: InboxTaskCounts | undefined;
+}
+
+export interface InboxTaskCounts {
+  readonly open: number;
+  readonly done: number;
+  readonly overdue: number;
 }
 
 function plural(count: number, one: string, many: string): string {
@@ -142,13 +150,46 @@ function busiestSlot(slots: readonly InboxSlotSummary[]): InboxSlotSummary | nul
   return slots.reduce((best, slot) => (slot.agentWorkMs > best.agentWorkMs ? slot : best));
 }
 
+/** Today's to-dos as a digest sentence of their own, for when there is no recap to tell. */
+export function buildTaskDigest(tasks: InboxTaskCounts | undefined): DigestSentence | null {
+  const parts = tasks ? taskParts(tasks) : null;
+  return parts ? { id: "tasks", parts } : null;
+}
+
+/** Today's to-dos in one sentence; nothing when there are none to tell about. */
+function taskParts(tasks: InboxTaskCounts): DigestPart[] | null {
+  const { open, done, overdue } = tasks;
+  if (open === 0 && done === 0) return null;
+  if (open === 0) {
+    return [
+      text(done === 1 ? "You finished your " : "You finished all "),
+      strong(plural(done, "task", "tasks")),
+      text(" for today."),
+    ];
+  }
+  return [
+    ...(done > 0
+      ? [
+          text("You finished "),
+          strong(plural(done, "task", "tasks")),
+          text(" today, "),
+          strong(`${formatNumber(open)} to go`),
+        ]
+      : [text("You have "), strong(plural(open, "task", "tasks")), text(" to do today")]),
+    ...(overdue > 0
+      ? [text(", "), strong(`${formatNumber(overdue)} overdue`, { tone: "bad" })]
+      : []),
+    text("."),
+  ];
+}
+
 /**
  * The day in two or three sentences: what the user sent, where the work went and which
  * model carried it, how long the agents ran. On a day with nothing yet, yesterday instead.
- * Empty when there is nothing to tell.
+ * Today's to-dos close it. Empty when there is nothing to tell.
  */
 export function buildInboxDigest(input: InboxRecapInput): DigestSentence[] {
-  const { recap, previousRecap, yesterdaySoFar, slots } = input;
+  const { recap, previousRecap, yesterdaySoFar, slots, tasks } = input;
   const totals = recap.totals;
   const sentences: DigestSentence[] = [];
   const push = (id: DigestSentence["id"], parts: readonly DigestPart[]) => {
@@ -257,6 +298,9 @@ export function buildInboxDigest(input: InboxRecapInput): DigestSentence[] {
       ]);
     }
   }
+
+  const tasksToday = buildTaskDigest(tasks);
+  if (tasksToday) sentences.push(tasksToday);
 
   return sentences;
 }

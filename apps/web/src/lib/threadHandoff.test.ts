@@ -1,6 +1,5 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
-  DEFAULT_SERVER_SETTINGS_VIEW,
   EventId,
   MessageId,
   type ModelSelection,
@@ -9,10 +8,14 @@ import {
   type ServerProviderStatus,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { AppSettingsSchema, getProviderInstanceOptions } from "../appSettings";
+import type { Thread } from "../types";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
-  resolveAvailableHandoffTargetProviders,
+  canContinueThreadHandoff,
+  resolveAvailableHandoffTargets,
+  resolveProviderHandoffOutcome,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
@@ -24,6 +27,63 @@ import {
 } from "./browserAnnotations";
 
 describe("threadHandoff", () => {
+  it("reads a same-thread handoff outcome from the activity keyed by its command", () => {
+    const activity = (id: string, payload: Record<string, unknown> = {}) =>
+      ({
+        id: EventId.makeUnsafe(id),
+        tone: "info",
+        kind: "provider.handoff",
+        summary: "Handoff summary",
+        payload,
+        turnId: null,
+        createdAt: "2026-10-03T10:00:00.000Z",
+      }) as Thread["activities"][number];
+
+    expect(resolveProviderHandoffOutcome({ activities: [] }, "cmd-1")).toEqual({
+      status: "pending",
+    });
+    expect(
+      resolveProviderHandoffOutcome({ activities: [activity("provider-handoff:cmd-2")] }, "cmd-1"),
+    ).toEqual({ status: "pending" });
+    expect(
+      resolveProviderHandoffOutcome({ activities: [activity("provider-handoff:cmd-1")] }, "cmd-1"),
+    ).toEqual({ status: "completed" });
+    expect(
+      resolveProviderHandoffOutcome(
+        {
+          activities: [
+            activity("provider-handoff-failed:cmd-1", { detail: "Claude could not start." }),
+          ],
+        },
+        "cmd-1",
+      ),
+    ).toEqual({ status: "failed", detail: "Claude could not start." });
+  });
+
+  it("continues in the same thread only when the provider changes", () => {
+    expect(
+      canContinueThreadHandoff({ sourceProvider: "codex", targetProvider: "claudeAgent" }),
+    ).toBe(true);
+    // Another account of the same provider still needs a new thread.
+    expect(canContinueThreadHandoff({ sourceProvider: "codex", targetProvider: "codex" })).toBe(
+      false,
+    );
+  });
+
+  const readyStatus = (
+    provider: ProviderKind,
+    overrides: Partial<ServerProviderStatus> = {},
+  ): ServerProviderStatus => ({
+    provider,
+    instanceId: provider,
+    driver: provider,
+    status: "ready",
+    available: true,
+    authStatus: "authenticated",
+    checkedAt: "2026-08-07T12:00:00.000Z",
+    ...overrides,
+  });
+
   it("strips source-thread browser annotations and selections from imported messages", () => {
     const sourceMessageId = MessageId.makeUnsafe("source-user-message");
     const annotation: BrowserAnnotationDraft = {
@@ -133,30 +193,15 @@ describe("threadHandoff", () => {
   });
 
   it("excludes disabled, missing, unavailable, and unauthenticated handoff targets", () => {
-    const readyStatus = (
-      provider: ProviderKind,
-      overrides: Partial<ServerProviderStatus> = {},
-    ): ServerProviderStatus => ({
-      provider,
-      instanceId: provider,
-      driver: provider,
-      status: "ready",
-      available: true,
-      authStatus: "authenticated",
-      checkedAt: "2026-08-07T12:00:00.000Z",
-      ...overrides,
-    });
-    const providerSettings = {
-      ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
-      antigravity: {
-        ...DEFAULT_SERVER_SETTINGS_VIEW.providers.antigravity,
-        enabled: false,
-      },
-    };
+    const providerInstances = getProviderInstanceOptions(
+      AppSettingsSchema.makeUnsafe({
+        providerInstances: { antigravity: { driver: "antigravity", enabled: false } },
+      }),
+    );
     expect(
-      resolveAvailableHandoffTargetProviders({
+      resolveAvailableHandoffTargets({
         sourceProvider: "codex",
-        providerSettings,
+        providerInstances,
         providerStatuses: [
           readyStatus("codex"),
           readyStatus("claudeAgent"),
@@ -166,27 +211,75 @@ describe("threadHandoff", () => {
           readyStatus("opencode", { authStatus: "unknown" }),
         ],
       }),
-    ).toEqual(["claudeAgent", "opencode"]);
+    ).toEqual([
+      { provider: "claudeAgent", instanceId: "claudeAgent", label: "Claude" },
+      { provider: "opencode", instanceId: "opencode", label: "OpenCode" },
+    ]);
   });
 
-  it("does not expose targets before enabled-provider settings are available", () => {
+  it("does not expose targets before provider health is available", () => {
     expect(
-      resolveAvailableHandoffTargetProviders({
+      resolveAvailableHandoffTargets({
         sourceProvider: "codex",
-        providerSettings: undefined,
-        providerStatuses: [
-          {
-            provider: "claudeAgent",
-            instanceId: "claudeAgent",
-            driver: "claudeAgent",
-            status: "ready",
-            available: true,
-            authStatus: "authenticated",
-            checkedAt: "2026-08-07T12:00:00.000Z",
-          },
-        ],
+        providerInstances: getProviderInstanceOptions(AppSettingsSchema.makeUnsafe({})),
+        providerStatuses: [],
       }),
     ).toEqual([]);
+  });
+
+  it("does not borrow a default account's health for unavailable or unchecked accounts", () => {
+    const providerInstances = getProviderInstanceOptions(
+      AppSettingsSchema.makeUnsafe({
+        providerInstances: {
+          claude_work: { driver: "claudeAgent", displayName: "Claude work" },
+          claude_unchecked: { driver: "claudeAgent", displayName: "Claude unchecked" },
+        },
+      }),
+    );
+    expect(
+      resolveAvailableHandoffTargets({
+        sourceProvider: "codex",
+        providerInstances,
+        providerStatuses: [
+          readyStatus("claudeAgent"),
+          readyStatus("claudeAgent", {
+            instanceId: "claude_work",
+            available: false,
+            status: "error",
+          }),
+        ],
+      }),
+    ).toEqual([{ provider: "claudeAgent", instanceId: "claudeAgent", label: "Claude" }]);
+  });
+
+  it("offers usable accounts of the source provider while excluding only the source account", () => {
+    const providerInstances = getProviderInstanceOptions(
+      AppSettingsSchema.makeUnsafe({
+        providerInstances: {
+          claude_personal: { driver: "claudeAgent", displayName: "Claude personal" },
+          claude_work: { driver: "claudeAgent", displayName: "Claude work" },
+        },
+      }),
+    );
+    expect(
+      resolveAvailableHandoffTargets({
+        sourceProvider: "claudeAgent",
+        sourceProviderInstanceId: "claude_personal",
+        providerInstances,
+        providerStatuses: [
+          readyStatus("claudeAgent"),
+          readyStatus("claudeAgent", { instanceId: "claude_personal" }),
+          readyStatus("claudeAgent", {
+            instanceId: "claude_work",
+            status: "warning",
+            authStatus: "unknown",
+          }),
+        ],
+      }),
+    ).toEqual([
+      { provider: "claudeAgent", instanceId: "claudeAgent", label: "Claude" },
+      { provider: "claudeAgent", instanceId: "claude_work", label: "Claude work" },
+    ]);
   });
 
   it("prefers sticky model selection for the chosen handoff target", () => {

@@ -11,6 +11,10 @@ import type {
 } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  expensiveReadErrorRefetchInterval,
+  isRpcCapacityExceededError,
+} from "./expensiveReadRetry";
 
 const EMPTY_SKILLS_RESULT: ProviderListSkillsResult = {
   skills: [],
@@ -131,9 +135,19 @@ function drainProviderModelDiscoveryQueue(): void {
     taskSettled = true;
     clearTimeout(timeoutId);
     task.signal.removeEventListener("abort", onTaskAbort);
-    providerModelDiscoveryRunning = false;
     settle();
-    drainProviderModelDiscoveryQueue();
+    const releaseSlot = () => {
+      providerModelDiscoveryRunning = false;
+      drainProviderModelDiscoveryQueue();
+    };
+    // Let React Query settle and enqueue an interactive follow-up before the
+    // next speculative catalog takes the slot. Promise settlement alone is
+    // earlier than the refresh caller's continuation, even on success.
+    if ([...foregroundModelDiscoveryOwners].some((key) => queryKeysMatch(key, task.queryKey))) {
+      setTimeout(releaseSlot, 0);
+    } else {
+      releaseSlot();
+    }
   };
   const onTaskAbort = () => finishTask(() => task.reject(abortReason(task.signal)));
   const timeoutId = setTimeout(
@@ -228,13 +242,7 @@ function requireDiscoveredModels(
   // Initial degraded discovery can still expose an adapter's usable static
   // fallback. During a background refresh, however, keep a previously good
   // dynamic catalog and let React Query retry the transient failure.
-  if (
-    provider === "devin" &&
-    result.error &&
-    previous &&
-    !previous.error &&
-    previous.models.length > 0
-  ) {
+  if (result.error && previous && !previous.error && previous.models.length > 0) {
     throw new Error(result.error);
   }
   const isAuthoritativeEmptyCatalog =
@@ -491,6 +499,7 @@ export function isInitialModelDiscoveryPending(query: {
 
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
+  refresh?: "if-stale" | "now";
   instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
   homePath?: string | null;
@@ -530,6 +539,7 @@ export function providerModelsQueryOptions(input: {
           const api = ensureNativeApi();
           const result = await api.provider.listModels({
             provider: input.provider,
+            ...(input.refresh ? { refresh: input.refresh } : {}),
             ...(input.instanceId ? { instanceId: input.instanceId } : {}),
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
             ...(input.homePath ? { homePath: input.homePath } : {}),
@@ -547,7 +557,19 @@ export function providerModelsQueryOptions(input: {
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
-    retry: providerModelDiscoveryRetry(input.provider),
+    // The transport already exhausted its bounded in-place admission retries.
+    // Repeating that budget here multiplies a saturated startup into 39–52
+    // probes per catalog and keeps the serialized discovery slot occupied.
+    retry: (failureCount, error) =>
+      !isRpcCapacityExceededError(error) &&
+      failureCount < providerModelDiscoveryRetry(input.provider),
+    refetchInterval: (query) => {
+      const capacityInterval = expensiveReadErrorRefetchInterval(query);
+      if (capacityInterval !== false) return capacityInterval;
+      if (input.provider === "devin" && (query.state.data?.error || query.state.error))
+        return 30_000;
+      return input.provider === "omp" ? 60_000 : false;
+    },
     // The server caches catalogs (30min fresh, then stale-while-revalidate,
     // persisted across restarts), so a refetch is a cheap RPC — but there is no
     // value in asking more often than the cache can change. Changes to paths,
@@ -568,12 +590,6 @@ export function providerModelsQueryOptions(input: {
     // fails. Keep it visible, but retry while observed instead of treating the
     // degraded result as fresh — a failed refresh retains healthy data, so the
     // query error must also keep recovery polling alive.
-    ...(input.provider === "devin"
-      ? {
-          refetchInterval: (query) =>
-            query.state.data?.error || query.state.error ? 30_000 : false,
-        }
-      : {}),
     // Droid discovery starts a disposable ACP session, so it must not refetch
     // on focus. OMP discovery is a cheap `omp models` subprocess (server-cached
     // 5min; modelRoles are re-read per request), so it refetches on focus and,
@@ -581,7 +597,7 @@ export function providerModelsQueryOptions(input: {
     // otherwise config/role edits only appear after an app restart.
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     ...(input.provider === "omp"
-      ? { refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: true }
+      ? { refetchOnWindowFocus: true, refetchIntervalInBackground: true }
       : {}),
     // Retain catalogs a full day — the server serves them stale-while-revalidate
     // for the same window, so an idle reopen paints instantly instead of

@@ -6,6 +6,7 @@
 // Layer: Tasks UI component
 // Exports: TaskCard
 
+import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { ProjectId, Todo, TodoUpdateInput } from "@synara/contracts";
 import { useEffect, useRef } from "react";
 
@@ -74,7 +75,7 @@ export function TaskCard({
     <section
       aria-label="Task details"
       className={cn(
-        "flex flex-col gap-3.5 overflow-y-auto rounded-3xl bg-popover p-4",
+        `${GLASS_RAISED_SURFACE_CLASS_NAME} flex flex-col gap-3.5 overflow-y-auto rounded-3xl bg-popover p-4`,
         RAISED_SURFACE_CHROME_CLASS_NAME,
         className,
       )}

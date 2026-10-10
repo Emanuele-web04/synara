@@ -7,6 +7,7 @@ import {
   readSidebarUiStateSnapshot,
   subscribeSidebarUiStateWrites,
 } from "./Sidebar.uiState";
+import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 describe("Sidebar.uiState", () => {
   let storage = new Map<string, string>();
@@ -68,6 +69,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      activityScope: null,
     });
   });
 
@@ -88,6 +90,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      activityScope: "project-123" as ActivityScopeSelection,
     });
 
     expect(readSidebarUiState()).toEqual({
@@ -106,6 +109,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      activityScope: "project-123",
     });
   });
 
@@ -131,6 +135,7 @@ describe("Sidebar.uiState", () => {
           threadId: "thread-123",
           splitViewId: 42,
         },
+        activityScope: 42,
       }),
     );
 
@@ -147,6 +152,7 @@ describe("Sidebar.uiState", () => {
         threadId: "thread-123",
       },
       activityViewEnabled: false,
+      activityScope: null,
     });
   });
 
@@ -187,6 +193,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      activityScope: null,
     });
   });
 });

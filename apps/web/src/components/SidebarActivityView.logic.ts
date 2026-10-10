@@ -4,7 +4,11 @@
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import type { SidebarThreadSummary } from "../types";
-import { hasUnseenCompletion, isThreadActivelyWorking } from "./Sidebar.logic";
+import {
+  hasUnseenCompletion,
+  hasUnseenSnoozeReturn,
+  isThreadActivelyWorking,
+} from "./Sidebar.logic";
 
 export function isThreadRunningForActivity(
   thread: Pick<SidebarThreadSummary, "hasLiveTailWork" | "session" | "latestTurn">,
@@ -14,13 +18,18 @@ export function isThreadRunningForActivity(
 
 /**
  * Threads that belong in the task feed: top-level, not archived, and having run
- * at least once. Drafts stay out, but a thread whose very first turn is
- * starting up already counts as running work.
+ * at least once, or explicitly snoozed/reminded. Ordinary drafts stay out,
+ * but a thread whose very first turn is starting up already counts as work.
  */
 export function isActivityThread(thread: SidebarThreadSummary): boolean {
   if (thread.archivedAt != null) return false;
   if (thread.parentThreadId) return false;
-  return thread.latestTurn !== null || isThreadRunningForActivity(thread);
+  return (
+    thread.snoozedUntil != null ||
+    thread.snoozeReminderAt != null ||
+    thread.latestTurn !== null ||
+    isThreadRunningForActivity(thread)
+  );
 }
 
 export function isThreadSettledForActivity(
@@ -41,10 +50,16 @@ function parseTimestampMs(value: string | null | undefined): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/** Activity follows the last human send; background work and reads do not move rows. */
-export type ActivityRecencyInput = Pick<SidebarThreadSummary, "createdAt" | "latestHumanMessageAt">;
+/** Human sends and intentional reminder wakeups move rows; background work and reads do not. */
+export type ActivityRecencyInput = Pick<
+  SidebarThreadSummary,
+  "createdAt" | "latestHumanMessageAt" | "snoozeReminderAt"
+>;
 
 export function resolveActivityRecencyIso(thread: ActivityRecencyInput): string {
+  if (parseTimestampMs(thread.snoozeReminderAt) > parseTimestampMs(thread.latestHumanMessageAt)) {
+    return thread.snoozeReminderAt!;
+  }
   return thread.latestHumanMessageAt && parseTimestampMs(thread.latestHumanMessageAt) > 0
     ? thread.latestHumanMessageAt
     : thread.createdAt;
@@ -68,10 +83,36 @@ function compareThreadIds(
 
 export interface ActivityViewModel {
   pinned: SidebarThreadSummary[];
-  /** Unpinned chats with an unsent composer message; they lead the feed until sent or cleared. */
+  /**
+   * Unpinned, idle chats with an unsent composer message, other than the open one;
+   * they lead the feed until sent or cleared.
+   */
   drafts: SidebarThreadSummary[];
   active: SidebarThreadSummary[];
   settled: SidebarThreadSummary[];
+  snoozed: SidebarThreadSummary[];
+}
+
+/**
+ * True when an unsent composer draft should lift the thread into Drafts (or to
+ * the top of Pinned). The open thread and threads that are working or starting
+ * a turn keep their place, so typing a follow-up never makes a row jump; their
+ * pencil glyph still marks the draft.
+ */
+function isParkedActivityDraft(
+  thread: Pick<SidebarThreadSummary, "id" | "hasLiveTailWork" | "session" | "latestTurn">,
+  input: {
+    draftThreadIdSet: ReadonlySet<ThreadId> | null;
+    activeThreadId: ThreadId | null;
+  },
+): boolean {
+  if (!input.draftThreadIdSet?.has(thread.id)) return false;
+  if (thread.id === input.activeThreadId) return false;
+  return !(
+    isThreadRunningForActivity(thread) ||
+    thread.session?.orchestrationStatus === "starting" ||
+    thread.latestTurn?.state === "running"
+  );
 }
 
 /**
@@ -82,25 +123,38 @@ export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   draftThreadIdSet?: ReadonlySet<ThreadId>;
+  /** The open thread: its draft is being typed, so it never moves to Drafts. */
+  activeThreadId?: ThreadId | null;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   /** Project scope as a set so merged scopes (all project-less chats) filter as one. */
   projectFilterIds?: ReadonlySet<ProjectId> | null;
 }): ActivityViewModel {
   const projectFilterIds = input.projectFilterIds ?? null;
-  const draftThreadIdSet = input.draftThreadIdSet ?? null;
+  const draftOptions = {
+    draftThreadIdSet: input.draftThreadIdSet ?? null,
+    activeThreadId: input.activeThreadId ?? null,
+  };
+  const isDraft = (thread: SidebarThreadSummary) => isParkedActivityDraft(thread, draftOptions);
   const pinned: SidebarThreadSummary[] = [];
   const drafts: SidebarThreadSummary[] = [];
   const active: SidebarThreadSummary[] = [];
   const settled: SidebarThreadSummary[] = [];
+  const snoozed: SidebarThreadSummary[] = [];
 
   for (const thread of input.threads) {
     if (!isActivityThread(thread)) continue;
     if (projectFilterIds !== null && !projectFilterIds.has(thread.projectId)) continue;
+    // The server clears snooze on expiry. Client clocks must not surface a thread
+    // before that durable update, and pins cannot bypass the user's snooze.
+    if (thread.snoozedUntil != null) {
+      snoozed.push(thread);
+      continue;
+    }
     if (input.pinnedThreadIdSet.has(thread.id)) {
       pinned.push(thread);
       continue;
     }
-    if (draftThreadIdSet?.has(thread.id)) {
+    if (isDraft(thread)) {
       drafts.push(thread);
       continue;
     }
@@ -114,7 +168,6 @@ export function buildActivityViewModel(input: {
   const compareRecency = (left: SidebarThreadSummary, right: SidebarThreadSummary) =>
     resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
     compareThreadIds(left, right);
-  const isDraft = (thread: SidebarThreadSummary) => draftThreadIdSet?.has(thread.id) ?? false;
   pinned.sort(
     (left, right) => Number(isDraft(right)) - Number(isDraft(left)) || compareRecency(left, right),
   );
@@ -128,7 +181,12 @@ export function buildActivityViewModel(input: {
     return rightSettledMs - leftSettledMs || compareThreadIds(left, right);
   });
 
-  return { pinned, drafts, active, settled };
+  snoozed.sort(
+    (left, right) =>
+      parseTimestampMs(left.snoozedUntil) - parseTimestampMs(right.snoozedUntil) ||
+      compareThreadIds(left, right),
+  );
+  return { pinned, drafts, active, settled, snoozed };
 }
 
 export type ActivityDateBucket = "today" | "yesterday" | "earlier";
@@ -314,7 +372,7 @@ export function resolveActivityDayStartMs(nowMs: number): number {
   return dayStart.getTime();
 }
 
-/** The five most recent human sends in the current working day, independent of status. */
+/** The five most recent human sends or reminders in the current working day. */
 export function splitRecentActivityThreads(
   active: readonly SidebarThreadSummary[],
   options: { nowMs: number; limit?: number },
@@ -322,11 +380,15 @@ export function splitRecentActivityThreads(
   const limit = options.limit ?? ACTIVITY_RECENT_LIMIT;
   const dayStartMs = resolveActivityDayStartMs(options.nowMs);
   const recent = active
-    .filter((thread) => parseTimestampMs(thread.latestHumanMessageAt) >= dayStartMs)
+    .filter(
+      (thread) =>
+        resolveActivityRecencyMs(thread) >= dayStartMs &&
+        (thread.latestHumanMessageAt != null || thread.snoozeReminderAt != null),
+    )
     .toSorted(
       (left, right) =>
-        parseTimestampMs(right.latestHumanMessageAt) -
-          parseTimestampMs(left.latestHumanMessageAt) || compareThreadIds(left, right),
+        resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
+        compareThreadIds(left, right),
     )
     .slice(0, limit);
   const recentThreadIds = new Set(recent.map((thread) => thread.id));
@@ -406,7 +468,26 @@ export function collectVisibleActivityThreadIds(input: {
 export function collectUnreadActivityThreads(
   threads: readonly SidebarThreadSummary[],
 ): SidebarThreadSummary[] {
-  return threads.filter((thread) => isActivityThread(thread) && hasUnseenCompletion(thread));
+  return threads.filter(
+    (thread) =>
+      thread.snoozedUntil == null &&
+      isActivityThread(thread) &&
+      (hasUnseenCompletion(thread) || hasUnseenSnoozeReturn(thread)),
+  );
+}
+
+/**
+ * The visit that reads an activity thread: its latest completion, or the snooze reminder
+ * when the chat came back from snooze after it. Like opening the chat, this uses the
+ * server's reminder time rather than this device's clock.
+ */
+export function resolveActivityThreadReadAt(thread: SidebarThreadSummary): string | undefined {
+  const completedAt = thread.latestTurn?.completedAt ?? undefined;
+  const reminderAt = thread.snoozeReminderAt ?? undefined;
+  if (reminderAt === undefined || !hasUnseenSnoozeReturn(thread)) return completedAt;
+  return completedAt !== undefined && Date.parse(completedAt) > Date.parse(reminderAt)
+    ? completedAt
+    : reminderAt;
 }
 
 /** The open thread is already being read even if its visited timestamp update is one render late. */

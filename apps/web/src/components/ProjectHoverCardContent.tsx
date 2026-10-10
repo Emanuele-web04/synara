@@ -8,11 +8,10 @@
 //      pin and "Edit project" rows are real controls. Spacing/type mirror the
 //      app's menu rows (12px UI font, compact padding) so it reads as native.
 
-import { BotIcon, MessageCircleIcon, SettingsIcon } from "~/lib/icons";
+import { BotIcon, MessageCircleIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
-import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import {
   SIDEBAR_HOVER_CARD_CONTAINER_PADDING_CLASS_NAME,
@@ -90,7 +89,7 @@ export function ProjectHoverCardContent({
       </div>
       <div className="-mx-0.5 my-0.5 h-px bg-[color:var(--color-border)]" aria-hidden />
       <div className={cn(ROW_CLASS_NAME, "text-foreground/80")}>
-        <FolderClosed className={ICON_CLASS_NAME} aria-hidden />
+        <FolderIcon className={ICON_CLASS_NAME} aria-hidden />
         <span className="min-w-0 truncate">{path}</span>
       </div>
       <div className="-mx-0.5 my-0.5 h-px bg-[color:var(--color-border)]" aria-hidden />

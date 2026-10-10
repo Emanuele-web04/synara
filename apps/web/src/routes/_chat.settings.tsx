@@ -3,8 +3,13 @@
 // Layer: Route screen
 // Exports: Settings route component for `/settings`
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
-import { GROUPS_ON, isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
+import {
+  type DesktopAudioInputDevice,
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderKind,
+  type SidechatExpiry,
+} from "@synara/contracts";
+import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
@@ -14,12 +19,12 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type AppSettings,
   type FollowUpBehavior,
+  type GitHubLinkOpenTarget,
   type MessageTrailAudioSource,
   type VoiceEnterBehavior,
   DEFAULT_UI_DENSITY,
   DEFAULT_CHAT_WIDTH,
   type UiDensity,
-  type SidebarLayout,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
   MIN_CHAT_FONT_SIZE_PX,
@@ -52,14 +57,16 @@ import {
 } from "~/components/settings/ProvidersSettingsPanel";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
 import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
-import { KeyboardShortcutsSettingsPanel } from "../components/settings/KeyboardShortcutsSettingsPanel";
+import {
+  KeyboardShortcutsResetButton,
+  KeyboardShortcutsSettingsPanel,
+} from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
 import {
   SettingResetButton,
   SettingsSegmentedControl,
-  type SettingsSegmentedOption,
   SettingsSelectControl,
 } from "../components/settings/SettingControls";
 import {
@@ -97,6 +104,8 @@ import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
+import { KeepAwakeSettingsSection } from "../components/KeepAwakeControls";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
@@ -121,11 +130,6 @@ import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 import { isAudioLevelAvailable } from "../lib/audioLevel";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
-
-const SIDEBAR_LAYOUT_OPTIONS = [
-  { value: "classic", label: "Classic" },
-  { value: "rail", label: "Rail" },
-] as const satisfies readonly SettingsSegmentedOption<SidebarLayout>[];
 
 const UI_DENSITY_OPTIONS = [
   {
@@ -195,12 +199,113 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
+const SIDECHAT_EXPIRY_OPTIONS = [
+  { value: "1h", label: "1 hour" },
+  { value: "24h", label: "24 hours" },
+  { value: "never", label: "Never" },
+] as const satisfies ReadonlyArray<{ value: SidechatExpiry; label: string }>;
+
+const GITHUB_LINK_OPEN_TARGET_LABELS = {
+  app: "In Synara",
+  browser: "In-app browser",
+  external: "External browser",
+} as const satisfies Record<GitHubLinkOpenTarget, string>;
+
 const MESSAGE_TRAIL_AUDIO_SOURCE_OPTIONS = [
   { value: "off", label: "Off" },
   { value: "system", label: "Mac audio" },
   { value: "microphone", label: "Microphone" },
   { value: "both", label: "Both" },
 ] as const satisfies ReadonlyArray<{ value: MessageTrailAudioSource; label: string }>;
+
+// Select items need a non-empty value; "" in settings means the Mac's default input.
+const MAC_DEFAULT_MICROPHONE_VALUE = "mac-default";
+
+function microphoneLabel(device: DesktopAudioInputDevice): string {
+  return device.bluetooth ? `${device.name} (Bluetooth)` : device.name;
+}
+
+function MessageTrailMicrophoneRow({
+  value,
+  defaultValue,
+  onChange,
+}: {
+  value: string;
+  defaultValue: string;
+  onChange: (microphoneId: string) => void;
+}) {
+  const [devices, setDevices] = useState<readonly DesktopAudioInputDevice[]>([]);
+
+  // Listing only reads device names; plugging a device in or out refreshes it.
+  useEffect(() => {
+    const audioLevel = window.desktopBridge?.audioLevel;
+    if (!audioLevel) return;
+    let cancelled = false;
+    const refresh = () => {
+      void audioLevel
+        .listMicrophones()
+        .then((next) => {
+          if (!cancelled) setDevices(next);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    navigator.mediaDevices?.addEventListener("devicechange", refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener("devicechange", refresh);
+    };
+  }, []);
+
+  const macDefault = devices.find((device) => device.default);
+  const selected = devices.find((device) => device.id === value);
+  const macDefaultLabel = macDefault
+    ? `Mac default: ${microphoneLabel(macDefault)}`
+    : "Mac default";
+  const valueContent = !value
+    ? macDefaultLabel
+    : selected
+      ? microphoneLabel(selected)
+      : "Not connected";
+
+  return (
+    <SettingsRow
+      title="Message trail microphone"
+      description="Microphone the message trail listens to. Pick a built-in one if you use Bluetooth headphones: opening their microphone lowers their sound quality. If the chosen microphone is not connected, the trail ignores the microphone instead of falling back to another one."
+      resetAction={
+        value !== defaultValue ? (
+          <SettingResetButton
+            label="message trail microphone"
+            onClick={() => onChange(defaultValue)}
+          />
+        ) : null
+      }
+      control={
+        <SettingsSelectControl
+          value={value || MAC_DEFAULT_MICROPHONE_VALUE}
+          onValueChange={(next) => onChange(next === MAC_DEFAULT_MICROPHONE_VALUE ? "" : next)}
+          ariaLabel="Message trail microphone"
+          triggerClassName="w-full sm:w-64"
+          valueContent={valueContent}
+        >
+          <SelectItem hideIndicator value={MAC_DEFAULT_MICROPHONE_VALUE}>
+            {macDefaultLabel}
+          </SelectItem>
+          {devices.map((device) => (
+            <SelectItem hideIndicator key={device.id} value={device.id}>
+              {microphoneLabel(device)}
+            </SelectItem>
+          ))}
+          {value && !selected ? (
+            <SelectItem hideIndicator value={value}>
+              Not connected
+            </SelectItem>
+          ) : null}
+        </SettingsSelectControl>
+      }
+    />
+  );
+}
 
 const VOICE_ENTER_BEHAVIOR_OPTIONS = [
   { value: "stop", label: "Stop" },
@@ -243,6 +348,7 @@ function SettingsRouteView() {
   } = useTheme();
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
+  const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
@@ -326,6 +432,9 @@ function SettingsRouteView() {
   const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
   const isInstallSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
   const hiddenProviderCount = new Set(settings.hiddenProviders).size;
+  const enabledProviderSelectOptions = PROVIDER_SELECT_OPTIONS.filter(
+    (provider) => !settings.disabledProviders.includes(provider),
+  );
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const isProviderActivityDirty =
     settings.disabledProviders.length !== defaults.disabledProviders.length ||
@@ -349,11 +458,11 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.anchorSentMessagesToTop !== defaults.anchorSentMessagesToTop
+      ? ["Move sent messages to top"]
+      : []),
     ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
       ? ["Delete worktree on archive"]
-      : []),
-    ...(isBetaFeatureOn("sidebarV2") && settings.sidebarLayout !== defaults.sidebarLayout
-      ? ["Sidebar layout"]
       : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
@@ -387,14 +496,24 @@ function SettingsRouteView() {
     defaults.enableSystemTaskCompletionNotifications
       ? ["Desktop notifications"]
       : []),
+    ...(settings.notifyAfterSubagentsFinish !== defaults.notifyAfterSubagentsFinish
+      ? ["Wait for subagents"]
+      : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
+      : []),
+    ...(settings.collapseFinishedTurns !== defaults.collapseFinishedTurns
+      ? ["Fold finished turns"]
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
     ...(settings.messageTrailAudioSource !== defaults.messageTrailAudioSource
       ? ["Message trail sound"]
       : []),
+    ...(settings.messageTrailMicrophoneId !== defaults.messageTrailMicrophoneId
+      ? ["Message trail microphone"]
+      : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
+    ...(settings.sidechatExpiry !== defaults.sidechatExpiry ? ["Side chat expiry"] : []),
     ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
       ? ["Enter while dictating"]
       : []),
@@ -418,7 +537,13 @@ function SettingsRouteView() {
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
+    ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
+      ? ["Keep Synara responsive"]
+      : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
+      ? ["Open pull requests and issues"]
+      : []),
     ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
       ? ["Pull request diff colors"]
       : []),
@@ -435,6 +560,10 @@ function SettingsRouteView() {
       ? ["Terminal close confirmation"]
       : []),
     ...(isGitTextGenerationModelDirty ? ["Git writing model"] : []),
+    ...(settings.sourceControlWritingStyle !== defaults.sourceControlWritingStyle ||
+    settings.sourceControlCustomInstructions !== defaults.sourceControlCustomInstructions
+      ? ["Source control writing style"]
+      : []),
     ...(settings.customCodexModels.length > 0 ||
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
@@ -532,20 +661,30 @@ function SettingsRouteView() {
           }
           control={
             <SettingsSelectControl
-              value={settings.defaultProvider}
+              value={
+                settings.disabledProviders.includes(settings.defaultProvider)
+                  ? null
+                  : settings.defaultProvider
+              }
+              disabled={enabledProviderSelectOptions.length === 0}
               onValueChange={(value) => {
-                if (!isProviderSelectOption(value)) return;
+                if (!isProviderSelectOption(value) || settings.disabledProviders.includes(value))
+                  return;
                 updateSettings({ defaultProvider: value });
               }}
               ariaLabel="Default provider"
               valueContent={
-                <ProviderOptionLabel
-                  provider={settings.defaultProvider}
-                  label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
-                />
+                settings.disabledProviders.includes(settings.defaultProvider) ? (
+                  "Choose an enabled provider"
+                ) : (
+                  <ProviderOptionLabel
+                    provider={settings.defaultProvider}
+                    label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
+                  />
+                )
               }
             >
-              {PROVIDER_SELECT_OPTIONS.map((provider) => (
+              {enabledProviderSelectOptions.map((provider) => (
                 <SelectItem hideIndicator key={provider} value={provider}>
                   <ProviderOptionLabel
                     provider={provider}
@@ -603,6 +742,15 @@ function SettingsRouteView() {
           ariaLabel: "Delete worktree on archive",
         })}
 
+        {renderBooleanSettingRow({
+          settingKey: "anchorSentMessagesToTop",
+          title: "Move sent messages to top",
+          description:
+            "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream.",
+          resetLabel: "move sent messages to top",
+          ariaLabel: "Move sent messages to top",
+        })}
+
         <SettingsRow
           title="Welcome tour"
           description="Replay the first-run setup: feature tour, provider selection, appearance, and first project."
@@ -618,29 +766,6 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Sidebar organization">
-        {isBetaFeatureOn("sidebarV2") ? (
-          <SettingsRow
-            title="Sidebar layout"
-            description="Classic keeps the single sidebar. Rail adds fixed icon tabs on the left, with projects and threads in a panel beside them."
-            resetAction={
-              settings.sidebarLayout !== defaults.sidebarLayout ? (
-                <SettingResetButton
-                  label="sidebar layout"
-                  onClick={() => updateSettings({ sidebarLayout: defaults.sidebarLayout })}
-                />
-              ) : null
-            }
-            control={
-              <SettingsSegmentedControl
-                value={settings.sidebarLayout}
-                onValueChange={(value) => updateSettings({ sidebarLayout: value })}
-                ariaLabel="Sidebar layout"
-                options={SIDEBAR_LAYOUT_OPTIONS}
-              />
-            }
-          />
-        ) : null}
-
         <SettingsRow
           title="Project order"
           description="Controls how projects are arranged in the main sidebar."
@@ -1252,6 +1377,31 @@ function SettingsRouteView() {
         />
 
         <SettingsRow
+          title="Side chat expiry"
+          description="Expire a side chat after it sits idle, unviewed and not running, for this long. Expired side chats are read-only and unload their provider session."
+          resetAction={
+            settings.sidechatExpiry !== defaults.sidechatExpiry ? (
+              <SettingResetButton
+                label="side chat expiry"
+                onClick={() =>
+                  updateSettings({
+                    sidechatExpiry: defaults.sidechatExpiry,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.sidechatExpiry}
+              onValueChange={(value) => updateSettings({ sidechatExpiry: value })}
+              ariaLabel="Side chat expiry"
+              options={SIDECHAT_EXPIRY_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
           title="Enter while dictating"
           description="Choose what Enter does while a voice note is recording: stop and transcribe into the composer, or stop and send the message once it is transcribed."
           resetAction={
@@ -1282,6 +1432,15 @@ function SettingsRouteView() {
           description: "Show token-by-token output while a response is in progress.",
           resetLabel: "assistant output",
           ariaLabel: "Stream assistant messages",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "collapseFinishedTurns",
+          title: "Fold finished turns",
+          description:
+            'Hide a finished turn\'s tool calls and intermediate messages behind a single "Worked for…" line. A turn stays open while it runs or while its background subagents are still working. Turn this off to keep every step visible.',
+          resetLabel: "fold finished turns",
+          ariaLabel: "Fold finished turns",
         })}
 
         {renderBooleanSettingRow({
@@ -1318,6 +1477,16 @@ function SettingsRouteView() {
           />
         ) : null}
 
+        {isAudioLevelAvailable() &&
+        (settings.messageTrailAudioSource === "microphone" ||
+          settings.messageTrailAudioSource === "both") ? (
+          <MessageTrailMicrophoneRow
+            value={settings.messageTrailMicrophoneId}
+            defaultValue={defaults.messageTrailMicrophoneId}
+            onChange={(messageTrailMicrophoneId) => updateSettings({ messageTrailMicrophoneId })}
+          />
+        ) : null}
+
         {renderBooleanSettingRow({
           settingKey: "autoOpenDevicePane",
           title: "Automatically open simulator",
@@ -1328,7 +1497,57 @@ function SettingsRouteView() {
         })}
       </SettingsSection>
 
+      <KeepAwakeSettingsSection
+        state={keepAwake}
+        mode={settings.keepAwakeMode}
+        defaultMode={defaults.keepAwakeMode}
+        onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
+      />
+
       <SettingsSection title="Review">
+        <SettingsRow
+          title="Open pull requests and issues"
+          description="Choose where a pull request or issue link in a chat opens: the built-in review view, the in-app browser, or your external browser. Ctrl/Cmd+click always opens the external browser."
+          resetAction={
+            settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget ? (
+              <SettingResetButton
+                label="open pull requests and issues"
+                onClick={() =>
+                  updateSettings({
+                    githubLinkOpenTarget: defaults.githubLinkOpenTarget,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.githubLinkOpenTarget}
+              onValueChange={(value) => {
+                if (value !== "app" && value !== "browser" && value !== "external") {
+                  return;
+                }
+                updateSettings({
+                  githubLinkOpenTarget: value,
+                });
+              }}
+              ariaLabel="Open pull requests and issues"
+              triggerClassName="w-full sm:w-40"
+              valueContent={GITHUB_LINK_OPEN_TARGET_LABELS[settings.githubLinkOpenTarget]}
+            >
+              <SelectItem hideIndicator value="app">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.app}
+              </SelectItem>
+              <SelectItem hideIndicator value="browser">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.browser}
+              </SelectItem>
+              <SelectItem hideIndicator value="external">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.external}
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
+
         {renderBooleanSettingRow({
           settingKey: "showPullRequestDiffColors",
           title: "Pull request diff colors",
@@ -1462,16 +1681,20 @@ function SettingsRouteView() {
                       {activeSectionItem.description}
                     </p>
                   </div>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    className="shrink-0"
-                    disabled={changedSettingLabels.length === 0}
-                    onClick={() => void restoreDefaults()}
-                  >
-                    <ResetIcon className="size-3.5" />
-                    Restore defaults
-                  </Button>
+                  {activeSection === "shortcuts" ? (
+                    <KeyboardShortcutsResetButton />
+                  ) : (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={changedSettingLabels.length === 0}
+                      onClick={() => void restoreDefaults()}
+                    >
+                      <ResetIcon className="size-3.5" />
+                      Restore defaults
+                    </Button>
+                  )}
                 </div>
               ) : null}
 

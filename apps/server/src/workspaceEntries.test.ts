@@ -182,6 +182,21 @@ describe("searchWorkspaceEntries", () => {
     assert.isFalse(paths.some((entryPath) => entryPath.startsWith(".convex/")));
   });
 
+  it("omits tracked files deleted from the working tree", async () => {
+    const cwd = makeTempDir("synara-workspace-deleted-");
+    runGit(cwd, ["init"]);
+    writeFile(cwd, "src/keep.ts", "export {};");
+    writeFile(cwd, "src/removed.ts", "export {};");
+    runGit(cwd, ["add", "src/keep.ts", "src/removed.ts"]);
+    fs.rmSync(path.join(cwd, "src/removed.ts"));
+
+    const result = await searchWorkspaceEntries({ cwd, query: "", limit: 100 });
+    const paths = result.entries.map((entry) => entry.path);
+
+    assert.include(paths, "src/keep.ts");
+    assert.notInclude(paths, "src/removed.ts");
+  });
+
   it("disables fsmonitor and untracked cache helpers during git workspace indexing", async () => {
     const cwd = makeTempDir("synara-workspace-hardened-git-");
 
@@ -193,6 +208,17 @@ describe("searchWorkspaceEntries", () => {
       if (args.includes("rev-parse")) {
         return {
           stdout: "true\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        };
+      }
+      if (args.includes("ls-files") && args.includes("--deleted")) {
+        return {
+          stdout: "",
           stderr: "",
           code: 0,
           signal: null,
@@ -244,6 +270,15 @@ describe("searchWorkspaceEntries", () => {
       "--cached",
       "--others",
       "--exclude-standard",
+      "-z",
+    ]);
+    assert.deepInclude(gitCalls, [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "ls-files",
+      "--deleted",
       "-z",
     ]);
     assert.deepInclude(gitCalls, [
@@ -315,6 +350,22 @@ describe("searchWorkspaceEntries", () => {
       null,
       null,
     ]);
+  });
+
+  it("resolves a file moved with a plain rename by its new path only", async () => {
+    const cwd = makeTempDir("synara-workspace-reference-moved-");
+    runGit(cwd, ["init"]);
+    writeFile(cwd, "src/helper.ts", "export {};");
+    runGit(cwd, ["add", "src/helper.ts"]);
+    fs.mkdirSync(path.join(cwd, "lib"));
+    fs.renameSync(path.join(cwd, "src/helper.ts"), path.join(cwd, "lib/helper.ts"));
+
+    const result = await resolveWorkspaceFileReferences({
+      cwd,
+      relativePaths: ["src/helper.ts", "helper.ts"],
+    });
+
+    expect(result.relativePaths).toEqual([null, "lib/helper.ts"]);
   });
 
   it("limits concurrent directory reads while walking the filesystem", async () => {

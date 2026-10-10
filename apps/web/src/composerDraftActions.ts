@@ -14,6 +14,7 @@ import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import type { StateCreator } from "zustand";
+import { hasActiveComposerSend } from "./lib/composerSendOwnership";
 
 import {
   normalizePullRequestContext,
@@ -101,6 +102,8 @@ function removeDraftThreadIfUnmapped(input: {
 } {
   if (
     !input.threadId ||
+    hasActiveComposerSend(input.threadId) ||
+    input.draftThreadsByThreadId[input.threadId]?.promotedTo !== undefined ||
     Object.values(input.projectDraftThreadIdByProjectId).includes(input.threadId)
   ) {
     return {
@@ -460,17 +463,24 @@ export const createComposerDraftStoreState =
       });
     },
     finalizePromotedDraftThread: (threadId) => {
-      const draftThread = get().draftThreadsByThreadId[threadId];
-      if (!draftThread?.promotedTo) {
-        return;
-      }
-      // Promotion removes the scratch content, but the same server thread
-      // keeps its explicit Computer choice for subsequent turns.
-      get().clearDraftThread(threadId, {
-        preserveComputerControl: draftThread.promotedTo === threadId,
+      set((state) => {
+        if (!state.draftThreadsByThreadId[threadId]?.promotedTo) {
+          return state;
+        }
+        // The send owner clears captured content. A server acknowledgement only
+        // retires the local registration; the composer may already have newer edits.
+        const { [threadId]: _removedDraftThread, ...draftThreadsByThreadId } =
+          state.draftThreadsByThreadId;
+        return {
+          draftThreadsByThreadId,
+          projectDraftThreadIdByProjectId: removeProjectDraftMappingsForThread(
+            state.projectDraftThreadIdByProjectId,
+            threadId,
+          ),
+        };
       });
     },
-    clearDraftThread: (threadId, options) => {
+    clearDraftThread: (threadId) => {
       if (threadId.length === 0) {
         return;
       }
@@ -495,22 +505,8 @@ export const createComposerDraftStoreState =
           state.draftThreadsByThreadId;
         const { [threadId]: _removedComposerDraft, ...restDraftsByThreadId } =
           state.draftsByThreadId;
-        const computerControl = options?.preserveComputerControl
-          ? _removedComposerDraft?.enableComputerControl
-          : undefined;
         return {
-          draftsByThreadId:
-            computerControl === undefined
-              ? restDraftsByThreadId
-              : {
-                  ...restDraftsByThreadId,
-                  [threadId]: {
-                    ...createEmptyThreadDraft(),
-                    enableComputerControl: computerControl,
-                    computerControlMode: _removedComposerDraft?.computerControlMode,
-                    computerControlGeneration: _removedComposerDraft?.computerControlGeneration,
-                  },
-                },
+          draftsByThreadId: restDraftsByThreadId,
           draftThreadsByThreadId: restDraftThreadsByThreadId,
           projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
         };

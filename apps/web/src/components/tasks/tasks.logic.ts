@@ -6,14 +6,14 @@
 // Exports: deriveTaskStatus, buildTaskSections, applyTodoEvent, due-date helpers,
 //          priority metadata.
 
-import type {
-  Todo,
-  TodoDueDate,
+import {
   TodoId,
-  TodoListResult,
-  TodoPriority,
-  TodoStreamEvent,
-  TodoUpdateInput,
+  type Todo,
+  type TodoDueDate,
+  type TodoListResult,
+  type TodoPriority,
+  type TodoStreamEvent,
+  type TodoUpdateInput,
 } from "@synara/contracts";
 
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -339,6 +339,11 @@ export function buildTaskSections(rows: readonly TaskRowModel[]): {
     (right.todo.completedAt ?? "").localeCompare(left.todo.completedAt ?? ""),
   );
   return { sections, completed };
+}
+
+/** The client picks a to-do's id, so its optimistic row and a retried create stay one. */
+export function newTodoId(): TodoId {
+  return TodoId.makeUnsafe(`todo:${crypto.randomUUID()}`);
 }
 
 // ── Due dates ────────────────────────────────────────────────────────

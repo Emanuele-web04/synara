@@ -99,6 +99,14 @@ export function useTaskDelegation(options: {
       });
       return true;
     }
+    if (result.kind === "dispatched" && result.deferred) {
+      toastManager.add({
+        type: "info",
+        title: "Chat send in progress",
+        description: "Wait for the current send to finish, then delegate this task again.",
+      });
+      return false;
+    }
     if (result.kind === "dispatched") {
       toastManager.add({
         type: "success",

@@ -7,7 +7,7 @@
 
 import { spawnSync } from "node:child_process";
 
-import { Effect } from "effect";
+import { Effect, Semaphore } from "effect";
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
@@ -16,6 +16,7 @@ import type {
 } from "@synara/contracts";
 
 import { GitHubCliError } from "../Errors.ts";
+import { GITHUB_READ_SLOTS } from "../githubReadGate.ts";
 import {
   decodePullRequestListJson,
   decodeRepositoryInboxJson,
@@ -49,6 +50,7 @@ export interface FakeGhScenario {
   };
   repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
   pullRequestChecks?: GitPullRequestCheck[];
+  pullRequestHeadSha?: string;
   pullRequestReviewComments?: GitPullRequestComment[];
   pullRequestReviewCommentsTruncated?: boolean;
   failWith?: GitHubCliError;
@@ -285,8 +287,13 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
     scenario.repositoryInboxJson?.[`${input.repository}:${input.state}`] ??
     fakeInboxGraphQlJson({ viewer: scenario.viewerLogin ?? "viewer" });
 
+  // Queue only: tests drive rate-limit pauses with their own clocks, which the live gate's
+  // wall-clock pause would outlast.
+  const readSlots = Semaphore.makeUnsafe(GITHUB_READ_SLOTS);
+
   return {
     service: {
+      withRead: (effect) => readSlots.withPermits(1)(effect),
       execute,
       getViewerLogin: (input) => {
         ghCalls.push(`api user --jq .login [cwd=${input.cwd}]`);
@@ -437,12 +444,13 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "view",
             input.reference,
             "--json",
-            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
           ],
         }).pipe(
           Effect.map((result) => ({
             summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
             checks: scenario.pullRequestChecks ?? [],
+            headSha: scenario.pullRequestHeadSha ?? null,
           })),
         ),
       getPullRequestReviewComments: (input) => {

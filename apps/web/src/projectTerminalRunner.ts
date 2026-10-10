@@ -28,6 +28,7 @@ export async function runProjectCommandInTerminal(input: {
   command: string;
   worktreePath?: string | null;
   env?: Record<string, string>;
+  onOpened?: () => void;
 }): Promise<{
   snapshot: TerminalSessionSnapshot;
   metadata: ProjectCommandTerminalMetadata | null;
@@ -48,6 +49,7 @@ export async function runProjectCommandInTerminal(input: {
     cols: PROJECT_COMMAND_TERMINAL_COLS,
     rows: PROJECT_COMMAND_TERMINAL_ROWS,
   });
+  input.onOpened?.();
   await input.api.terminal.write({
     threadId: input.threadId,
     terminalId: input.terminalId,

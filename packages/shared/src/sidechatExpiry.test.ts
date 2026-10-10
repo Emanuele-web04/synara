@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { SIDECHAT_INACTIVITY_EXPIRY_MS, createSidechatExpiryTimer } from "./sidechatExpiry";
+import {
+  SIDECHAT_INACTIVITY_EXPIRY_MS,
+  createSidechatExpiryTimer,
+  sidechatExpiryMs,
+} from "./sidechatExpiry";
 
 function makeClock(startAtMs = 0) {
   let nowMs = startAtMs;
@@ -51,6 +55,46 @@ describe("sidechat expiry timer", () => {
 
     clock.advanceTo(1_000 + SIDECHAT_INACTIVITY_EXPIRY_MS);
     expect(onExpire).toHaveBeenCalledWith("sidechat-1", 1_000);
+  });
+
+  it("re-times idle sidechats when the configured window changes", () => {
+    const clock = makeClock(1_000);
+    const onExpire = vi.fn();
+    const timer = createSidechatExpiryTimer({ ...clock, expiryMs: null, onExpire });
+    timer.restore({
+      threadId: "sidechat-1",
+      lastActivityAtMs: 1_000,
+      running: false,
+      expired: false,
+    });
+
+    clock.advanceTo(1_000 + 30 * SIDECHAT_INACTIVITY_EXPIRY_MS);
+    expect(onExpire).not.toHaveBeenCalled();
+
+    timer.setExpiryMs(sidechatExpiryMs("24h"));
+    clock.advanceTo(clock.now());
+    expect(onExpire).toHaveBeenCalledWith("sidechat-1", 1_000);
+  });
+
+  it("re-arms a fired expiry when the window changes before its command completes", () => {
+    const clock = makeClock(1_000);
+    const onExpire = vi.fn();
+    const timer = createSidechatExpiryTimer({ ...clock, onExpire });
+    timer.restore({
+      threadId: "sidechat-1",
+      lastActivityAtMs: 1_000,
+      running: false,
+      expired: false,
+    });
+    clock.advanceTo(1_000 + SIDECHAT_INACTIVITY_EXPIRY_MS);
+    expect(onExpire).toHaveBeenCalledTimes(1);
+
+    timer.setExpiryMs(sidechatExpiryMs("never"));
+    timer.setExpiryMs(sidechatExpiryMs("24h"));
+    clock.advanceTo(1_000 + 24 * SIDECHAT_INACTIVITY_EXPIRY_MS - 1);
+    expect(onExpire).toHaveBeenCalledTimes(1);
+    clock.advanceTo(1_000 + 24 * SIDECHAT_INACTIVITY_EXPIRY_MS);
+    expect(onExpire).toHaveBeenCalledTimes(2);
   });
 
   it("does not expire while viewed and restarts from the close time", () => {

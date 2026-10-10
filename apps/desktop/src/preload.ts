@@ -5,6 +5,7 @@ import type {
   DesktopAgentCursorStyle,
   DesktopBridge,
   DesktopComputerPreviewFrame,
+  DesktopDiagnosticActivity,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -30,6 +31,10 @@ function getBetaDiagnosticsBridge(): DesktopBridge["betaDiagnostics"] {
     return {
       rendererReady: () => ipcRenderer.send(IPC.betaDiagnostics.rendererReady),
       reportError: (error) => ipcRenderer.send(IPC.betaDiagnostics.reportError, error),
+      reportIssue: (issue) => ipcRenderer.invoke(IPC.betaDiagnostics.reportIssue, issue),
+      getReportStatus: (id) => ipcRenderer.invoke(IPC.betaDiagnostics.getReportStatus, id),
+      recordActivity: (breadcrumb) =>
+        ipcRenderer.send(IPC.betaDiagnostics.recordActivity, breadcrumb),
     };
   } catch {
     return undefined;
@@ -108,6 +113,21 @@ function parseBrowserAnnotationEvent(payload: unknown): BrowserAnnotationEvent |
 }
 
 const betaDiagnosticsBridge = getBetaDiagnosticsBridge();
+let lastBrowserResize = -Infinity;
+function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
+  try {
+    if (!betaDiagnosticsBridge?.recordActivity) return;
+    if (activity === "browser.resize") {
+      const now = Date.now();
+      if (now - lastBrowserResize < 1_000) return;
+      lastBrowserResize = now;
+    }
+    betaDiagnosticsBridge.recordActivity({ activity, phase: "started" });
+  } catch {
+    /* best effort */
+  }
+}
+
 contextBridge.exposeInMainWorld("desktopBridge", {
   ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
@@ -183,7 +203,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IPC.computerSetCursorStyle, style),
   },
   audioLevel: {
-    setSource: (source) => ipcRenderer.invoke(IPC.audioLevel.setSource, source),
+    setSource: (source, microphoneId) =>
+      ipcRenderer.invoke(IPC.audioLevel.setSource, source, microphoneId ?? null),
+    listMicrophones: () => ipcRenderer.invoke(IPC.audioLevel.listMicrophones),
     onLevel: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, level: unknown) => {
         if (typeof level !== "number" || !Number.isFinite(level)) return;
@@ -207,6 +229,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IPC.menuAction, wrappedListener);
     };
   },
+  setMenuShortcuts: (shortcuts) => ipcRenderer.invoke(IPC.setMenuShortcuts, shortcuts),
   onQuitConfirmationRequest: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       const request = parseQuitConfirmationRequest(payload);
@@ -345,11 +368,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         };
       },
     },
-    open: (input) => ipcRenderer.invoke(IPC.browser.open, input),
+    open: (input) => {
+      recordBrowserActivity("browser.open");
+      return ipcRenderer.invoke(IPC.browser.open, input);
+    },
     close: (input) => ipcRenderer.invoke(IPC.browser.close, input),
     hide: (input) => ipcRenderer.invoke(IPC.browser.hide, input),
     getState: (input) => ipcRenderer.invoke(IPC.browser.getState, input),
     setPanelBounds: async (input) => {
+      recordBrowserActivity("browser.resize");
       ipcRenderer.send(IPC.browser.setBounds, input);
     },
     attachWebview: (input) => ipcRenderer.invoke(IPC.browser.attachWebview, input),
@@ -359,7 +386,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IPC.browser.copyScreenshotToClipboard, input),
     captureScreenshot: (input) => ipcRenderer.invoke(IPC.browser.captureScreenshot, input),
     capturePreview: (input) => ipcRenderer.invoke(IPC.browser.capturePreview, input),
-    navigate: (input) => ipcRenderer.invoke(IPC.browser.navigate, input),
+    navigate: (input) => {
+      recordBrowserActivity("browser.navigate");
+      return ipcRenderer.invoke(IPC.browser.navigate, input);
+    },
     reload: (input) => ipcRenderer.invoke(IPC.browser.reload, input),
     goBack: (input) => ipcRenderer.invoke(IPC.browser.goBack, input),
     goForward: (input) => ipcRenderer.invoke(IPC.browser.goForward, input),

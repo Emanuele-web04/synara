@@ -5,6 +5,7 @@ import {
   type ProjectTask,
   type ThreadId,
 } from "@synara/contracts";
+import { SidePanelOverlay } from "~/components/chat/SidePanelOverlay";
 import { PROJECT_CONTEXT_PREVIEW_DOCUMENTS } from "@synara/shared/projectAgent";
 import { resolveGroupCoordinatorStatus } from "@synara/shared/groupThreadState";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
@@ -15,15 +16,12 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { IconButton } from "~/components/ui/icon-button";
 import { Textarea } from "~/components/ui/textarea";
-import {
-  ENVIRONMENT_PANEL_MOTION_CLASS,
-  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
-  ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-} from "~/components/chat/composerPickerStyles";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/environment/environmentPanelStyles";
 import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { resolveGroupCoordinatorDisplayName } from "~/lib/groupCoordinatorName";
-import { BotIcon, FastModeIcon, PauseIcon, PlayIcon, SettingsIcon, XIcon } from "~/lib/icons";
+import { useThreadFastModeNotice } from "~/hooks/useThreadFastModeNotice";
+import { BotIcon, PauseIcon, PlayIcon, SettingsIcon, XIcon } from "~/lib/icons";
+import { FastModeBadgeIcon } from "../FastModeBadgeIcon";
 import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import { cn } from "~/lib/utils";
 import { useAutomations } from "~/routes/-automations.shared";
@@ -37,6 +35,7 @@ import {
   EnvironmentPanelTitle,
   EnvironmentRow,
 } from "../environment/EnvironmentRow";
+import { HubWorkItemCards } from "../group/HubWorkItemCard";
 import { GroupSettingsDialog } from "../group/GroupSettingsDialog";
 import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
 import {
@@ -138,6 +137,10 @@ export function ProjectPanel({
     [allProjects],
   );
   const coordinatorThreadId = agent.overview?.config?.coordinatorThreadId ?? null;
+  const queuedWorkItems = (agent.overview?.hubWorkItems ?? []).filter(
+    (item) =>
+      item.state === "queued" || (item.state === "starting" && item.workerThreadId === null),
+  );
   const digestFocus = useMemo(
     () => projectDigestFocusRows(agent.overview?.digest?.focusItems ?? []),
     [agent.overview?.digest?.focusItems],
@@ -209,6 +212,9 @@ export function ProjectPanel({
   const coordinatorModel =
     agent.overview?.config?.coordinatorModelSelection ?? defaultModelSelection;
   const coordinatorModelSummary = resolveThreadModelSummary(coordinatorModel);
+  const coordinatorFastModeNotice = useThreadFastModeNotice(
+    coordinatorModel?.provider === "claudeAgent" ? coordinatorThreadId : null,
+  );
   const coordinatorDisplayName = resolveGroupCoordinatorDisplayName({
     coordinatorName: agent.overview?.config?.coordinatorName ?? null,
     threadTitle: coordinatorThread?.title ?? null,
@@ -241,14 +247,18 @@ export function ProjectPanel({
     () => new Set(agent.threads.filter((entry) => entry.archived).map((entry) => entry.threadId)),
     [agent.threads],
   );
+  const summaryNeedsYouThreadIds = projectId
+    ? summariesByProjectId.get(projectId)?.needsYouThreadIds
+    : undefined;
   const needsYouThreadIds = useMemo(
     () =>
       new Set(
-        (agent.overview?.workers ?? [])
-          .filter((worker) => worker.needsYou)
-          .map((worker) => worker.threadId),
+        summaryNeedsYouThreadIds ??
+          (agent.overview?.workers ?? [])
+            .filter((worker) => worker.needsYou)
+            .map((worker) => worker.threadId),
       ),
-    [agent.overview?.workers],
+    [agent.overview?.workers, summaryNeedsYouThreadIds],
   );
 
   const threadRows = useMemo(
@@ -388,9 +398,9 @@ export function ProjectPanel({
                     </span>
                   ) : null}
                   {coordinatorModelSummary?.fastMode ? (
-                    <FastModeIcon
+                    <FastModeBadgeIcon
+                      notice={coordinatorFastModeNotice}
                       className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]"
-                      aria-hidden
                     />
                   ) : null}
                   {coordinatorStatusDot ? (
@@ -447,6 +457,15 @@ export function ProjectPanel({
                 Blocked: {blocker.title} — {blocker.reason}
               </p>
             ))}
+
+            {queuedWorkItems.length > 0 ? (
+              <section aria-label="Queued work" className="space-y-2 px-2">
+                <p className="text-ui-sm font-medium text-muted-foreground">
+                  Queued work ({queuedWorkItems.length})
+                </p>
+                <HubWorkItemCards items={queuedWorkItems} onOpenThread={onOpenThread} />
+              </section>
+            ) : null}
 
             <GroupThreadsSection
               sections={threadSections}
@@ -530,25 +549,9 @@ export function ProjectPanel({
 
   return (
     <>
-      <div
-        className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
-        data-environment-panel-variant={variant}
-        aria-hidden={!open}
-        inert={!open}
-      >
-        <div
-          className={cn(
-            ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-            ENVIRONMENT_PANEL_MOTION_CLASS,
-            "flex max-h-full w-72 flex-col",
-            open
-              ? "pointer-events-auto translate-x-0 opacity-100"
-              : "pointer-events-none translate-x-full opacity-0",
-          )}
-        >
-          {content}
-        </div>
-      </div>
+      <SidePanelOverlay open={open} variant={variant} cardClassName="max-h-full w-72">
+        {content}
+      </SidePanelOverlay>
       {projectId !== null ? (
         <GroupSettingsDialog
           key={projectId}

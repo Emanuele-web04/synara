@@ -17,6 +17,7 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildBlockedComposerSendToastCopy,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
@@ -49,9 +50,11 @@ import {
   type TurnDispatchSettings,
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
+  hasServerReceivedSentMessage,
   isVoiceAuthExpiredMessage,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveActiveThreadTitle,
+  resolveBlockedComposerSendReason,
   resolveDraftFallbackModelSelection,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
@@ -62,7 +65,6 @@ import {
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveGitRepoUiState,
-  resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
   resolveSettledThreadBranchMismatch,
@@ -1613,63 +1615,6 @@ describe("deriveComposerSendState", () => {
   });
 });
 
-describe("resolveProjectScriptTerminalTarget", () => {
-  it("reuses the base terminal only when no terminal is open or running", () => {
-    const target = resolveProjectScriptTerminalTarget({
-      baseTerminalId: "default",
-      createTerminalId: () => "new-terminal",
-      hasRunningTerminal: false,
-      terminalOpen: false,
-    });
-
-    expect(target).toEqual({
-      shouldCreateNewTerminal: false,
-      terminalId: "default",
-    });
-  });
-
-  it("creates a fresh terminal when a live terminal could keep stale cwd or env", () => {
-    expect(
-      resolveProjectScriptTerminalTarget({
-        baseTerminalId: "default",
-        createTerminalId: () => "visible-script-terminal",
-        hasRunningTerminal: false,
-        terminalOpen: true,
-      }),
-    ).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "visible-script-terminal",
-    });
-
-    expect(
-      resolveProjectScriptTerminalTarget({
-        baseTerminalId: "default",
-        createTerminalId: () => "running-script-terminal",
-        hasRunningTerminal: true,
-        terminalOpen: false,
-      }),
-    ).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "running-script-terminal",
-    });
-  });
-
-  it("honors explicit requests for a new terminal", () => {
-    const target = resolveProjectScriptTerminalTarget({
-      baseTerminalId: "default",
-      createTerminalId: () => "forced-script-terminal",
-      hasRunningTerminal: false,
-      preferNewTerminal: true,
-      terminalOpen: false,
-    });
-
-    expect(target).toEqual({
-      shouldCreateNewTerminal: true,
-      terminalId: "forced-script-terminal",
-    });
-  });
-});
-
 describe("shouldRenderProviderHealthBanner", () => {
   it("does not show chat provider health while a terminal thread is active", () => {
     expect(
@@ -1957,6 +1902,25 @@ describe("runWorktreeCreationFlow", () => {
       flow,
     };
   }
+
+  it("does not start Git if setup was resolved during task registration", async () => {
+    const resolution = createWorktreeSetupResolution();
+    resolution.resolve("cancel");
+    let starts = 0;
+    const result = await runWorktreeCreationFlow({
+      progressId: "cancelled-before-git",
+      resolution,
+      subscribeToProgress: () => () => undefined,
+      onCreationStep: () => undefined,
+      startCreation: async () => {
+        starts += 1;
+        return { worktree: { path: "/unused" } };
+      },
+      removeWorktree: async () => undefined,
+    });
+    expect(result).toEqual({ outcome: "resolved" });
+    expect(starts).toBe(0);
+  });
 
   it("advances steps only for this creation's phase-started events", async () => {
     const harness = startFlowHarness();
@@ -3175,5 +3139,77 @@ describe("turn dispatch settings", () => {
     expect(resolved.runtimeMode).toBe("approval-required");
     expect(resolved.enableComputerControl).toBe(false);
     expect(resolved.computerControlMode).toBe("off");
+  });
+});
+
+describe("blocked composer sends", () => {
+  it("reports a send refused while another send owns the thread", () => {
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: true,
+        sessionStarting: true,
+        hasComposerContent: true,
+      }),
+    ).toBe("send-in-flight");
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: false,
+        sessionStarting: true,
+        hasComposerContent: true,
+      }),
+    ).toBe("session-starting");
+  });
+
+  it("stays silent when nothing blocks the send or there is nothing to send", () => {
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: false,
+        sessionStarting: false,
+        hasComposerContent: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: true,
+        sessionStarting: false,
+        hasComposerContent: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("explains every blocked send instead of doing nothing", () => {
+    for (const reason of ["send-in-flight", "session-starting", "no-project"] as const) {
+      const copy = buildBlockedComposerSendToastCopy(reason);
+      expect(copy.title.length).toBeGreaterThan(0);
+      expect(copy.description.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("hasServerReceivedSentMessage", () => {
+  const messageId = MessageId.makeUnsafe("sent-message");
+
+  it("detects a user message the server already recorded", () => {
+    expect(
+      hasServerReceivedSentMessage(
+        {
+          messages: [
+            {
+              id: messageId,
+              role: "user",
+              text: "Reply with ok",
+              createdAt: "2026-10-09T20:00:00.000Z",
+              streaming: false,
+            },
+          ],
+        },
+        messageId,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats a missing thread or message as not received", () => {
+    expect(hasServerReceivedSentMessage(undefined, messageId)).toBe(false);
+    expect(hasServerReceivedSentMessage({ messages: [] }, messageId)).toBe(false);
   });
 });

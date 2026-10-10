@@ -43,6 +43,7 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { runManagedAttachmentCleanupBatch } from "../../managedAttachmentCleanup.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { createEmptyReadModel, projectEvent } from "../projector.ts";
 
 const readProjectedMessage = (threadId: ThreadId, messageId: MessageId) =>
   Effect.gen(function* () {
@@ -127,6 +128,95 @@ const exists = (filePath: string) =>
   });
 
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-test-");
+
+it.layer(makeProjectionPipelinePrefixedTestLayer("synara-latest-turn-test-"))(
+  "idle session latest turn",
+  (it) => {
+    it.effect("preserves the latest completed turn across idle session events and replay", () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.makeUnsafe("thread-idle-latest-turn");
+        const createdAt = "2026-10-09T00:00:00.000Z";
+        let readModel = createEmptyReadModel(createdAt);
+        const append = makeScenarioAppender(
+          (event) =>
+            Effect.gen(function* () {
+              const savedEvent = yield* eventStore.append(event);
+              readModel = yield* projectEvent(readModel, savedEvent).pipe(Effect.orDie);
+              yield* projectionPipeline.projectEvent(savedEvent);
+            }),
+          "idle-latest-turn",
+        );
+        yield* append({
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          payload: {
+            threadId,
+            projectId: ProjectId.makeUnsafe("project-idle-latest-turn"),
+            title: "Idle latest turn",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+        for (const turnNumber of [1, 2]) {
+          const turnId = TurnId.makeUnsafe(`turn-idle-latest-${turnNumber}`);
+          for (const [index, status] of ["running", "ready", "ready", "ready"].entries()) {
+            const updatedAt = `2026-10-09T00:0${turnNumber}:0${index}.000Z`;
+            yield* append({
+              type: "thread.session-set",
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: updatedAt,
+              payload: {
+                threadId,
+                session: {
+                  threadId,
+                  status: status === "running" ? "running" : "ready",
+                  providerName: "codex",
+                  providerInstanceId: "codex",
+                  runtimeMode: "full-access",
+                  activeTurnId: status === "running" ? turnId : null,
+                  lastError: null,
+                  updatedAt,
+                },
+              },
+            });
+          }
+          const expectedTurn = readModel.threads.find(
+            (thread) => thread.id === threadId,
+          )?.latestTurn;
+          assert.equal(expectedTurn?.turnId, turnId);
+          assert.equal(expectedTurn?.state, "completed");
+          const readLatestTurn = () => sql<{ readonly turnId: string; readonly state: string }>`
+          SELECT threads.latest_turn_id AS "turnId", turns.state
+          FROM projection_threads AS threads
+          LEFT JOIN projection_turns AS turns
+            ON turns.thread_id = threads.thread_id AND turns.turn_id = threads.latest_turn_id
+          WHERE threads.thread_id = ${threadId}
+        `;
+          assert.deepEqual(yield* readLatestTurn(), [{ turnId, state: "completed" }]);
+          yield* sql`
+          DELETE FROM projection_state
+          WHERE projector IN (
+            ${ORCHESTRATION_PROJECTOR_NAMES.threads},
+            ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
+          )
+        `;
+          yield* projectionPipeline.bootstrap;
+          assert.deepEqual(yield* readLatestTurn(), [{ turnId, state: "completed" }]);
+        }
+      }),
+    );
+  },
+);
 
 it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
   it.effect("bootstraps all projection states and writes projection rows", () =>
@@ -3100,10 +3190,12 @@ it.layer(
 
       const settledRows = yield* sql<{
         readonly status: string;
+        readonly resolvedAt: string;
         readonly pendingUserInputCount: number;
       }>`
         SELECT
           interactions.status,
+          interactions.resolved_at AS "resolvedAt",
           threads.pending_user_input_count AS "pendingUserInputCount"
         FROM projection_pending_interactions AS interactions
         INNER JOIN projection_threads AS threads
@@ -3112,7 +3204,9 @@ it.layer(
           AND interactions.interaction_kind = 'userInput'
           AND interactions.request_id = ${requestId}
       `;
-      assert.deepEqual(settledRows, [{ status: "uncertain", pendingUserInputCount: 0 }]);
+      assert.deepEqual(settledRows, [
+        { status: "confirmed", resolvedAt: reconciledAt, pendingUserInputCount: 0 },
+      ]);
     }),
   );
 });
@@ -5820,11 +5914,254 @@ it.layer(
   );
 });
 
-it.layer(makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-deferred-"))(
-  "OrchestrationProjectionPipeline deferred cursor",
+it.layer(makeProjectionPipelinePrefixedTestLayer("synara-projection-interleaved-summary-"))(
+  "hot shell summaries and legacy replay",
   (it) => {
     it.effect(
-      "settles the deferred cursor inside the hot transaction only when it is caught up",
+      "commits shell recency and actionable plans before publication and replays legacy summary lag",
+      () =>
+        Effect.gen(function* () {
+          const pipeline = yield* OrchestrationProjectionPipeline;
+          const eventStore = yield* OrchestrationEventStore;
+          const sql = yield* SqlClient.SqlClient;
+          const projectId = ProjectId.makeUnsafe("committed-summary-project");
+          const threadId = ThreadId.makeUnsafe("committed-summary-thread");
+          const at = "2026-10-01T11:00:00.000Z";
+          const append = makeScenarioAppender(
+            makeAppendAndProject(eventStore, pipeline),
+            "committed-summary-seed",
+          );
+          yield* append({
+            type: "project.created",
+            aggregateKind: "project",
+            aggregateId: projectId,
+            occurredAt: at,
+            payload: {
+              projectId,
+              title: "Committed summary",
+              workspaceRoot: "/tmp/committed-summary",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: at,
+              updatedAt: at,
+            },
+          });
+          yield* append({
+            type: "thread.created",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: at,
+            payload: {
+              threadId,
+              projectId,
+              title: "Summary",
+              modelSelection: { provider: "codex", model: "gpt-5" },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt: at,
+              updatedAt: at,
+            },
+          });
+          const seedSequence = yield* eventStore.getHighWaterSequence();
+          const message = yield* eventStore.append({
+            type: "thread.message-sent",
+            eventId: EventId.makeUnsafe("committed-summary-message"),
+            commandId: CommandId.makeUnsafe("committed-summary-message"),
+            correlationId: null,
+            causationEventId: null,
+            metadata: {},
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: at,
+            payload: {
+              threadId,
+              messageId: MessageId.makeUnsafe("committed-summary-message"),
+              role: "user",
+              dispatchOrigin: "user",
+              text: "Human request",
+              turnId: null,
+              streaming: false,
+              createdAt: at,
+              updatedAt: at,
+            },
+          });
+          const plan = yield* eventStore.append({
+            type: "thread.proposed-plan-upserted",
+            eventId: EventId.makeUnsafe("committed-summary-plan"),
+            commandId: CommandId.makeUnsafe("committed-summary-plan"),
+            correlationId: null,
+            causationEventId: null,
+            metadata: {},
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: at,
+            payload: {
+              threadId,
+              proposedPlan: {
+                id: "committed-summary-plan",
+                turnId: null,
+                planMarkdown: "Implement the request",
+                implementedAt: null,
+                implementationThreadId: null,
+                createdAt: at,
+                updatedAt: at,
+              },
+            },
+          });
+          for (const event of [message, plan])
+            yield* sql.withTransaction(pipeline.projectHotEventInCurrentTransaction(event));
+          const summary = () => sql<{
+            userAt: string | null;
+            humanAt: string | null;
+            actionable: number;
+          }>`
+          SELECT latest_user_message_at AS "userAt", latest_human_message_at AS "humanAt",
+            has_actionable_proposed_plan AS actionable FROM projection_threads WHERE thread_id = ${threadId}
+        `;
+          const expected = [{ userAt: at, humanAt: at, actionable: 1 }];
+          // This is the same stored summary the shell stream reads at event S.
+          // It must be truthful before publication, without awaiting a deferred worker.
+          assert.deepStrictEqual(yield* summary(), expected);
+          // Model an upgrade with already committed hot rows and an older deferred
+          // summary cursor. Promotion must replay that cursor, not fast-forward it.
+          yield* sql`UPDATE projection_threads SET latest_user_message_at = NULL,
+          latest_human_message_at = NULL, has_actionable_proposed_plan = 0 WHERE thread_id = ${threadId}`;
+          yield* sql`UPDATE projection_state SET last_applied_sequence = ${seedSequence}
+          WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}`;
+          yield* pipeline.bootstrap;
+          assert.deepStrictEqual(yield* summary(), expected);
+        }),
+    );
+    it.effect("preserves newer hot timestamps when legacy summary replay resumes", () =>
+      Effect.gen(function* () {
+        const pipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const projectId = ProjectId.makeUnsafe("interleaved-summary-project");
+        const threadId = ThreadId.makeUnsafe("interleaved-summary-thread");
+        const at = (minute: number) => `2026-10-01T10:${String(minute).padStart(2, "0")}:00.000Z`;
+        const append = makeScenarioAppender(
+          makeAppendAndProject(eventStore, pipeline),
+          "interleaved-summary-seed",
+        );
+        yield* append({
+          type: "project.created",
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: at(0),
+          payload: {
+            projectId,
+            title: "Interleaved",
+            workspaceRoot: "/tmp/interleaved-summary",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: at(0),
+            updatedAt: at(0),
+          },
+        });
+        yield* append({
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: at(0),
+          payload: {
+            threadId,
+            projectId,
+            title: "Sidechat",
+            modelSelection: { provider: "codex", model: "gpt-5" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            sidechatSourceThreadId: ThreadId.makeUnsafe("interleaved-summary-source"),
+            createdAt: at(0),
+            updatedAt: at(0),
+          },
+        });
+        const session = yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.makeUnsafe("interleaved-summary-session"),
+          commandId: CommandId.makeUnsafe("interleaved-summary-session"),
+          correlationId: null,
+          causationEventId: null,
+          metadata: {},
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: at(1),
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              providerInstanceId: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: at(1),
+            },
+          },
+        });
+        const message = yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe("interleaved-summary-message"),
+          commandId: CommandId.makeUnsafe("interleaved-summary-message"),
+          correlationId: null,
+          causationEventId: null,
+          metadata: {},
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: at(2),
+          payload: {
+            threadId,
+            messageId: MessageId.makeUnsafe("interleaved-summary-message"),
+            role: "user",
+            text: "Older user send",
+            turnId: null,
+            streaming: false,
+            createdAt: at(2),
+            updatedAt: at(2),
+          },
+        });
+        const newer = yield* eventStore.append({
+          type: "thread.sidechat-activity-recorded",
+          eventId: EventId.makeUnsafe("interleaved-summary-newer"),
+          commandId: CommandId.makeUnsafe("interleaved-summary-newer"),
+          correlationId: null,
+          causationEventId: null,
+          metadata: {},
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: at(3),
+          payload: { threadId, lastActivityAt: at(3) },
+        });
+        for (const event of [session, message, newer])
+          yield* sql.withTransaction(pipeline.projectHotEventInCurrentTransaction(event));
+        yield* sql`UPDATE projection_state SET last_applied_sequence = ${session.sequence - 1}
+          WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}`;
+        yield* pipeline.bootstrap;
+        const rows = yield* sql<{
+          updatedAt: string;
+          sidechatLastActivityAt: string;
+          latestUserMessageAt: string;
+        }>`
+          SELECT updated_at AS "updatedAt", sidechat_last_activity_at AS "sidechatLastActivityAt",
+            latest_user_message_at AS "latestUserMessageAt"
+          FROM projection_threads WHERE thread_id = ${threadId}
+        `;
+        assert.deepStrictEqual(rows, [
+          { updatedAt: at(3), sidechatLastActivityAt: at(3), latestUserMessageAt: at(2) },
+        ]);
+      }),
+    );
+  },
+);
+
+it.layer(makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-deferred-"))(
+  "OrchestrationProjectionPipeline shell cursor",
+  (it) => {
+    it.effect(
+      "advances the shell cursor in hot transactions without skipping pending legacy summary replay",
       () =>
         Effect.gen(function* () {
           const projectionPipeline = yield* OrchestrationProjectionPipeline;
@@ -5872,36 +6209,32 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-def
             first.sequence,
           );
 
-          // Caught up: a streamed delta has no deferred projector, so the hot
-          // transaction moves the deferred cursor itself and reports it settled.
+          // Caught up: a streamed delta moves the historical shell cursor
+          // inside the same transaction as the other hot projections.
           const second = yield* streamedDelta(2, "two ");
-          const settled = yield* sql.withTransaction(
+          yield* sql.withTransaction(
             projectionPipeline.projectHotEventInCurrentTransaction(second),
           );
-          assert.isTrue(settled.deferredPhaseSettled);
           assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), second.sequence);
           assert.strictEqual(
             yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
             second.sequence,
           );
 
-          // Lagging (a failed or in-flight deferred catch-up): the hot transaction
-          // must leave the deferred cursor alone so the catch-up still replays.
+          // An older accepted-summary cursor must remain behind on an empty
+          // streamed delta until bootstrap replays its pending history.
           yield* sql`
         UPDATE projection_state SET last_applied_sequence = ${first.sequence}
         WHERE projector = ${ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries}
       `;
           const third = yield* streamedDelta(3, "three");
-          const notSettled = yield* sql.withTransaction(
-            projectionPipeline.projectHotEventInCurrentTransaction(third),
-          );
-          assert.isFalse(notSettled.deferredPhaseSettled);
+          yield* sql.withTransaction(projectionPipeline.projectHotEventInCurrentTransaction(third));
           assert.strictEqual(yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.hot), third.sequence);
           assert.strictEqual(
             yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
             first.sequence,
           );
-          yield* projectionPipeline.projectDeferredEvent(third);
+          yield* projectionPipeline.bootstrap;
           assert.strictEqual(
             yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
             third.sequence,

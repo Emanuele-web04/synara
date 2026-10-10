@@ -8,6 +8,7 @@ import {
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
   isBetaFeatureEnabled,
+  PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
@@ -32,10 +33,14 @@ export const isBetaFeatureOn = (feature: string): boolean =>
 export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
 
 /**
- * Inbox is Beta-only. Off, its rail and sidebar entries are gone and its route
- * redirects home; the server refuses its recap RPC regardless.
+ * Inbox is available in Stable and Beta. Tasks within it retain their separate gate.
  */
 export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
+
+/**
+ * Auto-fix CI is available in Stable and Beta; watching a PR remains opt-in.
+ */
+export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BETA_FEATURE);
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

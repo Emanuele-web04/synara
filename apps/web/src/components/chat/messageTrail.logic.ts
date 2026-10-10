@@ -323,6 +323,24 @@ export function computeTrailGeometry(input: {
   };
 }
 
+/** Visible fixed-spacing ticks plus four neighbours on each edge. End is exclusive. */
+export function computeTrailWindow(
+  geometry: TrailGeometry | null,
+  scrollTop: number,
+  viewportHeight: number,
+): { start: number; end: number } {
+  const count = geometry?.centerYs.length ?? 0;
+  if (!geometry || count <= 1 || geometry.spacing <= 0) {
+    return { start: 0, end: count };
+  }
+  const top = clampNumber(scrollTop, 0, geometry.contentHeight);
+  const height = Math.max(0, Number.isFinite(viewportHeight) ? viewportHeight : 0);
+  return {
+    start: clampNumber(Math.floor((top - geometry.startY) / geometry.spacing) - 4, 0, count),
+    end: clampNumber(Math.ceil((top + height - geometry.startY) / geometry.spacing) + 5, 0, count),
+  };
+}
+
 /**
  * Gaussian sigma tied to tick density so the focus radius stays ~1.5 ticks
  * whether the rail is sparse or dense: `clamp(spacing*1.5, min(spacing*2, 8), 22)`.
@@ -426,15 +444,39 @@ export function clampTooltipTop(
 
 // --- Audio wave --------------------------------------------------------
 
+// Reported levels are dB-mapped, and how loud speech lands depends on the
+// microphone: a headset sits near 0.7, a laptop microphone near 0.4. The
+// shaper follows the recent peak so either fills the wave, ignores room noise
+// below the knee, and squares the result so only real peaks reach full width.
+const AUDIO_NOISE_KNEE = 0.12;
+const AUDIO_MIN_PEAK = 0.3;
+// Silence is emitted only once, so decay by elapsed time rather than report count.
+const AUDIO_PEAK_HALF_LIFE_MS = 4_000;
+
+/** Stateful level shaper: maps reported 0..1 levels onto wave height with automatic gain. */
+export function createAudioLevelShaper(): (level: number) => number {
+  let peak = AUDIO_MIN_PEAK;
+  let lastReportedAt = performance.now();
+  return (level) => {
+    const reportedAt = performance.now();
+    const elapsed = Math.max(0, reportedAt - lastReportedAt);
+    lastReportedAt = reportedAt;
+    const release = 0.5 ** (elapsed / AUDIO_PEAK_HALF_LIFE_MS);
+    peak = Math.max(level, AUDIO_MIN_PEAK, peak * release);
+    const relative = clampNumber((level - AUDIO_NOISE_KNEE) / (peak - AUDIO_NOISE_KNEE), 0, 1);
+    return relative * relative;
+  };
+}
+
 /** Per-frame audio envelope: rises at once with the sound, falls back gently. */
 export function stepAudioEnvelope(previous: number, target: number, release: number): number {
   return target >= previous ? target : Math.max(target, previous * release);
 }
 
-/** Fixed per-tick gain in 0.65..1 so the column never moves in lockstep. */
+/** Fixed per-tick gain in 0.45..1 so the column never moves in lockstep. */
 export function audioTickGain(index: number): number {
   const noise = Math.sin((index + 1) * 12.9898) * 43758.5453;
-  return 0.65 + 0.35 * (noise - Math.floor(noise));
+  return 0.45 + 0.55 * (noise - Math.floor(noise));
 }
 
 /**
@@ -445,17 +487,19 @@ export function audioTickGain(index: number): number {
  */
 export function computeAudioTickWidths(input: {
   count: number;
+  startIndex?: number;
   centerIndex: number;
   history: readonly number[];
   framesPerTick: number;
   baseW: number;
   maxW: number;
 }): number[] {
-  const { count, centerIndex, history, framesPerTick, baseW, maxW } = input;
+  const { count, startIndex = 0, centerIndex, history, framesPerTick, baseW, maxW } = input;
   const widths: number[] = [];
   for (let i = 0; i < count; i += 1) {
-    const level = history[Math.abs(i - centerIndex) * framesPerTick] ?? 0;
-    widths.push(baseW + (maxW - baseW) * clampNumber(level, 0, 1) * audioTickGain(i));
+    const index = startIndex + i;
+    const level = history[Math.abs(index - centerIndex) * framesPerTick] ?? 0;
+    widths.push(baseW + (maxW - baseW) * clampNumber(level, 0, 1) * audioTickGain(index));
   }
   return widths;
 }

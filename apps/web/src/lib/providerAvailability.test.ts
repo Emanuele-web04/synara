@@ -65,6 +65,7 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       provider: "opencode",
       instanceId: "opencode",
       driver: "opencode",
+      enabled: false,
       status: "warning",
       available: false,
       authStatus: "unknown",

@@ -55,6 +55,113 @@ function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequenc
   }
 }
 
+it("persists terminal error identity and announced retry state in chat activities", () => {
+  const error = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "runtime.error",
+      eventId: "error",
+      turnId: TURN_ID,
+      payload: {
+        message: "Temporarily unavailable",
+        class: "provider_error",
+        errorCode: "server_overloaded",
+      },
+    }),
+  )[0]!;
+  expect(error.payload).toMatchObject({
+    errorCode: "server_overloaded",
+    message: "Temporarily unavailable",
+  });
+  const completion = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "turn.completed",
+      eventId: "completion",
+      turnId: TURN_ID,
+      payload: {
+        state: "failed",
+        errorMessage: "Temporarily unavailable",
+        errorCode: "server_overloaded",
+      },
+    }),
+  )[0]!;
+  expect(completion.payload).toMatchObject({ errorCode: "server_overloaded", state: "failed" });
+  const warning = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "runtime.warning",
+      eventId: "retry",
+      turnId: TURN_ID,
+      payload: { message: "Temporarily unavailable", willRetry: true },
+    }),
+  )[0]!;
+  expect(warning).toMatchObject({
+    summary: "Provider retrying",
+    turnId: TURN_ID,
+    payload: { willRetry: true },
+  });
+  for (const activity of [error, completion, warning]) {
+    expect(() => decodeActivityAppendCommand(activity)).not.toThrow();
+  }
+});
+
+it("projects tool summaries with stable group identity and no empty rows", () => {
+  const event = runtimeEvent({
+    provider: "claudeAgent",
+    type: "tool.summary",
+    eventId: "summary-1",
+    turnId: TURN_ID,
+    payload: {
+      summary: "Reviewed the provider.\n\nCancellation is covered.",
+      precedingToolUseIds: ["read-1", "test-1"],
+    },
+  });
+  const [activity] = projectProviderRuntimeActivities(event);
+  expect(activity).toMatchObject({
+    kind: "tool.summary",
+    tone: "info",
+    summary: "Tool summary",
+    payload: { detail: "Reviewed the provider.\n\nCancellation is covered." },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+  expect(
+    projectProviderRuntimeActivities({
+      ...event,
+      eventId: EventId.makeUnsafe("summary-repeated"),
+    })[0]?.id,
+  ).toBe(activity?.id);
+  expect(
+    projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider: "claudeAgent",
+        type: "tool.summary",
+        eventId: "empty",
+        payload: { summary: "  " },
+      }),
+    ),
+  ).toEqual([]);
+});
+
+it.each([
+  [{ isAuthenticating: true }, "Claude authentication started", "info"],
+  [{ isAuthenticating: false }, "Claude authentication finished", "info"],
+  [
+    { isAuthenticating: false, error: "secret-login-token" },
+    "Claude authentication needs attention.",
+    "error",
+  ],
+] as const)("projects safe authentication status %j", (status, summary, tone) => {
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "claudeAgent",
+      type: "auth.status",
+      eventId: "auth-status",
+      payload: { ...status, output: ["https://login.example/?token=secret-login-token"] },
+    }),
+  );
+  expect(activity).toMatchObject({ kind: "auth.status", summary, tone, turnId: null });
+  expect(JSON.stringify(activity)).not.toContain("secret-login-token");
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
 it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) => {
   const [activity] = projectProviderRuntimeActivities(
     runtimeEvent({
@@ -74,6 +181,196 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
     payload: { message: "Extension notification", detail: "Extension notification" },
   });
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
+it("keeps the full runtime warning message so the row's hover card can reveal it", () => {
+  // The work-log row clips the notice to one line with CSS `truncate`; the hover
+  // card can only show what the server stored, so the payload must carry the full
+  // text (e.g. Claude's ~190-char token-usage warning) rather than a row-sized cut.
+  const claudeWarning =
+    "Claude is processing ~201k logical prompt tokens per request (~200k cached reads, ~1k new/cache-write). Large active contexts can consume usage faster; cached reads cost less than fresh input.";
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "claudeAgent",
+      type: "runtime.warning",
+      eventId: "runtime-warning-full-message",
+      turnId: TURN_ID,
+      payload: { message: claudeWarning },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "runtime.warning",
+    summary: "Runtime warning",
+    payload: { message: claudeWarning, detail: claudeWarning },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized warnings.
+  const oversized = `prefix-${"x".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "runtime.warning",
+      eventId: "runtime-warning-oversized",
+      turnId: TURN_ID,
+      payload: { message: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { message: string; detail: string };
+  expect(cappedPayload.message).toHaveLength(2_000);
+  expect(cappedPayload.message.endsWith("...")).toBe(true);
+});
+
+it("keeps the full approval detail so the pending-approval panel shows the whole command", () => {
+  // The Claude adapter deliberately allows ~400 chars of command text in the
+  // approval detail; the panel can only render what the server stored, so the
+  // payload must carry the full string rather than a 180-char row-sized cut.
+  const approvalDetail =
+    `Bash: ${"git -C /workspace status && ".repeat(14)}git push origin main`.slice(0, 400);
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "request.opened",
+      eventId: "approval-full-detail",
+      turnId: TURN_ID,
+      requestId: ApprovalRequestId.makeUnsafe("request-full-detail"),
+      payload: { requestType: "command_execution_approval", detail: approvalDetail },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "approval.requested",
+    payload: { detail: approvalDetail },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized details.
+  const oversized = `prefix-${"x".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "request.opened",
+      eventId: "approval-oversized-detail",
+      turnId: TURN_ID,
+      payload: { requestType: "command_execution_approval", detail: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { detail: string };
+  expect(cappedPayload.detail).toHaveLength(2_000);
+  expect(cappedPayload.detail.endsWith("...")).toBe(true);
+});
+
+it("keeps the full tool progress summary so the hover card can reveal it", () => {
+  // The work-log row clips the progress detail to one line with CSS `truncate`;
+  // the hover card can only show what the server stored, so the payload must
+  // carry the full summary rather than a 180-char row-sized cut.
+  const progressSummary = `mcp__long-runner__sync: fetched 1,204 records across 17 pages; last checkpoint at offset 9,216 (page 14 of 17) — resuming pagination for shard eu-west after the rate-limit window resets`;
+  expect(progressSummary.length).toBeGreaterThan(180);
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "tool.progress",
+      eventId: "tool-progress-full-summary",
+      turnId: TURN_ID,
+      payload: {
+        toolUseId: "tool-progress-full",
+        toolName: "mcp__long-runner__sync",
+        summary: progressSummary,
+        elapsedSeconds: 4.8,
+      },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "tool.updated",
+    payload: { detail: progressSummary },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized summaries.
+  const oversized = `prefix-${"y".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "tool.progress",
+      eventId: "tool-progress-oversized",
+      turnId: TURN_ID,
+      payload: { toolUseId: "tool-oversized", toolName: "mcp__x", summary: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { detail: string };
+  expect(cappedPayload.detail).toHaveLength(2_000);
+  expect(cappedPayload.detail.endsWith("...")).toBe(true);
+});
+
+it("keeps the full task failure summary so the work-log reveal can show it", () => {
+  // A failed background/subagent task's summary is exactly what the operator
+  // needs to read in full; provider-authored failure text (rate-limit bodies,
+  // unsupported-version messages) routinely runs past 180 chars.
+  const failureSummary = `Subagent run failed after 3 retries: provider returned 429 rate_limit_error — "request exceeds the per-minute token budget for claude-opus-4-1; reduce context or wait for the current window to reset" (request id req_01JX4K9VF0Q8M2W7ABCDE)`;
+  expect(failureSummary.length).toBeGreaterThan(180);
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.completed",
+      eventId: "task-completed-full-summary",
+      turnId: TURN_ID,
+      payload: { taskId: "task-failed-1", status: "failed", summary: failureSummary },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "task.completed",
+    tone: "error",
+    payload: { detail: failureSummary },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized summaries.
+  const oversized = `prefix-${"z".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.completed",
+      eventId: "task-completed-oversized",
+      turnId: TURN_ID,
+      payload: { taskId: "task-failed-2", status: "failed", summary: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { detail: string };
+  expect(cappedPayload.detail).toHaveLength(2_000);
+  expect(cappedPayload.detail.endsWith("...")).toBe(true);
+});
+
+it("keeps the full task update error so the work-log reveal can show it", () => {
+  // The task.updated error is the provider's own failure text; the row's CSS
+  // `truncate` does the one-line clip, so the payload must carry the full
+  // string rather than a 180-char row-sized cut.
+  const taskError = `Task crashed while streaming the provider response: socket hang up after 42s without a delta — the CLI reported "unsupported client version 0.31.x; server requires >= 0.40.0" and refused the reconnect attempt (attempt 3 of 3)`;
+  expect(taskError.length).toBeGreaterThan(180);
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.updated",
+      eventId: "task-updated-full-error",
+      turnId: TURN_ID,
+      payload: { taskId: "task-failed-3", status: "failed", error: taskError },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "task.updated",
+    tone: "error",
+    payload: { detail: taskError },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized errors.
+  const oversized = `prefix-${"e".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "task.updated",
+      eventId: "task-updated-oversized",
+      turnId: TURN_ID,
+      payload: { taskId: "task-failed-4", status: "failed", error: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { detail: string };
+  expect(cappedPayload.detail).toHaveLength(2_000);
+  expect(cappedPayload.detail.endsWith("...")).toBe(true);
 });
 
 describe("projected activities satisfy the orchestration command schema", () => {
@@ -280,7 +577,7 @@ describe("provider runtime activity projection", () => {
     expect(events.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
   });
 
-  it("projects only readable completed Codex-family reasoning summaries", () => {
+  it("projects only readable completed Codex, Antigravity, and OpenCode reasoning", () => {
     const absent = [
       runtimeEvent({
         type: "content.delta",
@@ -311,7 +608,7 @@ describe("provider runtime activity projection", () => {
     ];
     expect(absent.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
 
-    for (const provider of ["codex", "antigravity"] as const) {
+    for (const provider of ["codex", "antigravity", "opencode"] as const) {
       const [activity] = projectProviderRuntimeActivities(
         runtimeEvent({
           type: "item.completed",
@@ -788,6 +1085,31 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    for (const [provider, usageSessionId] of [
+      ["cursor", "native-session"],
+      ["codex", "native-session"],
+      ["antigravity", "native-session:generation-after-restart"],
+    ] as const) {
+      const [resumedUsage] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "thread.token-usage.updated",
+          eventId: `${provider}-resumed-usage`,
+          provider,
+          lifecycleGeneration: "generation-after-restart",
+          providerRefs: { providerThreadId: "native-session" },
+          payload: { usage: { usedTokens: 0, totalProcessedTokens: 4_200 } },
+        }),
+      );
+      expect(resumedUsage).toMatchObject({
+        kind: "context-window.updated",
+        payload: {
+          provider,
+          totalProcessedTokens: 4_200,
+          usageSessionId,
+        },
+      });
+    }
+
     const [configured] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "session.configured",
@@ -826,6 +1148,46 @@ describe("provider runtime activity projection", () => {
       kind: "context-window.configured",
       payload: { cleared: true },
     });
+
+    const [blockedFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-blocked",
+        provider: "claudeAgent",
+        payload: {
+          config: { fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" },
+        },
+      }),
+    );
+    expect(blockedFastMode).toMatchObject({
+      id: "fast-mode-blocked",
+      kind: "fast-mode.state",
+      payload: { state: "off", disabledReason: "extra_usage_disabled" },
+    });
+
+    const [activeFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-on",
+        provider: "claudeAgent",
+        payload: { config: { fast_mode_state: "on" } },
+      }),
+    );
+    expect(activeFastMode).toMatchObject({ kind: "fast-mode.state", payload: { state: "on" } });
+
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "session.configured",
+          eventId: "fast-mode-with-context",
+          provider: "claudeAgent",
+          payload: { config: { autoCompactWindow: "1m", fast_mode_state: "cooldown" } },
+        }),
+      ).map((activity) => [activity.id, activity.kind]),
+    ).toEqual([
+      ["fast-mode-with-context", "context-window.configured"],
+      ["fast-mode-with-context:fast-mode", "fast-mode.state"],
+    ]);
 
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({

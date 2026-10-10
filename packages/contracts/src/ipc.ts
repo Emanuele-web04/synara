@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 import type {
+  LoadProjectImportHistoryInput,
+  LoadProjectImportHistoryResult,
   ImportProjectInput,
   ImportProjectResult,
   ListProjectImportsInput,
@@ -174,6 +176,12 @@ import type {
   PullRequestSetPinnedResult,
 } from "./pullRequests";
 import type {
+  PullRequestAutoFixGetInput,
+  PullRequestAutoFixListResult,
+  PullRequestAutoFixResult,
+  PullRequestAutoFixSetInput,
+} from "./pullRequestAutoFix";
+import type {
   GitHubInboxListInput,
   GitHubInboxListResult,
   GitHubIssueCommentInput,
@@ -293,6 +301,8 @@ import type {
   ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
+  ServerEditKeybindingsInput,
+  ServerEditKeybindingsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
   ServerVoicePrewarmInput,
@@ -316,6 +326,8 @@ import type {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetThreadDetailSnapshotInput,
+  OrchestrationSearchThreadsInput,
+  OrchestrationSearchThreadsResult,
   OrchestrationGetThreadDetailSnapshotResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
@@ -367,6 +379,7 @@ import type {
   StatsGetRecapResult,
 } from "./stats";
 import type { BrowserAnnotationMethods } from "./browserAnnotations";
+import { type KeybindingCommand, MAX_KEYBINDING_VALUE_LENGTH } from "./keybindings";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -376,12 +389,19 @@ export interface ContextMenuItem<T extends string = string> {
   destructive?: boolean;
   /** Central icon basename from the reversed set (e.g. `"pencil"`) or inline `<svg>` markup. */
   icon?: string;
+  /**
+   * Opens a submenu instead of resolving this row. Related actions (handoff targets, copy
+   * variants, fork targets) belong in one parent row rather than a flat run of siblings.
+   * Only leaf ids are ever returned; the parent `id` just identifies the group.
+   */
+  children?: readonly ContextMenuItem<T>[];
 }
 
 /** Context menu row sent over the desktop bridge with its icon pre-rasterized by the renderer. */
 export interface DesktopContextMenuItem<T extends string = string> extends ContextMenuItem<T> {
   /** `data:image/png;base64,` template image rendered at 2x for a 16pt menu icon. */
   iconDataUrl?: string;
+  children?: readonly DesktopContextMenuItem<T>[];
 }
 
 export type DesktopUpdateStatus =
@@ -399,10 +419,12 @@ export type DesktopTheme = "light" | "dark" | "system";
 
 /** Largest desktop blur radius the translucent window shell accepts, in points. */
 export const DESKTOP_WINDOW_BLUR_RADIUS_MAX = 64;
+/** Smallest one: an unblurred desktop behind a clear window reads as a hole, not as glass. */
+export const DESKTOP_WINDOW_BLUR_RADIUS_MIN = 1;
 
 /**
  * Window backing the renderer asks for. `translucent` removes macOS vibrancy and sets the
- * desktop blur to `blurRadius` (0 shows the desktop unblurred); `opaque` restores vibrancy.
+ * desktop blur to `blurRadius`; `opaque` restores vibrancy and ignores `blurRadius`.
  */
 export interface DesktopWindowMaterial {
   material: "opaque" | "translucent";
@@ -770,6 +792,32 @@ export interface DesktopCustomTitleBarState {
 export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark", "beta"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
+/** Keybinding commands whose effective shortcut is mirrored onto a native application menu item. */
+export const DESKTOP_MENU_SHORTCUT_COMMANDS = [
+  "terminal.new",
+  "sidebar.toggle",
+  "browser.toggle",
+] as const satisfies ReadonlyArray<KeybindingCommand>;
+export type DesktopMenuShortcutCommand = (typeof DESKTOP_MENU_SHORTCUT_COMMANDS)[number];
+
+// Same fields as KeybindingShortcut, but `key` is not trimmed: the space key is " ".
+const DesktopMenuShortcut = Schema.Struct({
+  key: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_KEYBINDING_VALUE_LENGTH)),
+  metaKey: Schema.Boolean,
+  ctrlKey: Schema.Boolean,
+  shiftKey: Schema.Boolean,
+  altKey: Schema.Boolean,
+  modKey: Schema.Boolean,
+});
+
+/** The user's shortcut for each menu command; null leaves that menu item without an accelerator. */
+export const DesktopMenuShortcuts = Schema.Struct({
+  "terminal.new": Schema.NullOr(DesktopMenuShortcut),
+  "sidebar.toggle": Schema.NullOr(DesktopMenuShortcut),
+  "browser.toggle": Schema.NullOr(DesktopMenuShortcut),
+});
+export type DesktopMenuShortcuts = typeof DesktopMenuShortcuts.Type;
+
 export interface SynaraStorageSnapshot {
   readonly version: 1;
   readonly exportedAt: string;
@@ -795,9 +843,17 @@ export interface DesktopComputerPreviewFrame {
 /** Sound the message trail follows: the Mac's audio output, the microphone, or both. */
 export type DesktopAudioLevelSource = "system" | "microphone" | "both";
 
+/** A Mac input device the message trail can listen to. `id` is the Core Audio UID. */
+export interface DesktopAudioInputDevice {
+  readonly id: string;
+  readonly name: string;
+  readonly bluetooth: boolean;
+  readonly default: boolean;
+}
+
 /**
  * Whether the desktop is reading audio levels. "unsupported" means this host
- * can never provide them (not macOS, or a Stable build); "unavailable" means
+ * can never provide them (not macOS); "unavailable" means
  * the reader failed, for example on macOS before 14.2 or without microphone
  * access.
  */
@@ -823,11 +879,81 @@ export interface DesktopRendererError {
   readonly stack?: string | undefined;
 }
 
+/** Fixed categories only: never carry RPC arguments, DOM text, paths, or IDs. */
+export const DesktopDiagnosticActivity = Schema.Literals([
+  "chat.send",
+  "chat.stop",
+  "chat.open",
+  "chat.unblock",
+  "workspace.change",
+  "project.create",
+  "project.import",
+  "project.import.preview",
+  "project.import.catalog",
+  "workspace.search",
+  "workspace.read",
+  "browser.open",
+  "browser.navigate",
+  "browser.resize",
+  "window.resize",
+  "transport.reconnect",
+  "renderer.ready",
+]);
+export type DesktopDiagnosticActivity = typeof DesktopDiagnosticActivity.Type;
+export const DesktopDiagnosticBreadcrumb = Schema.Struct({
+  activity: DesktopDiagnosticActivity,
+  phase: Schema.Literals(["started", "succeeded", "failed"]),
+});
+export type DesktopDiagnosticBreadcrumb = typeof DesktopDiagnosticBreadcrumb.Type;
+
+/** Handled failures carry fixed categories, never exception text or operation arguments. */
+export const DesktopDiagnosticIssue = Schema.Struct({
+  code: Schema.Literals([
+    "server.event-loop.stall",
+    "git.request.failed",
+    "git.branch.failed",
+    "git.commit.failed",
+    "git.push.failed",
+    "git.pr.failed",
+    "voice.record.failed",
+    "voice.transcribe.failed",
+    "claude.compaction.request-failed",
+    "claude.compaction.uncertain",
+    "claude.cache.request-failed",
+    "claude.cache.failed",
+    "claude.cache.uncertain",
+    "startup.database-locked",
+    "startup.migration-recovery-required",
+    "startup.migration-divergence-consent-required",
+    "startup.migration-runtime-identity-mismatch",
+    "startup.migration-schema-too-new",
+    "startup.migration-startup-block-invalid",
+  ]),
+  reason: Schema.optional(
+    Schema.Literals([
+      "unknown",
+      "auth",
+      "invalid-response",
+      "timeout",
+      "output-limit",
+      "live-owner",
+      "unknown-owner",
+    ]),
+  ),
+  durationMs: Schema.optional(Schema.Finite),
+});
+export type DesktopDiagnosticIssue = typeof DesktopDiagnosticIssue.Type;
+export const DESKTOP_DIAGNOSTIC_ISSUE_PREFIX = "SYNARA_DIAGNOSTIC_ISSUE ";
+export type DesktopDiagnosticReportStatus = "queued" | "sent" | "unavailable";
+
 export interface DesktopBridge {
   /** Present only when the desktop main process enables baked-in Beta diagnostics. */
   betaDiagnostics?: {
     rendererReady: () => void;
     reportError: (error: DesktopRendererError) => void;
+    recordActivity?: (breadcrumb: DesktopDiagnosticBreadcrumb) => void;
+    reportIssue?: (issue: DesktopDiagnosticIssue) => Promise<string | null>;
+    getReportStatus?: (id: string) => Promise<DesktopDiagnosticReportStatus>;
   };
   safariAccess?: {
     getInfo: () => Promise<DesktopSafariAccessInfo>;
@@ -900,15 +1026,26 @@ export interface DesktopBridge {
   };
   /**
    * Loudness of the Mac's audio output and/or the microphone, in 0..1, for the
-   * message trail. Beta desktop on macOS only; the main process refuses it
-   * elsewhere. Levels stream only while this window has a source set (`null`
-   * stops), and silence arrives once as 0.
+   * message trail. Desktop on macOS only, in Stable and Beta; the main process
+   * refuses it elsewhere. Levels stream only while this window has a source set
+   * (`null` stops), and silence arrives once as 0. `microphoneId` picks the
+   * input device by `DesktopAudioInputDevice.id`; omitted or `null` follows
+   * the Mac's default input.
    */
   audioLevel?: {
-    setSource: (source: DesktopAudioLevelSource | null) => Promise<DesktopAudioLevelStatus>;
+    setSource: (
+      source: DesktopAudioLevelSource | null,
+      microphoneId?: string | null,
+    ) => Promise<DesktopAudioLevelStatus>;
+    listMicrophones: () => Promise<readonly DesktopAudioInputDevice[]>;
     onLevel: (listener: (level: number) => void) => () => void;
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
+  /**
+   * Mirrors the user's keybindings onto the native menu accelerators. Absent on
+   * builds that predate it; until a window reports, the menu keeps its defaults.
+   */
+  setMenuShortcuts?: (shortcuts: DesktopMenuShortcuts) => Promise<void>;
   onQuitConfirmationRequest: (
     listener: (request: DesktopQuitConfirmationRequest) => void,
   ) => () => void;
@@ -1128,6 +1265,8 @@ export interface NativeApi {
     action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;
     comment: (input: PullRequestCommentInput) => Promise<PullRequestActionResult>;
     setPinned: (input: PullRequestSetPinnedInput) => Promise<PullRequestSetPinnedResult>;
+    getAutoFix: (input: PullRequestAutoFixGetInput) => Promise<PullRequestAutoFixListResult>;
+    setAutoFix: (input: PullRequestAutoFixSetInput) => Promise<PullRequestAutoFixResult>;
   };
   contextMenu: {
     show: <T extends string>(
@@ -1192,6 +1331,7 @@ export interface NativeApi {
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+    editKeybindings: (input: ServerEditKeybindingsInput) => Promise<ServerEditKeybindingsResult>;
   };
   stats: {
     getProfileStats: (input: StatsGetProfileStatsInput) => Promise<StatsGetProfileStatsResult>;
@@ -1219,12 +1359,18 @@ export interface NativeApi {
     getThreadDetailSnapshot: (
       input: OrchestrationGetThreadDetailSnapshotInput,
     ) => Promise<OrchestrationGetThreadDetailSnapshotResult>;
+    searchThreads: (
+      input: OrchestrationSearchThreadsInput,
+    ) => Promise<OrchestrationSearchThreadsResult>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
     listProjectImports: (input: ListProjectImportsInput) => Promise<ListProjectImportsResult>;
     importProject: (input: ImportProjectInput) => Promise<ImportProjectResult>;
+    loadProjectImportHistory: (
+      input: LoadProjectImportHistoryInput,
+    ) => Promise<LoadProjectImportHistoryResult>;
     regenerateThreadTitle: (
       input: OrchestrationRegenerateThreadTitleInput,
     ) => Promise<OrchestrationRegenerateThreadTitleResult>;

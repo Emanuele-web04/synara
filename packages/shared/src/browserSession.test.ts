@@ -6,7 +6,6 @@ import {
   buildChromeClientHints,
   classifyBrowserWindowOpen,
   deriveChromeUserAgent,
-  isLikelyOAuthHost,
   normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput,
   isBlankBrowserTabUrl,
@@ -137,30 +136,18 @@ describe("isBlankBrowserTabUrl", () => {
   });
 });
 
-describe("isLikelyOAuthHost", () => {
-  it("matches known auth hosts and their subdomains", () => {
-    expect(isLikelyOAuthHost("accounts.google.com")).toBe(true);
-    expect(isLikelyOAuthHost("appleid.apple.com")).toBe(true);
-    expect(isLikelyOAuthHost("login.microsoftonline.com")).toBe(true);
-  });
-
-  it("does not match arbitrary hosts", () => {
-    expect(isLikelyOAuthHost("example.com")).toBe(false);
-    expect(isLikelyOAuthHost("github.com")).toBe(false);
-    expect(isLikelyOAuthHost("")).toBe(false);
-  });
-});
-
 describe("classifyBrowserWindowOpen", () => {
-  it("does not treat new-window disposition alone as a popup", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://example.com/article",
-        frameName: "",
-        features: "",
-        disposition: "new-window",
-      }),
-    ).toBe("tab");
+  it("does not treat new-window disposition or arbitrary hosts alone as a popup", () => {
+    for (const url of ["https://example.com/article", "https://github.com/", ""]) {
+      expect(
+        classifyBrowserWindowOpen({
+          url,
+          frameName: "",
+          features: "",
+          disposition: "new-window",
+        }),
+      ).toBe("tab");
+    }
   });
 
   it("treats window features as a popup signal", () => {
@@ -175,14 +162,20 @@ describe("classifyBrowserWindowOpen", () => {
   });
 
   it("treats known auth hosts opened via _blank as popups", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://accounts.google.com/o/oauth2/auth",
-        frameName: "_blank",
-        features: "",
-        disposition: "foreground-tab",
-      }),
-    ).toBe("popup");
+    for (const url of [
+      "https://accounts.google.com/o/oauth2/auth",
+      "https://appleid.apple.com/",
+      "https://login.microsoftonline.com/",
+    ]) {
+      expect(
+        classifyBrowserWindowOpen({
+          url,
+          frameName: "_blank",
+          features: "",
+          disposition: "foreground-tab",
+        }),
+      ).toBe("popup");
+    }
   });
 
   it("treats known OAuth endpoints on multi-purpose hosts as popups", () => {

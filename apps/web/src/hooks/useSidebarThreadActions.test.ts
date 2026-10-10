@@ -1,5 +1,5 @@
 // FILE: useSidebarThreadActions.test.ts
-// Purpose: Characterizes Sidebar pin races, archive serialization/undo, and batch deletion.
+// Purpose: Covers Sidebar pin races, archive/Done navigation, undo, and batch deletion.
 // Layer: Web hook tests
 
 import { ProjectId, ThreadId } from "@synara/contracts";
@@ -237,6 +237,7 @@ function render(
     routeThreadId?: ThreadId | null;
     threadsHydrated?: boolean;
     archiveDeletesOrphanedWorktree?: boolean;
+    sidebarTreeThreads?: readonly SidebarThreadSummary[];
   } = {},
 ) {
   reactHarness.beginRender();
@@ -254,12 +255,23 @@ function render(
     routeSplitViewId: overrides.routeSplitViewId ?? null,
     routeThreadId: overrides.routeThreadId ?? null,
     sidebarThreads,
-    sidebarTreeThreads: sidebarThreads,
+    sidebarTreeThreads: overrides.sidebarTreeThreads ?? sidebarThreads,
     sidebarThreadSummaryById: Object.fromEntries(
       sidebarThreads.map((thread) => [thread.id, thread]),
     ),
     threadsHydrated: overrides.threadsHydrated ?? false,
   });
+}
+
+function deferWindowTimers() {
+  vi.stubGlobal("window", {
+    setTimeout: vi.fn(() => 1),
+    clearTimeout: vi.fn(),
+  });
+}
+
+async function flushActionResponses() {
+  await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
 }
 
 beforeEach(() => {
@@ -327,6 +339,176 @@ beforeEach(() => {
 });
 
 describe("useSidebarThreadActions", () => {
+  it("uses elapsed durations and tomorrow at 9am in the user's local calendar", async () => {
+    const now = new Date(2026, 9, 2, 23, 45);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now.getTime());
+    try {
+      const controller = render();
+      controller.snoozeThread(THREAD_ID, 30);
+      controller.snoozeThread(THREAD_ID, 60);
+      controller.snoozeThread(THREAD_ID, 120);
+      controller.snoozeThread(THREAD_ID, "tomorrow");
+      await vi.waitFor(() => expect(harness.dispatchCommand).toHaveBeenCalledTimes(4));
+      expect(harness.dispatchCommand.mock.calls.map(([command]) => command.snoozedUntil)).toEqual([
+        new Date(2026, 9, 3, 0, 15).toISOString(),
+        new Date(2026, 9, 3, 0, 45).toISOString(),
+        new Date(2026, 9, 3, 1, 45).toISOString(),
+        new Date(2026, 9, 3, 9, 0).toISOString(),
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("schedules and cancels snooze through thread metadata without navigating", async () => {
+    const controller = render();
+    controller.setThreadSnoozedUntil(THREAD_ID, "2026-10-02T12:00:00.000Z");
+    await vi.waitFor(() =>
+      expect(harness.dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.meta.update",
+          threadId: THREAD_ID,
+          snoozedUntil: "2026-10-02T12:00:00.000Z",
+        }),
+      ),
+    );
+    controller.setThreadSnoozedUntil(THREAD_ID, null);
+    await vi.waitFor(() =>
+      expect(harness.dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.meta.update",
+          threadId: THREAD_ID,
+          snoozedUntil: null,
+        }),
+      ),
+    );
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
+  it("reports snooze failures without hiding the server-confirmed row", async () => {
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("offline"));
+    render().setThreadSnoozedUntil(THREAD_ID, "2026-10-02T12:00:00.000Z");
+    await vi.waitFor(() =>
+      expect(harness.toast).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })),
+    );
+    expect(sidebarThreads[0]?.snoozedUntil ?? null).toBeNull();
+  });
+
+  it("leaves the focused chat only after snooze is confirmed and offers undo", async () => {
+    let confirm!: (value: { sequence: number }) => void;
+    harness.dispatchCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    const controller = render({ routeThreadId: THREAD_ID });
+    controller.snoozeThread(THREAD_ID, 30);
+    expect(harness.navigate).not.toHaveBeenCalled();
+    confirm({ sequence: 1 });
+    await vi.waitFor(() =>
+      expect(harness.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: { threadId: FALLBACK_ID },
+        }),
+      ),
+    );
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0] as {
+      data: { archiveUndo: { message: string; onUndo: () => Promise<boolean> } };
+    };
+    expect(undoToast.data.archiveUndo.message).toMatch(/^Snoozed until /);
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.dispatchCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: THREAD_ID, snoozedUntil: null }),
+    );
+  });
+
+  it("does not change focus after a failed snooze or a route change during confirmation", async () => {
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("offline"));
+    const controller = render({ routeThreadId: THREAD_ID });
+    controller.snoozeThread(THREAD_ID, 30);
+    await vi.waitFor(() =>
+      expect(harness.toast).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })),
+    );
+    expect(harness.navigate).not.toHaveBeenCalled();
+    let confirm!: (value: { sequence: number }) => void;
+    harness.dispatchCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    controller.snoozeThread(THREAD_ID, 30);
+    render({ routeThreadId: FALLBACK_ID });
+    confirm({ sequence: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
+  it.each(["open-split", "leave-and-return"] as const)(
+    "keeps newer navigation when snooze confirmation follows %s",
+    async (navigation) => {
+      let confirm!: (value: { sequence: number }) => void;
+      harness.dispatchCommand.mockReturnValueOnce(
+        new Promise((resolve) => {
+          confirm = resolve;
+        }),
+      );
+      const controller = render({ routeThreadId: THREAD_ID });
+      controller.snoozeThread(THREAD_ID, 30);
+      if (navigation === "open-split") {
+        render({
+          routeThreadId: THREAD_ID,
+          activeSplitView: { id: "split-snooze" } as never,
+          routeSplitViewId: "split-snooze",
+        });
+      } else {
+        render({ routeThreadId: FALLBACK_ID });
+        render({ routeThreadId: THREAD_ID });
+      }
+      confirm({ sequence: 1 });
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).not.toHaveBeenCalled();
+      expect(harness.toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ archiveUndo: expect.any(Object) }),
+        }),
+      );
+    },
+  );
+
+  it("returns focus to an ordinary visible chat rather than a dock chat or subagent", async () => {
+    const dockChat = makeThread(ThreadId.makeUnsafe("dock-chat"), {
+      lastVisitedAt: "2026-10-03T12:00:00.000Z",
+    });
+    const child = makeThread(ThreadId.makeUnsafe("visible-subagent"), {
+      parentThreadId: FALLBACK_ID,
+      lastVisitedAt: "2026-10-03T11:00:00.000Z",
+    });
+    const focused = makeThread(THREAD_ID);
+    const fallback = makeThread(FALLBACK_ID);
+    sidebarThreads = [focused, fallback, dockChat, child];
+    render({
+      routeThreadId: THREAD_ID,
+      sidebarTreeThreads: [focused, fallback, child],
+    }).snoozeThread(THREAD_ID, 30);
+    await flushActionResponses();
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID } }),
+    );
+  });
+
+  it("opens a new chat if all other chats are snoozed", async () => {
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(FALLBACK_ID, { snoozedUntil: "2026-10-03T12:00:00Z" }),
+    ];
+    render({ routeThreadId: THREAD_ID }).snoozeThread(THREAD_ID, 30);
+    await vi.waitFor(() => expect(harness.handleNewChat).toHaveBeenCalled());
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
   it("pins optimistically and dispatches thread metadata", async () => {
     let controller = render();
 
@@ -422,6 +604,524 @@ describe("useSidebarThreadActions", () => {
     expect(harness.navigate).not.toHaveBeenCalled();
     expect(harness.handleNewChat).toHaveBeenCalledWith();
   });
+
+  it("opens the most recent chat after the focused thread is marked done", async () => {
+    deferWindowTimers();
+    const controller = render({ routeThreadId: THREAD_ID });
+
+    controller.setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID }, replace: true }),
+    );
+  });
+
+  it.each([true, false])("offers Done undo (focused chat: %s)", async (focused) => {
+    deferWindowTimers();
+    const routeThreadId = focused ? THREAD_ID : FALLBACK_ID;
+    const controller = render({ routeThreadId });
+
+    controller.setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0];
+    expect(undoToast).toEqual(
+      expect.objectContaining({
+        timeout: 0,
+        data: expect.objectContaining({
+          allowCrossThreadVisibility: true,
+          dismissAfterVisibleMs: expect.any(Number),
+          archiveUndo: expect.objectContaining({ onUndo: expect.any(Function) }),
+        }),
+      }),
+    );
+    harness.navigate.mockClear();
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.dispatchCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: THREAD_ID, isSettled: false }),
+    );
+    expect(render({ routeThreadId }).settledOverrideByThreadId.get(THREAD_ID)).toBe(false);
+    if (focused) {
+      expect(harness.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({ params: { threadId: THREAD_ID }, replace: true }),
+      );
+    } else {
+      expect(harness.navigate).not.toHaveBeenCalled();
+    }
+  });
+
+  it("waits for Done confirmation before offering undo", async () => {
+    deferWindowTimers();
+    let acceptDone!: (response: { sequence: number }) => void;
+    harness.dispatchCommand.mockImplementationOnce(
+      () => new Promise((resolve) => (acceptDone = resolve)),
+    );
+
+    render().setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+    expect(harness.toast).not.toHaveBeenCalled();
+
+    acceptDone({ sequence: 1 });
+    await flushActionResponses();
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ archiveUndo: expect.any(Object) }),
+      }),
+    );
+  });
+
+  it("keeps Done undo available for retry when reopening fails", async () => {
+    deferWindowTimers();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    render({ routeThreadId: THREAD_ID }).setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0];
+    harness.navigate.mockClear();
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("undo rejected"));
+
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(false);
+    expect(harness.navigate).not.toHaveBeenCalled();
+    expect(harness.toast).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Unable to undo done" }),
+    );
+
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: THREAD_ID }, replace: true }),
+    );
+    errorLog.mockRestore();
+  });
+
+  it("keeps the focused chat when marking it done fails", async () => {
+    deferWindowTimers();
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    harness.dispatchCommand.mockRejectedValue(new Error("done rejected"));
+
+    render({ routeThreadId: THREAD_ID }).setThreadSettledWithToast(THREAD_ID, true);
+    await flushActionResponses();
+
+    expect(harness.navigate).not.toHaveBeenCalled();
+    expect(harness.handleNewChat).not.toHaveBeenCalled();
+    expect(harness.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Unable to mark thread as done" }),
+    );
+    expect(harness.toast).toHaveBeenCalledOnce();
+    errorLog.mockRestore();
+  });
+
+  it("keeps the focused chat when undoing done", async () => {
+    deferWindowTimers();
+    sidebarThreads = [
+      makeThread(THREAD_ID, { settledAt: "2026-07-20T01:00:00.000Z" }),
+      makeThread(FALLBACK_ID),
+    ];
+
+    render({ routeThreadId: THREAD_ID }).setThreadSettledWithToast(THREAD_ID, false);
+    await flushActionResponses();
+
+    expect(harness.navigate).not.toHaveBeenCalled();
+    expect(harness.handleNewChat).not.toHaveBeenCalled();
+    expect(harness.toast).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate for an accepted Done request superseded by Undo", async () => {
+    deferWindowTimers();
+    let acceptDone!: (response: { sequence: number }) => void;
+    harness.dispatchCommand.mockImplementationOnce(
+      () => new Promise((resolve) => (acceptDone = resolve)),
+    );
+    const controller = render({ routeThreadId: THREAD_ID });
+
+    controller.setThreadSettledWithToast(THREAD_ID, true);
+    controller.setThreadSettledWithToast(THREAD_ID, false);
+    await flushActionResponses();
+    acceptDone({ sequence: 1 });
+    await flushActionResponses();
+
+    expect(harness.navigate).not.toHaveBeenCalled();
+    expect(harness.handleNewChat).not.toHaveBeenCalled();
+    expect(harness.toast).not.toHaveBeenCalled();
+  });
+
+  it("uses human recency across projects instead of the sidebar working priority", async () => {
+    const recentId = ThreadId.makeUnsafe("thread-recent-other-project");
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(FALLBACK_ID, {
+        latestHumanMessageAt: "2026-07-21T00:00:00.000Z",
+        latestUserMessageAt: "2026-07-21T00:00:00.000Z",
+        hasLiveTailWork: true,
+      }),
+      makeThread(recentId, {
+        projectId: ProjectId.makeUnsafe("project-other"),
+        latestHumanMessageAt: "2026-07-22T00:00:00.000Z",
+        latestUserMessageAt: "2026-07-22T00:00:00.000Z",
+      }),
+    ];
+
+    await render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID);
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: recentId } }),
+    );
+  });
+
+  it("skips archived, done, and subagent threads when choosing the next chat", async () => {
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(FALLBACK_ID),
+      makeThread(ThreadId.makeUnsafe("thread-already-archived"), {
+        latestHumanMessageAt: "2026-07-22T00:00:00.000Z",
+        latestUserMessageAt: "2026-07-22T00:00:00.000Z",
+        archivedAt: "2026-07-22T01:00:00.000Z",
+      }),
+      makeThread(ThreadId.makeUnsafe("thread-already-done"), {
+        latestHumanMessageAt: "2026-07-23T00:00:00.000Z",
+        latestUserMessageAt: "2026-07-23T00:00:00.000Z",
+        settledAt: "2026-07-23T01:00:00.000Z",
+      }),
+      makeThread(ThreadId.makeUnsafe("thread-child"), {
+        latestHumanMessageAt: "2026-07-24T00:00:00.000Z",
+        latestUserMessageAt: "2026-07-24T00:00:00.000Z",
+        parentThreadId: THREAD_ID,
+      }),
+    ];
+
+    await render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID);
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID } }),
+    );
+  });
+
+  it("chooses from the visible thread list instead of hidden raw summaries", async () => {
+    const focused = makeThread(THREAD_ID);
+    const fallback = makeThread(FALLBACK_ID);
+    sidebarThreads = [
+      focused,
+      fallback,
+      makeThread(ThreadId.makeUnsafe("thread-hidden"), {
+        latestHumanMessageAt: "2026-07-22T00:00:00.000Z",
+        latestUserMessageAt: "2026-07-22T00:00:00.000Z",
+      }),
+    ];
+
+    await render({
+      routeThreadId: THREAD_ID,
+      sidebarTreeThreads: [focused, fallback],
+    }).archiveThread(THREAD_ID);
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID } }),
+    );
+  });
+
+  it("keeps the focused chat when its archive command fails", async () => {
+    harness.archiveThread.mockRejectedValue(new Error("archive rejected"));
+
+    await expect(render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID)).rejects.toThrow(
+      "archive rejected",
+    );
+
+    expect(harness.navigate).not.toHaveBeenCalled();
+    expect(harness.handleNewChat).not.toHaveBeenCalled();
+  });
+
+  it("reads the current candidate list when an archive response arrives", async () => {
+    let acceptArchive!: (sequence: number) => void;
+    harness.archiveThread.mockImplementationOnce(
+      () => new Promise((resolve) => (acceptArchive = resolve)),
+    );
+    const pending = render({ routeThreadId: THREAD_ID }).archiveThread(THREAD_ID);
+    const recentId = ThreadId.makeUnsafe("thread-arrived-during-archive");
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(recentId, { latestHumanMessageAt: "2026-07-22T00:00:00.000Z" }),
+    ];
+    render({ routeThreadId: THREAD_ID });
+
+    acceptArchive(1);
+    await pending;
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: recentId } }),
+    );
+  });
+
+  it.each(["archive", "done"] as const)(
+    "preserves a newer route while the focused thread's %s request is pending",
+    async (action) => {
+      deferWindowTimers();
+      let acceptRequest!: () => void;
+      if (action === "archive") {
+        harness.archiveThread.mockImplementationOnce(
+          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
+        );
+      } else {
+        harness.dispatchCommand.mockImplementationOnce(
+          () =>
+            new Promise<{ sequence: number }>(
+              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
+            ),
+        );
+      }
+      const controller = render({ routeThreadId: THREAD_ID });
+      const pending =
+        action === "archive"
+          ? controller.archiveThread(THREAD_ID)
+          : controller.setThreadSettledWithToast(THREAD_ID, true);
+      render({ routeThreadId: FALLBACK_ID });
+
+      acceptRequest();
+      await pending;
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["archive", "done"] as const)(
+    "keeps focus when a background %s target is opened before acceptance",
+    async (action) => {
+      deferWindowTimers();
+      let acceptRequest!: () => void;
+      if (action === "archive") {
+        harness.archiveThread.mockImplementationOnce(
+          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
+        );
+      } else {
+        harness.dispatchCommand.mockImplementationOnce(
+          () =>
+            new Promise<{ sequence: number }>(
+              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
+            ),
+        );
+      }
+      const controller = render({ routeThreadId: FALLBACK_ID });
+      const pending =
+        action === "archive"
+          ? controller.archiveThread(THREAD_ID)
+          : controller.setThreadSettledWithToast(THREAD_ID, true);
+      render({ routeThreadId: THREAD_ID });
+
+      acceptRequest();
+      await pending;
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["archive", "done"] as const)(
+    "keeps focus after leaving and returning to a pending %s target",
+    async (action) => {
+      deferWindowTimers();
+      let acceptRequest!: () => void;
+      if (action === "archive") {
+        harness.archiveThread.mockImplementationOnce(
+          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
+        );
+      } else {
+        harness.dispatchCommand.mockImplementationOnce(
+          () =>
+            new Promise<{ sequence: number }>(
+              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
+            ),
+        );
+      }
+      const controller = render({ routeThreadId: THREAD_ID });
+      const pending =
+        action === "archive"
+          ? controller.archiveThread(THREAD_ID)
+          : controller.setThreadSettledWithToast(THREAD_ID, true);
+      render({ routeThreadId: FALLBACK_ID });
+      render({ routeThreadId: THREAD_ID });
+
+      acceptRequest();
+      await pending;
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["archive", "done"] as const)(
+    "keeps a newer split route while the focused thread's %s request is pending",
+    async (action) => {
+      deferWindowTimers();
+      let acceptRequest!: () => void;
+      if (action === "archive") {
+        harness.archiveThread.mockImplementationOnce(
+          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
+        );
+      } else {
+        harness.dispatchCommand.mockImplementationOnce(
+          () =>
+            new Promise<{ sequence: number }>(
+              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
+            ),
+        );
+      }
+      const controller = render({ routeThreadId: THREAD_ID });
+      const pending =
+        action === "archive"
+          ? controller.archiveThread(THREAD_ID)
+          : controller.setThreadSettledWithToast(THREAD_ID, true);
+      render({ routeThreadId: THREAD_ID, routeSplitViewId: "split-newer" });
+
+      acceptRequest();
+      await pending;
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["archive", "done"] as const)(
+    "skips an accepted archive before its projection when the focused chat is marked %s",
+    async (action) => {
+      deferWindowTimers();
+      const olderId = ThreadId.makeUnsafe("thread-older-pending");
+      sidebarThreads = [
+        makeThread(THREAD_ID),
+        makeThread(FALLBACK_ID),
+        makeThread(olderId, { createdAt: "2026-07-18T00:00:00.000Z" }),
+      ];
+      const controller = render({ routeThreadId: THREAD_ID });
+      await controller.archiveThread(FALLBACK_ID);
+
+      if (action === "archive") await controller.archiveThread(THREAD_ID);
+      else controller.setThreadSettledWithToast(THREAD_ID, true);
+      await flushActionResponses();
+
+      expect(harness.navigate).toHaveBeenCalledOnce();
+      expect(harness.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({ params: { threadId: olderId } }),
+      );
+    },
+  );
+
+  it.each(["archive", "done"] as const)(
+    "keeps the focused chat when another thread is marked %s",
+    async (action) => {
+      deferWindowTimers();
+      const controller = render({ routeThreadId: FALLBACK_ID });
+
+      if (action === "archive") await controller.archiveThread(THREAD_ID);
+      else controller.setThreadSettledWithToast(THREAD_ID, true);
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an accepted archive excluded after its Undo toast closes before projection", async () => {
+    const olderId = ThreadId.makeUnsafe("thread-older-pending");
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(FALLBACK_ID),
+      makeThread(olderId, { createdAt: "2026-07-18T00:00:00.000Z" }),
+    ];
+    const controller = render({ routeThreadId: THREAD_ID });
+    await controller.archiveThreadWithUndo(FALLBACK_ID);
+    const toast = harness.toast.mock.calls.at(-1)?.[0] as {
+      data: { archiveUndo: { onNoUndo: () => void } };
+    };
+    toast.data.archiveUndo.onNoUndo();
+
+    await controller.archiveThread(THREAD_ID);
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: olderId } }),
+    );
+  });
+
+  it.each(["archive", "done"] as const)(
+    "opens the saved chat draft when %s leaves no unfinished candidate",
+    async (action) => {
+      deferWindowTimers();
+      sidebarThreads = [
+        makeThread(THREAD_ID),
+        makeThread(FALLBACK_ID, { settledAt: "2026-07-20T00:00:00.000Z" }),
+      ];
+      const controller = render({ routeThreadId: THREAD_ID });
+
+      if (action === "archive") await controller.archiveThread(THREAD_ID);
+      else controller.setThreadSettledWithToast(THREAD_ID, true);
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).toHaveBeenCalledWith();
+    },
+  );
+
+  it("excludes optimistic Done candidates before the server projection arrives", async () => {
+    deferWindowTimers();
+    const olderId = ThreadId.makeUnsafe("thread-older-unfinished");
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(FALLBACK_ID, { latestHumanMessageAt: "2026-07-22T00:00:00.000Z" }),
+      makeThread(olderId, { createdAt: "2026-07-18T00:00:00.000Z" }),
+    ];
+    let controller = render({ routeThreadId: THREAD_ID });
+    controller.setThreadSettledWithToast(FALLBACK_ID, true);
+    await flushActionResponses();
+    controller = render({ routeThreadId: THREAD_ID });
+
+    await controller.archiveThread(THREAD_ID);
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: olderId } }),
+    );
+  });
+
+  it("excludes every project bulk-archive target from the next-chat destination", async () => {
+    const outsideId = ThreadId.makeUnsafe("thread-outside-project");
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(FALLBACK_ID),
+      makeThread(outsideId, {
+        projectId: ProjectId.makeUnsafe("project-outside"),
+        createdAt: "2026-07-18T00:00:00.000Z",
+      }),
+    ];
+
+    await render({ routeThreadId: THREAD_ID }).archiveAllThreadsInProject(PROJECT_ID);
+
+    expect(harness.navigate).toHaveBeenCalledOnce();
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: outsideId } }),
+    );
+  });
+
+  it.each(["archive", "done"] as const)(
+    "leaves split view when the focused thread is marked %s",
+    async (action) => {
+      deferWindowTimers();
+      const controller = render({
+        routeThreadId: THREAD_ID,
+        activeSplitView: { id: "split-actions" } as never,
+        routeSplitViewId: "split-actions",
+      });
+
+      if (action === "archive") await controller.archiveThread(THREAD_ID);
+      else controller.setThreadSettledWithToast(THREAD_ID, true);
+      await flushActionResponses();
+
+      const navigation = harness.navigate.mock.calls.at(-1)?.[0] as {
+        params: { threadId: ThreadId };
+        search?: () => unknown;
+      };
+      expect(navigation).toMatchObject({ params: { threadId: FALLBACK_ID } });
+      expect(navigation?.search?.()).toEqual({});
+    },
+  );
 
   it("waits for the Undo decision before requesting worktree cleanup", async () => {
     const controller = render({ archiveDeletesOrphanedWorktree: true });

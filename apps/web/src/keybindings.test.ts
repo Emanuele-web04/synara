@@ -17,6 +17,8 @@ import {
   shouldShowThreadJumpHints,
   shortcutLabelForCommand,
   spaceJumpIndexFromCommand,
+  splitShortcutLabel,
+  suspendShortcutDispatch,
   terminalNavigationShortcutData,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
@@ -43,6 +45,79 @@ describe("editable keybinding resolution", () => {
 
     assert.isNotNull(binding);
     assert.equal(formatKeybindingWhenExpression(binding?.whenAst), "(!(terminalFocus) || isMac)");
+  });
+});
+
+describe("active thread action shortcuts", () => {
+  for (const [key, command] of [
+    ["a", "thread.archive"],
+    ["s", "thread.snooze"],
+    ["u", "thread.markUnread"],
+  ] as const) {
+    it(`resolves ${command} on both platforms and yields to non-Mac terminals`, () => {
+      for (const platform of ["MacIntel", "Win32", "Linux"]) {
+        const press = event({
+          key,
+          metaKey: platform === "MacIntel",
+          ctrlKey: platform !== "MacIntel",
+          altKey: true,
+          shiftKey: true,
+        });
+        assert.equal(resolveShortcutCommand(press, [], { platform }), command);
+        assert.equal(
+          resolveShortcutCommand(press, [], { platform, context: { terminalFocus: true } }),
+          platform === "MacIntel" ? command : null,
+        );
+      }
+    });
+  }
+});
+
+describe("layout-aware matching", () => {
+  const rules = (...entries: Array<[KeybindingCommand, string]>): ResolvedKeybindingsConfig =>
+    entries.map(([command, key]) => ({
+      command,
+      shortcut: {
+        key,
+        modKey: true,
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: true,
+      },
+    }));
+  const options = { platform: "MacIntel", context: { terminalFocus: false, terminalOpen: false } };
+
+  it("matches a typed letter only as that letter, not also as its physical key", () => {
+    // AZERTY: the key in QWERTY's Q position types "a".
+    const press = event({ key: "a", code: "KeyQ", metaKey: true, shiftKey: true });
+    const bindings = rules(["chat.new", "q"], ["terminal.toggle", "a"]);
+
+    assert.equal(resolveShortcutCommand(press, bindings, options), "terminal.toggle");
+    assert.isNull(resolveShortcutCommand(press, rules(["chat.new", "q"]), options));
+  });
+
+  it("falls back to the physical key when the layout types something else", () => {
+    // Option on macOS and Shift on the number row change the character, not the key.
+    const optionS = event({ key: "ß", code: "KeyS", metaKey: true, shiftKey: true });
+    const shiftOne = event({ key: "!", code: "Digit1", metaKey: true, shiftKey: true });
+
+    assert.equal(resolveShortcutCommand(optionS, rules(["chat.new", "s"]), options), "chat.new");
+    assert.equal(resolveShortcutCommand(shiftOne, rules(["chat.new", "1"]), options), "chat.new");
+  });
+});
+
+describe("splitShortcutLabel", () => {
+  it("keeps the plus key as a key of its own", () => {
+    assert.deepEqual(splitShortcutLabel("Ctrl++"), ["Ctrl", "+"]);
+    assert.deepEqual(splitShortcutLabel("Ctrl+Shift++"), ["Ctrl", "Shift", "+"]);
+    assert.deepEqual(splitShortcutLabel("⌘+"), ["⌘", "+"]);
+    assert.deepEqual(splitShortcutLabel("+"), ["+"]);
+  });
+
+  it("splits ordinary labels as before", () => {
+    assert.deepEqual(splitShortcutLabel("Ctrl+Shift+K"), ["Ctrl", "Shift", "K"]);
+    assert.deepEqual(splitShortcutLabel("⇧⌘Right"), ["⇧", "⌘", "Right"]);
   });
 });
 
@@ -181,7 +256,7 @@ const DEFAULT_BINDINGS = compile([
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
     shortcut: modShortcut("d"),
-    command: "terminal.split",
+    command: "terminal.workspace.terminal",
     whenAst: whenIdentifier("terminalFocus"),
   },
   {
@@ -239,6 +314,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("tab", { shiftKey: true, modKey: false }),
+    command: "model.effort.next",
+    whenAst: whenIdentifier("composerFocus"),
+  },
+  {
     shortcut: modShortcut("e", { shiftKey: true }),
     command: "traitsPicker.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -251,6 +331,16 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("f"),
     command: "chat.find",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("p"),
+    command: "search.files",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("f", { shiftKey: true }),
+    command: "search.content",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
@@ -350,12 +440,23 @@ const DEFAULT_BINDINGS = compile([
   },
 ]);
 
-describe("split/new/close terminal shortcuts", () => {
+describe("terminal shortcuts", () => {
+  it("ignores retired split shortcuts so they cannot consume shell keys", () => {
+    const keybindings = compile([{ shortcut: modShortcut("d"), command: "terminal.split" }]);
+    assert.equal(
+      resolveShortcutCommand(event({ key: "d", ctrlKey: true }), keybindings, {
+        platform: "Win32",
+        context: { terminalOpen: true, terminalFocus: true },
+      }),
+      null,
+    );
+  });
+
   it("supports when expressions", () => {
     const keybindings = compile([
       {
         shortcut: modShortcut("\\"),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenAnd(whenIdentifier("terminalOpen"), whenNot(whenIdentifier("terminalFocus"))),
       },
       {
@@ -370,14 +471,14 @@ describe("split/new/close terminal shortcuts", () => {
         platform: "Win32",
         context: { terminalOpen: true, terminalFocus: false },
       }),
-      "terminal.split",
+      "terminal.workspace.terminal",
     );
     assert.notEqual(
       resolveShortcutCommand(event({ key: "\\", ctrlKey: true }), keybindings, {
         platform: "Win32",
         context: { terminalOpen: false, terminalFocus: false },
       }),
-      "terminal.split",
+      "terminal.workspace.terminal",
     );
     assert.equal(
       resolveShortcutCommand(event({ key: "n", ctrlKey: true, shiftKey: true }), keybindings, {
@@ -450,6 +551,86 @@ describe("split/new/close terminal shortcuts", () => {
         platform: "Linux",
       }),
       "terminal.new",
+    );
+  });
+});
+
+describe("workspace search shortcuts", () => {
+  it.each([
+    ["server config", DEFAULT_BINDINGS],
+    ["fallback config", []],
+  ] as const)(
+    "resolves file and snippet search outside terminal focus using %s",
+    (_name, bindings) => {
+      assert.equal(
+        resolveShortcutCommand(event({ key: "p", metaKey: true }), bindings, {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        }),
+        "search.files",
+      );
+      assert.equal(
+        resolveShortcutCommand(event({ key: "f", metaKey: true, shiftKey: true }), bindings, {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        }),
+        "search.content",
+      );
+    },
+  );
+
+  it.each([
+    ["server config", DEFAULT_BINDINGS],
+    ["fallback config", []],
+  ] as const)(
+    "keeps the shipped search chords in a focused terminal using %s",
+    (_name, bindings) => {
+      assert.isNull(
+        resolveShortcutCommand(event({ key: "p", ctrlKey: true }), bindings, {
+          platform: "Win32",
+          context: { terminalFocus: true },
+        }),
+      );
+      assert.isNull(
+        resolveShortcutCommand(event({ key: "f", ctrlKey: true, shiftKey: true }), bindings, {
+          platform: "Win32",
+          context: { terminalFocus: true },
+        }),
+      );
+    },
+  );
+
+  it("honors a remapped search command and an explicit unassignment", () => {
+    const remapped = compile([
+      {
+        shortcut: modShortcut("g"),
+        command: "search.files",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+      {
+        shortcut: { ...modShortcut("unassigned"), modKey: false },
+        command: "search.content",
+      },
+    ]);
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "g", metaKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "search.files",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "p", metaKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "f", metaKey: true, shiftKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
     );
   });
 });
@@ -573,6 +754,34 @@ describe("space jump shortcuts", () => {
   });
 });
 
+describe("thread tab shortcuts", () => {
+  const resolve = (
+    overrides: Partial<ShortcutEventLike>,
+    platform: string,
+    terminalFocus = false,
+  ) => resolveShortcutCommand(event(overrides), [], { platform, context: { terminalFocus } });
+
+  it("uses Cmd+Ctrl+Arrow on macOS, including from a focused terminal", () => {
+    const right = { key: "ArrowRight", metaKey: true, ctrlKey: true };
+    assert.strictEqual(resolve(right, "MacIntel"), "threadTab.next");
+    assert.strictEqual(resolve(right, "MacIntel", true), "threadTab.next");
+    assert.strictEqual(
+      resolve({ key: "ArrowLeft", metaKey: true, ctrlKey: true }, "MacIntel"),
+      "threadTab.previous",
+    );
+    // Cmd+Shift+Arrow stays text selection in the composer.
+    assert.isNull(resolve({ key: "ArrowRight", metaKey: true, shiftKey: true }, "MacIntel"));
+  });
+
+  it("uses Ctrl+PageUp/PageDown elsewhere and yields them to a focused terminal", () => {
+    assert.strictEqual(resolve({ key: "PageDown", ctrlKey: true }, "Linux"), "threadTab.next");
+    assert.strictEqual(resolve({ key: "PageUp", ctrlKey: true }, "Win32"), "threadTab.previous");
+    assert.isNull(resolve({ key: "PageDown", ctrlKey: true }, "Linux", true));
+    // Ctrl+Alt+Arrow switches desktop workspaces on Linux.
+    assert.isNull(resolve({ key: "ArrowRight", ctrlKey: true, altKey: true }, "Linux"));
+  });
+});
+
 describe("workspace terminal tab shortcuts", () => {
   it("resolves the active workspace close shortcut only while the terminal workspace is open", () => {
     assert.strictEqual(
@@ -655,17 +864,17 @@ describe("shortcutLabelForCommand", () => {
     const bindings = compile([
       {
         shortcut: modShortcut("\\"),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenIdentifier("terminalFocus"),
       },
       {
         shortcut: modShortcut("\\", { shiftKey: true }),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenNot(whenIdentifier("terminalFocus")),
       },
     ]);
     assert.strictEqual(
-      shortcutLabelForCommand(bindings, "terminal.split", "Linux"),
+      shortcutLabelForCommand(bindings, "terminal.workspace.terminal", "Linux"),
       "Ctrl+Shift+\\",
     );
   });
@@ -779,6 +988,57 @@ describe("cross-command precedence", () => {
 });
 
 describe("resolveShortcutCommand", () => {
+  it.each(["MacIntel", "Win32", "Linux"])(
+    "cycles effort with Shift+Tab only in the composer on %s",
+    (platform) => {
+      const shortcutEvent = event({ key: "Tab", shiftKey: true });
+      assert.strictEqual(
+        resolveShortcutCommand(shortcutEvent, [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+        "model.effort.next",
+      );
+      assert.isNull(
+        resolveShortcutCommand(shortcutEvent, [], {
+          platform,
+          context: { composerFocus: false },
+        }),
+      );
+      assert.isNull(
+        resolveShortcutCommand(event({ key: "Tab" }), [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+      );
+      assert.strictEqual(
+        resolveShortcutCommand(event({ key: "Tab", ctrlKey: true, shiftKey: true }), [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+        "view.recent.previous",
+      );
+    },
+  );
+
+  it("lets a configured effort shortcut replace the Shift+Tab fallback", () => {
+    const keybindings = compile([
+      {
+        command: "model.effort.next",
+        shortcut: modShortcut("e", { altKey: true, modKey: false }),
+        whenAst: whenIdentifier("composerFocus"),
+      },
+    ]);
+    const options = { platform: "MacIntel", context: { composerFocus: true } };
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "e", altKey: true }), keybindings, options),
+      "model.effort.next",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "Tab", shiftKey: true }), keybindings, options),
+    );
+  });
+
   it("resolves model cycle commands outside terminal focus", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "]", altKey: true }), DEFAULT_BINDINGS, {
@@ -968,5 +1228,74 @@ describe("plus key parsing", () => {
       }),
       "terminal.toggle",
     );
+  });
+});
+
+describe("unassigned commands", () => {
+  // What the server sends for a command whose shortcut the user removed.
+  const unassignedNewThread = compile([
+    { shortcut: modShortcut("unassigned", { modKey: false }), command: "chat.new" },
+  ]);
+
+  it("does not bring the shipped shortcut back through the fallback table", () => {
+    const options = {
+      platform: "MacIntel",
+      context: { terminalFocus: false, terminalOpen: false },
+    };
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "n", metaKey: true }), [], options),
+      "chat.new",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "n", metaKey: true }), unassignedNewThread, options),
+    );
+  });
+
+  it("has no shortcut to show", () => {
+    assert.isNull(shortcutLabelForCommand(unassignedNewThread, "chat.new", "MacIntel"));
+    assert.isNull(
+      resolveKeybindingForCommand(unassignedNewThread, "chat.new", { platform: "MacIntel" }),
+    );
+  });
+});
+
+describe("option-modified keys", () => {
+  it("matches Option+Space by its physical key on macOS", () => {
+    const bindings = compile([
+      { shortcut: modShortcut(" ", { modKey: false, altKey: true }), command: "terminal.toggle" },
+    ]);
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "\u00a0", code: "Space", altKey: true }), bindings, {
+        platform: "MacIntel",
+      }),
+      "terminal.toggle",
+    );
+  });
+});
+
+describe("suspendShortcutDispatch", () => {
+  it("stops every shortcut from resolving until each holder resumes", () => {
+    const pressed = event({ key: "j", metaKey: true });
+    const options = { platform: "MacIntel" };
+    const resumeFirst = suspendShortcutDispatch();
+    const resumeSecond = suspendShortcutDispatch();
+
+    assert.isNull(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options));
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ metaKey: true, key: "/", code: "Slash" }),
+        "MacIntel",
+      ),
+    );
+
+    resumeFirst();
+    // Resuming twice must not release the other holder's suspension.
+    resumeFirst();
+    assert.isNull(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options));
+
+    resumeSecond();
+    assert.equal(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options), "terminal.toggle");
   });
 });

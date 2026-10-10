@@ -3,6 +3,7 @@
 // Layer: Git and orchestration text-generation service.
 
 import {
+  Deferred,
   Effect,
   Fiber,
   FileSystem,
@@ -30,7 +31,10 @@ import {
   type CodexPreparedAuthSource,
 } from "../../codexProcessEnv.ts";
 import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
-import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
+import {
+  makeEffectProcessCommand,
+  spawnProviderProcess,
+} from "../../platform/effectProcessRuntime.ts";
 import { compareCodexCliVersions, parseCodexCliVersion } from "../../provider/codexCliVersion.ts";
 import { withoutProviderCredentialEnvironment } from "../../providerChildEnvironment.ts";
 import { TextGenerationError } from "../Errors.ts";
@@ -210,6 +214,15 @@ function normalizeCodexError(
   });
 }
 
+function codexAuthenticationFailureDetail(output: string): string | undefined {
+  const authenticationFailed = output
+    .split(/\r?\n/)
+    .some((line) => /^ERROR:/.test(line) && /\b401\b/.test(line) && /\bunauthorized\b/i.test(line));
+  return authenticationFailed
+    ? "Codex authentication failed (401 Unauthorized). Check the selected Codex account or provider credentials in Settings, then retry."
+    : undefined;
+}
+
 const makeCodexTextGeneration = Effect.gen(function* () {
   const timingOption = yield* Effect.serviceOption(CodexTextGenerationTimingConfig);
   const timing = Option.getOrElse(timingOption, () => DEFAULT_CODEX_TEXT_GENERATION_TIMING);
@@ -220,14 +233,17 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const readStreamAsString = <E>(
     operation: string,
     stream: Stream.Stream<Uint8Array, E>,
+    onLine?: (line: string) => Effect.Effect<void>,
   ): Effect.Effect<string, TextGenerationError> =>
     Effect.gen(function* () {
       let text = "";
-      yield* Stream.runForEach(stream, (chunk) =>
-        Effect.sync(() => {
-          text += Buffer.from(chunk).toString("utf8");
+      yield* stream.pipe(
+        Stream.decodeText,
+        Stream.splitLines,
+        Stream.runForEach((line) => {
+          text += `${line}\n`;
+          return onLine?.(line) ?? Effect.void;
         }),
-      ).pipe(
         Effect.mapError((cause) =>
           normalizeCodexError("codex", operation, cause, "Failed to collect process output"),
         ),
@@ -244,6 +260,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const cleanupHandled = yield* Ref.make(false);
+      const authenticationFailure = yield* Deferred.make<never, TextGenerationError>();
       yield* Effect.addFinalizer(() =>
         Ref.get(cleanupHandled).pipe(
           Effect.flatMap((handled) =>
@@ -258,9 +275,15 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const stdoutFiber = yield* readStreamAsString(input.operation, input.child.stdout).pipe(
         Effect.forkScoped,
       );
-      const stderrFiber = yield* readStreamAsString(input.operation, input.child.stderr).pipe(
-        Effect.forkScoped,
-      );
+      const stderrFiber = yield* readStreamAsString(input.operation, input.child.stderr, (line) => {
+        const detail = codexAuthenticationFailureDetail(line);
+        return detail
+          ? Deferred.fail(
+              authenticationFailure,
+              new TextGenerationError({ operation: input.operation, detail }),
+            ).pipe(Effect.asVoid)
+          : Effect.void;
+      }).pipe(Effect.forkScoped);
       const exitCode = yield* input.child.exitCode.pipe(
         Effect.map((value) => Number(value)),
         Effect.mapError((cause) =>
@@ -271,6 +294,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             "Failed to read Codex CLI exit code",
           ),
         ),
+        Effect.raceFirst(Deferred.await(authenticationFailure)),
         Effect.timeoutOrElse({
           duration: input.timeoutMs,
           onTimeout: () =>
@@ -286,6 +310,18 @@ const makeCodexTextGeneration = Effect.gen(function* () {
               ),
             ),
         }),
+        Effect.catch((error) =>
+          Ref.get(cleanupHandled).pipe(
+            Effect.flatMap((handled) =>
+              handled
+                ? Effect.fail(error)
+                : terminateCodexChild(input.child, timing.killGraceMs, input.operation).pipe(
+                    Effect.andThen(Ref.set(cleanupHandled, true)),
+                    Effect.andThen(Effect.fail(error)),
+                  ),
+            ),
+          ),
+        ),
       );
 
       const collectOutput = Effect.all(
@@ -677,7 +713,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             outputPath,
             "-",
           ];
-          const command = makeEffectProcessCommand(codexBinaryPath, args, {
+          const child = yield* spawnProviderProcess(commandSpawner, codexBinaryPath, args, {
             cwd: isolatedCodexHome.workDirectoryPath,
             detached: true,
             env,
@@ -685,20 +721,16 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             stdin: {
               stream: Stream.make(new TextEncoder().encode(prompt)),
             },
-          });
-
-          const child = yield* commandSpawner
-            .spawn(command)
-            .pipe(
-              Effect.mapError((cause) =>
-                normalizeCodexError(
-                  codexBinaryPath,
-                  operation,
-                  cause,
-                  "Failed to spawn Codex CLI process",
-                ),
+          }).pipe(
+            Effect.mapError((cause) =>
+              normalizeCodexError(
+                codexBinaryPath,
+                operation,
+                cause,
+                "Failed to spawn Codex CLI process",
               ),
-            );
+            ),
+          );
           const { exitCode, stdout, stderr } = yield* collectCodexChildResult({
             binaryPath: codexBinaryPath,
             child,
@@ -714,9 +746,10 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             return yield* new TextGenerationError({
               operation,
               detail:
-                detail.length > 0
+                codexAuthenticationFailureDetail(detail) ??
+                (detail.length > 0
                   ? `Codex CLI command failed: ${detail}`
-                  : `Codex CLI command failed with code ${exitCode}.`,
+                  : `Codex CLI command failed with code ${exitCode}.`),
             });
           }
         });
@@ -753,6 +786,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = (input) => {
     const wantsBranch = input.includeBranch === true;
     const { prompt, outputSchemaJson } = buildCommitMessagePrompt({
+      writingPreferences: input.writingPreferences,
       branch: input.branch,
       stagedSummary: input.stagedSummary,
       stagedPatch: input.stagedPatch,
@@ -784,6 +818,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
 
   const generatePrContent: TextGenerationShape["generatePrContent"] = (input) => {
     const { prompt, outputSchemaJson } = buildPrContentPrompt({
+      writingPreferences: input.writingPreferences,
       baseBranch: input.baseBranch,
       headBranch: input.headBranch,
       commitSummary: input.commitSummary,

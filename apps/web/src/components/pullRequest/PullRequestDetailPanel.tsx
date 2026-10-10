@@ -589,7 +589,7 @@ export function PullRequestDetailPanel({
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
+    <div className="flex h-full min-h-0 w-full flex-col app-content-surface text-foreground">
       {/* No rule under the header: the tab row already reads as its own band, and the section
           borders further down are the only dividers the panel needs. No state glyph either:
           the dock tab above already carries it, and the Summary tab spells the state out. */}
