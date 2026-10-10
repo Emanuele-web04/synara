@@ -170,8 +170,12 @@ export function deriveAgentActivityTimelineState(
           ? `${updateCount} updates - ${latestPreview}`
           : `${updateCount} updates`
         : latestPreview;
+    // The group row sits where the trace started, so it carries the first
+    // entry's ordering keys (time and sequence) and the latest entry's content.
+    const { sequence: _latestSequence, ...latestContent } = latest;
     const displayEntry: WorkLogEntry = {
-      ...latest,
+      ...latestContent,
+      ...(first.sequence !== undefined ? { sequence: first.sequence } : {}),
       id: groupId,
       createdAt: first.createdAt,
       label: "Reasoning trace",
