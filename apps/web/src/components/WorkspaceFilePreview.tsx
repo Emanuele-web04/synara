@@ -86,6 +86,13 @@ import { FileLineCommentBox } from "./chat/FileLineCommentBox";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { useFileLineCommenting } from "./chat/useFileLineCommenting";
 import { WorkspaceFilePreviewHeader } from "./chat/WorkspaceFilePreviewHeader";
+import { WorkspaceFileFindBar } from "./chat/WorkspaceFileFindBar";
+import {
+  collectWorkspaceFileFindMatches,
+  stepWorkspaceFileFindIndex,
+  WORKSPACE_FILE_PREVIEW_FIND_EVENT,
+  workspaceFileFindEnabled,
+} from "./chat/workspaceFileFind.logic";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
 import { LocalImagePreview } from "./LocalImagePreview";
@@ -267,6 +274,91 @@ function FileContentsView(props: { path: string; contents: string; themeName: Di
       </Suspense>
     </FilePreviewHighlightErrorBoundary>
   );
+}
+
+interface HighlightRegistryLike {
+  set: (name: string, value: object) => void;
+  delete: (name: string) => void;
+}
+
+const FILE_FIND_MAX_MATCHES = 1000;
+
+function workspaceFileFindHighlightRegistry(): HighlightRegistryLike | null {
+  const css = (globalThis as typeof globalThis & { CSS?: { highlights?: HighlightRegistryLike } })
+    .CSS;
+  return css?.highlights ?? null;
+}
+
+/**
+ * Highlight the rendered DOM without rewriting Shiki or Markdown HTML. The
+ * CSS Custom Highlight API keeps code spans and parsed Markdown intact; older
+ * engines still get precise scrolling/counts, simply without the paint layer.
+ */
+function applyWorkspaceFileFindHighlights(
+  root: HTMLElement | null,
+  query: string,
+  activeIndex: number,
+  highlightNames: { all: string; active: string },
+): number {
+  const registry = workspaceFileFindHighlightRegistry();
+  registry?.delete(highlightNames.all);
+  registry?.delete(highlightNames.active);
+  // The viewer also hosts status text and selection controls, which are not
+  // part of the file. Count and highlight the same rendered content only.
+  const contentRoot = root?.querySelector(
+    ".editor-markdown-preview__body, .editor-file-viewer__highlight, .editor-file-viewer__plain",
+  );
+  if (!contentRoot || query.trim().length === 0) return 0;
+
+  const ranges: Range[] = [];
+  const textNodes: Text[] = [];
+  const walker = document.createTreeWalker(contentRoot, 4 /* NodeFilter.SHOW_TEXT */);
+  let node = walker.nextNode();
+  while (node) {
+    if (node.nodeType === 3 && node.textContent) textNodes.push(node as Text);
+    node = walker.nextNode();
+  }
+  const nodeSpans: Array<{ node: Text; start: number; end: number }> = [];
+  let renderedText = "";
+  for (const textNode of textNodes) {
+    const text = textNode.textContent ?? "";
+    const start = renderedText.length;
+    renderedText += text;
+    nodeSpans.push({ node: textNode, start, end: renderedText.length });
+  }
+  const renderedMatches = collectWorkspaceFileFindMatches(
+    renderedText,
+    query,
+    FILE_FIND_MAX_MATCHES + 1,
+  );
+  for (const match of renderedMatches.slice(0, FILE_FIND_MAX_MATCHES)) {
+    const startSpan = nodeSpans.find(
+      (span) => match.startOffset >= span.start && match.startOffset < span.end,
+    );
+    const endSpan = nodeSpans.find(
+      (span) => match.endOffset > span.start && match.endOffset <= span.end,
+    );
+    if (!startSpan || !endSpan) continue;
+    const range = document.createRange();
+    range.setStart(startSpan.node, match.startOffset - startSpan.start);
+    range.setEnd(endSpan.node, match.endOffset - endSpan.start);
+    ranges.push(range);
+  }
+  if (ranges.length === 0) return 0;
+
+  const safeIndex = Math.min(Math.max(activeIndex, 0), ranges.length - 1);
+  const HighlightCtor = (
+    globalThis as typeof globalThis & {
+      Highlight?: new (...ranges: Range[]) => object;
+    }
+  ).Highlight;
+  if (registry && HighlightCtor) {
+    registry.set(highlightNames.all, new HighlightCtor(...ranges));
+    registry.set(highlightNames.active, new HighlightCtor(ranges[safeIndex]!));
+  }
+  const activeElement = ranges[safeIndex]?.commonAncestorContainer.parentElement;
+  activeElement?.scrollIntoView({ block: "nearest" });
+  return renderedMatches.length;
 }
 
 function createPierreEditor(options: PierreEditorOptions<undefined>) {
@@ -561,7 +653,14 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const liveRevalidationEnabled = props.liveRevalidationEnabled ?? true;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const filePreviewRootRef = useRef<HTMLDivElement>(null);
   const contentsRef = useRef<HTMLDivElement>(null);
+  const fileFindHighlightId = useId().replaceAll(":", "");
+  const [fileFindOpen, setFileFindOpen] = useState(false);
+  const [fileFindFocusNonce, setFileFindFocusNonce] = useState(0);
+  const [fileFindQuery, setFileFindQuery] = useState("");
+  const [fileFindActiveIndex, setFileFindActiveIndex] = useState(0);
+  const [fileFindRenderedMatchCount, setFileFindRenderedMatchCount] = useState(0);
   const taskWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestTaskWriteVersionRef = useRef({ next: 0, byFile: new Map<string, number>() });
   const taskFileDiskVersionRef = useRef(new Map<string, string>());
@@ -573,6 +672,11 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     workspaceRoot,
   } = props;
   const queryClient = useQueryClient();
+  const openFileFind = useCallback(() => {
+    setFileFindOpen(true);
+    setFileFindFocusNonce((current) => current + 1);
+  }, []);
+
   // A workspace-relative reference that fails to read may actually live under
   // an ancestor of the workspace root (agents sometimes emit paths relative to
   // a parent folder, e.g. `Claude/Outbox/note.md` for a thread rooted at
@@ -766,6 +870,40 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     editor.readOnlyReason === null
       ? fileQuery.data
       : null;
+  const fileFindEnabled = workspaceFileFindEnabled({
+    fileContentsReady: fileQuery.data !== undefined,
+    fileIsImage,
+    editableDocument: editableDocument !== null,
+    showMarkdownPreview,
+  });
+  // The app-level keybinding dispatcher sends a targeted event after resolving
+  // configurable `file.find`/`chat.find` rules. The direct keyboard listener
+  // keeps standalone preview mounts (outside the chat route) equally useful.
+  useEffect(() => {
+    const onPreviewFind = (event: Event) => {
+      if (!fileFindEnabled) return;
+      const target = (event as CustomEvent<{ target?: EventTarget }>).detail?.target;
+      if (!target || !(target instanceof Node) || !filePreviewRootRef.current?.contains(target)) {
+        return;
+      }
+      openFileFind();
+    };
+    const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!fileFindEnabled || event.defaultPrevented || event.key.toLowerCase() !== "f") return;
+      if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return;
+      const target = event.target;
+      if (!(target instanceof Node) || !filePreviewRootRef.current?.contains(target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openFileFind();
+    };
+    window.addEventListener(WORKSPACE_FILE_PREVIEW_FIND_EVENT, onPreviewFind);
+    window.addEventListener("keydown", onWindowKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener(WORKSPACE_FILE_PREVIEW_FIND_EVENT, onPreviewFind);
+      window.removeEventListener("keydown", onWindowKeyDown, { capture: true });
+    };
+  }, [fileFindEnabled, openFileFind]);
   const activeEditBuffer =
     editableDocument && editor.canEdit
       ? {
@@ -781,6 +919,81 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     editableDocument != null &&
     editor.state.format?.expectedVersion !== editableDocument.version;
   const displayedFileContents = activeEditBuffer?.contents ?? fileContents;
+  useEffect(
+    () => () => {
+      const registry = workspaceFileFindHighlightRegistry();
+      registry?.delete(`synara-file-find-${fileFindHighlightId}`);
+      registry?.delete(`synara-file-find-active-${fileFindHighlightId}`);
+    },
+    [fileFindHighlightId],
+  );
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.dataset.workspaceFileFind = fileFindHighlightId;
+    style.textContent = `
+      ::highlight(synara-file-find-${fileFindHighlightId}) {
+        background-color: color-mix(in srgb, #f59e0b 24%, transparent);
+      }
+      ::highlight(synara-file-find-active-${fileFindHighlightId}) {
+        background-color: color-mix(in srgb, #f97316 38%, transparent);
+      }
+    `;
+    document.head.append(style);
+    return () => style.remove();
+  }, [fileFindHighlightId]);
+  useEffect(() => {
+    if (!fileFindOpen || !fileFindEnabled) {
+      setFileFindRenderedMatchCount(0);
+      return;
+    }
+    const renderedMatchCount = applyWorkspaceFileFindHighlights(
+      contentsRef.current,
+      fileFindQuery,
+      fileFindActiveIndex,
+      {
+        all: `synara-file-find-${fileFindHighlightId}`,
+        active: `synara-file-find-active-${fileFindHighlightId}`,
+      },
+    );
+    setFileFindRenderedMatchCount((current) =>
+      current === renderedMatchCount ? current : renderedMatchCount,
+    );
+    const navigableMatchCount = Math.min(FILE_FIND_MAX_MATCHES, renderedMatchCount);
+    if (navigableMatchCount === 0) {
+      setFileFindActiveIndex(0);
+    } else if (fileFindActiveIndex >= navigableMatchCount) {
+      setFileFindActiveIndex(navigableMatchCount - 1);
+    }
+  }, [
+    displayedFileContents,
+    fileFindActiveIndex,
+    fileFindEnabled,
+    fileFindHighlightId,
+    fileFindOpen,
+    fileFindQuery,
+    showMarkdownPreview,
+  ]);
+  const closeFileFind = useCallback(() => {
+    setFileFindOpen(false);
+    setFileFindQuery("");
+    setFileFindActiveIndex(0);
+    setFileFindRenderedMatchCount(0);
+    const registry = workspaceFileFindHighlightRegistry();
+    registry?.delete(`synara-file-find-${fileFindHighlightId}`);
+    registry?.delete(`synara-file-find-active-${fileFindHighlightId}`);
+  }, [fileFindHighlightId]);
+  const handleFileFindQueryChange = useCallback((query: string) => {
+    setFileFindQuery(query);
+    setFileFindActiveIndex(0);
+  }, []);
+  const handleFileFindStep = useCallback(
+    (direction: "next" | "previous") => {
+      const count = Math.min(FILE_FIND_MAX_MATCHES, fileFindRenderedMatchCount);
+      if (count === 0) return;
+      setFileFindActiveIndex((current) => stepWorkspaceFileFindIndex(count, current, direction));
+    },
+    [fileFindRenderedMatchCount],
+  );
   const lineCount =
     displayedFileContents.length === 0 ? 0 : displayedFileContents.split("\n").length;
   const readOnlyReason =
@@ -1061,7 +1274,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     hasFileContents && fileReadError !== null && !activeEditBuffer?.error;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface">
+    <div
+      ref={filePreviewRootRef}
+      data-workspace-file-preview="true"
+      data-workspace-file-find-enabled={fileFindEnabled ? "true" : undefined}
+      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface"
+    >
       <WorkspaceFilePreviewHeader
         workspaceRoot={props.workspaceRoot}
         filePath={filePath}
@@ -1089,7 +1307,23 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         readOnlyReason={readOnlyReason}
         reloading={fileIsImage || fileIsPdf ? binaryPreviewReloading : fileQuery.isFetching}
         onReload={workspaceRoot && filePath ? handleFileReload : undefined}
+        onFind={fileFindEnabled ? openFileFind : undefined}
       />
+      <div className="pointer-events-none absolute top-1 right-3 z-20">
+        <div className="pointer-events-auto">
+          <WorkspaceFileFindBar
+            open={fileFindEnabled && fileFindOpen}
+            focusNonce={fileFindFocusNonce}
+            query={fileFindQuery}
+            matchCount={Math.min(FILE_FIND_MAX_MATCHES, fileFindRenderedMatchCount)}
+            matchCountCapped={fileFindRenderedMatchCount > FILE_FIND_MAX_MATCHES}
+            activeIndex={fileFindActiveIndex}
+            onQueryChange={handleFileFindQueryChange}
+            onStep={handleFileFindStep}
+            onClose={closeFileFind}
+          />
+        </div>
+      </div>
       {activeEditBuffer?.error ? (
         <div
           role="alert"

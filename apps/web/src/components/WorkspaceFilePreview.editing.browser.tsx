@@ -655,6 +655,87 @@ it("preserves unsaved Markdown edits across Preview and Source", async () => {
   }
 });
 
+it("leaves Ctrl/Cmd+F available to the editable source editor", async () => {
+  const readFile = vi.fn().mockResolvedValue(loadedFile());
+  const restore = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+      </QueryClientProvider>,
+    );
+    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    await editor.click();
+    await userEvent.keyboard(shortcut("f"));
+    await expect.element(page.getByTestId("workspace-file-find-bar")).not.toBeInTheDocument();
+  } finally {
+    restore();
+  }
+});
+
+it("counts only rendered Markdown text and recomputes when switching source views", async () => {
+  const readFile = vi.fn().mockResolvedValue(
+    loadedFile({
+      relativePath: "README.md",
+      contents: "# Preview find\n\n[Read the guide](https://example.invalid/hidden-token)\n",
+    }),
+  );
+  const restore = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" />
+      </QueryClientProvider>,
+    );
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    await page.getByRole("button", { name: "Find in file", exact: true }).click();
+    await page.getByRole("textbox", { name: "Find in file" }).fill("hidden-token");
+    await expect.element(page.getByText("No results", { exact: true })).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Next match (Enter)" })).toBeDisabled();
+
+    await page.getByRole("button", { name: "Close find (Esc)" }).click();
+    await page.getByRole("radio", { name: "Source", exact: true }).click();
+    await page.getByRole("button", { name: "Find in file", exact: true }).click();
+    await page.getByRole("textbox", { name: "Find in file" }).fill("hidden-token");
+    await expect.element(page.getByText("1 / 1", { exact: true })).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Next match (Enter)" })).toBeEnabled();
+
+    await page.getByRole("button", { name: "Close find (Esc)" }).click();
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    await page.getByRole("button", { name: "Find in file", exact: true }).click();
+    await page.getByRole("textbox", { name: "Find in file" }).fill("hidden-token");
+    await expect.element(page.getByText("No results", { exact: true })).toBeVisible();
+    expect(readFile).toHaveBeenCalledTimes(1);
+  } finally {
+    restore();
+  }
+});
+
+it("does not cap rendered Markdown matches because of hidden link targets", async () => {
+  const readFile = vi.fn().mockResolvedValue(
+    loadedFile({
+      relativePath: "README.md",
+      contents: `# Preview find\n\n[Needle](https://example.invalid/${"needle-".repeat(1001)})\n`,
+    }),
+  );
+  const restore = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  try {
+    await render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath="README.md" />
+      </QueryClientProvider>,
+    );
+    await page.getByRole("radio", { name: "Preview", exact: true }).click();
+    await page.getByRole("button", { name: "Find in file", exact: true }).click();
+    await page.getByRole("textbox", { name: "Find in file" }).fill("needle");
+    await expect.element(page.getByText("1 / 1", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Next match (Enter)" }).click();
+    await expect.element(page.getByText("1 / 1", { exact: true })).toBeVisible();
+  } finally {
+    restore();
+  }
+});
+
 it("preserves edits and focus when a save completes while typing", async () => {
   let complete!: (v: { relativePath: string; version: string }) => void;
   const pending = new Promise<{ relativePath: string; version: string }>((r) => (complete = r));
