@@ -2402,10 +2402,11 @@ const make = Effect.gen(function* () {
       // restart here would tear down each legacy-started session on its first
       // web turn.
       const previousComputerControl =
-        Option.isSome(gatewaySessions) &&
-        gatewaySessions.value.computerControlProvisioned &&
-        currentProvider !== undefined
-          ? gatewaySessions.value.computerControlProvisioned(threadId, currentProvider)
+        Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
+          ? gatewaySessions.value.computerControlProvisioned(
+              threadId,
+              currentProvider ?? desiredProvider,
+            )
           : (threadSessionComputerControl.get(threadId) ?? false);
       const computerControlChanged =
         requestedComputerControl !== undefined &&
@@ -4685,11 +4686,10 @@ const make = Effect.gen(function* () {
                   const runtime = (yield* providerService.listSessions()).find(
                     (session) => session.threadId === event.payload.threadId,
                   );
-                  if (
-                    optimisticSession?.status === "starting" &&
-                    runtime &&
-                    runtime.activeTurnId == null
-                  ) {
+                  const shouldRestoreRejectedSession =
+                    optimisticSession?.status === "starting" ||
+                    (turnStartSession === null && optimisticSession?.status === "ready");
+                  if (shouldRestoreRejectedSession && runtime && runtime.activeTurnId == null) {
                     yield* setThreadSession({
                       threadId: event.payload.threadId,
                       session: {

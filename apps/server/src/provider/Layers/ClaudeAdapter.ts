@@ -70,6 +70,7 @@ import {
 import {
   applyClaudePromptEffortPrefix,
   getClaudeContextWindowSuffix,
+  getDefaultEffort,
   getDefaultModel,
   getEffectiveClaudeCodeEffort,
   getModelCapabilities,
@@ -1062,14 +1063,64 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
 }
 
 function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"][number] {
+  const staticCapabilities = getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value);
+  // The SDK knows about new model releases ahead of Synara's static catalog.
+  // Explicit no-effort support and an advertised effort ladder are authoritative;
+  // only missing SDK metadata falls back to the curated static capabilities.
+  const sdkEfforts =
+    model.supportsEffort === false
+      ? []
+      : Array.isArray(model.supportedEffortLevels)
+        ? [...new Set(model.supportedEffortLevels)].filter(
+            (level) =>
+              level === "low" ||
+              level === "medium" ||
+              level === "high" ||
+              level === "xhigh" ||
+              level === "max",
+          )
+        : undefined;
+  const staticDefault = getDefaultEffort(staticCapabilities);
+  const sdkOptions = sdkEfforts?.map((value) => {
+    const known = staticCapabilities.reasoningEffortLevels.find((option) => option.value === value);
+    return {
+      value,
+      label:
+        known?.label ??
+        (value === "xhigh" ? "Extra High" : value[0]!.toUpperCase() + value.slice(1)),
+      controlSource: "api-effort" as const,
+      ...(value === staticDefault ? { isDefault: true as const } : {}),
+    };
+  });
+  const capabilities =
+    sdkOptions === undefined
+      ? staticCapabilities
+      : {
+          ...staticCapabilities,
+          reasoningEffortLevels: [
+            ...sdkOptions,
+            // Synara-only modes (e.g. Ultracode) are not SDK API effort values.
+            ...staticCapabilities.reasoningEffortLevels.filter(
+              (option) => option.controlSource !== "api-effort",
+            ),
+          ],
+        };
   const optionDescriptors = getProviderOptionDescriptors({
     provider: PROVIDER,
-    caps: getModelCapabilities(PROVIDER, model.resolvedModel ?? model.value),
+    caps: capabilities,
   });
   return {
     slug: model.value,
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
     name: model.displayName,
+    ...(sdkOptions !== undefined
+      ? {
+          supportedReasoningEfforts: sdkOptions.map(({ value, label }) => ({ value, label })),
+          ...(staticDefault && sdkEfforts?.some((effort) => effort === staticDefault)
+            ? { defaultReasoningEffort: staticDefault }
+            : {}),
+        }
+      : {}),
     ...(optionDescriptors.length > 0 ? { optionDescriptors } : {}),
     ...(typeof model.supportsAutoMode === "boolean"
       ? { supportsAutoMode: model.supportsAutoMode }
@@ -1702,6 +1753,8 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
       return "Claude authentication succeeded, but this organization does not allow Claude Code.";
     case "account_on_hold":
       return "The active Claude account is on hold. Resolve the account issue, then retry.";
+    case "verification_required":
+      return "Claude requires organization verification before this account can continue. Complete verification, then retry.";
     case "billing_error":
       return "Claude billing or subscription access failed. Check the active Claude account, then retry.";
     case "rate_limit":
@@ -1716,6 +1769,8 @@ function claudeAssistantErrorMessage(error: SDKAssistantMessageError): string {
       return "Claude returned a server error. Retry in a moment.";
     case "max_output_tokens":
       return "Claude reached the maximum output length before completing the turn.";
+    case "cloud_credential_error":
+      return "Claude could not load its cloud provider credentials. Check or refresh them, then retry.";
     case "unknown":
       return "Claude failed to complete the turn.";
   }
@@ -1726,6 +1781,7 @@ function claudeAssistantErrorRequiresProcessRestart(error: SDKAssistantMessageEr
     error === "authentication_failed" ||
     error === "oauth_org_not_allowed" ||
     error === "account_on_hold" ||
+    error === "verification_required" ||
     error === "billing_error"
   );
 }
@@ -4628,6 +4684,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // before allocating an event stamp so it can't flood the timeline (or churn
         // allocations) with "Runtime warning" entries.
         if (message.subtype === "thinking_tokens") {
+          return;
+        }
+
+        // Internal auto-mode permission bookends belong to the CLI, not the
+        // transcript. The SDK's public types do not include this subtype yet.
+        if (sdkMessageSubtype(message) === "permission_check_status") {
           return;
         }
 

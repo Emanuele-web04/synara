@@ -5132,7 +5132,9 @@ describe("ProviderCommandReactor", () => {
           Array.from(laterEvents).filter(
             (event) =>
               (event.type === "thread.claude-cache-set" && event.payload.review !== null) ||
-              (event.type === "thread.session-set" && event.payload.session.status === "ready"),
+              (event.type === "thread.session-set" &&
+                event.payload.session.status === "ready" &&
+                event.payload.session.lastError === null),
           ),
         ).toEqual([]);
         expect(harness.sendTurn).not.toHaveBeenCalled();

@@ -1428,12 +1428,25 @@ export type WorkingLabel =
   | "Loading"
   | "Thinking"
   | "Checking message delivery…"
-  | `Starting ${string}…`;
+  | `Starting ${string}…`
+  | `Reconnecting to ${string}…`;
+
+/** The first send's own user echo is not evidence of a previously live session. */
+export function isFirstSessionConnect(input: {
+  messages: readonly Pick<ChatMessage, "role">[];
+  latestTurn: Thread["latestTurn"];
+}): boolean {
+  return (
+    !input.messages.some((message) => message.role === "assistant") &&
+    input.latestTurn?.completedAt == null
+  );
+}
 
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
+  isFirstConnect?: boolean;
   isSettlingTurnDispatch?: boolean;
   providerName?: string;
 }): WorkingLabel {
@@ -1442,7 +1455,9 @@ export function resolveWorkingLabel(input: {
     return "Loading";
   }
   if (input.isConnecting && input.providerName) {
-    return `Starting ${input.providerName}…`;
+    return input.isFirstConnect === false
+      ? `Reconnecting to ${input.providerName}…`
+      : `Starting ${input.providerName}…`;
   }
   return "Thinking";
 }

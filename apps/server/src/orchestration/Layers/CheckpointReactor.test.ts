@@ -719,6 +719,43 @@ describe("CheckpointReactor", () => {
     },
   );
 
+  it("does not revert checkpoints while a pending turn start is ahead of the read model", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    await runtime!.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const now = new Date().toISOString();
+        yield* sql`INSERT INTO projection_turns (thread_id, pending_message_id, state, requested_at, checkpoint_files_json)
+          VALUES (${threadId}, ${MessageId.makeUnsafe("pending-start-ahead-of-read-model")}, 'pending', ${now}, '[]')`;
+      }),
+    );
+
+    const restore = vi.spyOn(harness.checkpointStore, "restoreCheckpoint");
+    const reverse = vi.spyOn(harness.checkpointStore, "reverseCheckpointDiff");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("revert-during-pending-turn-start"),
+        threadId,
+        turnCount: 1,
+        scope: "thread",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await Effect.runPromise(harness.engine.drain);
+    await harness.start();
+    await settleCheckpointWork(harness.reactor.drain);
+
+    expect(restore).not.toHaveBeenCalled();
+    expect(reverse).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+    const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    )!;
+    expect(thread.activities.some((entry) => entry.kind === "checkpoint.revert.failed")).toBe(true);
+  });
+
   it("schedules SQL-filtered domain pages and ACKs telemetry without decoding raw payloads", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     await harness.drain();

@@ -119,9 +119,9 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "opencode" &&
       input.provider !== "pi" &&
       input.provider !== "devin" &&
-      input.provider !== "omp") ||
-    !runtimeEfforts ||
-    runtimeEfforts.length === 0
+      input.provider !== "omp" &&
+      input.provider !== "claudeAgent") ||
+    runtimeEfforts === undefined
   ) {
     return {
       ...staticCapabilities,

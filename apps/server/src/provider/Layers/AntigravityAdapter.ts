@@ -716,8 +716,8 @@ export function resolveAntigravityCliModelLabel(
   if (!parsed) return model;
   const effort =
     parsed.effort ??
-    options?.reasoningEffort?.trim().toLowerCase() ??
-    discoveredDefaultEffort?.trim().toLowerCase() ??
+    trim(options?.reasoningEffort)?.toLowerCase() ??
+    trim(discoveredDefaultEffort)?.toLowerCase() ??
     DEFAULT_EFFORT_BY_MODEL[parsed.model];
   // Always rebuild the CLI display label. Returning the raw input would preserve
   // corrupted `slug\tName (Effort)` rows from older discovery parsing.

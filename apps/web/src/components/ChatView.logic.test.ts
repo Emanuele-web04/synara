@@ -38,6 +38,7 @@ import {
   resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
   resolveWorkingLabel,
+  isFirstSessionConnect,
   deriveComposerSendState,
   deriveComposerVoiceState,
   editAndResendDispatchFields,
@@ -2366,6 +2367,29 @@ describe("hasLiveTurnTakenOver", () => {
 });
 
 describe("resolveWorkingLabel", () => {
+  it("distinguishes a real first start from a returning provider session", () => {
+    expect(
+      isFirstSessionConnect({
+        messages: [{ role: "user" }],
+        latestTurn: null,
+      }),
+    ).toBe(true);
+    expect(
+      isFirstSessionConnect({
+        messages: [{ role: "user" }, { role: "assistant" }],
+        latestTurn: null,
+      }),
+    ).toBe(false);
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: false,
+        turnTakenOver: true,
+        isConnecting: true,
+        isFirstConnect: false,
+        providerName: "Devin",
+      }),
+    ).toBe("Reconnecting to Devin…");
+  });
   it("shows Loading only while an unacknowledged send is still local", () => {
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");

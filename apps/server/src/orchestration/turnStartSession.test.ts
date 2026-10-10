@@ -56,8 +56,8 @@ describe("deriveTurnStartSession", () => {
     ).toBe(false);
   });
 
-  it("preserves established provider settings when restarting an idle session", () => {
-    expect(derive(makeSession("ready"))).toMatchObject({
+  it("preserves established provider settings when starting an idle session", () => {
+    expect(derive(makeSession("idle"))).toMatchObject({
       status: "starting",
       providerName: "codex",
       runtimeMode: "approval-required",
@@ -66,8 +66,19 @@ describe("deriveTurnStartSession", () => {
     });
   });
 
-  it.each(["starting", "running"] as const)("does not replace a %s session", (status) => {
-    expect(derive(makeSession(status))).toBeNull();
+  it.each(["starting", "ready", "running"] as const)(
+    "does not replace an established %s session with a false Starting state",
+    (status) => {
+      expect(derive(makeSession(status))).toBeNull();
+    },
+  );
+
+  it("does not overwrite newer terminal state with a delayed start request", () => {
+    const recentError = {
+      ...makeSession("error"),
+      updatedAt: "2026-07-22T00:00:00.000Z",
+    };
+    expect(derive(recentError)).toBeNull();
   });
 
   it("clears terminal error details when a new turn starts", () => {

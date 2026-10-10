@@ -385,6 +385,25 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     });
   });
 
+  it("uses Haiku 5.5's native efforts and 1M budget, while preserving Haiku 4.5", () => {
+    const capabilities = getModelCapabilities("claudeAgent", "claude-haiku-5-5");
+    expect(values("claudeAgent", "claude-haiku-5-5")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(getDefaultEffort(capabilities)).toBe("medium");
+    expect(capabilities.contextWindowTokens).toBe(1_000_000);
+    expect(capabilities.autoCompactWindowOptions?.map((option) => option.value)).toEqual([
+      "auto",
+      "200k",
+      "1m",
+    ]);
+    expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-5-5"))).toBe("medium");
+  });
+
   it("returns no claude effort options for Haiku 4.5", () => {
     expect(values("claudeAgent", "claude-haiku-4-5")).toEqual([]);
   });
@@ -1033,7 +1052,7 @@ describe("normalizePiModelOptions", () => {
 });
 
 describe("normalizeAntigravityModelOptions", () => {
-  it("stores only supported non-default effort overrides", () => {
+  it("preserves discovered default effort and explicit overrides", () => {
     const runtimeCapabilities = {
       reasoningEffortLevels: [
         { value: "low", label: "Low" },
@@ -1047,25 +1066,38 @@ describe("normalizeAntigravityModelOptions", () => {
     };
     expect(
       normalizeAntigravityModelOptions(
-        "Gemini 3.5 Flash",
+        "Gemini 3.8 Flash",
         { reasoningEffort: "medium" },
         runtimeCapabilities,
       ),
-    ).toBeUndefined();
+    ).toEqual({ reasoningEffort: "medium" });
     expect(
       normalizeAntigravityModelOptions(
-        "Gemini 3.5 Flash",
+        "Gemini 3.8 Flash",
         { reasoningEffort: "ultra" },
         runtimeCapabilities,
       ),
-    ).toBeUndefined();
+    ).toEqual({ reasoningEffort: "medium" });
     expect(
       normalizeAntigravityModelOptions(
-        "Gemini 3.5 Flash",
+        "Gemini 3.8 Flash",
         { reasoningEffort: "high" },
         runtimeCapabilities,
       ),
     ).toEqual({ reasoningEffort: "high" });
+    expect(
+      normalizeAntigravityModelOptions("Gemini 3.8 Flash", undefined, runtimeCapabilities),
+    ).toEqual({ reasoningEffort: "medium" });
+    expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.8 Flash",
+        { reasoningEffort: " " },
+        runtimeCapabilities,
+      ),
+    ).toEqual({ reasoningEffort: "medium" });
+    expect(
+      normalizeAntigravityModelOptions("Unknown model", { reasoningEffort: "high" }),
+    ).toBeUndefined();
   });
 });
 describe("normalizePiModelOptions", () => {
@@ -1114,14 +1146,16 @@ describe("getModelCapabilities Claude capability flags", () => {
     expect(caps("claude-opus-6[1m]")).toBe(caps("claude-opus-5-5"));
     expect(caps("claude-opus-5-6")).toBe(caps("claude-opus-5-5"));
     expect(caps("claude-fable-6")).toBe(caps("claude-fable-5-1"));
-    expect(caps("claude-sonnet-5-1")).toBe(caps("claude-sonnet-5"));
-    expect(caps("claude-haiku-5")).toBe(caps("claude-haiku-4-5"));
+    expect(caps("claude-sonnet-6")).toBe(caps("claude-sonnet-5-5"));
+    expect(caps("claude-haiku-6")).toBe(caps("claude-haiku-5-5"));
     expect(resolveNewestKnownClaudeFamilyModel("claude-opus-6[1m]")).toBe("claude-opus-5-5");
   });
 
   it("keeps older or unrecognized uncatalogued Claude ids on empty capabilities", () => {
     const caps = (slug: string) => getModelCapabilities("claudeAgent", slug);
     expect(caps("claude-opus-5-1")).toBe(EMPTY_MODEL_CAPABILITIES);
+    expect(caps("claude-haiku-5")).toBe(EMPTY_MODEL_CAPABILITIES);
+    expect(caps("claude-sonnet-5-1")).toBe(EMPTY_MODEL_CAPABILITIES);
     expect(caps("claude-opus-4-1")).toBe(EMPTY_MODEL_CAPABILITIES);
     expect(caps("claude-3-opus")).toBe(EMPTY_MODEL_CAPABILITIES);
     expect(caps("us.anthropic.claude-opus-6-v1")).toBe(EMPTY_MODEL_CAPABILITIES);
