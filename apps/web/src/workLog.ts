@@ -3743,7 +3743,8 @@ function coalesceMonitorTerminalNotices(entries: TimelineEntry[]): TimelineEntry
         completion &&
         monitor.outcome !== "updated" &&
         monitor.taskId === completion.taskId &&
-        monitor.outcome === (completion.outcome === "finished" ? "completed" : completion.outcome) &&
+        monitor.outcome ===
+          (completion.outcome === "finished" ? "completed" : completion.outcome) &&
         (!previous.entry.turnId ||
           !current.entry.turnId ||
           previous.entry.turnId === current.entry.turnId)

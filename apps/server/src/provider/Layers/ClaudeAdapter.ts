@@ -519,6 +519,11 @@ interface ClaudeSessionContext {
   // seed the set because they can race the aggregate snapshot and suppress its
   // "Moved to background" notice entirely.
   readonly knownBackgroundTaskIds: Set<string>;
+  // Turn that was running when each task started. Task messages can arrive
+  // after that turn ended (a stopped turn's subagents report "stopped", a
+  // background task finishes later) and must stay attributed to it rather
+  // than to whatever turn is active by then.
+  readonly taskTurnIds: Map<string, TurnId>;
   // Task ids with provider-terminal evidence. Agent-scoped human interactions
   // are cancelled only on this evidence (or whole-session stop), never merely
   // because their parent foreground turn completed.
@@ -1123,6 +1128,18 @@ function resolveSelectedClaudeThinkingToggle(
 
 function asCanonicalTurnId(value: TurnId): TurnId {
   return value;
+}
+
+// Task events belong to the turn that started the task, falling back to the
+// active turn for tasks this session never saw start.
+function taskTurnIdField(
+  context: Pick<ClaudeSessionContext, "taskTurnIds" | "turnState">,
+  taskId: string,
+): { readonly turnId?: TurnId } {
+  const turnId =
+    context.taskTurnIds.get(taskId) ??
+    (context.turnState ? asCanonicalTurnId(context.turnState.turnId) : undefined);
+  return turnId ? { turnId } : {};
 }
 
 function asRuntimeRequestId(value: ApprovalRequestId): RuntimeRequestId {
@@ -3883,6 +3900,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pendingSubagentSteers: new Map(),
           pendingSubagentStops: new Set(),
           knownBackgroundTaskIds: new Set(),
+          taskTurnIds: new Map(),
           terminalTaskIds: new Set(),
           settledSubagentToolUseIds: new Map(),
           subagentToolOwners: new Map(),
@@ -5333,9 +5351,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             provider: PROVIDER,
             createdAt: taskStamp.createdAt,
             threadId: owner.target.session.threadId,
-            ...(owner.target.turnState
-              ? { turnId: asCanonicalTurnId(owner.target.turnState.turnId) }
-              : {}),
+            ...(owner.target === context
+              ? taskTurnIdField(context, message.task_id)
+              : owner.target.turnState
+                ? { turnId: asCanonicalTurnId(owner.target.turnState.turnId) }
+                : {}),
             payload: {
               taskId: RuntimeTaskId.makeUnsafe(message.task_id),
               ...(status !== undefined ? { status } : {}),
@@ -5556,6 +5576,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           case "task_started": {
             context.terminalTaskIds.delete(message.task_id);
+            if (context.turnState && !context.taskTurnIds.has(message.task_id)) {
+              context.taskTurnIds.set(message.task_id, asCanonicalTurnId(context.turnState.turnId));
+            }
             // Resuming an existing agent (SendMessage) restarts its task id under
             // the new tool call. Alias that call to the original Task tool_use_id
             // so the resumed run reuses its child thread instead of a new one.
@@ -5716,6 +5739,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const startedTaskToolUseId = startedOwner.run?.toolUseId ?? message.tool_use_id;
             yield* offerRuntimeEvent(startedOwner.target, {
               ...baseFor(startedOwner.target),
+              ...(startedOwner.target === context ? taskTurnIdField(context, message.task_id) : {}),
               type: "task.started",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
@@ -5764,6 +5788,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const progressRun = progressOwner.run;
             yield* offerRuntimeEvent(progressOwner.target, {
               ...baseFor(progressOwner.target),
+              ...(progressOwner.target === context
+                ? taskTurnIdField(context, message.task_id)
+                : {}),
               type: "task.progress",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
@@ -5818,6 +5845,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             );
             yield* offerRuntimeEvent(completedOwner.target, {
               ...baseFor(completedOwner.target),
+              ...(completedOwner.target === context
+                ? taskTurnIdField(context, message.task_id)
+                : {}),
               type: "task.completed",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
@@ -5831,6 +5861,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(completedOwner.run ? { toolUseId: completedOwner.run.toolUseId } : {}),
               },
             });
+            context.taskTurnIds.delete(message.task_id);
             context.liveWorkflowTaskIds.delete(message.task_id);
             context.knownWorkflowTaskIds.delete(message.task_id);
             context.workflowTaskIdByMemberTaskId.delete(message.task_id);
@@ -6262,11 +6293,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             provider: PROVIDER,
             createdAt: stamp.createdAt,
             threadId: context.session.threadId,
+            ...(context.taskTurnIds.has(taskId)
+              ? { turnId: context.taskTurnIds.get(taskId)! }
+              : {}),
             payload: { taskId: RuntimeTaskId.makeUnsafe(taskId), status: "stopped" },
             providerRefs: nativeProviderRefs(context),
           });
         }
         context.knownBackgroundTaskIds.clear();
+        context.taskTurnIds.clear();
 
         const updatedAt = yield* nowIso;
         context.session = {
@@ -7260,6 +7295,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             pendingSubagentSteers,
             pendingSubagentStops,
             knownBackgroundTaskIds: new Set(),
+            taskTurnIds: new Map(),
             terminalTaskIds: new Set(),
             settledSubagentToolUseIds: new Map(),
             subagentToolOwners: new Map(),

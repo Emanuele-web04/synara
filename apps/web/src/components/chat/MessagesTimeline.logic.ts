@@ -582,7 +582,7 @@ interface TimelineDiffMessage {
 /** A background task whose completion woke the agent into a new turn. */
 export interface TurnResumedBy {
   readonly description: string | null;
-  readonly outcome: "finished" | "failed" | "stopped";
+  readonly outcome: "finished" | "failed" | "stopped" | "updated";
 }
 
 /**
@@ -1662,10 +1662,14 @@ function collectResumedBy(
     if (!isBackgroundTaskCompletionRow(row) || row.kind !== "work") break;
     for (const entry of row.groupedEntries.toReversed()) {
       const completion = entry.backgroundTaskCompletion;
-      if (!completion) continue;
+      const monitor = entry.monitorNotification;
+      if (!completion && !monitor) continue;
       resumedBy.unshift({
-        description: completion.description,
-        outcome: completion.outcome ?? "finished",
+        description: completion?.description ?? monitor?.name ?? null,
+        outcome:
+          completion?.outcome ??
+          (monitor?.outcome === "completed" ? "finished" : monitor?.outcome) ??
+          "finished",
       });
     }
   }
