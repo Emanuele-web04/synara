@@ -1,6 +1,6 @@
 import "../../index.css";
 import { ProjectId, ThreadId } from "@synara/contracts";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import type { ReactNode } from "react";
@@ -92,7 +92,8 @@ it.each(["Stop subagent Scout", "Run Scout in background"])(
     const feedback = vi.spyOn(toastManager, "add");
     const screen = await render(<SubagentsDockPane hostThreadId={parent} />);
     try {
-      await page.getByRole("button", { name: label, exact: true }).click({ force: true });
+      page.getByRole("button", { name: "Open subagent Scout (Running)" }).element().focus();
+      await page.getByRole("button", { name: label, exact: true }).click();
       await expect.poll(() => feedback.mock.calls.length).toBe(1);
       expect(feedback.mock.calls[0]?.[0]).toMatchObject({
         type: "error",
@@ -162,5 +163,35 @@ it("keeps completed-only relative time current after the last active run settles
     await screen.unmount();
     vi.useRealTimers();
     clock.mockRestore();
+  }
+});
+
+it("reveals gated dock controls through keyboard row focus before Stop is clickable", async () => {
+  const screen = await render(
+    <>
+      <button>Focus start</button>
+      <SubagentsDockPane hostThreadId={parent} />
+    </>,
+  );
+  try {
+    const start = page.getByRole("button", { name: "Focus start", exact: true });
+    await start.hover();
+    start.element().focus();
+    const stop = screen.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Stop subagent Scout"]',
+    )!;
+    expect(getComputedStyle(stop).visibility).toBe("hidden");
+    const controls = stop.closest<HTMLElement>(".pointer-events-none")!;
+    expect(getComputedStyle(controls).pointerEvents).toBe("none");
+    const row = page.getByRole("button", { name: "Open subagent Scout (Running)" }).element();
+    for (let i = 0; i < 8 && document.activeElement !== row; i++) await userEvent.tab();
+    expect(document.activeElement).toBe(row);
+    await expect.poll(() => getComputedStyle(stop).visibility).toBe("visible");
+    await page.getByRole("button", { name: "Stop subagent Scout", exact: true }).click();
+    expect(state.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "thread.turn.interrupt" }),
+    );
+  } finally {
+    await screen.unmount();
   }
 });
