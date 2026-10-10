@@ -155,6 +155,51 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("MessagesTimeline", () => {
+  it.each(["stopped", "interrupted"] as const)(
+    "renders the %s header after its request when the turn produced no content",
+    async (outcome) => {
+      const { MessagesTimeline } = await import("./MessagesTimeline");
+      const turnId = TurnId.makeUnsafe("empty-turn");
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          timelineEntries={[
+            {
+              id: "empty-request",
+              kind: "message",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              message: {
+                id: MessageId.makeUnsafe("empty-request"),
+                role: "user",
+                text: "Inspect the repository",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                streaming: false,
+                turnId,
+              },
+            },
+          ]}
+          turnTimingByTurnId={
+            new Map([
+              [
+                turnId,
+                {
+                  startedAt: "2026-03-17T19:12:28.000Z",
+                  completedAt: "2026-03-17T19:12:30.000Z",
+                  interrupted: true,
+                  stoppedByUser: outcome === "stopped",
+                },
+              ],
+            ])
+          }
+        />,
+      );
+      const label = outcome === "stopped" ? "Stopped by you after 2.0s" : "Interrupted after 2.0s";
+      expect(markup).toContain(`data-turn-header="${outcome}"`);
+      expect(markup).toContain(label);
+      expect(markup.indexOf(label)).toBeGreaterThan(markup.indexOf("Inspect the repository"));
+    },
+  );
+
   it("shows the literal failed command, exit code and stderr even when the provider uses an error tone", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
