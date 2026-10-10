@@ -12,7 +12,11 @@ export const DRAFT_NAVIGATION_COALESCE_WINDOW_MS = 5_000;
 
 const inFlightDraftNavigationBySlot = new Map<
   string,
-  { readonly operation: Promise<unknown>; readonly startedAt: number }
+  {
+    readonly operation: Promise<unknown>;
+    readonly startedAt: number;
+    readonly controller: AbortController;
+  }
 >();
 
 export function draftNavigationSlotKey(projectId: string, entryPoint: string): string {
@@ -20,14 +24,20 @@ export function draftNavigationSlotKey(projectId: string, entryPoint: string): s
 }
 
 /** Coalesces repeated clicks/shortcuts that target the same project + entry-point slot. */
-export function runDraftNavigationOnce<T>(slotKey: string, run: () => Promise<T>): Promise<T> {
+export function runDraftNavigationOnce<T>(
+  slotKey: string,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
   const existing = inFlightDraftNavigationBySlot.get(slotKey);
   if (existing && Date.now() - existing.startedAt < DRAFT_NAVIGATION_COALESCE_WINDOW_MS) {
     return existing.operation as Promise<T>;
   }
 
-  const operation = Promise.resolve().then(run);
-  inFlightDraftNavigationBySlot.set(slotKey, { operation, startedAt: Date.now() });
+  // A retry owns the slot even after it settles; an older preparation must not navigate later.
+  existing?.controller.abort();
+  const controller = new AbortController();
+  const operation = Promise.resolve().then(() => run(controller.signal));
+  inFlightDraftNavigationBySlot.set(slotKey, { operation, startedAt: Date.now(), controller });
   const clearOperation = () => {
     if (inFlightDraftNavigationBySlot.get(slotKey)?.operation === operation) {
       inFlightDraftNavigationBySlot.delete(slotKey);
@@ -42,6 +52,7 @@ export function runDraftNavigationOnce<T>(slotKey: string, run: () => Promise<T>
  * rolls the staged draft back without treating the user's newer navigation as an error.
  */
 export async function stageDraftNavigation(input: {
+  readonly signal?: AbortSignal | undefined;
   readonly stage: () => void;
   readonly navigate: () => Promise<void>;
   readonly isDestinationActive: () => boolean;
@@ -58,9 +69,13 @@ export async function stageDraftNavigation(input: {
   };
 
   try {
+    if (input.signal?.aborted) {
+      rollbackOnce();
+      return false;
+    }
     input.stage();
     await input.navigate();
-    if (!input.isDestinationActive()) {
+    if (input.signal?.aborted || !input.isDestinationActive()) {
       rollbackOnce();
       return false;
     }

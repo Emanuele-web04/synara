@@ -110,4 +110,48 @@ describe("stagedDraftNavigation", () => {
       vi.useRealTimers();
     }
   });
+  it("keeps the newer draft when expired preparation finishes after the retry", async () => {
+    vi.useFakeTimers();
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let activeDraft = "home";
+    const finalized: string[] = [];
+    const staged: string[] = [];
+    const slotKey = draftNavigationSlotKey("project-slow-group", "chat");
+    const createDraft = (name: string, beforeStage: Promise<void>) =>
+      runDraftNavigationOnce(slotKey, async (signal?: AbortSignal) => {
+        await beforeStage;
+        return stageDraftNavigation({
+          signal,
+          stage: () => {
+            staged.push(name);
+          },
+          navigate: async () => {
+            activeDraft = name;
+          },
+          isDestinationActive: () => activeDraft === name,
+          finalize: () => {
+            finalized.push(name);
+          },
+          rollback: () => undefined,
+        });
+      });
+    try {
+      const older = createDraft("older", preparation);
+      await Promise.resolve();
+      vi.advanceTimersByTime(DRAFT_NAVIGATION_COALESCE_WINDOW_MS);
+      await expect(createDraft("newer", Promise.resolve())).resolves.toBe(true);
+      expect(activeDraft).toBe("newer");
+      releasePreparation();
+      await older;
+      expect(activeDraft).toBe("newer");
+      expect(staged).toEqual(["newer"]);
+      expect(finalized).toEqual(["newer"]);
+    } finally {
+      releasePreparation();
+      vi.useRealTimers();
+    }
+  });
 });
