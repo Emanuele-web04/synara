@@ -733,6 +733,7 @@ describe("external MCP gateway stdio flow", () => {
         expect(overviewPayload.nextSteps).toEqual([
           "Call synara_capabilities with a projectId to list the exact provider/model targets available to this integration.",
         ]);
+        expect(overviewPayload.limits).toMatchObject({ concurrentAgentTasks: null });
 
         const auditRows = yield* sql<{
           readonly requestId: string | null;
@@ -787,6 +788,25 @@ describe("external MCP gateway stdio flow", () => {
         expect(JSON.stringify(successfulDespiteAuditFailure.body)).toContain(PROJECT_ID);
         expect(JSON.stringify(successfulDespiteAuditFailure.body)).not.toContain('"isError":true');
         yield* sql`DROP TRIGGER reject_external_mcp_gateway_audit_finish`;
+        for (const concurrencyLimit of [null, 8, null]) {
+          yield* service.updateIntegration({
+            integrationId: restricted.integration.integrationId,
+            concurrencyLimit,
+          });
+          const capabilities = yield* gateway.handlePost({
+            authorizationHeader: `Bearer ${restrictedCredential}`,
+            body: {
+              jsonrpc: "2.0",
+              id: "current-capabilities",
+              method: "tools/call",
+              params: { name: "synara_capabilities", arguments: { projectId: PROJECT_ID } },
+            },
+          });
+          expect(toolPayload(capabilities.body as Record<string, unknown>).limits).toMatchObject({
+            concurrentAgentTasks: concurrencyLimit,
+            callsPerMinute: restricted.integration.rateLimitPerMinute,
+          });
+        }
       }).pipe(Effect.provide(testLayer)),
     );
   });
