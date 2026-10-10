@@ -468,15 +468,16 @@ const make = Effect.gen(function* () {
         return yield* discover;
       }
       const cacheKey = providerModelDiscoveryCacheKey(resolved);
+      // A CLI upgrade can change any provider's model list or controls without
+      // changing its binary path. Use the already-cached health snapshot as a
+      // version fence across providers, not only for Claude.
       const runtimeVersion =
-        resolved.provider === "claudeAgent"
-          ? ((yield* providerHealth.getStatuses).find(
-              (status) =>
-                status.provider === "claudeAgent" && status.instanceId === resolved.instanceId,
-            )?.version ?? null)
-          : undefined;
+        (yield* providerHealth.getStatuses).find(
+          (status) =>
+            status.provider === resolved.provider && status.instanceId === resolved.instanceId,
+        )?.version ?? null;
       return yield* modelDiscoveryCache.lookup(
-        { ...cacheKey, ...(runtimeVersion !== undefined ? { runtimeVersion } : {}) },
+        { ...cacheKey, runtimeVersion },
         discover,
         parsed.refresh,
       );
