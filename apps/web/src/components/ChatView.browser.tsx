@@ -3910,7 +3910,12 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
       await page.getByRole("button", { name: /Approve once/u }).click();
-      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
+      await vi.waitFor(() =>
+        expect(subscribeThread).toHaveBeenCalledWith({
+          threadId: THREAD_ID,
+          messageWindow: { limit: 100 },
+        }),
+      );
       await expect
         .element(page.getByRole("button", { name: /Approve once/u }))
         .not.toBeInTheDocument();
