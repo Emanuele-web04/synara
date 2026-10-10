@@ -30,12 +30,6 @@ export class ProviderCredentials extends ServiceMap.Service<
   ProviderCredentialsShape
 >()("synara/providerCredentials/ProviderCredentials") {}
 
-export const resolveProviderServerPassword = (provider: ExternalProviderServer) =>
-  Effect.gen(function* () {
-    const credentials = yield* ProviderCredentials;
-    return (yield* credentials.getServerPassword(provider)) ?? undefined;
-  }).pipe(Effect.orDie);
-
 export const makeProviderServerPasswordResolver =
   (credentials: ProviderCredentialsShape) =>
   (provider: ExternalProviderServer): Effect.Effect<string | undefined> =>

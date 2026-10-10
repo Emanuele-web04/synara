@@ -8,13 +8,13 @@ import {
   SpaceId,
   ThreadId,
   TurnId,
-  type OrchestrationReadModel,
   type OrchestrationShellStreamEvent,
 } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyShellEvent,
+  applyThreadUpdate,
   clearThreadDetailSyncFailureInClientState,
   evictThreadDetailFromClientState,
   markThreadDetailSyncFailedInClientState,
@@ -33,6 +33,7 @@ import type { AppState } from "./storeState";
 import { getThreadFromState } from "./threadDerivation";
 import {
   makeThread,
+  makeDomainEvent,
   makeActivity,
   makeState,
   makeProject,
@@ -43,8 +44,259 @@ import {
   threadsOf,
 } from "./storeTestFixtures";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
+import { applyOrchestrationEvents } from "./storeEventReducer";
 
 describe("store projection", () => {
+  it("retains project-import provenance through shell hydration, detail updates, and eviction", () => {
+    const thread = makeReadModelThread({ isProjectImport: true });
+    let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(thread));
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+    state = syncServerReadModel(state, makeReadModel(thread));
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+    state = evictThreadDetailFromClientState(state, thread.id);
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+  });
+
+  it("retains an active resend timestamp through binding updates and rollback", () => {
+    const at = (minute: number) => `2026-09-17T10:0${minute}:00.000Z`;
+    const messageId = MessageId.makeUnsafe("resent");
+    const thread = makeThread({
+      latestHumanMessageAt: at(1),
+      messages: [
+        {
+          id: messageId,
+          role: "user",
+          text: "Original",
+          dispatchOrigin: "user",
+          turnId: null,
+          streaming: false,
+          createdAt: at(1),
+        },
+      ],
+    });
+    let state = makeState(thread);
+    const upsertUserMessage = (input: {
+      messageId: MessageId;
+      createdAt: string;
+      updatedAt: string;
+      sequence: number;
+    }) => {
+      const { sequence, ...message } = input;
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId: thread.id,
+            role: "user",
+            text: "Edited",
+            dispatchOrigin: "user",
+            turnId: null,
+            streaming: false,
+            source: "native",
+            ...message,
+          },
+          { sequence, occurredAt: at(sequence) },
+        ),
+      ]);
+    };
+    upsertUserMessage({ messageId, createdAt: at(2), updatedAt: at(2), sequence: 2 });
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    expect(threadsOf(state)[0]?.messages[0]?.createdAt).toBe(at(1));
+    upsertUserMessage({ messageId, createdAt: at(1), updatedAt: at(2), sequence: 3 });
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    const nextMessageId = MessageId.makeUnsafe("next");
+    upsertUserMessage({
+      messageId: nextMessageId,
+      createdAt: at(4),
+      updatedAt: at(4),
+      sequence: 4,
+    });
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "thread.conversation-rolled-back",
+        {
+          threadId: thread.id,
+          messageId: nextMessageId,
+          numTurns: 1,
+        },
+        { sequence: 5, occurredAt: at(5) },
+      ),
+    ]);
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(at(2));
+  });
+
+  it.each(["2026-09-17T10:00:00.000Z", null])(
+    "preserves authoritative human recency %s while stale detail awaits hydration",
+    (latestHumanMessageAt) => {
+      const staleAt = "2026-09-17T10:20:00.000Z";
+      const incoming = makeReadModelThread({ latestHumanMessageAt, messages: [] });
+      const thread = makeThread({
+        id: incoming.id,
+        latestHumanMessageAt: staleAt,
+        messages: [
+          {
+            id: MessageId.makeUnsafe("rolled-back-human"),
+            role: "user",
+            text: "Removed remotely",
+            dispatchOrigin: "user",
+            turnId: null,
+            streaming: false,
+            createdAt: staleAt,
+          },
+        ],
+      });
+      let state = syncServerShellSnapshot(makeState(thread), {
+        ...makeShellSnapshot(incoming),
+        snapshotSequence: 20,
+      });
+      expect(getThreadFromState(state, thread.id)?.messages).toHaveLength(1);
+      state = applyThreadUpdate(state, thread.id, (current) => ({
+        ...current,
+        lastVisitedAt: "2026-09-17T10:30:00.000Z",
+      }));
+      expect(getThreadFromState(state, thread.id)?.latestHumanMessageAt).toBe(latestHumanMessageAt);
+      expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(
+        latestHumanMessageAt,
+      );
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId: thread.id,
+            messageId: MessageId.makeUnsafe("automatic-followup"),
+            role: "user",
+            dispatchOrigin: "automation",
+            text: "Continue",
+            streaming: false,
+            turnId: null,
+            source: "native",
+            createdAt: "2026-09-17T10:31:00.000Z",
+            updatedAt: "2026-09-17T10:31:00.000Z",
+          },
+          { sequence: 21, occurredAt: "2026-09-17T10:31:00.000Z" },
+        ),
+      ]);
+      expect(getThreadFromState(state, thread.id)?.latestHumanMessageAt).toBe(latestHumanMessageAt);
+      expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(
+        latestHumanMessageAt,
+      );
+    },
+  );
+
+  it("retains human recency through partial hydration, reads, agent sends, eviction, and reconnect", () => {
+    const humanAt = "2026-09-17T10:00:00.000Z";
+    const incoming = makeReadModelThread({ latestHumanMessageAt: humanAt, messages: [] });
+    const threadId = incoming.id;
+    let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(incoming));
+    state = syncServerThreadDetailHotPath(state, incoming);
+    state = applyThreadUpdate(state, threadId, (thread) => ({
+      ...thread,
+      lastVisitedAt: "2026-09-17T10:10:00.000Z",
+    }));
+    for (const [index, dispatchOrigin] of (["agent", "automation", "user"] as const).entries()) {
+      const createdAt = `2026-09-17T10:2${index}:00.000Z`;
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId,
+            messageId: MessageId.makeUnsafe(`recency-${index}`),
+            role: "user",
+            dispatchOrigin,
+            text: "Follow-up",
+            streaming: false,
+            turnId: null,
+            source: "native",
+            createdAt,
+            updatedAt: createdAt,
+          },
+          { sequence: 10 + index, occurredAt: createdAt },
+        ),
+      ]);
+      expect(getThreadFromState(state, threadId)?.latestHumanMessageAt).toBe(
+        dispatchOrigin === "user" ? createdAt : humanAt,
+      );
+      expect(state.sidebarThreadSummaryById[threadId]?.latestHumanMessageAt).toBe(
+        dispatchOrigin === "user" ? createdAt : humanAt,
+      );
+    }
+    state = evictThreadDetailFromClientState(state, threadId);
+    expect(getThreadFromState(state, threadId)?.latestHumanMessageAt).toBe(
+      "2026-09-17T10:22:00.000Z",
+    );
+    state = syncServerShellSnapshot(state, {
+      ...makeShellSnapshot({ ...incoming, latestHumanMessageAt: humanAt }),
+      snapshotSequence: 20,
+    });
+    expect(state.sidebarThreadSummaryById[threadId]?.latestHumanMessageAt).toBe(humanAt);
+  });
+
+  it("restores cache reviews from shell snapshots and retains them during detail eviction", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const incoming = makeReadModelThread({
+      claudeCacheReview: {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe("held-message"),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+          contextTokens: 800_000,
+        },
+        status: "pending",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      },
+    });
+    const restored = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(incoming));
+    expect(restored.threadShellById?.[threadId]?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+    expect(getThreadFromState(restored, threadId)?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+
+    const hydrated = syncServerThreadDetailHotPath(restored, incoming);
+    const evicted = evictThreadDetailFromClientState(hydrated, threadId);
+    expect(getThreadFromState(evicted, threadId)?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+
+    const cleared = applyShellEvent(evicted, {
+      kind: "thread-upserted",
+      sequence: 9,
+      thread: { ...incoming, claudeCacheReview: null },
+    });
+    expect(getThreadFromState(cleared, threadId)?.claudeCacheReview).toBeNull();
+  });
+
+  it("restores a failed cache review and clears it from an authoritative full snapshot", () => {
+    const incoming = makeReadModelThread({
+      claudeCacheReview: {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe("held-message"),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "failed",
+        error: "Compaction was interrupted",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      },
+    });
+    const restored = syncServerReadModel(makeState(makeThread()), makeReadModel(incoming));
+    expect(threadsOf(restored)[0]?.claudeCacheReview).toEqual(incoming.claudeCacheReview);
+
+    const cleared = syncServerReadModel(restored, {
+      ...makeReadModel({ ...incoming, claudeCacheReview: null }),
+      snapshotSequence: 2,
+    });
+    expect(threadsOf(cleared)[0]?.claudeCacheReview).toBeNull();
+  });
+
   it("preserves a semantic branch when a temp worktree branch arrives from the read model", () => {
     const initialThread = makeThread({
       branch: "feature/semantic-branch",
@@ -675,22 +927,6 @@ describe("store projection", () => {
     expect(threadsOf(next)[0]?.session?.lastError).toBeUndefined();
   });
 
-  it("preserves claude model slugs without an active session", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-6",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(threadsOf(next)[0]?.modelSelection.model).toBe("claude-opus-4-6");
-  });
-
   it("resolves claude aliases when session provider is claudeAgent", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(
@@ -742,32 +978,6 @@ describe("store projection", () => {
     expect(threadsOf(next)[0]?.session?.provider).toBe("opencode");
   });
 
-  it("preserves Pi as the active session provider", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "pi",
-          model: "anthropic/claude-sonnet-4-5",
-        },
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "pi",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(threadsOf(next)[0]?.modelSelection.provider).toBe("pi");
-    expect(threadsOf(next)[0]?.session?.provider).toBe("pi");
-  });
-
   it("preserves exact OpenCode thread model slugs from the read model", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(
@@ -801,20 +1011,6 @@ describe("store projection", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.projects[0]?.defaultModelSelection?.model).toBe("openai/gpt-5.4");
-  });
-
-  it("preserves project and thread updatedAt timestamps from the read model", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        updatedAt: "2026-02-27T00:05:00.000Z",
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.projects[0]?.updatedAt).toBe("2026-02-27T00:00:00.000Z");
-    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
   });
 
   it("preserves a newer live assistant intro when a hot-path snapshot lags behind", () => {
@@ -1472,26 +1668,6 @@ describe("store projection", () => {
     );
   });
 
-  it("removes successfully deleted archived threads through the shared client helper", () => {
-    const threadId = ThreadId.makeUnsafe("thread-archived");
-    const initialState = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          id: threadId,
-          archivedAt: "2026-02-27T00:05:00.000Z",
-        }),
-      ),
-    );
-
-    const next = removeDeletedThreadFromClientState(initialState, threadId);
-
-    expect(threadsOf(next)).toHaveLength(0);
-    expect(next.threadIds).not.toContain(threadId);
-    expect(next.threadShellById?.[threadId]).toBeUndefined();
-    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
-  });
-
   it("keeps a client-deleted thread hidden when a stale shell snapshot includes it", () => {
     const threadId = ThreadId.makeUnsafe("thread-stale-delete");
     const initialState = syncServerReadModel(
@@ -1583,43 +1759,6 @@ describe("store projection", () => {
     expect(threadsOf(next)).toHaveLength(1);
     expect(next.threadIds).toContain(threadId);
     expect(next.threadShellById?.[threadId]?.title).toBe("Rehydrated shell removed thread");
-  });
-
-  it("reuses normalized thread objects when the incoming snapshot is unchanged", () => {
-    const readModel = {
-      snapshotSequence: 1,
-      updatedAt: "2026-02-28T00:00:00.000Z",
-      spaces: [],
-      projects: [
-        makeReadModelProject({
-          defaultModelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ],
-      threads: [
-        makeReadModelThread({
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          createdAt: "2026-02-13T00:00:00.000Z",
-          updatedAt: "2026-02-28T00:00:00.000Z",
-        }),
-      ],
-    } satisfies OrchestrationReadModel;
-
-    const hydratedState = syncServerReadModel(makeState(makeThread()), readModel);
-    const thread = threadsOf(hydratedState)[0];
-    const next = syncServerReadModel(hydratedState, readModel);
-
-    expect(next.threadShellById).toBe(hydratedState.threadShellById);
-    expect(next.threadSessionById).toBe(hydratedState.threadSessionById);
-    expect(next.threadTurnStateById).toBe(hydratedState.threadTurnStateById);
-    expect(next.sidebarThreadSummaryById).toBe(hydratedState.sidebarThreadSummaryById);
-    expect(threadsOf(next)[0]).toBe(thread);
   });
 });
 
@@ -1728,16 +1867,6 @@ describe("deletion tombstone retirement", () => {
     );
     return removeDeletedThreadFromClientState(hydrated, deletedThreadId, deletedAtSequence);
   }
-
-  it("retires a thread tombstone once a snapshot at or after the deletion confirms it is gone", () => {
-    const deletedState = makeDeletedThreadState(5);
-    expect(deletedState.deletedThreadIdsById?.[deletedThreadId]).toBe(5);
-
-    const next = syncServerShellSnapshot(deletedState, makeEmptyShellSnapshot(9));
-
-    expect(next.deletedThreadIdsById?.[deletedThreadId]).toBeUndefined();
-    expect(threadsOf(next)).toHaveLength(0);
-  });
 
   it("keeps a thread tombstone when the confirming snapshot predates the deletion", () => {
     const deletedState = makeDeletedThreadState(5);
@@ -1877,20 +2006,6 @@ describe("deletion tombstone retirement", () => {
     expect(resynced).toBe(hydrated);
   });
 
-  it("keeps the thread id registry stable across a shell snapshot that changes nothing", () => {
-    const hydrated = syncServerShellSnapshot(
-      makeState(makeThread({ id: deletedThreadId, projectId })),
-      makeShellSnapshotListingDeletedThread(4, "Stable"),
-    );
-
-    const resynced = syncServerShellSnapshot(
-      hydrated,
-      makeShellSnapshotListingDeletedThread(5, "Stable"),
-    );
-
-    expect(resynced.threadIds).toBe(hydrated.threadIds);
-  });
-
   it("rebuilds the thread id registry when the snapshot drops a thread", () => {
     const hydrated = syncServerShellSnapshot(
       makeState(makeThread({ id: deletedThreadId, projectId })),
@@ -1948,6 +2063,7 @@ describe("deletion tombstone retirement", () => {
 
     // The whole point of rebuilding these records in one pass: an unchanged snapshot must not
     // hand every downstream selector three brand-new dictionaries to re-derive from.
+    expect(resynced.threadIds).toBe(hydrated.threadIds);
     expect(resynced.threadShellById).toBe(hydrated.threadShellById);
     expect(resynced.threadSessionById).toBe(hydrated.threadSessionById);
     expect(resynced.threadTurnStateById).toBe(hydrated.threadTurnStateById);

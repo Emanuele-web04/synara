@@ -25,6 +25,18 @@ Confirm:
 
 Do not diagnose the primary checkout when the task actually owns a managed worktree.
 
+## Large commits and pushes
+
+Commit and push actions stream Git output and keep only a bounded preview for commit-message generation and diagnostic logs. Reaching those preview limits does not shorten the committed files or stop the push. Large file selections are passed through a temporary path list rather than command-line arguments.
+
+Staging, committing, and pushing have no fixed Synara time deadline. A large transfer or a slow hook can take time; avoid starting a duplicate operation while one is running. Git hooks, authentication failures, and restrictions enforced by the remote repository can still reject an operation. Check the failed phase and its error details before retrying.
+
+## Connection interrupted during a Git action
+
+With an updated server and client, commit, push, and pull-request actions continue on the server when the WebSocket connection drops. Once reconnected, Synara reattaches to the same action and retrieves its current phase, hook progress, or result without executing it again. Older clients retain cancellation on disconnect because they cannot recover an action.
+
+Stopping the server still interrupts running actions. Remote actions also stop when their authenticated session is revoked or expires, even while disconnected. If the server restarted or the saved result is no longer available, Synara asks you to check repository status before retrying. Completed commits and pushes are not rolled back by a disconnect.
+
 ## Detached HEAD in a managed worktree
 
 A detached HEAD can be intentional. Synara-managed worktrees may begin from a selected base ref without immediately attaching a named branch.

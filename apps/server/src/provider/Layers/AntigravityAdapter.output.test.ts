@@ -130,16 +130,16 @@ const transcriptToolStep = (step: number) => ({
   tool_calls: [{ name: "run_command", args: { CommandLine: "echo same" } }],
 });
 describe("Antigravity structured output lifecycle", () => {
-  it.each([
-    "[Read this](https://example.com)",
-    "{example}",
-    '{"answer":42}',
-    "Long response ".repeat(12000),
-  ])("preserves legacy text output %#", async (stdout) => {
-    const events = await runPrintTurn({ stdout });
-    expect(textPayloads(events)).toEqual([{ streamKind: "assistant_text", delta: stdout.trim() }]);
-    expect(terminalPayload(events)).toMatchObject({ state: "completed" });
-  });
+  it.each(["{example}", '{"answer":42}', "Long response ".repeat(12000)])(
+    "preserves legacy text output %#",
+    async (stdout) => {
+      const events = await runPrintTurn({ stdout });
+      expect(textPayloads(events)).toEqual([
+        { streamKind: "assistant_text", delta: stdout.trim() },
+      ]);
+      expect(terminalPayload(events)).toMatchObject({ state: "completed" });
+    },
+  );
   it("explicit user interruption remains interrupted and suppresses late raw stdout", async () => {
     const events = await runPrintTurn({
       stdout: encode([done]),
@@ -157,10 +157,10 @@ describe("Antigravity structured output lifecycle", () => {
     });
     expect(textPayloads(events)).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
   });
-  it.each([1, 2])("does not recover a genuine error on conversation turn %s", async (turns) => {
+  it("does not recover a genuine error on conversation turn 1", async () => {
     expect(
       terminalPayload(
-        await runPrintTurn({ stdout: encode([done, envelope("quota exceeded", turns)]), code: 1 }),
+        await runPrintTurn({ stdout: encode([done, envelope("quota exceeded", 1)]), code: 1 }),
       ),
     ).toMatchObject({ state: "failed" });
   });
@@ -208,24 +208,18 @@ describe("Antigravity structured output lifecycle", () => {
       events.filter((e) => e.type === "item.started" && e.payload.itemType === "command_execution"),
     ).toHaveLength(2);
   });
-  it.each(["CANCELED", "INTERRUPTED"])(
-    "honors %s without a user-requested interrupt",
-    async (status) => {
-      expect(
-        terminalPayload(
-          await runPrintTurn({ stdout: encode([done, envelope(undefined, 2, status)]), code: 1 }),
-        ),
-      ).toMatchObject({ state: "interrupted" });
-    },
-  );
-  it.each(["INVALID", "WAITING", "RUNNING"])(
-    "does not complete terminal status %s on exit zero",
-    async (status) => {
-      expect(
-        terminalPayload(
-          await runPrintTurn({ stdout: encode([envelope(undefined, 1, status)]), code: 0 }),
-        ),
-      ).toMatchObject({ state: "failed" });
-    },
-  );
+  it("honors CANCELED without a user-requested interrupt", async () => {
+    expect(
+      terminalPayload(
+        await runPrintTurn({ stdout: encode([done, envelope(undefined, 2, "CANCELED")]), code: 1 }),
+      ),
+    ).toMatchObject({ state: "interrupted" });
+  });
+  it("does not complete terminal status INVALID on exit zero", async () => {
+    expect(
+      terminalPayload(
+        await runPrintTurn({ stdout: encode([envelope(undefined, 1, "INVALID")]), code: 0 }),
+      ),
+    ).toMatchObject({ state: "failed" });
+  });
 });

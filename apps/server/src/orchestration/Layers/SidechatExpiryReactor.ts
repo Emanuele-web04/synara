@@ -7,11 +7,14 @@ import {
 import {
   SIDECHAT_VISIBLE_ACTIVITY_HEARTBEAT_MS,
   createSidechatExpiryTimer,
+  sidechatExpiryMs,
   type SidechatExpiryTimerClock,
 } from "@synara/shared/sidechatExpiry";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { Cause, Duration, Effect, Layer, Schedule, Stream } from "effect";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   SidechatExpiryReactor,
@@ -64,6 +67,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
   Effect.gen(function* () {
     const orchestrationEngine = yield* OrchestrationEngineService;
     const providerService = yield* ProviderService;
+    const serverSettings = yield* ServerSettingsService;
     const knownThreadIds = new Set<ThreadId>();
     const knownSidechatIds = new Set<ThreadId>();
 
@@ -91,7 +95,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
       Effect.gen(function* () {
         const readModel = yield* orchestrationEngine.getReadModel();
         const thread = readModel.threads.find((candidate) => candidate.id === threadId);
-        if (!thread || !thread.sidechatSourceThreadId || thread.deletedAt || thread.archivedAt) {
+        if (!thread || !isSidechatThread(thread) || thread.deletedAt || thread.archivedAt) {
           timer.remove(threadId);
           return;
         }
@@ -155,7 +159,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
         switch (event.type) {
           case "thread.created": {
             knownThreadIds.add(event.payload.threadId);
-            if (!event.payload.sidechatSourceThreadId) return;
+            if (!isSidechatThread(event.payload)) return;
             knownSidechatIds.add(event.payload.threadId);
             timer.restore({
               threadId: event.payload.threadId,
@@ -219,7 +223,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
             const thread = readModel.threads.find(
               (candidate) => candidate.id === event.payload.threadId,
             );
-            if (!thread?.sidechatSourceThreadId || thread.deletedAt) return;
+            if (!thread || !isSidechatThread(thread) || thread.deletedAt) return;
             knownSidechatIds.add(thread.id);
             const expired = Boolean(thread.sidechatExpiredAt);
             const restoredActivityAtMs = expired
@@ -242,11 +246,31 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
       });
 
     const start: SidechatExpiryReactorShape["start"] = Effect.gen(function* () {
+      // Follow setting changes first, then apply the current window before
+      // restoring timers so "never" cannot expire side chats that went idle
+      // while the server was down. Each change carries the full value, so a
+      // change racing the subscription is corrected by the read below.
+      const settingsChanges = yield* serverSettings.subscribeChanges;
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to read side chat expiry setting", {
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(null)),
+        ),
+      );
+      if (settings) timer.setExpiryMs(sidechatExpiryMs(settings.sidechatExpiry));
+      yield* settingsChanges.pipe(
+        Stream.runForEach((next) =>
+          Effect.sync(() => timer.setExpiryMs(sidechatExpiryMs(next.sidechatExpiry))),
+        ),
+        Effect.forkScoped,
+      );
+
       const liveEvents = yield* orchestrationEngine.subscribeDomainEvents;
       const readModel = yield* orchestrationEngine.getReadModel();
       for (const thread of readModel.threads) {
         knownThreadIds.add(thread.id);
-        if (!thread.sidechatSourceThreadId) {
+        if (!isSidechatThread(thread)) {
           continue;
         }
         knownSidechatIds.add(thread.id);
@@ -300,7 +324,8 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
           const thread = readModel.threads.find((candidate) => candidate.id === threadId);
           knownThreadIds.add(threadId);
           if (
-            thread?.sidechatSourceThreadId &&
+            thread &&
+            isSidechatThread(thread) &&
             !thread.sidechatExpiredAt &&
             !thread.deletedAt &&
             !thread.archivedAt

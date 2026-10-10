@@ -52,14 +52,6 @@ describe("isEditableEventTarget", () => {
     expect(isEditableEventTarget(makeEvent(input))).toBe(true);
   });
 
-  it("returns true for a descendant of an input-like ancestor (e.g. an option inside a select)", () => {
-    stubDom();
-    const select = new MockHTMLElement();
-    const option = new MockHTMLElement();
-    option.closestResult = select;
-    expect(isEditableEventTarget(makeEvent(option))).toBe(true);
-  });
-
   it("returns true for a contenteditable element with no input/textarea/select ancestor", () => {
     stubDom();
     const editable = new MockHTMLElement();

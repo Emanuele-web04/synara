@@ -1,9 +1,12 @@
 import type {
+  ComputerProvisionResult,
   ProviderKind,
   ServerConfig,
+  ServerConsumeCodexResetCreditInput,
   ServerListProviderUsageInput,
   ServerProviderStatus,
   ServerStopLocalServerInput,
+  StatsGetRecapInput,
   ThreadId,
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
@@ -29,8 +32,12 @@ export const serverQueryKeys = {
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
     ["server", "profileTokenStats", utcOffsetMinutes] as const,
+  recap: (input: StatsGetRecapInput) =>
+    ["server", "recap", input.from, input.to, input.slotBoundaries.join(",")] as const,
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
+  computerStatus: () => ["server", "computerStatus"] as const,
+  computerAuditHistory: () => ["server", "computerAuditHistory"] as const,
 };
 
 export const serverMutationKeys = {
@@ -46,6 +53,38 @@ export function serverConfigQueryOptions() {
     },
     staleTime: Infinity,
   });
+}
+
+/** Polled while the Computer use settings panel is visible, so keep it refetchable. */
+export const COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
+
+export function computerStatusQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.computerStatus(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      // Desktop-bridge NativeApi implementations update out of band and may
+      // predate the computer namespace.
+      if (!api.computer) {
+        throw new Error("This app build cannot read computer status.");
+      }
+      return api.computer.getStatus({});
+    },
+    staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
+  });
+}
+
+/** Share one setup request across the settings panel and transcript cards. */
+let computerProvisionInFlight: Promise<ComputerProvisionResult> | undefined;
+export function provisionComputer(): Promise<ComputerProvisionResult> {
+  if (computerProvisionInFlight) return computerProvisionInFlight;
+  const api = ensureNativeApi();
+  if (!api.computer?.provision)
+    return Promise.reject(new Error("This app build cannot set up computer control."));
+  computerProvisionInFlight = api.computer.provision({}).finally(() => {
+    computerProvisionInFlight = undefined;
+  });
+  return computerProvisionInFlight;
 }
 
 interface ProviderStatusSnapshot {
@@ -310,6 +349,11 @@ export async function fetchAllProviderUsage(input: ServerListProviderUsageInput 
   return api.server.listProviderUsage(input);
 }
 
+export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput) {
+  const api = ensureNativeApi();
+  return api.server.consumeCodexResetCredit(input);
+}
+
 /** Provider enablement changes alter the membership of the batch and invalidate any
  * provider-scoped result that may otherwise survive after a provider is disabled. */
 export async function invalidateProviderUsageQueries(queryClient: QueryClient): Promise<void> {
@@ -357,9 +401,36 @@ export function serverProfileTokenStatsQueryOptions(input: { enabled?: boolean }
   });
 }
 
+// Inbox recap of one window (a working day and its slots), from Synara's local DB. A recap
+// generated after its window ended is final and stays fresh. Anything earlier is refetched,
+// including yesterday's entry when it is the one "today" left behind after the day rolled
+// over (same window, same key). The current window refreshes while the Inbox is open.
+export function serverRecapQueryOptions(
+  input: StatsGetRecapInput,
+  options: { enabled?: boolean; live?: boolean } = {},
+) {
+  const live = options.live ?? true;
+  const windowEndMs = Date.parse(input.to);
+  return queryOptions({
+    queryKey: serverQueryKeys.recap(input),
+    enabled: options.enabled ?? true,
+    staleTime: (query) => {
+      const generatedAtMs = Date.parse(query.state.data?.generatedAt ?? "");
+      if (generatedAtMs >= windowEndMs) return Number.POSITIVE_INFINITY;
+      return live ? 60_000 : 0;
+    },
+    // Opening the Inbox always shows today's latest numbers.
+    refetchOnMount: live ? "always" : true,
+    refetchInterval: live ? 5 * 60_000 : false,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async () => ensureNativeApi().stats.getRecap(input),
+  });
+}
+
 // Live remaining-usage for every provider. Always fetches the full batch under a single query
 // key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-provider snapshots, so the batch is cheap.
+// and one request cycle; the server caches per-account snapshots, so the batch is cheap.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean

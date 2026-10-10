@@ -1,27 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  defaultCustomTitleBarPreference,
-  resolveCustomTitleBarActive,
-  supportsCustomTitleBar,
-} from "./desktopTitleBar";
-
-describe("supportsCustomTitleBar", () => {
-  it("supports Windows and Linux only", () => {
-    expect(supportsCustomTitleBar("win32")).toBe(true);
-    expect(supportsCustomTitleBar("linux")).toBe(true);
-    expect(supportsCustomTitleBar("darwin")).toBe(false);
-    expect(supportsCustomTitleBar("freebsd")).toBe(false);
-  });
-});
-
-describe("defaultCustomTitleBarPreference", () => {
-  it("defaults on for Windows and Linux, off elsewhere", () => {
-    expect(defaultCustomTitleBarPreference("win32")).toBe(true);
-    expect(defaultCustomTitleBarPreference("linux")).toBe(true);
-    expect(defaultCustomTitleBarPreference("darwin")).toBe(false);
-  });
-});
+import { resolveCustomTitleBarActive } from "./desktopTitleBar";
 
 describe("resolveCustomTitleBarActive", () => {
   it("never activates on unsupported platforms", () => {

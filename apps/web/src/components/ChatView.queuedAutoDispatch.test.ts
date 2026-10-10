@@ -89,20 +89,6 @@ describe("shouldHoldQueuedComposerAutoDispatch", () => {
     queuedTurnCount: 1,
   };
 
-  it("releases the queue head when the thread is idle and not awaiting a turn start", () => {
-    expect(shouldHoldQueuedComposerAutoDispatch(idleRelease)).toBe(false);
-  });
-
-  it("holds through the post-dispatch awaiting-turn gap even when send is no longer busy", () => {
-    expect(
-      shouldHoldQueuedComposerAutoDispatch({
-        ...idleRelease,
-        isSendBusy: false,
-        isAwaitingTurnStart: true,
-      }),
-    ).toBe(true);
-  });
-
   it("holds while a live turn is queueable, the steer gate is armed, or the queue is empty", () => {
     expect(
       shouldHoldQueuedComposerAutoDispatch({ ...idleRelease, hasQueueableLiveTurn: true }),

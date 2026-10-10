@@ -39,6 +39,7 @@ export function makeThread(overrides: Partial<Thread> = {}): Thread {
     createdAt: "2026-02-13T00:00:00.000Z",
     latestTurn: null,
     latestUserMessageAt: null,
+    latestHumanMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,

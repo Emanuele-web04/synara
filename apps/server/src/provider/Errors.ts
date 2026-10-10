@@ -64,7 +64,8 @@ export class ProviderAdapterRequestError extends Schema.TaggedErrorClass<Provide
   },
 ) {
   override get message(): string {
-    return `Provider adapter request failed (${this.provider}) for ${this.method}: ${this.detail}`;
+    const detail = this.detail.trim();
+    return `Provider adapter request failed (${this.provider}) for ${this.method}${detail ? `: ${detail}` : ""}`;
   }
 }
 

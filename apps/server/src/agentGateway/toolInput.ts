@@ -19,6 +19,7 @@ export const PROVIDER_KINDS: ReadonlyArray<ProviderKind> = [
   "opencode",
   "pi",
   "devin",
+  "omp",
 ];
 
 export const MODEL_SELECTION_INPUT_SCHEMA = {
@@ -58,6 +59,30 @@ export function readStringArg(
     throw new ToolInputError(`Argument "${name}" must be a non-empty string.`);
   }
   return value.trim();
+}
+
+/**
+ * A string argument taken exactly as written, with no trimming.
+ *
+ * `readStringArg` trims, which is right for an identifier and wrong for an
+ * accessibility label: the desktop targeters match labels verbatim on purpose
+ * (`uiTreeTargeting.ts` — "labels keep their surrounding space because nothing
+ * trims a label arriving over MCP"), so trimming here silently retargeted a
+ * caller that named `"Save "` at a different control called `"Save"`.
+ *
+ * Still refuses a blank string: a label made only of spaces names nothing, and
+ * passing it on would match everything in scope.
+ */
+export function readVerbatimStringArg(
+  args: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const value = args[name];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ToolInputError(`Argument "${name}" must be a non-empty string.`);
+  }
+  return value;
 }
 
 export function readNumberArg(args: Record<string, unknown>, name: string): number | undefined {
@@ -147,18 +172,27 @@ export function readModelSelectionArg(
 export function buildModelSelection(
   provider: ProviderKind,
   model: string | undefined,
+  fallbackSelection?: ModelSelection,
 ): ModelSelection {
+  // Explicit argument wins, then the caller's own thread model, and only then
+  // the provider default — an agent on a non-default model must not silently
+  // spawn work on that provider's default model.
+  const inherited = fallbackSelection?.provider === provider ? fallbackSelection : undefined;
   const effectiveModel =
     model ??
-    (provider === "pi"
-      ? undefined
-      : DEFAULT_MODEL_BY_PROVIDER[provider as Exclude<ProviderKind, "pi">]);
+    inherited?.model ??
+    (provider === "pi" || provider === "omp" ? undefined : DEFAULT_MODEL_BY_PROVIDER[provider]);
   if (!effectiveModel) {
     throw new ToolInputError(
       `Provider "${provider}" has no default model; pass an explicit "model" argument.`,
     );
   }
-  return { provider, model: effectiveModel } as ModelSelection;
+  return {
+    ...inherited,
+    provider,
+    model: effectiveModel,
+    ...(model !== undefined && model !== inherited?.model ? { options: undefined } : {}),
+  } as ModelSelection;
 }
 
 export function decodeCreateThreadsInput(value: unknown) {

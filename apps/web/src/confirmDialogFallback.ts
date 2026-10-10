@@ -3,6 +3,7 @@
 // Layer: UI fallback helper
 // Depends on: global document/body and shared Tailwind theme tokens already loaded by the app.
 
+import { notifyNativeSurfaceOcclusionChange } from "./lib/nativeSurfaceOcclusion";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "./surfaceStyles";
 
 export function showConfirmDialogFallback(message: string): Promise<boolean> {
@@ -15,14 +16,20 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     // Backdrop
     const backdrop = document.createElement("div");
     backdrop.className = "fixed inset-0 z-50 bg-black/50";
+    // The data-slot markers let native surfaces (the browser panel) hide under this dialog.
+    backdrop.dataset.slot = "alert-dialog-backdrop";
     backdrop.style.cssText = "animation:fadeIn .15s ease-out";
 
     // Viewport (centers the dialog)
     const viewport = document.createElement("div");
     viewport.className = "fixed inset-0 z-50 flex items-center justify-center p-4";
+    viewport.dataset.slot = "alert-dialog-viewport";
 
     // Popup
     const popup = document.createElement("div");
+    popup.dataset.slot = "alert-dialog-popup";
+    popup.setAttribute("role", "alertdialog");
+    popup.setAttribute("aria-modal", "true");
     popup.className =
       "flex w-full max-w-[22rem] flex-col rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xl";
     popup.style.cssText = "animation:scaleIn .15s ease-out";
@@ -38,7 +45,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
 
     if (description) {
       const descEl = document.createElement("p");
-      descEl.className = "text-muted-foreground text-[13px] leading-5";
+      descEl.className = "text-muted-foreground text-ui-lg leading-5";
       descEl.textContent = description;
       header.appendChild(descEl);
     }
@@ -53,6 +60,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
       document.removeEventListener("keydown", onKeyDown);
       backdrop.remove();
       viewport.remove();
+      notifyNativeSurfaceOcclusionChange();
       resolve(result);
     }
 
@@ -74,7 +82,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     cancelBtn.type = "button";
     cancelBtn.textContent = "Cancel";
     cancelBtn.className =
-      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-3 text-[13px] font-medium text-[var(--color-text-foreground)] outline-none focus-visible:ring-1 focus-visible:ring-ring/60 " +
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-3 text-ui-lg font-medium text-[var(--color-text-foreground)] outline-none focus-visible:ring-1 focus-visible:ring-ring/60 " +
       ELEVATED_HOVER_SURFACE_CLASS_NAME;
     cancelBtn.addEventListener("click", () => cleanup(false));
 
@@ -83,7 +91,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     confirmBtn.type = "button";
     confirmBtn.textContent = "Confirm";
     confirmBtn.className =
-      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-foreground bg-foreground px-3 text-[13px] font-medium text-background outline-none transition-all duration-150 hover:scale-[1.02] hover:bg-foreground/92 focus-visible:ring-1 focus-visible:ring-ring/60";
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-foreground bg-foreground px-3 text-ui-lg font-medium text-background outline-none transition-all duration-150 hover:scale-[1.02] hover:bg-foreground/92 focus-visible:ring-1 focus-visible:ring-ring/60";
 
     confirmBtn.addEventListener("click", () => cleanup(true));
 
@@ -94,6 +102,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
 
     document.body.appendChild(backdrop);
     document.body.appendChild(viewport);
+    notifyNativeSurfaceOcclusionChange();
 
     // Auto-focus confirm button
     requestAnimationFrame(() => confirmBtn.focus());

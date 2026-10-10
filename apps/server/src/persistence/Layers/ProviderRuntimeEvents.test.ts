@@ -9,6 +9,7 @@ import {
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Statement from "effect/unstable/sql/Statement";
 
 import {
   PROVIDER_RUNTIME_EVENT_MAX_BYTES,
@@ -59,6 +60,375 @@ const readOpenTurnReplayCount = (threadId: string) =>
     });
     return rows.filter((row) => row.event.threadId === threadId).length;
   });
+
+it.effect(
+  "filters checkpoint heads before limiting or decoding while preserving the raw reader",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const telemetry = yield* repository.append(
+        runtimeEvent("checkpoint-filter-telemetry", "text"),
+      );
+      yield* sql`UPDATE provider_runtime_events SET event_json = ${"invalid json"}
+      WHERE sequence = ${telemetry.sequence}`;
+      const fileChange = yield* repository.append({
+        ...runtimeEvent("checkpoint-filter-file", ""),
+        type: "item.completed",
+        itemId: RuntimeItemId.makeUnsafe("checkpoint-filter-file"),
+        payload: { itemType: "file_change", status: "completed" },
+      });
+      const terminal = yield* repository.append({
+        ...runtimeEvent("checkpoint-filter-terminal", ""),
+        type: "turn.completed",
+        payload: { state: "completed" },
+      });
+      const request = {
+        sequenceExclusive: 0,
+        throughSequenceInclusive: terminal.sequence,
+        limit: 1,
+        checkpointRelevantOnly: true,
+      };
+      assert.deepEqual(
+        (yield* repository.readAfter(request)).map((row) => row.sequence),
+        [fileChange.sequence],
+      );
+      assert.deepEqual(
+        (yield* repository.readAfter({ ...request, sequenceExclusive: fileChange.sequence })).map(
+          (row) => row.sequence,
+        ),
+        [terminal.sequence],
+      );
+      assert.lengthOf(
+        yield* repository.readAfter({ ...request, throughSequenceInclusive: telemetry.sequence }),
+        0,
+      );
+      assert.strictEqual(
+        (yield* Effect.flip(repository.readAfter({ ...request, checkpointRelevantOnly: false })))
+          ._tag,
+        "PersistenceDecodeError",
+      );
+      assert.strictEqual(
+        (yield* Effect.flip(
+          repository.readAfter({
+            sequenceExclusive: 0,
+            throughSequenceInclusive: terminal.sequence,
+            limit: 1,
+          }),
+        ))._tag,
+        "PersistenceDecodeError",
+      );
+      yield* sql`UPDATE provider_runtime_events SET event_json = ${"invalid terminal json"}
+      WHERE sequence = ${terminal.sequence}`;
+      const invalidTerminal = yield* Effect.flip(
+        repository.readAfter({ ...request, sequenceExclusive: fileChange.sequence }),
+      );
+      assert.strictEqual(invalidTerminal._tag, "PersistenceDecodeError");
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+const checkpointConsumer = "checkpoint-reactor.runtime.v1";
+const registerCheckpointConsumer = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    INSERT INTO provider_runtime_event_consumers (consumer_name, last_acked_sequence, created_at, updated_at)
+    VALUES (${checkpointConsumer}, 0, ${"2026-10-07T00:00:00.000Z"}, ${"2026-10-07T00:00:00.000Z"})
+  `;
+});
+const checkpointWarning = (index: number): ProviderRuntimeEvent => ({
+  type: "runtime.warning",
+  eventId: EventId.makeUnsafe(`checkpoint-warning-${index}`),
+  provider: "codex",
+  threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+  createdAt: "2026-10-07T00:00:00.000Z",
+  payload: { message: "Telemetry" },
+});
+
+it.effect(
+  "checkpoint ACK ahead of ingestion preserves unaccepted runtime rows and ingestion turn ownership",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* registerCheckpointConsumer;
+      yield* repository.append({
+        type: "turn.started",
+        eventId: EventId.makeUnsafe("checkpoint-ahead-start"),
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+        turnId: TurnId.makeUnsafe("checkpoint-ahead-turn"),
+        createdAt: "2026-10-07T00:00:00.000Z",
+        payload: {},
+      });
+      let lastSequence = 0;
+      for (let index = 0; index < 600; index += 1) {
+        lastSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+      }
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: checkpointConsumer,
+          throughSequence: lastSequence,
+          updatedAt: "2026-10-07T00:00:01.000Z",
+        }),
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        0,
+      );
+      const rows = yield* repository.readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: lastSequence,
+        limit: 1000,
+      });
+      assert.lengthOf(rows, 601);
+      const openTurns = yield* sql`SELECT thread_id FROM provider_runtime_open_turns`;
+      assert.lengthOf(openTurns, 0);
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+it.effect(
+  "retains pending native checkpoint completion across repository restart without retaining old telemetry",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      yield* registerCheckpointConsumer;
+      const terminal = yield* repository.append({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("checkpoint-pending-terminal"),
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+        turnId: TurnId.makeUnsafe("checkpoint-pending-turn"),
+        createdAt: "2026-10-07T00:00:00.000Z",
+        payload: { state: "completed" },
+      });
+      let lastSequence = terminal.sequence;
+      for (let index = 0; index < 600; index += 1) {
+        lastSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+      }
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: lastSequence,
+          updatedAt: "2026-10-07T00:00:01.000Z",
+        }),
+      );
+      const restarted = yield* Effect.service(ProviderRuntimeEventRepository).pipe(
+        Effect.provide(ProviderRuntimeEventRepositoryLive),
+      );
+      const rows = yield* restarted.readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: lastSequence,
+        limit: 1000,
+      });
+      assert.isTrue(rows.some((row) => row.event.eventId === "checkpoint-pending-terminal"));
+      assert.lengthOf(rows, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 1);
+      assert.strictEqual(yield* restarted.getConsumerCursor(checkpointConsumer), 0);
+      assert.isTrue(
+        yield* restarted.advanceConsumerCursor({
+          consumerName: checkpointConsumer,
+          eventSequence: terminal.sequence,
+          updatedAt: "2026-10-07T00:00:02.000Z",
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+it.effect(
+  "checkpoint batch ACK releases accepted native retention without another ingestion event",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* registerCheckpointConsumer;
+      const terminal = yield* repository.append({
+        type: "turn.completed",
+        eventId: EventId.makeUnsafe("checkpoint-retention-release"),
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+        turnId: TurnId.makeUnsafe("checkpoint-retention-release"),
+        createdAt: "2026-10-07T00:00:00.000Z",
+        payload: { state: "completed" },
+      });
+      let throughSequence = terminal.sequence;
+      for (let index = 0; index < 600; index++)
+        throughSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence,
+          updatedAt: "2026-10-07T00:00:01.000Z",
+        }),
+      );
+      const before =
+        yield* sql`SELECT sequence FROM provider_runtime_events WHERE sequence = ${terminal.sequence}`;
+      assert.lengthOf(before, 1);
+      const checkpointStatements: string[] = [];
+      assert.isTrue(
+        yield* repository
+          .advanceConsumerCursorThrough({
+            consumerName: checkpointConsumer,
+            throughSequence,
+            updatedAt: "2026-10-07T00:00:02.000Z",
+          })
+          .pipe(
+            Effect.provideService(Statement.CurrentTransformer, (statement) =>
+              Effect.sync(() => {
+                checkpointStatements.push(statement.compile()[0]);
+                return statement;
+              }),
+            ),
+          ),
+      );
+      const checkpointReads = checkpointStatements.filter(
+        (query) => /^\s*SELECT/.test(query) && query.includes("FROM provider_runtime_events"),
+      );
+      assert.isAbove(checkpointReads.length, 0);
+      // Checkpoint ACK has no per-row bookkeeping: validate one stored target,
+      // rather than materializing metadata for the entire settled prefix.
+      const after =
+        yield* sql`SELECT sequence FROM provider_runtime_events WHERE sequence = ${terminal.sequence}`;
+      assert.deepEqual(
+        {
+          remainingTerminalRows: after.length,
+          unboundedMetadataReads: checkpointReads.filter(
+            (query) => !/WHERE (?:\w+\.)?sequence\s*=/.test(query),
+          ).length,
+        },
+        { remainingTerminalRows: 0, unboundedMetadataReads: 0 },
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        throughSequence,
+      );
+      const openTurns = yield* sql`SELECT thread_id FROM provider_runtime_open_turns`;
+      assert.lengthOf(openTurns, 0);
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+it.effect(
+  "bounds checkpoint retention passes and continues through existing open-turn maintenance",
+  () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* registerCheckpointConsumer;
+      const activeThread = ThreadId.makeUnsafe("checkpoint-retention-active");
+      yield* insertLiveProjectionThread(activeThread, "2026-10-07T00:00:00.000Z");
+      const active = yield* repository.append({
+        type: "turn.started",
+        eventId: EventId.makeUnsafe("checkpoint-retention-active"),
+        provider: "codex",
+        threadId: activeThread,
+        turnId: TurnId.makeUnsafe("checkpoint-retention-active"),
+        createdAt: "2026-10-07T00:00:00.000Z",
+        payload: {},
+      });
+      for (let index = 0; index < 1100; index++)
+        yield* repository.append({
+          type: "turn.completed",
+          eventId: EventId.makeUnsafe(`bounded-checkpoint-terminal-${index}`),
+          provider: "codex",
+          threadId: ThreadId.makeUnsafe("checkpoint-journal-thread"),
+          turnId: TurnId.makeUnsafe(`bounded-checkpoint-terminal-${index}`),
+          createdAt: "2026-10-07T00:00:00.000Z",
+          payload: { state: "completed" },
+        });
+      let throughSequence = 0;
+      for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED; index++)
+        throughSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: "2026-10-07T00:00:01.000Z",
+      });
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: checkpointConsumer,
+        throughSequence,
+        updatedAt: "2026-10-07T00:00:02.000Z",
+      });
+      const remaining = yield* sql<{
+        count: number;
+      }>`SELECT COUNT(*) AS count FROM provider_runtime_events WHERE event_type = 'turn.completed'`;
+      const deleted = 1100 - remaining[0]!.count;
+      assert.isAbove(deleted, 0);
+      assert.isAtMost(deleted, 1024);
+      assert.isAbove(remaining[0]!.count, 0);
+      // Use the already-owned maintenance cadence; no private busy drain loop.
+      yield* repository.pruneSettledOpenTurns;
+      const settled =
+        yield* sql`SELECT sequence FROM provider_runtime_events WHERE event_type = 'turn.completed'`;
+      assert.lengthOf(settled, 0);
+      const activeRows =
+        yield* sql`SELECT sequence FROM provider_runtime_events WHERE sequence = ${active.sequence}`;
+      assert.lengthOf(activeRows, 1);
+      const replay = yield* repository.readAcceptedOpenTurnEvents({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        sequenceExclusive: 0,
+        limit: 10,
+      });
+      assert.isTrue(replay.some((row) => row.sequence === active.sequence));
+    }).pipe(
+      Effect.provide(
+        ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+    ),
+);
+
+it.effect("journals image metadata and replays it without the model image body", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const data = Buffer.alloc(512 * 1024, 123).toString("base64");
+    const image = { type: "image", data, mimeType: "image/png" };
+    const event = {
+      ...runtimeEvent("runtime-event-image", ""),
+      type: "item.completed",
+      itemId: RuntimeItemId.makeUnsafe("runtime-item-image"),
+      payload: { itemType: "mcp_tool_call", status: "completed", data: { content: [image] } },
+      raw: { source: "codex.app-server.notification", payload: { content: [image] } },
+    } satisfies ProviderRuntimeEvent;
+    const stored = yield* repository.append(event);
+    const replay = yield* repository.readAfter({
+      sequenceExclusive: 0,
+      throughSequenceInclusive: stored.sequence,
+      limit: 10,
+    });
+    assert.lengthOf(replay, 1);
+    assert.deepEqual(replay[0]?.event, stored.event);
+    assert.isBelow(JSON.stringify(replay).length, 2000);
+    assert.deepEqual(replay[0]?.event.raw?.payload, {
+      content: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          synaraImageOmitted: true,
+          encodedLength: data.length,
+          byteLength: 512 * 1024,
+        },
+      ],
+    });
+    assert.equal(image.data, data);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
 
 layer("ProviderRuntimeEventRepository", (it) => {
   it.effect("journals exact events and advances its consumer cursor contiguously", () =>
@@ -667,3 +1037,91 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
     }),
   );
 });
+
+it.effect("amortizes checkpoint retention passes across small checkpoint ACKs", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    yield* registerCheckpointConsumer;
+    const sequences: number[] = [];
+    for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 8; index++)
+      sequences.push((yield* repository.append(checkpointWarning(index))).sequence);
+    const statements: string[] = [];
+    const capture = Effect.provideService(Statement.CurrentTransformer, (statement) =>
+      Effect.sync(() => {
+        statements.push(statement.compile()[0]);
+        return statement;
+      }),
+    );
+    const prunes = () =>
+      statements.filter((query) => query.includes("DELETE FROM provider_runtime_events")).length;
+    for (const throughSequence of sequences.slice(0, 8))
+      assert.isTrue(
+        yield* repository
+          .advanceConsumerCursorThrough({
+            consumerName: checkpointConsumer,
+            throughSequence,
+            updatedAt: "2026-10-07T00:00:01.000Z",
+          })
+          .pipe(capture),
+      );
+    assert.strictEqual(prunes(), 0);
+    assert.isTrue(
+      yield* repository
+        .advanceConsumerCursorThrough({
+          consumerName: checkpointConsumer,
+          throughSequence: sequences.at(-1)!,
+          updatedAt: "2026-10-07T00:00:02.000Z",
+        })
+        .pipe(capture),
+    );
+    assert.strictEqual(prunes(), 1);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
+it.effect("releases superseded file notifications behind a stalled checkpoint cursor", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    yield* registerCheckpointConsumer;
+    const fileChange = (id: string): ProviderRuntimeEvent => ({
+      ...runtimeEvent(id, ""),
+      type: "item.completed",
+      itemId: RuntimeItemId.makeUnsafe(id),
+      payload: { itemType: "file_change", status: "completed" },
+    });
+    yield* repository.append(fileChange("superseded-file"));
+    yield* repository.append(fileChange("newest-file-before-terminal"));
+    yield* repository.append({
+      ...runtimeEvent("superseded-terminal", ""),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    let throughSequence = (yield* repository.append(fileChange("file-after-terminal"))).sequence;
+    for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 8; index++)
+      throughSequence = (yield* repository.append(checkpointWarning(index))).sequence;
+    assert.isTrue(
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: "2026-10-07T00:00:01.000Z",
+      }),
+    );
+    const retained = yield* sql<{ readonly eventId: string }>`
+        SELECT json_extract(event_json, '$.eventId') AS "eventId" FROM provider_runtime_events
+        WHERE thread_id = 'thread-runtime-journal' ORDER BY sequence`;
+    // The checkpoint cursor never moved: only the superseded notification is
+    // released; each turn's newest file row and its terminal stay replayable.
+    assert.deepEqual(
+      retained.map((row) => row.eventId),
+      ["newest-file-before-terminal", "superseded-terminal", "file-after-terminal"],
+    );
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);

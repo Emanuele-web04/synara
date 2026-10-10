@@ -9,9 +9,6 @@ import {
 } from "./baseSchemas";
 import { GitPullRequestMergeability } from "./git";
 
-export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
-export type PullRequestInvolvement = typeof PullRequestInvolvement.Type;
-
 export const PullRequestState = Schema.Literals(["open", "closed", "merged"]);
 export type PullRequestState = typeof PullRequestState.Type;
 
@@ -28,6 +25,14 @@ export const PullRequestActor = Schema.Struct({
   url: Schema.NullOr(Schema.String),
 });
 export type PullRequestActor = typeof PullRequestActor.Type;
+
+export const PullRequestCommitAuthor = Schema.Struct({
+  login: Schema.NullOr(TrimmedNonEmptyString),
+  name: Schema.NullOr(Schema.String),
+  avatarUrl: Schema.NullOr(Schema.String),
+  url: Schema.NullOr(Schema.String),
+});
+export type PullRequestCommitAuthor = typeof PullRequestCommitAuthor.Type;
 
 export const PullRequestLabel = Schema.Struct({
   name: TrimmedNonEmptyString,
@@ -80,7 +85,7 @@ export const PullRequestCommit = Schema.Struct({
   messageHeadline: Schema.String,
   messageBody: Schema.String,
   committedDate: IsoDateTime,
-  authors: Schema.Array(PullRequestActor),
+  authors: Schema.Array(PullRequestCommitAuthor),
 });
 export type PullRequestCommit = typeof PullRequestCommit.Type;
 
@@ -128,6 +133,18 @@ export const PullRequestStackSummary = Schema.Struct({
 });
 export type PullRequestStackSummary = typeof PullRequestStackSummary.Type;
 
+/**
+ * How the signed-in `gh` account relates to a pull request or issue. `involved` mirrors GitHub's
+ * `involves:` search qualifier (author, assignee, mention, or commenter), so it is true whenever
+ * `authored` or `assigned` is, plus mentions and comments the list fields cannot show directly.
+ */
+export const GitHubViewerInvolvement = Schema.Struct({
+  authored: Schema.Boolean,
+  assigned: Schema.Boolean,
+  involved: Schema.Boolean,
+});
+export type GitHubViewerInvolvement = typeof GitHubViewerInvolvement.Type;
+
 export const PullRequestProjectContext = Schema.Struct({
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
@@ -169,55 +186,24 @@ export const PullRequestListEntry = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   labels: Schema.Array(PullRequestLabel),
+  // The inbox query returns these with the row at no extra cost. Decoding defaults keep rows
+  // from an older server (or a recovered pin) valid during version skew.
+  commentCount: Schema.optional(NonNegativeInt).pipe(Schema.withDecodingDefault(() => 0)),
+  assignees: Schema.optional(Schema.Array(PullRequestActor)).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
+  viewerInvolvement: Schema.optional(GitHubViewerInvolvement).pipe(
+    Schema.withDecodingDefault(() => ({ authored: false, assigned: false, involved: false })),
+  ),
 });
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
-
-export const PullRequestsListInput = Schema.Struct({
-  involvement: Schema.optional(PullRequestInvolvement),
-  state: PullRequestState,
-  projectId: Schema.optional(Schema.NullOr(ProjectId)),
-  forceRefresh: Schema.optional(Schema.Boolean),
-});
-export type PullRequestsListInput = typeof PullRequestsListInput.Type;
-
-export const PullRequestsListError = Schema.Struct({
-  projectId: ProjectId,
-  projectTitle: TrimmedNonEmptyString,
-  message: TrimmedNonEmptyString,
-});
-
-export const PullRequestsListRepositoryBatch = Schema.Struct({
-  projectId: ProjectId,
-  projectTitle: TrimmedNonEmptyString,
-  repository: TrimmedNonEmptyString,
-  truncated: Schema.Boolean,
-});
-export type PullRequestsListRepositoryBatch = typeof PullRequestsListRepositoryBatch.Type;
-
-export const PullRequestsListResult = Schema.Struct({
-  viewer: Schema.NullOr(TrimmedNonEmptyString),
-  entries: Schema.Array(PullRequestListEntry),
-  errors: Schema.Array(PullRequestsListError),
-  repositoryBatches: Schema.Array(PullRequestsListRepositoryBatch),
-});
-export type PullRequestsListResult = typeof PullRequestsListResult.Type;
-
-export const PullRequestReviewRequestCountInput = Schema.Struct({
-  projectId: Schema.optional(Schema.NullOr(ProjectId)),
-});
-export type PullRequestReviewRequestCountInput = typeof PullRequestReviewRequestCountInput.Type;
-
-export const PullRequestReviewRequestCountResult = Schema.Struct({
-  count: NonNegativeInt,
-  /** True means at least one repository could not be counted or reached the search cap. */
-  incomplete: Schema.Boolean,
-});
-export type PullRequestReviewRequestCountResult = typeof PullRequestReviewRequestCountResult.Type;
 
 export const PullRequestDetailInput = Schema.Struct({
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
+  /** Bypass the server's short detail cache. Query keys deliberately ignore this flag. */
+  forceRefresh: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDetailInput = typeof PullRequestDetailInput.Type;
 
@@ -330,7 +316,9 @@ export type PullRequestActionResult = typeof PullRequestActionResult.Type;
 export class PullRequestsUnavailableError extends Schema.TaggedErrorClass<PullRequestsUnavailableError>()(
   "PullRequestsUnavailableError",
   {
-    reason: Schema.Literals(["gh-not-installed", "gh-not-authenticated"]),
+    reason: Schema.Literals(["gh-not-installed", "gh-not-authenticated", "rate-limited"]),
     message: TrimmedNonEmptyString,
+    /** When a rate-limited request may be retried. Absent for the gh setup reasons. */
+    retryAt: Schema.optional(IsoDateTime),
   },
 ) {}

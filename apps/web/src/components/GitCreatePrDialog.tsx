@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DiffStat } from "~/components/ui/diff-stat";
-import { SubmitShortcutKbd } from "~/components/ui/kbd";
+import { getSubmitShortcutKeyShortcuts, SubmitShortcutKbd } from "~/components/ui/kbd";
 import {
   type CreatePrBrowserPreparation,
   type GitDialogContext,
@@ -23,7 +23,7 @@ import {
   GitDialogHeading,
   GitDialogShell,
 } from "./GitDialogChrome";
-import { ArrowUpRightIcon, GitPullRequestDraftIcon, GitPullRequestIcon } from "~/lib/icons";
+import { CreatePullRequestIcon, ExternalLinkIcon, GitPullRequestDraftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 export interface GitCreatePrDialogSubmission {
@@ -120,20 +120,22 @@ export function GitCreatePrDialog({
           onChange={(event) => setBody(event.target.value)}
         />
         {view.showCommitToggle && (
-          <label className="flex cursor-pointer items-center gap-2 py-1 text-sm">
+          <label className="flex cursor-pointer items-center gap-2 py-1 text-ui leading-snug">
             <Checkbox
               checked={includeLocalChanges}
               onCheckedChange={(checked) => setIncludeLocalChanges(checked === true)}
             />
             <span className="flex-1">Commit and push local changes</span>
             <DiffStat
-              className="shrink-0 font-mono text-xs"
+              className="shrink-0 font-mono text-ui leading-snug"
               insertions={view.insertions}
               deletions={view.deletions}
             />
           </label>
         )}
-        {unavailableHint && <p className="py-1 text-warning text-xs">{unavailableHint}</p>}
+        {unavailableHint && (
+          <p className="py-1 text-warning text-ui leading-snug">{unavailableHint}</p>
+        )}
       </GitDialogBody>
       <GitDialogActionList>
         <GitDialogActionRow
@@ -145,14 +147,15 @@ export function GitCreatePrDialog({
         <GitDialogActionRow
           highlighted
           disabled={!canCreate}
-          icon={<GitPullRequestIcon />}
+          icon={<CreatePullRequestIcon />}
           label="Create PR"
           trailing={<SubmitShortcutKbd />}
+          aria-keyshortcuts={getSubmitShortcutKeyShortcuts()}
           onClick={() => submit(false)}
         />
         <GitDialogActionRow
           disabled={!canOpenInBrowser}
-          icon={<ArrowUpRightIcon />}
+          icon={<ExternalLinkIcon />}
           label="Open PR in browser"
           onClick={() => onOpenInBrowser({ preparation: browserPreparation, includeLocalChanges })}
         />

@@ -2,7 +2,7 @@ import type { Path } from "effect";
 
 export const parseManagedWorktreeWorkspaceRoot = (input: {
   readonly gitPointerFileContents: string;
-  readonly path: Path.Path;
+  readonly path: Pick<Path.Path, "isAbsolute" | "normalize" | "resolve" | "sep">;
   readonly worktreePath: string;
 }): string | null => {
   const firstLine = input.gitPointerFileContents.split(/\r?\n/, 1)[0]?.trim() ?? "";

@@ -1,3 +1,5 @@
+import { ServerEventLoopMonitor, unavailableEventLoopStatus } from "./eventLoopMonitor";
+import type { ServerRuntimeStatus } from "@synara/contracts";
 import http from "node:http";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -12,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import {
   resolveDefaultChatWorkspaceRoot,
+  resolveDefaultGroupsWorkspaceRoot,
   resolveDefaultStudioWorkspaceRoot,
   ServerConfig,
   type ServerConfigShape,
@@ -19,6 +22,7 @@ import {
 import {
   editorIconEffectRouteLayer,
   isLegacyTokenAuthorized,
+  makeDesktopComputerEmergencyStopRouteLayer,
   makeDesktopShutdownEffectRouteLayer,
   makeHealthEffectRouteLayer,
   projectFaviconEffectRouteLayer,
@@ -32,8 +36,10 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "./orchestration/Services/OrchestrationEngine";
+import { ComputerService, type ComputerServiceShape } from "./computer/Services/ComputerService";
 import type { ServerReadiness } from "./server/readiness";
 import {
+  DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
   DESKTOP_SHUTDOWN_ROUTE_PATH,
   makeServerShutdownController,
   type ServerShutdownController,
@@ -63,6 +69,7 @@ function makeConfig(overrides: Partial<ServerConfigShape> = {}): ServerConfigSha
     homeDir: os.homedir(),
     chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: os.homedir() }),
     studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir: os.homedir() }),
+    groupsWorkspaceRoot: resolveDefaultGroupsWorkspaceRoot({ homeDir: os.homedir() }),
     baseDir,
     keybindingsConfigPath: path.join(baseDir, "keybindings.json"),
     serverRuntimeStatePath: path.join(baseDir, "runtime.json"),
@@ -127,8 +134,16 @@ const healthyOrchestrationEngine = {
 } as unknown as OrchestrationEngineShape;
 
 type TestedRoute =
-  | { readonly kind: "health"; readonly readiness: typeof readiness }
+  | {
+      readonly kind: "health";
+      readonly readiness: typeof readiness;
+      readonly eventLoop?: ServerRuntimeStatus;
+    }
   | { readonly kind: "shutdown"; readonly controller: ServerShutdownController }
+  | {
+      readonly kind: "emergency-stop";
+      readonly computerService?: ComputerServiceShape;
+    }
   | { readonly kind: "static" }
   | { readonly kind: "favicon" }
   | { readonly kind: "editor-icon" };
@@ -157,6 +172,10 @@ async function withEffectServer(
             yield* httpServer.serve(
               yield* HttpRouter.toHttpEffect(makeDesktopShutdownEffectRouteLayer(route.controller)),
             );
+          } else if (route.kind === "emergency-stop") {
+            yield* httpServer.serve(
+              yield* HttpRouter.toHttpEffect(makeDesktopComputerEmergencyStopRouteLayer()),
+            );
           } else if (route.kind === "favicon") {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(projectFaviconEffectRouteLayer));
           } else if (route.kind === "editor-icon") {
@@ -173,6 +192,12 @@ async function withEffectServer(
               Layer.succeed(ServerAuth, serverAuth),
               Layer.succeed(ProjectFaviconResolver, projectFaviconResolver),
               Layer.succeed(OrchestrationEngineService, healthyOrchestrationEngine),
+              ...(route.kind === "emergency-stop" && route.computerService
+                ? [Layer.succeed(ComputerService, route.computerService)]
+                : []),
+              ...(route.kind === "health" && route.eventLoop
+                ? [Layer.succeed(ServerEventLoopMonitor, { getSnapshot: () => route.eventLoop! })]
+                : []),
               NodeHttpServer.layerHttpServices,
             ),
           ),
@@ -223,6 +248,7 @@ describe("production Effect HTTP routes", () => {
         startupReady: false,
         pushBusReady: true,
         projection: { state: "healthy", hasFailure: false },
+        eventLoop: { available: false, sampleCount: 0, lastStall: null },
       });
       // /health is unauthenticated: failure detail (which can embed raw event
       // payloads via pretty-printed decode causes) must never cross this route.
@@ -328,6 +354,119 @@ describe("production Effect HTTP routes", () => {
           const response = await fetch(`${origin}${DESKTOP_SHUTDOWN_ROUTE_PATH}`, { method });
           expect(response.status).toBe(404);
         }
+      },
+    );
+  });
+
+  it("relays an authenticated desktop emergency stop into the computer manager", async () => {
+    const shutdownToken = "a".repeat(64);
+    let stopCalls = 0;
+    const computerService = {
+      supported: true,
+      availability: { kind: "available" as const },
+      manager: {
+        emergencyStopInput: async () => {
+          stopCalls += 1;
+        },
+      },
+    } as unknown as ComputerServiceShape;
+    await withEffectServer(
+      makeConfig({
+        mode: "desktop",
+        desktopShutdownToken: shutdownToken,
+        authToken: "browser-token",
+      }),
+      { kind: "emergency-stop", computerService },
+      async (origin) => {
+        // Repeated presses stay idempotent: each relay re-confirms the stop.
+        for (let requestIndex = 0; requestIndex < 2; requestIndex += 1) {
+          const response = await fetch(`${origin}${DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${shutdownToken}` },
+          });
+          expect(response.status).toBe(202);
+          await expect(response.json()).resolves.toEqual({ accepted: true });
+        }
+        expect(stopCalls).toBe(2);
+      },
+    );
+  });
+
+  it("refuses the emergency-stop route to browser authority and wrong tokens", async () => {
+    const shutdownToken = "a".repeat(64);
+    let stopCalls = 0;
+    const computerService = {
+      supported: true,
+      availability: { kind: "available" as const },
+      manager: {
+        emergencyStopInput: async () => {
+          stopCalls += 1;
+        },
+      },
+    } as unknown as ComputerServiceShape;
+    await withEffectServer(
+      makeConfig({
+        mode: "desktop",
+        desktopShutdownToken: shutdownToken,
+        authToken: "browser-token",
+      }),
+      { kind: "emergency-stop", computerService },
+      async (origin) => {
+        for (const request of [
+          { method: "POST" },
+          { method: "POST", headers: { Authorization: `Bearer ${"b".repeat(64)}` } },
+          { method: "POST", headers: { Authorization: "Bearer browser-token" } },
+        ]) {
+          const response = await fetch(
+            `${origin}${DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH}?token=${shutdownToken}`,
+            request,
+          );
+          expect(response.status).toBe(401);
+        }
+        expect(stopCalls).toBe(0);
+      },
+    );
+  });
+
+  it("keeps the emergency-stop route unavailable outside a private desktop deployment", async () => {
+    const shutdownToken = "a".repeat(64);
+    const computerService = {
+      supported: true,
+      availability: { kind: "available" as const },
+      manager: { emergencyStopInput: async () => undefined },
+    } as unknown as ComputerServiceShape;
+    for (const overrides of [
+      { mode: "web" as const },
+      { mode: "desktop" as const, host: "0.0.0.0", allowInsecureRemote: true },
+      { mode: "desktop" as const, publicUrl: new URL("https://synara.example.test/") },
+      { mode: "desktop" as const, desktopShutdownToken: undefined },
+    ]) {
+      await withEffectServer(
+        makeConfig({ desktopShutdownToken: shutdownToken, ...overrides }),
+        { kind: "emergency-stop", computerService },
+        async (origin) => {
+          const response = await fetch(`${origin}${DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${shutdownToken}` },
+          });
+          expect(response.status).toBe(404);
+        },
+      );
+    }
+  });
+
+  it("answers 404 when no computer service exists to stop", async () => {
+    const shutdownToken = "a".repeat(64);
+    await withEffectServer(
+      makeConfig({ mode: "desktop", desktopShutdownToken: shutdownToken }),
+      { kind: "emergency-stop" },
+      async (origin) => {
+        const response = await fetch(`${origin}${DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${shutdownToken}` },
+        });
+        expect(response.status).toBe(404);
+        await expect(response.json()).resolves.toEqual({ accepted: false });
       },
     );
   });
@@ -603,4 +742,48 @@ describe("production Effect HTTP routes", () => {
       await expect(response.text()).resolves.toBe("Missing id parameter");
     });
   });
+});
+
+it("exposes only aggregate stall metrics in unauthenticated health", async () => {
+  await withEffectServer(
+    makeConfig(),
+    {
+      kind: "health",
+      readiness,
+      eventLoop: {
+        ...unavailableEventLoopStatus,
+        available: true,
+        stallWindowCount: 2,
+        maxStallMs: 5200,
+        discardedIdleGapCount: 1,
+        discardedIdleGapMs: 60_000,
+        lastStall: { durationMs: 5200, ageMs: 1000 },
+      },
+    },
+    async (origin) => {
+      const response = await fetch(`${origin}/health`);
+      const body = (await response.json()) as { eventLoop: ServerRuntimeStatus };
+      expect(body.eventLoop).toMatchObject({
+        available: true,
+        stallWindowCount: 2,
+        discardedIdleGapCount: 1,
+        discardedIdleGapMs: 60_000,
+        lastStall: { durationMs: 5200, ageMs: 1000 },
+      });
+      expect(Object.keys(body.eventLoop).sort()).toEqual([
+        "available",
+        "delayMaxMs",
+        "delayP50Ms",
+        "delayP99Ms",
+        "discardedIdleGapCount",
+        "discardedIdleGapMs",
+        "lastStall",
+        "maxStallMs",
+        "sampleCount",
+        "sampleWindowMs",
+        "stallWindowCount",
+        "utilization",
+      ]);
+    },
+  );
 });
