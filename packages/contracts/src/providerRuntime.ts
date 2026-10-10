@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect";
+import { AsyncUserInputQuestions } from "./asyncUserInput";
 import {
   EventId,
   IsoDateTime,
@@ -12,7 +13,8 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas";
-import { ProviderKind } from "./orchestration";
+import { ClaudeCacheObservation } from "./claudeCache";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -28,7 +30,6 @@ const RuntimeEventRawSource = Schema.Literals([
   "antigravity.cli.event",
   "acp.jsonrpc",
   "acp.cursor.extension",
-  "kilo.sdk.event",
   "opencode.sdk.event",
   "pi.sdk.event",
 ]);
@@ -147,6 +148,7 @@ export const CanonicalRequestType = Schema.Literals([
   "apply_patch_approval",
   "exec_command_approval",
   "tool_user_input",
+  "tool_approval",
   "dynamic_tool_call",
   "auth_tokens_refresh",
   "unknown",
@@ -262,7 +264,8 @@ const EventUnmappedType = Schema.Literal("event.unmapped");
 
 const ProviderRuntimeEventBase = Schema.Struct({
   eventId: EventId,
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   threadId: ThreadId,
   createdAt: IsoDateTime,
   turnId: Schema.optional(TurnId),
@@ -318,11 +321,23 @@ const ThreadMetadataUpdatedPayload = Schema.Struct({
 export type ThreadMetadataUpdatedPayload = typeof ThreadMetadataUpdatedPayload.Type;
 
 export const ThreadTokenUsageSnapshot = Schema.Struct({
+  claudeCache: Schema.optional(ClaudeCacheObservation),
+  // Provider session totals, distinct from the latest request/context snapshot.
+  cumulativeUsage: Schema.optional(
+    Schema.Struct({
+      inputTokens: NonNegativeInt,
+      outputTokens: NonNegativeInt,
+      cachedInputTokens: Schema.optional(NonNegativeInt),
+      cacheCreationInputTokens: Schema.optional(NonNegativeInt),
+    }),
+  ),
   usedTokens: NonNegativeInt,
   usedPercent: Schema.optional(
     Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
   ),
   totalProcessedTokens: Schema.optional(NonNegativeInt),
+  // Claude v1 counts API responses once; unversioned Claude totals are unreliable.
+  tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
   maxTokens: Schema.optional(PositiveInt),
   inputTokens: Schema.optional(NonNegativeInt),
   cachedInputTokens: Schema.optional(NonNegativeInt),
@@ -377,12 +392,18 @@ export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
 const TurnCompletedPayload = Schema.Struct({
   state: RuntimeTurnState,
+  // Present only for an explicitly requested native compaction operation.
+  contextCompacted: Schema.optional(Schema.Boolean),
   stopReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   usage: Schema.optional(Schema.Unknown),
   modelUsage: Schema.optional(UnknownRecordSchema),
+  tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
+  // Per-turn main-loop usage, including observed usage when no result arrives.
+  mainLoopTokens: Schema.optional(NonNegativeInt),
   totalCostUsd: Schema.optional(Schema.Number),
   cumulativeCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
@@ -419,6 +440,7 @@ const TurnDiffUpdatedPayload = Schema.Struct({
 export type TurnDiffUpdatedPayload = typeof TurnDiffUpdatedPayload.Type;
 
 export const ItemLifecyclePayload = Schema.Struct({
+  asyncQuestions: Schema.optional(AsyncUserInputQuestions),
   itemType: CanonicalItemType,
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -575,6 +597,11 @@ const TaskProgressPayload = Schema.Struct({
   // Live per-agent snapshots for workflow tasks, polled from the run's
   // transcript directory while the workflow is running.
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentRuntimeSnapshot)),
+  // Set when the task is a provider-native subagent: the spawning tool call id
+  // (the child thread's provider thread id) and the subagent's own title, so
+  // progress is attributed to that subagent instead of the parent's reasoning.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentTitle: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
 
@@ -602,6 +629,8 @@ const TaskCompletedPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   workflowTaskId: Schema.optional(RuntimeTaskId),
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
+  // Spawning tool call id when the task is a provider-native subagent.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 
@@ -621,6 +650,8 @@ const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
   hookName: TrimmedNonEmptyStringSchema,
   hookEvent: TrimmedNonEmptyStringSchema,
+  statusMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  data: Schema.optional(Schema.Unknown),
 });
 export type HookStartedPayload = typeof HookStartedPayload.Type;
 
@@ -634,11 +665,17 @@ export type HookProgressPayload = typeof HookProgressPayload.Type;
 
 const HookCompletedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
+  hookName: Schema.optional(TrimmedNonEmptyStringSchema),
+  hookEvent: Schema.optional(TrimmedNonEmptyStringSchema),
   outcome: Schema.Literals(["success", "error", "cancelled"]),
+  status: Schema.optional(Schema.Literals(["completed", "failed", "blocked", "stopped"])),
+  statusMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  durationMs: Schema.optional(NonNegativeInt),
   output: Schema.optional(Schema.String),
   stdout: Schema.optional(Schema.String),
   stderr: Schema.optional(Schema.String),
   exitCode: Schema.optional(Schema.Int),
+  data: Schema.optional(Schema.Unknown),
 });
 export type HookCompletedPayload = typeof HookCompletedPayload.Type;
 
@@ -732,12 +769,14 @@ export type VcsStateChangedPayload = typeof VcsStateChangedPayload.Type;
 
 const RuntimeWarningPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
+  willRetry: Schema.optional(Schema.Boolean),
   detail: Schema.optional(Schema.Unknown),
 });
 export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 
 const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
+  errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
   class: Schema.optional(RuntimeErrorClass),
   detail: Schema.optional(Schema.Unknown),
 });

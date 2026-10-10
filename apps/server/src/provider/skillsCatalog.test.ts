@@ -79,6 +79,66 @@ disable-model-invocation: true
       "disable-model-invocation": true,
     });
   });
+
+  it("reads block scalars and keeps nested keys from overriding top-level ones", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: check-code
+description: >-
+  Review recent code changes
+  before they are merged.
+
+  Use it after every edit.
+summary: |
+  First line
+    indented line
+metadata:
+  env:
+    - name: API_KEY
+      description: Service key
+license: MIT
+---
+`),
+    ).toEqual({
+      name: "check-code",
+      description: "Review recent code changes before they are merged.\nUse it after every edit.",
+      summary: "First line\n  indented line",
+      license: "MIT",
+    });
+  });
+
+  it("reads a short description kept under metadata", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: codex-style
+description: Long description
+metadata:
+  short-description: Short text
+---
+`),
+    ).toEqual({
+      name: "codex-style",
+      description: "Long description",
+      "short-description": "Short text",
+    });
+  });
+
+  it("parses frontmatter with many keys without a quadratic slowdown", () => {
+    const keys = Array.from({ length: 40_000 }, (_, index) => `key${index}: value`).join("\n");
+    const startedAt = performance.now();
+    expect(parseSkillFrontmatter(`---\nname: wide\n${keys}\n---\n`).name).toBe("wide");
+    expect(performance.now() - startedAt).toBeLessThan(3_000);
+  });
+
+  it("falls back to the line reader for frontmatter that is not valid YAML", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: loose
+description: Use when: the user asks for it
+---
+`),
+    ).toEqual({ name: "loose", description: "Use when: the user asks for it" });
+  });
 });
 
 describe("pathIsWithin", () => {
@@ -110,7 +170,21 @@ describe("discoverSkillsCatalog", () => {
       "Cursor",
     );
     await writeSkill(path.join(homeDir, ".grok", "skills", "grok-only"), "grok-only", "Grok");
-    await writeSkill(path.join(homeDir, ".kilo", "skills", "kilo-only"), "kilo-only", "Kilo");
+    await writeSkill(
+      path.join(homeDir, ".config", "devin", "skills", "devin-only"),
+      "devin-only",
+      "Devin",
+    );
+    await writeSkill(
+      path.join(homeDir, ".config", "cognition", "skills", "cognition-only"),
+      "cognition-only",
+      "Cognition",
+    );
+    await writeSkill(
+      path.join(homeDir, ".codeium", "windsurf", "skills", "windsurf-only"),
+      "windsurf-only",
+      "Windsurf",
+    );
     await writeSkill(
       path.join(homeDir, ".config", "opencode", "skills", "opencode-only"),
       "opencode-only",
@@ -126,9 +200,75 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("claude-only")?.scope).toBe("claude");
     expect(byName.get("cursor-only")?.scope).toBe("cursor");
     expect(byName.get("grok-only")?.scope).toBe("grok");
-    expect(byName.get("kilo-only")?.scope).toBe("kilo");
+    expect(byName.get("devin-only")?.scope).toBe("devin");
+    expect(byName.get("cognition-only")?.scope).toBe("devin");
+    expect(byName.get("windsurf-only")?.scope).toBe("devin");
     expect(byName.get("opencode-only")?.scope).toBe("opencode");
     expect(byName.get("pi-only")?.scope).toBe("pi");
+  });
+
+  it("honors a custom agentDir for omp and pi skill roots", async () => {
+    const ompAgentDir = path.join(root, "custom-omp-agent");
+    const piAgentDir = path.join(root, "custom-pi-agent");
+    await writeSkill(
+      path.join(ompAgentDir, "skills", "omp-custom"),
+      "omp-custom",
+      "OMP profile skill",
+    );
+    await writeSkill(path.join(piAgentDir, "skills", "pi-custom"), "pi-custom", "Pi profile skill");
+    await writeSkill(
+      path.join(homeDir, ".omp", "agent", "skills", "omp-default"),
+      "omp-default",
+      "Default root skill",
+    );
+
+    const ompSkills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "omp",
+      agentDir: ompAgentDir,
+    });
+    expect(ompSkills.find((s) => s.name === "omp-custom")?.scope).toBe("omp");
+    expect(ompSkills.find((s) => s.name === "omp-default")).toBeUndefined();
+
+    const piSkills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "pi",
+      agentDir: piAgentDir,
+    });
+    expect(piSkills.find((s) => s.name === "pi-custom")?.scope).toBe("pi");
+  });
+
+  it("discovers Devin's project-local native skill roots", async () => {
+    const cwd = path.join(root, "repo", "packages", "web");
+    await mkdir(cwd, { recursive: true });
+    await writeSkill(
+      path.join(root, "repo", ".devin", "skills", "devin-project"),
+      "devin-project",
+      "Project Devin skill",
+    );
+    await writeSkill(
+      path.join(root, "repo", ".cognition", "skills", "cognition-project"),
+      "cognition-project",
+      "Project Cognition skill",
+    );
+    await writeSkill(
+      path.join(root, "repo", ".windsurf", "skills", "windsurf-project"),
+      "windsurf-project",
+      "Project Windsurf skill",
+    );
+
+    const skills = await discoverSkillsCatalog({
+      cwd,
+      homeDir,
+      synaraBaseDir,
+      provider: "devin",
+    });
+
+    for (const name of ["devin-project", "cognition-project", "windsurf-project"]) {
+      expect(skills.find((skill) => skill.name === name)).toMatchObject({ scope: "project" });
+    }
   });
 
   it("discovers only the registered Claude plugin version for Grok with its native namespace", async () => {

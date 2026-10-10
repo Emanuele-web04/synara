@@ -6,17 +6,19 @@
  * requiring a live turn so a detached provider cell cannot drive a simulator
  * after its turn ended.
  *
- * Consent rides the existing per-provider approval flows rather than a new
- * subsystem. Two things are enforced here rather than left to the provider:
- *
- * - `device_open_url` always requires approval. It is an exfiltration vector
- *   (an arbitrary URL opened in the device's browser), so it is refused
- *   in-tool for any session whose provider has no approval gate, following the
- *   `BrowserDownloadApprovalRequired` precedent of cancelling before the effect
- *   and telling the agent that explicit user approval is required.
- * - Every input tool is refused the same way for gateless providers. Antigravity
- *   runs with `--dangerously-skip-permissions`, so without this a prompt-injected
- *   agent could drive the device with no user in the loop.
+ * Consent rides the Synara-owned approval flow (`authorizeAction`) for every
+ * approval-required tool, mirroring the computer family: provider-native
+ * permission bridges cannot see MCP calls, so a gated provider like OMP still
+ * cannot ask about a device action unless Synara asks on its behalf — and a
+ * gateless provider (`PROVIDERS_WITHOUT_APPROVAL_GATE`; Antigravity runs with
+ * `--dangerously-skip-permissions`, Pi executes gateway tools with no approval
+ * bridge) needs the same card or a prompt-injected agent could drive the
+ * device with no user in the loop. `device_open_url` is always in that set:
+ * it is an exfiltration vector (an arbitrary URL opened in the device's
+ * browser), so it cancels before the effect, following the
+ * `BrowserDownloadApprovalRequired` precedent. When no Synara authorize
+ * surface was supplied at all, mutating tools refuse with the
+ * approval-unavailable error rather than running unasked.
  *
  * @module agentGateway/deviceTools
  */
@@ -27,7 +29,6 @@ import {
   DEVICE_SWIPE_DURATION_MIN_MS,
   type DeviceHardwareButton,
   type DeviceOpenPaneReason,
-  type ProviderKind,
 } from "@synara/contracts";
 import { Effect } from "effect";
 
@@ -50,13 +51,6 @@ import {
 } from "./toolRuntime.ts";
 
 export const DEVICE_CONTROL_CAPABILITY = "device:control" as const;
-
-/**
- * Providers whose sessions run without a per-tool approval gate. Synara cannot
- * put a human in the loop for them, so device actions with a physical or
- * exfiltration effect are refused rather than silently auto-approved.
- */
-const PROVIDERS_WITHOUT_APPROVAL_GATE = new Set<ProviderKind>(["antigravity"]);
 
 export function deviceToolRequiresApproval(name: string): boolean {
   return DEVICE_APPROVAL_REQUIRED_TOOLS.has(name);
@@ -84,7 +78,7 @@ const AGENT_RECOVERABLE_ERROR_PATTERNS: readonly RegExp[] = [
   /scrolling stopped moving/iu,
 ];
 
-export function isViewerFacingDeviceError(error: unknown): boolean {
+function isViewerFacingDeviceError(error: unknown): boolean {
   const message = errorText(error);
   return !AGENT_RECOVERABLE_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
@@ -121,6 +115,11 @@ const DEVICE_HARDWARE_BUTTONS: readonly DeviceHardwareButton[] = [
   "volume-down",
 ];
 
+// Screenshots ride MCP tool-result and provider session frames as base64;
+// 4 MB of PNG stays well under the shared 16 MB JSON-RPC frame cap after
+// encoding, for every provider transport.
+const DEVICE_SCREENSHOT_MAX_INLINE_BYTES = 4 * 1024 * 1024;
+
 const UDID_PROPERTY = {
   type: "string",
   description: "Device udid from device_list.",
@@ -135,6 +134,25 @@ const DEVICE_SCROLL_BUDGET_RANGE = {
   minimum: DEVICE_SCROLL_MIN_SWIPES,
   maximum: DEVICE_SCROLL_MAX_SWIPES,
 } as const;
+
+const DEVICE_APPROVAL_AGENT_GUIDANCE =
+  "If this reports DeviceApprovalRequired, the action was refused before it ran because the session has no approval gate; explain that the user must perform it from the device pane and do not retry.";
+const DEVICE_BUILD_AGENT_GUIDANCE =
+  "Synara never builds the app; when needed, build it first with xcodebuild or the project's build tool. This tool surfaces the driven device in the pane.";
+const DEVICE_INPUT_RESULT_AGENT_GUIDANCE =
+  "If HID events were not delivered, nothing happened and the server already retried once, so surface the failure. Never report success without observing the result in device_describe_ui; an unchanged tree means the action missed or changed nothing.";
+
+function approvalRequiredDeviceDescription(description: string): string {
+  return `${description} ${DEVICE_APPROVAL_AGENT_GUIDANCE}`;
+}
+
+function builtAppDeviceDescription(description: string): string {
+  return approvalRequiredDeviceDescription(`${description} ${DEVICE_BUILD_AGENT_GUIDANCE}`);
+}
+
+function deviceInputDescription(description: string): string {
+  return approvalRequiredDeviceDescription(`${description} ${DEVICE_INPUT_RESULT_AGENT_GUIDANCE}`);
+}
 
 function approvalUnavailableResult(name: string): McpToolCallResult {
   return {
@@ -178,6 +196,13 @@ function readBoundedIntegerArg(
 
 export interface AgentGatewayDeviceToolsOptions {
   readonly manager: DeviceManager;
+  /** Synara-owned consent for approval-required calls; see computerTools.ts. */
+  readonly authorizeAction?: (
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolContext,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
 }
 
 export function makeAgentGatewayDeviceTools(
@@ -196,14 +221,20 @@ export function makeAgentGatewayDeviceTools(
   ) => {
     return (args: Record<string, unknown>, context: ToolContext) =>
       Effect.gen(function* () {
-        if (
-          deviceToolRequiresApproval(name) &&
-          PROVIDERS_WITHOUT_APPROVAL_GATE.has(context.callerProvider)
-        ) {
+        if (deviceToolRequiresApproval(name) && options.authorizeAction === undefined) {
           return approvalUnavailableResult(name);
         }
+        const authorize = options.authorizeAction;
         return yield* Effect.tryPromise({
-          try: async () => {
+          try: async (signal) => {
+            if (deviceToolRequiresApproval(name) && authorize) {
+              const approved = await authorize(name, args, context, signal);
+              if (!approved) {
+                return mcpToolResultError(
+                  "Device action was denied or cancelled; no input was sent.",
+                );
+              }
+            }
             const value = await manager.withAgentActivity(context.callerThreadId, () =>
               run(args, context),
             );
@@ -261,7 +292,7 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_list",
         description:
-          "List iOS simulators Synara can drive, with their runtime, boot state, and who booted them. Call this before any other device_* tool to get a udid.",
+          "List iOS simulators Synara can drive, with their runtime, boot state, and who booted them. Call this before any other device_* tool and use an already-booted device when one is available; booting another wastes time and can leave the user watching the wrong pane.",
         inputSchema: {
           type: "object",
           properties: {
@@ -283,8 +314,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_boot",
-        description:
-          'Boot a simulator. Synara caps the number of simulators it boots itself; past the cap this returns kind "boot-limit-reached" with the devices to shut down, which is a refusal to relay to the user, not an error to retry.',
+        description: approvalRequiredDeviceDescription(
+          'Boot a simulator only when device_list finds nothing booted or the user named a different device. Synara caps the simulators it boots; kind "boot-limit-reached" lists devices to relay to the user so they can choose one to shut down, and must not be retried.',
+        ),
         inputSchema: {
           type: "object",
           properties: { udid: UDID_PROPERTY },
@@ -311,8 +343,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_install",
-        description:
-          "Install a built .app bundle on a booted simulator. Synara never builds the app: run your own build first and pass the resulting bundle path.",
+        description: builtAppDeviceDescription(
+          "Install a built .app bundle on a booted simulator and pass the resulting bundle path.",
+        ),
         inputSchema: {
           type: "object",
           properties: {
@@ -339,7 +372,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_launch",
-        description: "Launch an installed app by bundle id on a booted simulator.",
+        description: builtAppDeviceDescription(
+          "Launch an installed app by bundle id on a booted simulator. Launch system apps directly by bundle id; Settings is com.apple.Preferences.",
+        ),
         inputSchema: {
           type: "object",
           properties: {
@@ -372,8 +407,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_open_url",
-        description:
-          "Open a URL on the device, following its deep-link handlers. Always requires explicit user approval.",
+        description: approvalRequiredDeviceDescription(
+          "Open a URL on the device through its deep-link handlers; this always requires explicit user approval. For Expo Go, boot with device_boot and then use exp://127.0.0.1:8081; if Metro is needed, start it detached in the background so it does not block the turn. Never run expo start --ios, expo run:ios, or npm run ios because they open Simulator.app outside the pane. When the user asks to see the app working, finish with it visible in the streamed pane.",
+        ),
         inputSchema: {
           type: "object",
           properties: {
@@ -400,8 +436,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_tap",
-        description:
-          "Tap an element by label, or a raw point. Prefer label: Synara re-reads the accessibility tree, scrolls the element into view if it sits below the fold, and taps its own point, which is the only thing that works for a control merged into its row (a switch's row centre is dead space). Never swipe first to reach something you are about to tap. Pass role alongside label only to disambiguate. Use x and y just for something the tree does not label; they are device points from device_describe_ui, never screenshot pixels.",
+        description: deviceInputDescription(
+          "Tap by label with device_tap {udid, label}; add role as {udid, label, role} only to disambiguate a repeated label. Synara re-reads the accessibility tree, scrolls the element into view, and uses its activationPoint, which is required for a switch, checkbox, stepper, or other control merged into a row whose centre is dead space. Use x and y only for an unlabeled target, and copy device points from device_describe_ui rather than screenshot pixels or computed coordinates.",
+        ),
         inputSchema: {
           type: "object",
           properties: {
@@ -458,7 +495,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_swipe",
-        description: "Swipe between two points on the device screen, in device points.",
+        description: deviceInputDescription(
+          "Swipe between two device points only when the gesture itself is the goal, such as dismissing a sheet, paging a carousel, or pulling to refresh. Never write a swipe loop to find content; use device_scroll_to_element or labelled device_tap instead.",
+        ),
         inputSchema: {
           type: "object",
           properties: {
@@ -496,8 +535,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_type",
-        description:
+        description: deviceInputDescription(
           "Type text into the focused field. Tap the field first; this does not focus anything by itself.",
+        ),
         inputSchema: {
           type: "object",
           properties: {
@@ -522,7 +562,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_press_button",
-        description: "Press a hardware button: home, lock, volume-up, or volume-down.",
+        description: deviceInputDescription(
+          "Press a hardware button: home, lock, volume-up, or volume-down.",
+        ),
         inputSchema: {
           type: "object",
           properties: {
@@ -556,7 +598,7 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_screenshot",
         description:
-          "Capture the device screen as a PNG. Prefer device_describe_ui for finding elements; use this when the pixels themselves matter.",
+          "Capture the device screen as a PNG for showing the user a result or when pixels themselves matter. Never use screenshots to locate elements or verify state; use device_describe_ui.",
         inputSchema: {
           type: "object",
           properties: { udid: UDID_PROPERTY },
@@ -570,7 +612,9 @@ export function makeAgentGatewayDeviceTools(
           return yield* Effect.tryPromise({
             try: async () => {
               const result = await manager.withAgentActivity(context.callerThreadId, () =>
-                manager.screenshot(readUdid(args)),
+                manager.screenshot(readUdid(args), {
+                  maxInlineBytes: DEVICE_SCREENSHOT_MAX_INLINE_BYTES,
+                }),
               );
               await surfaceDevice(context, readUdid(args), "agent-tool");
               // Image content beside the JSON so the model sees the screen
@@ -594,7 +638,7 @@ export function makeAgentGatewayDeviceTools(
       definition: {
         name: "device_describe_ui",
         description:
-          "Read the device's accessibility tree: roles, subroles, labels, values, frames, and activation points in device points. This is the canonical way to locate something before device_tap. Tap a node's activationPoint when it has one: a control merged into its row (switch, checkbox, stepper) only responds there, not at the row's frame centre. A toggle's value is \"1\" when on and \"0\" when off, so re-reading this tree is how you verify a toggle flipped.",
+          'Read the accessibility tree: roles, subroles, labels, values, frames, and activation points in device points. Use this before device_tap and re-read it afterwards to verify the screen changed. A control merged into a row only responds at its activationPoint, not the row centre. Toggle value "1" means on and "0" means off; inspect and re-read that value rather than using a screenshot. Simulators omit hardware-backed panes such as Airplane Mode, Cellular, and Face ID enrollment, while Developer options appear only when exposed by the runtime; if a requested control is absent, say so instead of substituting another setting.',
         inputSchema: {
           type: "object",
           properties: { udid: UDID_PROPERTY },
@@ -612,8 +656,9 @@ export function makeAgentGatewayDeviceTools(
       requiresActiveTurn: true,
       definition: {
         name: "device_scroll_to_element",
-        description:
-          "Scroll a labelled element into view, in one call. Synara swipes and re-reads the tree until the element sits in the tappable band, then returns it with its tap point. Use this instead of a manual device_swipe loop for anything you are looking for. You do not need it before device_tap with a label, which scrolls on its own; reach for it to read something below the fold, or to confirm a screen contains what you expect.",
+        description: deviceInputDescription(
+          "Scroll a labelled element into view in one call. Synara swipes and re-reads the tree until the element reaches the tappable band, then returns its tap point. Use this instead of a device_swipe loop when reading or confirming content below the fold; labelled device_tap already scrolls on its own.",
+        ),
         inputSchema: {
           type: "object",
           properties: {

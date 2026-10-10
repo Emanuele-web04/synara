@@ -12,6 +12,7 @@ import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
 import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
+import YAML from "yaml";
 import { discoverClaudePluginSkillRoots } from "./claudePluginSkills.ts";
 
 type FrontmatterValue = string | boolean;
@@ -47,16 +48,51 @@ function parseYamlScalar(value: string): FrontmatterValue {
   return unquoted;
 }
 
-// Parses the small scalar frontmatter subset used by Agent Skills without pulling in YAML.
+// Some skills keep their short description under `metadata:`, which the line reader used to pick up.
+function readMetadataShortDescription(parsed: object): string | undefined {
+  const metadata = (parsed as { metadata?: unknown }).metadata;
+  if (typeof metadata !== "object" || metadata === null) {
+    return undefined;
+  }
+  const value = (metadata as Record<string, unknown>)["short-description"];
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+// Reads Agent Skills frontmatter as YAML so block scalars (`description: >-`) and nested maps
+// parse correctly. Frontmatter that is not valid YAML falls back to the lenient line reader.
 export function parseSkillFrontmatter(markdown: string): Record<string, FrontmatterValue> {
   const normalized = markdown.replace(/\r\n/g, "\n");
   const match = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/.exec(normalized);
   if (!match) {
     return {};
   }
+  const block = match[1] ?? "";
+
+  try {
+    // Skill files can come from untrusted repositories: `uniqueKeys: false` skips the quadratic
+    // duplicate-key check, and `logLevel: "error"` keeps unusual tags from printing process warnings.
+    const parsed: unknown = YAML.parse(block, { uniqueKeys: false, logLevel: "error" });
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      const record: Record<string, FrontmatterValue> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === "string") {
+          record[key] = value.trim();
+        } else if (typeof value === "boolean") {
+          record[key] = value;
+        }
+      }
+      const shortDescription = readMetadataShortDescription(parsed);
+      if (shortDescription !== undefined && record["short-description"] === undefined) {
+        record["short-description"] = shortDescription;
+      }
+      return record;
+    }
+  } catch {
+    // Not valid YAML: use the line reader below.
+  }
 
   const record: Record<string, FrontmatterValue> = {};
-  for (const line of (match[1] ?? "").split("\n")) {
+  for (const line of block.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) {
       continue;
@@ -342,6 +378,8 @@ export interface SkillsCatalogDiscoveryInput {
   readonly includeDuplicateOrigins?: boolean;
   /** Bypass the short-lived discovery cache. */
   readonly forceReload?: boolean;
+  /** Provider-configured agent dir (pi/omp) — overrides the default profile root. */
+  readonly agentDir?: string | null;
 }
 
 export interface SkillsCatalogRootInput extends SkillsCatalogDiscoveryInput {
@@ -356,9 +394,10 @@ const HOME_ORIGIN_ORDER = [
   "cursor",
   "grok",
   "factory",
-  "kilo",
   "opencode",
   "pi",
+  "devin",
+  "omp",
   "agents",
 ] as const;
 export type SkillsCatalogOrigin = (typeof HOME_ORIGIN_ORDER)[number] | "project";
@@ -439,17 +478,39 @@ const SKILL_ORIGIN_ROOTS = {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".factory", "skills")],
     projectRootNames: [".factory"],
   },
-  kilo: {
-    homeRoots: (input) => [nodePath.join(input.homeDir, ".kilo", "skills")],
-    projectRootNames: [".kilo"],
-  },
   opencode: {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".config", "opencode", "skills")],
     projectRootNames: [".opencode"],
   },
   pi: {
-    homeRoots: (input) => [nodePath.join(input.homeDir, ".pi", "agent", "skills")],
+    homeRoots: (input) => [
+      nodePath.join(input.agentDir ?? nodePath.join(input.homeDir, ".pi", "agent"), "skills"),
+    ],
     projectRootNames: [".pi"],
+  },
+  devin: {
+    homeRoots: (input) => [
+      ...(process.platform === "win32"
+        ? [
+            nodePath.join(input.homeDir, "AppData", "Roaming", "devin", "skills"),
+            nodePath.join(input.homeDir, "AppData", "Roaming", "cognition", "skills"),
+          ]
+        : []),
+      nodePath.join(input.homeDir, ".config", "devin", "skills"),
+      nodePath.join(input.homeDir, ".config", "cognition", "skills"),
+      nodePath.join(input.homeDir, ".codeium", "windsurf", "skills"),
+      nodePath.join(input.homeDir, ".codeium", "windsurf-next", "skills"),
+      nodePath.join(input.homeDir, ".codeium", "windsurf-insiders", "skills"),
+      // Keep the original path as a compatibility fallback for early Devin CLI builds.
+      nodePath.join(input.homeDir, ".devin", "skills"),
+    ],
+    projectRootNames: [".devin", ".cognition", ".windsurf"],
+  },
+  omp: {
+    homeRoots: (input) => [
+      nodePath.join(input.agentDir ?? nodePath.join(input.homeDir, ".omp", "agent"), "skills"),
+    ],
+    projectRootNames: [".omp"],
   },
   agents: {
     homeRoots: (input) => [nodePath.join(input.homeDir, ".agents", "skills")],
@@ -464,9 +525,10 @@ const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
   antigravity: ["agents"],
   grok: ["grok", "claude", "agents"],
   droid: ["factory", "agents", "claude", "codex"],
-  kilo: ["kilo", "agents", "claude"],
   opencode: ["opencode", "claude", "agents"],
   pi: ["pi", "agents"],
+  devin: ["devin", "claude", "agents"],
+  omp: ["omp", "agents"],
 } as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;
 
 function homeRootsForOrigin(
@@ -517,11 +579,11 @@ function rootsForOrderedOrigins(
   orderedOrigins: ReadonlyArray<SkillsHomeOrigin>,
 ): SkillRoot[] {
   const homeRoots = orderedOrigins.flatMap((origin) =>
-    homeRootsForOrigin(origin, input).map((path) => ({
-      path,
-      scope: origin,
-      ...(origin === "pi" ? { includeMarkdownFiles: true } : {}),
-    })),
+    homeRootsForOrigin(origin, input).map((path) =>
+      origin === "pi" || origin === "omp"
+        ? { path, scope: origin, includeMarkdownFiles: true }
+        : { path, scope: origin },
+    ),
   );
   const homeRootPaths = new Set(homeRoots.map((root) => nodePath.resolve(root.path)));
 
@@ -544,11 +606,11 @@ function rootsForOrderedOrigins(
           if (homeRootPaths.has(nodePath.resolve(rootPath))) {
             continue;
           }
-          projectRoots.push({
-            path: rootPath,
-            scope: "project",
-            ...(origin === "pi" ? { includeMarkdownFiles: true } : {}),
-          });
+          projectRoots.push(
+            origin === "pi" || origin === "omp"
+              ? { path: rootPath, scope: "project", includeMarkdownFiles: true }
+              : { path: rootPath, scope: "project" },
+          );
         }
       }
     }
@@ -576,6 +638,7 @@ export async function discoverSkillsCatalog(
     input.provider ?? "",
     input.homeDir,
     input.synaraBaseDir,
+    input.agentDir?.trim() ?? "",
     input.includeDuplicateOrigins ? "all-origins" : "deduped",
   ].join("\u0000");
 

@@ -17,9 +17,18 @@ import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@synara/
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 
 import { basenameOfPath } from "~/file-icons";
-import { useCopyFileContentsToClipboard } from "~/hooks/useCopyToClipboard";
+import { useCopyFileContentsToClipboard, useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
 import type { ChatFileReference } from "~/lib/chatReferences";
-import { ChevronRightIcon, CodeIcon, EllipsisIcon, EyeOpenIcon } from "~/lib/icons";
+import {
+  ChevronRightIcon,
+  CodeIcon,
+  CopyIcon,
+  EllipsisIcon,
+  EyeOpenIcon,
+  PencilIcon,
+  RefreshCwIcon,
+} from "~/lib/icons";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
@@ -49,10 +58,16 @@ interface WorkspaceFilePreviewHeaderProps {
   contentsForCopy?: string | null;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
+  onEditFile?: (() => void) | undefined;
   /** Marks the currently open source buffer as different from its saved version. */
   dirty?: boolean;
+  saveState?: string | undefined;
+  onSave?: (() => void) | undefined;
   /** Short reason the current source cannot be edited safely. */
   readOnlyReason?: string | null;
+  /** Re-fetches the current file without discarding a dirty edit buffer. */
+  onReload?: (() => void) | undefined;
+  reloading?: boolean;
 }
 
 // Source (raw file, where selecting text yields a precise line/column chat
@@ -169,7 +184,7 @@ function CollapsingPathBreadcrumb(props: {
     <nav
       ref={navRef}
       aria-label="File path"
-      className="relative flex min-w-0 flex-1 items-center overflow-hidden text-[12px] leading-none"
+      className="relative flex min-w-0 flex-1 items-center overflow-hidden text-ui leading-none"
     >
       {/* Hidden mirror of the full breadcrumb at natural width, measured to
           decide how many directories fit. Absolutely positioned so it never
@@ -213,8 +228,8 @@ function CollapsingPathBreadcrumb(props: {
         {fileSegment}
       </span>
       {dirty ? (
-        <span
-          className="ml-1.5 size-1.5 shrink-0 rounded-full bg-foreground/75"
+        <StatusDot
+          className="ml-1.5 bg-foreground/75"
           role="status"
           aria-label="Unsaved changes"
           title="Unsaved changes"
@@ -260,9 +275,13 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
     onAskWhyInChat?.({ path: filePath });
   };
   const copyFileContents = useCopyFileContentsToClipboard();
+  const copyPathToClipboard = useCopyPathToClipboard();
 
   const canCopyContents = contentsForCopy != null;
-  const hasOverflowMenu = canCopyContents || Boolean(onReferenceInChat || onAskWhyInChat);
+  const openInTarget =
+    fileIsOutsideWorkspace || !workspaceRoot
+      ? filePath
+      : joinWorkspaceRelativePath(workspaceRoot, filePath);
 
   return (
     <div
@@ -279,19 +298,34 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
       />
 
       {props.truncated ? (
-        <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 @sm/header-actions:inline">
+        <span className="hidden shrink-0 text-ui-xs text-muted-foreground/70 @sm/header-actions:inline">
           Shown partially
         </span>
       ) : props.readOnlyReason ? (
         <span
-          className="hidden max-w-32 shrink-0 truncate text-[10px] text-muted-foreground/70 @sm/header-actions:inline"
+          className="hidden max-w-32 shrink-0 truncate text-ui-xs text-muted-foreground/70 @sm/header-actions:inline"
           title={props.readOnlyReason}
         >
           Read-only
         </span>
       ) : null}
 
+      {props.saveState ? (
+        <span role="status" className="shrink-0 text-ui-sm text-muted-foreground">
+          {props.saveState}
+        </span>
+      ) : null}
       <div className="flex shrink-0 items-center gap-1.5">
+        {props.onSave ? (
+          <button
+            type="button"
+            onClick={props.onSave}
+            disabled={!props.dirty || props.saveState === "Saving..."}
+            className="rounded-md px-2 py-1 text-ui-sm disabled:opacity-50"
+          >
+            Save
+          </button>
+        ) : null}
         {props.isMarkdown ? (
           <div
             role="radiogroup"
@@ -323,43 +357,65 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
           </div>
         ) : null}
 
-        {hasOverflowMenu ? (
-          <Menu>
-            <MenuTrigger render={<ChatHeaderIconButton label="More actions" tone="plain" />}>
-              <EllipsisIcon aria-hidden="true" className="size-3.5" />
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
-              {canCopyContents ? (
-                <MenuItem
-                  onClick={() =>
-                    copyFileContents(contentsForCopy ?? "", fileSegment, {
-                      partial: props.truncated ?? false,
-                    })
-                  }
-                >
-                  Copy contents
-                </MenuItem>
-              ) : null}
-              {onReferenceInChat ? (
-                <MenuItem onClick={referenceWholeFile}>Reference in chat</MenuItem>
-              ) : null}
-              {onAskWhyInChat ? (
-                <MenuItem onClick={askWhyWholeFile}>Ask why this changed</MenuItem>
-              ) : null}
-            </ComposerPickerMenuPopup>
-          </Menu>
+        {props.onEditFile ? (
+          <ChatHeaderIconButton
+            type="button"
+            tone="plain"
+            label="Edit file"
+            title="Edit file"
+            onClick={props.onEditFile}
+          >
+            <PencilIcon aria-hidden="true" className="size-3.5" />
+          </ChatHeaderIconButton>
         ) : null}
+
+        {props.onReload ? (
+          <ChatHeaderIconButton
+            label="Reload file from disk"
+            title="Reload file from disk"
+            tone="plain"
+            onClick={props.onReload}
+          >
+            <RefreshCwIcon
+              aria-hidden="true"
+              className={cn("size-3.5", props.reloading && "animate-spin")}
+            />
+          </ChatHeaderIconButton>
+        ) : null}
+
+        <Menu>
+          <MenuTrigger render={<ChatHeaderIconButton label="More actions" tone="plain" />}>
+            <EllipsisIcon aria-hidden="true" className="size-3.5" />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
+            <MenuItem onClick={() => copyPathToClipboard(openInTarget)}>
+              <CopyIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <span>Copy path</span>
+            </MenuItem>
+            {canCopyContents ? (
+              <MenuItem
+                onClick={() =>
+                  copyFileContents(contentsForCopy ?? "", fileSegment, {
+                    partial: props.truncated ?? false,
+                  })
+                }
+              >
+                Copy contents
+              </MenuItem>
+            ) : null}
+            {onReferenceInChat ? (
+              <MenuItem onClick={referenceWholeFile}>Reference in chat</MenuItem>
+            ) : null}
+            {onAskWhyInChat ? (
+              <MenuItem onClick={askWhyWholeFile}>Ask why this changed</MenuItem>
+            ) : null}
+          </ComposerPickerMenuPopup>
+        </Menu>
 
         {/* Responsive (default) mode: the "Open" label rides the same
             `header-actions` container declared on this header, so it shows on a
             wide pane and collapses to the editor icon when the pane is narrow. */}
-        <OpenInPicker
-          openInTarget={
-            fileIsOutsideWorkspace || !workspaceRoot
-              ? filePath
-              : joinWorkspaceRelativePath(workspaceRoot, filePath)
-          }
-        />
+        <OpenInPicker openInTarget={openInTarget} />
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import {
   EXTERNAL_MCP_DEFAULT_WAIT_MS,
+  EXTERNAL_MCP_MAX_MESSAGE_CHARS,
   EXTERNAL_MCP_MAX_PROMPT_CHARS,
   EXTERNAL_MCP_MAX_WAIT_MS,
   ExternalMcpCreateTaskInput,
@@ -12,6 +13,7 @@ import {
   type ServerProviderStatus,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
+import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -40,6 +42,7 @@ import {
   type McpToolCallResult,
 } from "../../agentGateway/protocol.ts";
 import {
+  filterToolsByCapability,
   gatewayToolErrorResult,
   GatewayToolError,
   READ_ONLY_TOOL_ANNOTATIONS,
@@ -51,6 +54,7 @@ import {
   agentGatewayTargetOptionGuidance,
   loadAgentGatewayProviderCatalog,
   type AgentGatewayProviderAvailability,
+  type AgentGatewayProviderInstanceAvailability,
 } from "../../agentGateway/targetResolver.ts";
 import {
   decodeCreateThreadsInput,
@@ -86,8 +90,27 @@ import {
 } from "../Services/ExternalMcpGateway.ts";
 
 const EXTERNAL_MCP_INSTRUCTIONS =
-  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Tools are restricted to the integration's allowed projects and scopes. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
+  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Call synara_capabilities with a projectId to choose an exact provider instanceId and model from the advertised catalog. Tools are restricted to the integration's allowed projects and scopes. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
 const MCP_MAX_BATCH_MESSAGES = 50;
+
+const providerInstanceAvailability = (
+  instance: ReturnType<typeof deriveProviderInstances>[number],
+  status: ServerProviderStatus | undefined,
+): AgentGatewayProviderInstanceAvailability => {
+  const result = {
+    instanceId: instance.instanceId,
+    displayName: instance.displayName,
+    isDefault: instance.isDefault,
+    enabled: instance.enabled,
+  };
+  return status === undefined
+    ? result
+    : {
+        ...result,
+        available: status.available,
+        authStatus: status.authStatus,
+      };
+};
 
 interface ExternalToolContext {
   readonly principal: ExternalClientPrincipal;
@@ -102,7 +125,7 @@ export function filterExternalMcpTools(
   tools: ReadonlyArray<ExternalTool>,
   capabilities: ReadonlySet<ExternalMcpCapability>,
 ) {
-  return tools.filter((tool) => capabilities.has(tool.requiredCapability));
+  return filterToolsByCapability(tools, capabilities);
 }
 
 const decodeExternalCreateTask = Schema.decodeUnknownEffect(ExternalMcpCreateTaskInput);
@@ -179,16 +202,32 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       settings.getSettings,
       providerHealth.getStatuses,
     ]);
-    const statusByProvider = new Map<ProviderKind, ServerProviderStatus>(
-      statuses.map((status) => [status.provider, status]),
-    );
+    const statusByInstance = new Map<string, ServerProviderStatus>();
+    for (const status of statuses) {
+      if (isProviderKind(status.driver)) {
+        const instanceId = status.instanceId ?? status.provider;
+        statusByInstance.set(`${status.driver}\u0000${instanceId}`, status);
+      }
+    }
+    const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
+    for (const instance of deriveProviderInstances(serverSettings)) {
+      const instances = instancesByProvider.get(instance.driver) ?? [];
+      instancesByProvider.set(instance.driver, [...instances, instance]);
+    }
     return new Map<ProviderKind, AgentGatewayProviderAvailability>(
       PROVIDER_KINDS.map((provider) => {
-        const status = statusByProvider.get(provider);
+        const status = statusByInstance.get(`${provider}\u0000${provider}`);
+        const instances = instancesByProvider.get(provider) ?? [];
         return [
           provider,
           {
             enabled: serverSettings.providers[provider].enabled,
+            instances: instances.map((instance) =>
+              providerInstanceAvailability(
+                instance,
+                statusByInstance.get(`${instance.driver}\u0000${instance.instanceId}`),
+              ),
+            ),
             ...(status
               ? {
                   available: status.available,
@@ -237,7 +276,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         required: ["projectId"],
         additionalProperties: false,
       },
-      annotations: { title: "Synara integration capabilities", ...READ_ONLY_TOOL_ANNOTATIONS },
+      annotations: {
+        title: "Synara integration capabilities",
+        ...READ_ONLY_TOOL_ANNOTATIONS,
+      },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -272,12 +314,18 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             name: context.client.integration.name,
             capabilities: [...context.client.capabilities],
           },
-          defaults: { environment: "worktree", runtimeMode: "approval-required" },
+          defaults: {
+            environment: "worktree",
+            runtimeMode: "approval-required",
+          },
           targetConstruction: Object.fromEntries(
             providers.map((provider) => [
               provider.provider,
               {
                 modelValueSource: "providers[].models[].slug",
+                instanceIdValueSource: "providers[].instances[].instanceId",
+                instanceIdSelectionRule:
+                  "Use an enabled instanceId advertised for this provider; omit it to use the provider's default instance.",
                 ...agentGatewayTargetOptionGuidance(provider),
               },
             ]),
@@ -299,8 +347,15 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     definition: {
       name: "synara_list_allowed_projects",
       description: "List only the Synara projects explicitly granted to this integration.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-      annotations: { title: "List allowed Synara projects", ...READ_ONLY_TOOL_ANNOTATIONS },
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "List allowed Synara projects",
+        ...READ_ONLY_TOOL_ANNOTATIONS,
+      },
     },
     handler: (_args, context) =>
       snapshotQuery.getShellSnapshot().pipe(
@@ -308,7 +363,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           mcpToolResultJson({
             projects: snapshot.projects
               .filter((project) => context.client.allowedProjectIds.has(project.id))
-              .map((project) => ({ projectId: project.id, title: project.title })),
+              .map((project) => ({
+                projectId: project.id,
+                title: project.title,
+              })),
           }),
         ),
         Effect.catch((error) => Effect.succeed(externalErrorResult(error))),
@@ -321,7 +379,11 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       name: "synara_overview",
       description:
         "Discover everything this integration can use in one call: every allowed Synara project with its on-disk path and activity, provider availability, granted scopes, and safe defaults. Call this first to orient yourself.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
       annotations: { title: "Synara overview", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
     handler: (_args, context) =>
@@ -351,7 +413,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             provider,
             ...availability,
           })),
-          defaults: { environment: "worktree", runtimeMode: "approval-required" },
+          defaults: {
+            environment: "worktree",
+            runtimeMode: "approval-required",
+          },
           limits: {
             oneTaskPerRequest: true,
             maxPromptChars: EXTERNAL_MCP_MAX_PROMPT_CHARS,
@@ -376,13 +441,29 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           requestId: { type: "string", maxLength: 256 },
           projectId: { type: "string" },
           provider: { type: "string", enum: [...PROVIDER_KINDS] },
+          instanceId: {
+            type: "string",
+            description:
+              "Exact provider instance ID from synara_capabilities providers[].instances[].instanceId. Omit to use the provider's default instance.",
+          },
           model: { type: "string" },
-          options: { type: "object", description: AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION },
+          options: {
+            type: "object",
+            description: AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
+          },
           prompt: { type: "string", maxLength: EXTERNAL_MCP_MAX_PROMPT_CHARS },
           title: { type: "string", maxLength: 240 },
           environment: { type: "string", enum: ["worktree", "local"] },
-          runtimeMode: { type: "string", enum: ["approval-required", "full-access"] },
+          runtimeMode: {
+            type: "string",
+            enum: ["approval-required", "full-access"],
+          },
           baseRef: { type: "string" },
+          enableComputerControl: {
+            type: "boolean",
+            description:
+              'Give the created task the computer-control tool family (observe, click, type, menus, clipboard). Requires the "computer:control" integration scope; every computer action still goes through operator approval.',
+          },
         },
         required: ["requestId", "projectId", "provider", "model", "prompt"],
         additionalProperties: false,
@@ -420,6 +501,17 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             ),
           );
         }
+        if (
+          input.enableComputerControl === true &&
+          !context.client.capabilities.has("computer:control")
+        ) {
+          return yield* Effect.fail(
+            new GatewayToolError(
+              "capability_denied",
+              'Computer control requires the explicit "computer:control" scope.',
+            ),
+          );
+        }
         return yield* runCreateThreads(
           decodeCreateThreadsInput({
             requestId: input.requestId,
@@ -430,12 +522,14 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
                 ...(input.title ? { title: input.title } : {}),
                 target: {
                   provider: input.provider,
+                  ...(input.instanceId ? { instanceId: input.instanceId } : {}),
                   model: input.model,
                   ...(input.options ? { options: input.options } : {}),
                 },
                 ...(input.environment ? { environment: input.environment } : {}),
                 ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
                 ...(input.baseRef ? { baseRef: input.baseRef } : {}),
+                ...(input.enableComputerControl === true ? { enableComputerControl: true } : {}),
               },
             ],
           }),
@@ -455,19 +549,49 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     definition: {
       name: "synara_read_task",
       description:
-        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted.",
+        "Read one task created by this integration, or an allowed-project task when tasks:read-project was explicitly granted. To read one settled long message losslessly, pass the summary's index, messageId, and messageVersion with messageOffsetChars 0, then follow messagePage.nextOffsetChars with the same identity and version.",
       inputSchema: {
         type: "object",
         properties: {
           threadId: { type: "string" },
           cursor: { type: "string" },
           messageLimit: { type: "integer", minimum: 1, maximum: 100 },
-          maxMessageChars: { type: "integer", minimum: 50, maximum: 10_000 },
+          maxMessageChars: {
+            type: "integer",
+            minimum: 50,
+            maximum: EXTERNAL_MCP_MAX_MESSAGE_CHARS,
+            description: `Characters per message or single-message slice (default 1500, max ${EXTERNAL_MCP_MAX_MESSAGE_CHARS}). The response reports the effective value.`,
+          },
+          messageIndex: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Current transcript index of one message to read losslessly; messageId and messageVersion detect stale coordinates.",
+          },
+          messageOffsetChars: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Character offset within messageIndex (default 0); follow messagePage.nextOffsetChars until absent.",
+          },
+          messageId: {
+            type: "string",
+            description:
+              "Message identity returned in each message summary; required with messageIndex.",
+          },
+          messageVersion: {
+            type: "string",
+            description:
+              "Opaque version returned in each message summary; required with messageIndex so slices stay bound to one snapshot.",
+          },
         },
         required: ["threadId"],
         additionalProperties: false,
       },
-      annotations: { title: "Read a permitted Synara task", ...READ_ONLY_TOOL_ANNOTATIONS },
+      annotations: {
+        title: "Read a permitted Synara task",
+        ...READ_ONLY_TOOL_ANNOTATIONS,
+      },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -490,6 +614,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             cursor: input.cursor,
             messageLimit: input.messageLimit,
             maxMessageChars: input.maxMessageChars,
+            messageIndex: input.messageIndex,
+            messageOffsetChars: input.messageOffsetChars,
+            messageId: input.messageId,
+            messageVersion: input.messageVersion,
           }),
         );
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
@@ -506,12 +634,19 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         properties: {
           threadId: { type: "string" },
           runId: { type: ["string", "null"] },
-          timeoutMs: { type: "integer", minimum: 0, maximum: EXTERNAL_MCP_MAX_WAIT_MS },
+          timeoutMs: {
+            type: "integer",
+            minimum: 0,
+            maximum: EXTERNAL_MCP_MAX_WAIT_MS,
+          },
         },
         required: ["threadId"],
         additionalProperties: false,
       },
-      annotations: { title: "Wait for a permitted Synara task", ...READ_ONLY_TOOL_ANNOTATIONS },
+      annotations: {
+        title: "Wait for a permitted Synara task",
+        ...READ_ONLY_TOOL_ANNOTATIONS,
+      },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -573,7 +708,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           summary,
           summaryTruncated,
           error: failure,
-          readTask: { tool: "synara_read_task", arguments: { threadId: input.threadId } },
+          readTask: {
+            tool: "synara_read_task",
+            arguments: { threadId: input.threadId },
+          },
         });
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };

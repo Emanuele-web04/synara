@@ -1,0 +1,52 @@
+// FILE: onboardingDialogStore.ts
+// Purpose: Open/close state for the welcome tour shared between the first-run gate, the
+//          Settings "replay" button, and the dialog itself.
+// Layer: Web UI store
+
+import { create } from "zustand";
+
+export type OnboardingOpenReason = "first-run" | "replay";
+
+interface OnboardingDialogStore {
+  isOpen: boolean;
+  /**
+   * True once the first-run gate has produced a non-pending answer at least once. Other
+   * startup dialogs (AppSnap's announcement) wait for this so two modals never stack.
+   */
+  startupGateSettled: boolean;
+  /**
+   * True while the beta welcome sheet is still probing or on screen. The
+   * first-run gate waits for it so the welcome always opens before the tour.
+   */
+  betaWelcomePending: boolean;
+  /** Why the dialog is open; null when closed. */
+  openReason: OnboardingOpenReason | null;
+  /**
+   * True once the user reached a setup step. A first-run dialog opened from a
+   * provisional (possibly transient) empty snapshot may be auto-closed when later
+   * authoritative data proves the install is not new, but never once the user has
+   * started making choices in it.
+   */
+  engaged: boolean;
+  open: (reason: OnboardingOpenReason) => void;
+  /** Settings → "Open welcome tour". */
+  openDialog: () => void;
+  close: () => void;
+  markEngaged: () => void;
+  markStartupGateSettled: () => void;
+  setBetaWelcomePending: (pending: boolean) => void;
+}
+
+export const useOnboardingDialogStore = create<OnboardingDialogStore>((set) => ({
+  isOpen: false,
+  startupGateSettled: false,
+  betaWelcomePending: false,
+  openReason: null,
+  engaged: false,
+  open: (reason) => set({ isOpen: true, openReason: reason, engaged: false }),
+  openDialog: () => set({ isOpen: true, openReason: "replay", engaged: false }),
+  close: () => set({ isOpen: false, openReason: null, engaged: false }),
+  markEngaged: () => set({ engaged: true }),
+  markStartupGateSettled: () => set({ startupGateSettled: true }),
+  setBetaWelcomePending: (pending) => set({ betaWelcomePending: pending }),
+}));

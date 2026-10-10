@@ -5,9 +5,11 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ThreadTokenUsageSnapshot } from "@synara/contracts";
 import {
+  getClaudeContextWindowSuffix,
   getDefaultAutoCompactWindow,
   getModelCapabilities,
   hasAutoCompactWindowOption,
+  stripClaudeContextWindowSuffix,
   trimOrNull,
 } from "@synara/shared/model";
 
@@ -18,11 +20,15 @@ export const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
   "1m": 1_000_000,
 } as const;
 
+function claudeContextWindowTokensForOption(value: string | null): number | undefined {
+  return value !== null && Object.hasOwn(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS, value)
+    ? CLAUDE_CONTEXT_WINDOW_MAX_TOKENS[value as keyof typeof CLAUDE_CONTEXT_WINDOW_MAX_TOKENS]
+    : undefined;
+}
+
 const CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 const CLAUDE_CONTEXT_WARNING_RATIO = 0.8;
 const CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS = 50_000;
-const CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS = 20_000;
-const CLAUDE_LOW_CACHE_READ_RATIO = 0.2;
 
 export type ClaudeContextUsageWarningKey = "uncached-ingestion" | "near-window" | "large-prompt";
 
@@ -79,10 +85,6 @@ export function resolveClaudeEffectiveContextBudget(
     return Math.min(autoCompactBudget, lastKnownContextWindow);
   }
   return autoCompactBudget ?? lastKnownContextWindow;
-}
-
-export function stripClaudeContextWindowSuffix(apiModelId: string): string {
-  return apiModelId.replace(/\[[^\]]+\]$/u, "");
 }
 
 export function normalizeClaudeTokenUsage(
@@ -160,9 +162,15 @@ export function resolveClaudeApiModelIdContextWindowMaxTokens(
   if (!apiModelId) {
     return undefined;
   }
-  return positiveFiniteNumber(
-    getModelCapabilities("claudeAgent", stripClaudeContextWindowSuffix(apiModelId))
-      .contextWindowTokens,
+  // Bootstrap estimate only: the live SDK response takes precedence.
+  // Opus/Sonnet 4.6 need extended-context opt-in; capacity remains 1M.
+  return (
+    claudeContextWindowTokensForOption(getClaudeContextWindowSuffix(apiModelId)) ??
+    (/^claude-(?:opus|sonnet)-4-6$/u.test(apiModelId) ? 200_000 : undefined) ??
+    positiveFiniteNumber(
+      getModelCapabilities("claudeAgent", stripClaudeContextWindowSuffix(apiModelId))
+        .contextWindowTokens,
+    )
   );
 }
 
@@ -171,22 +179,17 @@ export function resolveSelectedClaudeAutoCompactWindow(
   selectedAutoCompactWindow: string | null | undefined,
 ): number | undefined {
   const caps = getModelCapabilities("claudeAgent", model);
-  const resolvedAutoCompactWindow =
-    trimOrNull(selectedAutoCompactWindow) ?? getDefaultAutoCompactWindow(caps) ?? null;
+  const selected = trimOrNull(selectedAutoCompactWindow);
+  // Only an explicit override is pinned; the model-native window is left to
+  // Claude Code's own resolution (server tuning, settings.json, env override).
   if (
-    !resolvedAutoCompactWindow ||
-    !hasAutoCompactWindowOption(caps, resolvedAutoCompactWindow) ||
-    !Object.prototype.hasOwnProperty.call(
-      CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
-      resolvedAutoCompactWindow,
-    )
+    !selected ||
+    selected === getDefaultAutoCompactWindow(caps) ||
+    !hasAutoCompactWindowOption(caps, selected)
   ) {
     return undefined;
   }
-
-  return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS[
-    resolvedAutoCompactWindow as keyof typeof CLAUDE_CONTEXT_WINDOW_MAX_TOKENS
-  ];
+  return claudeContextWindowTokensForOption(selected);
 }
 
 export function resolveEffectiveClaudeContextWindow(input: {
@@ -262,18 +265,17 @@ export function decideClaudeContextUsageWarnings(
     cachedReadTokens > 0
       ? ` (${formatApproxTokens(cachedReadTokens)} cached reads, ${formatApproxTokens(uncachedTokens)} new/cache-write)`
       : "";
-  const cacheReadRatio = cachedReadTokens / promptTokens;
+  const cacheWriteTokens = finiteClaudeTokenCountOrZero(rawUsage.cache_creation_input_tokens);
+  const freshInputTokens = Math.max(0, finiteClaudeTokenCountOrZero(rawUsage.input_tokens));
   let first: ClaudeContextUsageWarning | undefined;
 
   if (
-    (uncachedTokens > CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS ||
-      (promptTokens > CLAUDE_LOW_CACHE_RATIO_MIN_PROMPT_TOKENS &&
-        cacheReadRatio < CLAUDE_LOW_CACHE_READ_RATIO)) &&
+    freshInputTokens > CLAUDE_UNCACHED_INGESTION_WARNING_TOKENS &&
     !emittedWarnings.has("uncached-ingestion")
   ) {
     first = {
       key: "uncached-ingestion",
-      message: `Claude ingested ${formatApproxTokens(uncachedTokens)} uncached prompt tokens in one request (${Math.round(cacheReadRatio * 100)}% cache reads). This usually means a fresh session, a session restart replaying history via resume, or a first turn over a large context; uncached input consumes usage limits fastest.`,
+      message: `Claude reported ${formatApproxTokens(freshInputTokens)} input tokens outside cache in one request, plus ${formatApproxTokens(cacheWriteTokens)} cache writes and ${formatApproxTokens(cachedReadTokens)} cache reads. Input includes instructions, tool definitions, history and the current message; it is not a system-prompt measurement.`,
     };
   }
 

@@ -18,6 +18,8 @@ import {
   ProjectLocalSearchEntry,
   ProjectPrewarmSearchIndexInput,
   ProjectPrewarmSearchIndexResult,
+  ProjectResolveWorkspaceFileReferencesInput,
+  ProjectResolveWorkspaceFileReferencesResult,
   ProjectSearchContentInput,
   ProjectSearchContentResult,
   ProjectSearchEntriesInput,
@@ -28,7 +30,11 @@ import {
   PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH,
   PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH,
 } from "@synara/contracts";
-import { isExplicitRelativePath, isWindowsAbsolutePath } from "@synara/shared/path";
+import {
+  isExplicitRelativePath,
+  isWindowsAbsolutePath,
+  isWorkspaceRelativePathSafe,
+} from "@synara/shared/path";
 import { normalizeWorkspaceEntrySearchQuery } from "@synara/shared/searchQuery";
 import { resolveRealPathWithinRoot } from "./workspace/realPathContainment";
 
@@ -590,10 +596,30 @@ async function buildWorkspaceIndexFromGit(cwd: string): Promise<WorkspaceIndex |
     return null;
   }
 
+  // `--cached` keeps listing tracked files that were deleted from disk but not
+  // staged (e.g. an agent's `rm`), so they would show up in search and open to
+  // ENOENT. Drop them, and fall back to the filesystem walk if this listing fails.
+  const deletedFiles = await runProcess(
+    "git",
+    [...WORKSPACE_GIT_HARDENED_CONFIG_ARGS, "ls-files", "--deleted", "-z"],
+    {
+      cwd,
+      allowNonZeroExit: true,
+      timeoutMs: 20_000,
+      maxBufferBytes: 16 * 1024 * 1024,
+      outputMode: "truncate",
+    },
+  ).catch(() => null);
+  if (!deletedFiles || deletedFiles.code !== 0 || deletedFiles.stdoutTruncated) {
+    return null;
+  }
+  const deletedPaths = new Set(splitNullSeparatedPaths(deletedFiles.stdout, false));
+
   const listedPaths = splitNullSeparatedPaths(
     listedFiles.stdout,
     Boolean(listedFiles.stdoutTruncated),
   )
+    .filter((entry) => !deletedPaths.has(entry))
     .map((entry) => toPosixPath(entry))
     .filter((entry) => entry.length > 0 && !isPathInIgnoredDirectory(entry));
   const filePaths = await filterGitIgnoredPaths(cwd, listedPaths);
@@ -1053,33 +1079,99 @@ export async function searchWorkspaceContent(
 // Agents (and rendered chat links) frequently cite a file by just its basename
 // (e.g. `chatReferences.test.ts`) or a partial tail (`lib/chatReferences.ts`),
 // which resolves to a non-existent path under the workspace root. Match it
-// against the tracked workspace index by exact path or `/`-anchored suffix and
+// against the shared workspace index by exact path or `/`-anchored suffix and
 // only resolve when exactly one file matches, so an ambiguous name (many
 // `index.ts`) stays unresolved rather than opening the wrong file.
-export async function resolveWorkspaceFileBySuffix(input: {
-  cwd: string;
-  relativePath: string;
-}): Promise<string | null> {
-  const normalized = toPosixPath(input.relativePath.trim()).replace(/^\/+/, "");
-  if (normalized.length === 0) {
+function normalizedWorkspaceFileReference(reference: string): string | null {
+  const trimmed = reference.trim();
+  if (!isWorkspaceRelativePathSafe(trimmed)) {
     return null;
   }
+  const normalized = path.posix.normalize(toPosixPath(trimmed)).replace(/^\.\/+/, "");
+  return normalized.length > 0 && normalized !== "." ? normalized : null;
+}
 
-  const index = await getWorkspaceIndex(input.cwd);
-  const suffix = `/${normalized}`;
-  let match: string | null = null;
+// The index is immutable once built and replaced wholesale on rebuild, so the
+// basename map can live alongside it instead of being rebuilt over up to 25k
+// entries on every reference-resolution RPC.
+const pathsByBasenameByIndex = new WeakMap<
+  WorkspaceIndex,
+  ReadonlyMap<string, ReadonlyArray<string>>
+>();
+
+function filePathsByBasename(index: WorkspaceIndex): ReadonlyMap<string, ReadonlyArray<string>> {
+  const cached = pathsByBasenameByIndex.get(index);
+  if (cached) {
+    return cached;
+  }
+  const built = buildFilePathsByBasename(index);
+  pathsByBasenameByIndex.set(index, built);
+  return built;
+}
+
+function buildFilePathsByBasename(
+  index: WorkspaceIndex,
+): ReadonlyMap<string, ReadonlyArray<string>> {
+  const pathsByBasename = new Map<string, string[]>();
   for (const entry of index.entries) {
     if (entry.kind !== "file") {
       continue;
     }
-    if (entry.path === normalized || entry.path.endsWith(suffix)) {
-      if (match !== null) {
-        return null;
-      }
-      match = entry.path;
+    const basename = path.posix.basename(entry.path);
+    const paths = pathsByBasename.get(basename);
+    if (paths) {
+      paths.push(entry.path);
+    } else {
+      pathsByBasename.set(basename, [entry.path]);
     }
   }
+  return pathsByBasename;
+}
+
+function resolveWorkspaceFileReferenceFromIndex(
+  reference: string,
+  pathsByBasename: ReadonlyMap<string, ReadonlyArray<string>>,
+): string | null {
+  const normalized = normalizedWorkspaceFileReference(reference);
+  if (!normalized) {
+    return null;
+  }
+  const candidates = pathsByBasename.get(path.posix.basename(normalized)) ?? [];
+  const suffix = `/${normalized}`;
+  let match: string | null = null;
+  for (const candidate of candidates) {
+    if (candidate !== normalized && !candidate.endsWith(suffix)) {
+      continue;
+    }
+    if (match !== null) {
+      return null;
+    }
+    match = candidate;
+  }
   return match;
+}
+
+export async function resolveWorkspaceFileReferences(
+  input: ProjectResolveWorkspaceFileReferencesInput,
+): Promise<ProjectResolveWorkspaceFileReferencesResult> {
+  const index = await getWorkspaceIndex(input.cwd);
+  const pathsByBasename = filePathsByBasename(index);
+  return {
+    relativePaths: input.relativePaths.map((reference) =>
+      resolveWorkspaceFileReferenceFromIndex(reference, pathsByBasename),
+    ),
+  };
+}
+
+export async function resolveWorkspaceFileBySuffix(input: {
+  cwd: string;
+  relativePath: string;
+}): Promise<string | null> {
+  const result = await resolveWorkspaceFileReferences({
+    cwd: input.cwd,
+    relativePaths: [input.relativePath],
+  });
+  return result.relativePaths[0] ?? null;
 }
 
 export async function discoverProjectScripts(

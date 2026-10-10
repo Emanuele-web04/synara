@@ -2,7 +2,22 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-import { buildProviderChildEnvironment } from "./providerChildEnvironment";
+import {
+  buildProviderChildEnvironment,
+  registerProviderCredentialKey,
+  withoutProviderCredentialEnvironment,
+} from "./providerChildEnvironment";
+
+it("removes registered ambient provider credentials from account-scoped environments", () => {
+  registerProviderCredentialKey("ACME_PROVIDER_TOKEN");
+  expect(
+    withoutProviderCredentialEnvironment({
+      PATH: "/usr/bin",
+      OPENAI_API_KEY: "ambient-openai",
+      ACME_PROVIDER_TOKEN: "ambient-custom",
+    }),
+  ).toEqual({ PATH: "/usr/bin" });
+});
 
 describe("buildProviderChildEnvironment", () => {
   it("strips Synara control-plane and inherited native capabilities", () => {
@@ -101,7 +116,7 @@ describe("buildProviderChildEnvironment", () => {
     },
   );
 
-  it.each(["codex", "kilo", "opencode", "pi"] as const)(
+  it.each(["codex", "opencode", "pi"] as const)(
     "preserves upstream credential discovery for multi-provider %s",
     (provider) => {
       const env = buildProviderChildEnvironment({

@@ -1,5 +1,6 @@
 "use client";
 
+import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { Field as FieldPrimitive } from "@base-ui/react/field";
 import { mergeProps } from "@base-ui/react/merge-props";
 import type * as React from "react";
@@ -19,7 +20,7 @@ function Textarea({ className, size: sizeProp, unstyled: unstyledProp, ...props 
       className={
         cn(
           !unstyled &&
-            "relative inline-flex w-full rounded-lg border border-input bg-background text-[length:var(--app-font-size-ui,12px)] text-foreground has-aria-invalid:border-destructive/36 has-focus-visible:has-aria-invalid:border-destructive/64 has-focus-visible:border-foreground/30 has-disabled:opacity-64 sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32",
+            `${GLASS_RAISED_SURFACE_CLASS_NAME} relative inline-flex w-full rounded-lg border border-input bg-background text-ui text-foreground has-aria-invalid:border-destructive/36 has-focus-visible:has-aria-invalid:border-destructive/64 has-focus-visible:border-foreground/30 has-disabled:opacity-64 sm:text-ui dark:bg-input/32`,
           className,
         ) || undefined
       }

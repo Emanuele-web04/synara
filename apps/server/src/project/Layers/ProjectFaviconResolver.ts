@@ -28,6 +28,15 @@ const FAVICON_CANDIDATES = [
   "assets/logo.png",
 ] as const;
 
+const NESTED_FAVICON_CANDIDATES = [
+  "apps/web/public/favicon.svg",
+  "apps/web/public/favicon.ico",
+  "apps/web/public/favicon.png",
+  "web/public/favicon.svg",
+  "web/public/favicon.ico",
+  "web/public/favicon.png",
+] as const;
+
 const ICON_SOURCE_FILES = [
   "index.html",
   "public/index.html",
@@ -62,7 +71,10 @@ export const makeProjectFaviconResolver = Effect.gen(function* () {
 
   const isPathWithinProject = (projectCwd: string, candidatePath: string): boolean => {
     const relative = path.relative(path.resolve(projectCwd), path.resolve(candidatePath));
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    return (
+      relative === "" ||
+      (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+    );
   };
 
   const findExistingFile = Effect.fn(function* (
@@ -107,6 +119,34 @@ export const makeProjectFaviconResolver = Effect.gen(function* () {
       if (existing) {
         return existing;
       }
+    }
+
+    // Nested app discovery is a fallback to the project's own icon and declaration.
+    for (const candidate of NESTED_FAVICON_CANDIDATES) {
+      const existing = yield* findExistingFile(cwd, [path.join(cwd, candidate)]);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    // Some repositories keep the web app one directory below the project root.
+    // Limit discovery to app-like first-level folders so a sidebar refresh does
+    // not scan unrelated source trees or dependency directories.
+    const children = yield* fileSystem
+      .readDirectory(cwd)
+      .pipe(Effect.catch(() => Effect.succeed([] as string[])));
+    const appFolders = children
+      .filter((name) => !name.startsWith(".") && /(?:web|front|dash|app|client|site)/i.test(name))
+      .toSorted()
+      .slice(0, 16);
+    for (const folder of appFolders) {
+      const existing = yield* findExistingFile(
+        cwd,
+        ["favicon.svg", "favicon.ico", "favicon.png"].map((name) =>
+          path.join(cwd, folder, "public", name),
+        ),
+      );
+      if (existing) return existing;
     }
 
     return null;

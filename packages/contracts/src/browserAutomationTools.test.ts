@@ -7,6 +7,8 @@ import {
   BrowserClickOutput,
   BrowserDragInput,
   BrowserEvaluateInput,
+  BrowserRunInput,
+  BrowserRunOutput,
   BrowserLogsInput,
   BrowserLogsOutput,
   BrowserPressOutput,
@@ -21,6 +23,10 @@ import {
   BrowserTypeInput,
   BrowserUploadInput,
   BrowserWaitInput,
+  BrowserWebMcpCallInput,
+  BrowserWebMcpCallOutput,
+  BrowserWebMcpToolsInput,
+  BrowserWebMcpToolsOutput,
 } from "./index";
 
 const KEY = "01J00000000000000000000000";
@@ -38,19 +44,10 @@ describe("browser automation tool schemas", () => {
       "browser_forward",
       "browser_reload",
       "browser_resize",
-      "browser_snapshot",
       "browser_screenshot",
       "browser_logs",
-      "browser_click",
-      "browser_hover",
-      "browser_drag",
-      "browser_type",
-      "browser_select",
       "browser_upload",
-      "browser_press",
-      "browser_scroll",
-      "browser_wait",
-      "browser_evaluate",
+      "browser_run",
       "browser_close",
     ]);
     expect(new Set(BROWSER_TOOL_NAMES).size).toBe(BROWSER_TOOL_NAMES.length);
@@ -61,6 +58,11 @@ describe("browser automation tool schemas", () => {
       fullPage: false,
     });
     expect(Schema.is(BrowserScreenshotInput)({ fullPage: true, extra: true })).toBe(false);
+    expect(Schema.decodeUnknownSync(BrowserScreenshotInput)({ kind: "proof" })).toMatchObject({
+      kind: "proof",
+      fullPage: false,
+    });
+    expect(Schema.is(BrowserScreenshotInput)({ kind: "fabricated" })).toBe(false);
     expect(Schema.decodeUnknownSync(BrowserLogsInput)({})).toMatchObject({
       includeConsole: true,
       includeNetwork: true,
@@ -224,6 +226,22 @@ describe("browser automation tool schemas", () => {
   });
 
   it("bounds evaluate and wait inputs", () => {
+    expect(Schema.is(BrowserRunInput)({ code: "return {ok: true}", idempotencyKey: KEY })).toBe(
+      true,
+    );
+    expect(Schema.is(BrowserRunInput)({ code: "" })).toBe(false);
+    expect(Schema.is(BrowserRunInput)({ code: "x".repeat(16_385) })).toBe(false);
+    expect(Schema.is(BrowserRunInput)({ code: "return null", threadId: "forged" })).toBe(false);
+    expect(
+      Schema.is(BrowserRunOutput)({ tabId: TAB_ID, value: { ok: true }, serializedByteCount: 11 }),
+    ).toBe(true);
+    expect(
+      Schema.is(BrowserRunOutput)({
+        tabId: TAB_ID,
+        value: "x".repeat(262_145),
+        serializedByteCount: 262_147,
+      }),
+    ).toBe(false);
     expect(
       Schema.is(BrowserEvaluateInput)({ idempotencyKey: KEY, expression: "x".repeat(16_385) }),
     ).toBe(false);
@@ -309,6 +327,59 @@ describe("browser automation tool schemas", () => {
         ],
       }),
     ).toThrow();
+  });
+
+  it("keeps WebMCP discovery compact and binds calls to opaque ids", () => {
+    expect(Schema.decodeUnknownSync(BrowserWebMcpToolsInput)({})).toMatchObject({ limit: 8 });
+    expect(Schema.is(BrowserWebMcpToolsInput)({ query: "checkout", limit: 32 })).toBe(true);
+    expect(Schema.is(BrowserWebMcpToolsInput)({ limit: 33 })).toBe(false);
+    expect(
+      Schema.decodeUnknownSync(BrowserWebMcpCallInput)({
+        discoveryId: SNAPSHOT_ID,
+        toolId: "w1",
+      }),
+    ).toMatchObject({ arguments: {} });
+    expect(
+      Schema.is(BrowserWebMcpCallInput)({ discoveryId: SNAPSHOT_ID, toolId: "checkout" }),
+    ).toBe(false);
+
+    const discovery = {
+      tabId: TAB_ID,
+      url: "https://example.test/checkout",
+      contentTrust: "untrusted-web-page",
+      available: true,
+      implementation: "compatibility",
+      discoveryId: SNAPSHOT_ID,
+      tools: [
+        {
+          toolId: "w1",
+          name: "checkout",
+          description: "Submit the current cart.",
+          inputSchema: { type: "object", properties: {} },
+          origin: "https://example.test",
+          annotations: { readOnlyHint: false, untrustedContentHint: true },
+        },
+      ],
+      totalToolCount: 1,
+      skippedToolCount: 0,
+      truncated: false,
+    };
+    expect(() => Schema.decodeUnknownSync(BrowserWebMcpToolsOutput)(discovery)).not.toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(BrowserWebMcpCallOutput)({
+        tabId: TAB_ID,
+        discoveryId: SNAPSHOT_ID,
+        toolId: "w1",
+        toolName: "checkout",
+        contentTrust: "untrusted-web-page",
+        status: "completed",
+        result: { orderId: "123" },
+        finalUrl: "https://example.test/complete",
+        navigated: true,
+        redirects: [],
+        loadState: "commit",
+      }),
+    ).not.toThrow();
   });
 
   it("forbids tabId on workspace/open tools", () => {

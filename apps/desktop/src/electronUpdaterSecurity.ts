@@ -3,21 +3,15 @@
 // Layer: Desktop update runtime
 // Exports: updater patching, shell-free PowerShell signature verification helpers.
 
-import {
-  execFile,
-  spawnSync,
-  type ExecFileException,
-  type ExecFileOptions,
-} from "node:child_process";
+import type { ExecFileException } from "node:child_process";
 import * as Path from "node:path";
 
 import {
   matchesDistinguishedName,
   parseDistinguishedName,
 } from "@synara/shared/windowsCertificate";
-import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
-
-export { parseDistinguishedName } from "@synara/shared/windowsCertificate";
+import { execProcessFile, spawnProcessSync } from "@synara/shared/processRuntime";
+import { resolveWindowsPowerShellExecutable } from "@synara/shared/platformEnvironment";
 
 type Logger = {
   info?(message: string): void;
@@ -41,10 +35,16 @@ type UpdaterWithSignatureVerifier = {
   ) => Promise<string | null>;
 };
 
+interface PowerShellExecOptions {
+  readonly encoding: "utf8";
+  readonly env?: NodeJS.ProcessEnv;
+  readonly timeout?: number;
+}
+
 type ExecFileLike = (
   file: string,
   args: ReadonlyArray<string>,
-  options: ExecFileOptions & { encoding: "utf8" },
+  options: PowerShellExecOptions,
   callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
 ) => void;
 
@@ -63,13 +63,7 @@ interface SignatureVerifierOptions {
 }
 
 export function buildPowerShellExecutablePath(env: NodeJS.ProcessEnv = process.env): string {
-  return Path.win32.join(
-    resolveWindowsSystemRoot(env),
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
+  return resolveWindowsPowerShellExecutable(env);
 }
 
 export function buildPowerShellExecArgs(command: string): string[] {
@@ -89,13 +83,11 @@ export function buildPowerShellExecArgs(command: string): string[] {
 function buildPowerShellExecOptions(
   timeout: number,
   env: NodeJS.ProcessEnv,
-): ExecFileOptions & { encoding: "utf8" } {
+): PowerShellExecOptions {
   return {
     env: { ...env, PSModulePath: "" },
     encoding: "utf8",
-    shell: false,
     timeout,
-    windowsHide: true,
   };
 }
 
@@ -109,9 +101,14 @@ function runPowerShell(
     const execFileImpl: ExecFileLike =
       options.execFile ??
       ((file, args, execOptions, callback) => {
-        execFile(file, [...args], execOptions, (error, stdout, stderr) => {
-          callback(error, String(stdout), String(stderr));
-        });
+        execProcessFile(
+          file,
+          args,
+          { ...execOptions, platform: "win32", requireExecutable: true },
+          (error, stdout, stderr) => {
+            callback(error, String(stdout), String(stderr));
+          },
+        );
       });
     execFileImpl(
       buildPowerShellExecutablePath(env),
@@ -279,13 +276,10 @@ export function hardenElectronUpdater(
     ): string {
       this._logger?.info?.(`Executing: ${cmd} with args: ${args}`);
       const mergedEnv = { ...process.env, ...env };
-      const prepared = prepareWindowsSafeProcess(cmd, args, { env: mergedEnv });
-      const response = spawnSync(prepared.command, prepared.args, {
+      const response = spawnProcessSync(cmd, args, {
         env: mergedEnv,
         encoding: "utf8",
-        shell: prepared.shell,
-        windowsHide: prepared.windowsHide,
-        windowsVerbatimArguments: prepared.windowsVerbatimArguments,
+        platform: "win32",
       });
       const { error, status, stdout, stderr } = response;
       if (error) {

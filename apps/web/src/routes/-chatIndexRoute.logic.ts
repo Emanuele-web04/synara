@@ -4,12 +4,13 @@
 // Layer: Route UI logic helpers
 // Exports: home-chat restore-route resolution.
 
-import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
+import type { ProjectId, SpaceId, ThreadId, ThreadSidechatContext } from "@synara/contracts";
 
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ServerWorkspacePaths } from "../lib/serverWorkspacePaths";
 import { isThreadReachableFromSpace } from "../lib/spaceNavigation";
 import type { Project } from "../types";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 /**
  * Set only when "/" was reached by *selecting* a Space. The landing then restores threads that
@@ -29,12 +30,20 @@ export function resolveChatIndexRestoreRoute(input: {
   readonly availableSplitViewIds: ReadonlySet<string>;
   readonly threadIds: readonly ThreadId[];
   readonly sidebarThreadSummaryById: Readonly<
-    Record<string, { readonly projectId: ProjectId } | undefined>
+    Record<
+      string,
+      | {
+          readonly projectId: ProjectId;
+          readonly sidechatSourceThreadId?: ThreadId | null;
+          readonly sidechatContext?: ThreadSidechatContext | null;
+        }
+      | undefined
+    >
   >;
-  readonly studioProjectIds: ReadonlySet<ProjectId>;
+  readonly groupProjectIds: ReadonlySet<ProjectId>;
   /**
    * Still-unsent chat drafts. They have a route id but no sidebar summary yet, so the summary
-   * lookup below never matches them — mirrors the /studio landing's draft handling so a cold
+   * lookup below never matches them — mirrors the /groups landing's draft handling so a cold
    * start on "/" can reopen an unsent draft instead of always minting a new one.
    */
   readonly draftProjectIdByThreadId: ReadonlyMap<string, ProjectId>;
@@ -45,7 +54,7 @@ export function resolveChatIndexRestoreRoute(input: {
   readonly rememberedSplitViewThreadIds: readonly ThreadId[] | undefined;
   readonly landingSpace: ChatIndexLandingSpace | null;
 }): LastThreadRoute | null {
-  const { draftProjectIdByThreadId, landingSpace, sidebarThreadSummaryById, studioProjectIds } =
+  const { draftProjectIdByThreadId, landingSpace, sidebarThreadSummaryById, groupProjectIds } =
     input;
 
   const availableThreadIds = new Set<string>();
@@ -53,12 +62,13 @@ export function resolveChatIndexRestoreRoute(input: {
     // Fail closed: a thread we can't classify is not restorable from "/". Summaries are built
     // from the same snapshot as threadIds, so this only ever excludes a thread if that invariant
     // breaks — and then a fresh draft beats restoring into the wrong segment.
-    const projectId =
-      sidebarThreadSummaryById[threadId]?.projectId ?? draftProjectIdByThreadId.get(threadId);
+    const threadSummary = sidebarThreadSummaryById[threadId];
+    if (threadSummary && isSidechatThread(threadSummary)) continue;
+    const projectId = threadSummary?.projectId ?? draftProjectIdByThreadId.get(threadId);
     if (projectId === undefined) continue;
-    // Studio threads belong to the /studio surface; restoring one from "/" would silently
+    // Group threads belong to the /groups surface; restoring one from "/" would silently
     // switch the user into that segment.
-    if (studioProjectIds.has(projectId)) continue;
+    if (groupProjectIds.has(projectId)) continue;
     if (
       landingSpace &&
       !isThreadReachableFromSpace({

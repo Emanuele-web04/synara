@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
 import {
   renderSynaraHarnessPolicy,
@@ -9,6 +10,36 @@ import {
 } from "./harnessPolicy.ts";
 
 describe("Synara harness policy", () => {
+  it("defers duplicate automation authoring text while preserving tool routing and run rules", () => {
+    const inline = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const deferred = renderSynaraHarnessPolicy({
+      gatewayControlAvailable: true,
+      automationAuthoring: "tool-descriptions",
+    });
+    assert.equal(deferred, inline.replace(`${AUTOMATION_AUTHORING_GUIDANCE}\n`, ""));
+    assert.include(deferred, "synara_create_automation");
+    assert.include(deferred, "synara_view_automation");
+    assert.include(deferred, "synara_report_automation_result");
+  });
+
+  it("includes honest completion evidence and opt-in delegated E2E testing", () => {
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    for (const text of [
+      "completion report",
+      "artifactPath",
+      "![Result description]",
+      "explicitly asked",
+      "synara_e2e_review",
+      "Do not load it for unrelated work",
+    ]) {
+      assert.include(policy, text);
+    }
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false }),
+      "browser_screenshot({kind:'proof'})",
+    );
+  });
+
   it("identifies Synara and explains exact batch coordination when MCP is available", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     assert.include(policy, SYNARA_HARNESS_POLICY_MARKER);
@@ -16,25 +47,46 @@ describe("Synara harness policy", () => {
     assert.include(policy, "one exact synara_create_threads plan");
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
-    assert.include(policy, "Use the browser_* tools");
-    assert.include(policy, "exact thread-scoped Electron page Synara surfaces to the user");
-    assert.include(policy, "continue in the background");
-    assert.include(policy, "must never change the user's active chat");
-    assert.include(policy, "in any language");
-    assert.include(policy, "canonical and complete control surface");
-    assert.include(policy, "start with browser_open");
-    assert.include(policy, "do not load or use a generic Browser");
-    assert.include(policy, "workspace-relative paths");
-    assert.include(policy, "BrowserInterruptedByHuman");
-    assert.include(policy, "BrowserDownloadApprovalRequired");
-    assert.include(policy, "OAuth popup requiring human action");
-    assert.include(policy, "stop using tools and answer");
+    assert.include(policy, "synara_set_thread_pull_request");
+    assert.include(policy, "current thread's own deliverable");
+    assert.include(policy, "only reviews, references, or discusses");
+    assert.include(policy, "use browser_* autonomously");
+    assert.include(policy, "canonical, complete control surface");
+    assert.include(policy, "never substitute Chrome");
+    assert.include(policy, "user's active chat");
+    assert.include(policy, "Detailed rules live in each tool description");
+    assert.notInclude(policy, "BrowserInterruptedByHuman");
+    assert.notInclude(policy, "start with browser_open");
     assert.include(policy, "do not create Synara threads");
-    assert.include(policy, "3–8 word outcome-oriented task label");
-    assert.include(policy, "no assumed chat context");
-    assert.include(policy, "notifying the user versus staying silent");
+    assert.include(policy, "specific 3–8 word outcome label");
+    assert.include(policy, "Assume no chat context");
+    assert.include(policy, "notify-versus-silent criteria");
     assert.include(policy, 'later manual follow-up such as "continue"');
     assert.include(policy, "Never call this tool for a manual follow-up turn");
+  });
+
+  it("asks agents to emit known absolute file URLs instead of invented relative links", () => {
+    const gateway = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const identityOnly = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    for (const policy of [gateway, identityOnly]) {
+      assert.include(policy, "[config.ts](file:///absolute/path/config.ts)");
+      assert.include(policy, "Relative links are only for the session working directory");
+      assert.include(policy, "use plain text and never invent a path");
+    }
+  });
+
+  it("keeps final answers self-contained when intermediate progress is collapsed", () => {
+    const gateway = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    const identityOnly = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
+
+    for (const policy of [gateway, identityOnly]) {
+      assert.include(policy, 'under "Worked for..."');
+      assert.include(policy, "Final responses must restate every needed scope");
+      assert.include(policy, 'Never request approval using "this", "the above"');
+      assert.include(policy, "structured user-input tool");
+      assert.include(policy, "include all decision context");
+    }
   });
 
   it("never advertises gateway mutation to providers without scoped MCP", () => {
@@ -50,40 +102,19 @@ describe("Synara harness policy", () => {
       "<synara_host_context>",
     );
     assert.isNull(takeSynaraHarnessPolicyForSession(state, { gatewayControlAvailable: true }));
+
+    // The text-part form ACP adapters inject obeys the same once-per-session latch.
+    const partState: { harnessPolicyDelivered?: boolean } = {};
+    const input = { provider: "cursor", scopedGatewayConnectionAvailable: true } as const;
+    assert.include(
+      takeSynaraHarnessPolicyTextPartForProviderSession(partState, input)?.text ?? "",
+      SYNARA_HARNESS_POLICY_MARKER,
+    );
+    assert.isNull(takeSynaraHarnessPolicyTextPartForProviderSession(partState, input));
   });
 
-  it("delivers once on fresh/load/fork sessions for every scoped MCP provider", () => {
-    for (const provider of [
-      "antigravity",
-      "cursor",
-      "grok",
-      "droid",
-      "opencode",
-      "kilo",
-      "pi",
-    ] as const) {
-      for (const lifecycle of ["fresh", "load", "fork"] as const) {
-        const state: { harnessPolicyDelivered?: boolean } = {};
-        const first =
-          takeSynaraHarnessPolicyTextPartForProviderSession(state, {
-            provider,
-            scopedGatewayConnectionAvailable: true,
-          })?.text ?? "";
-        assert.include(first, SYNARA_HARNESS_POLICY_MARKER, `${provider}/${lifecycle}`);
-        assert.include(first, "Use the synara_* tools", `${provider}/${lifecycle}`);
-        assert.isNull(
-          takeSynaraHarnessPolicyForProviderSession(state, {
-            provider,
-            scopedGatewayConnectionAvailable: true,
-          }),
-          `${provider}/${lifecycle}`,
-        );
-      }
-    }
-  });
-
-  it("keeps OpenCode, Kilo, and Pi identity-only until scoped setup succeeds", () => {
-    for (const provider of ["opencode", "kilo", "pi"] as const) {
+  it("keeps OpenCode and Pi identity-only until scoped setup succeeds", () => {
+    for (const provider of ["opencode", "pi"] as const) {
       const text =
         takeSynaraHarnessPolicyForProviderSession(
           {},
@@ -95,71 +126,19 @@ describe("Synara harness policy", () => {
     }
   });
 
-  it("teaches the device tools well enough for a plain prompt to work", () => {
+  it("routes iOS work to device tools without embedding per-tool instructions", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    assert.include(policy, "any-language iOS app or simulator request");
+    assert.include(policy, "call device_* directly and autonomously");
+    assert.include(policy, "never use xcrun simctl");
+    assert.include(policy, "open Simulator.app");
+    assert.include(policy, "user watches the streamed pane");
+    assert.notInclude(policy, "device_list first");
+    assert.notInclude(policy, "com.apple.Preferences");
+  });
 
-    // When to reach for them at all: the demo needed "using your device_* tools"
-    // spelled out because the policy only triggered on the user naming a tool.
-    assert.include(policy, "run, test, check, demo, debug, or interact with an iOS app");
-    assert.include(policy, "whether or not the user names a tool");
-    assert.include(policy, "never drive the simulator with xcrun simctl");
-    // A rival agent-device skill on the host was read before the tools were
-    // tried; the browser guidance names its competitors, so this does too.
-    assert.include(policy, "do not load or use an agent-device");
-    assert.include(policy, "rather than reading skill files first");
-
-    // The workflow, so the agent does not have to guess an ordering.
-    assert.include(policy, "device_list first");
-    // Reusing a booted device rather than starting a second one: two live
-    // simulators compete for the pane and the user watches the wrong screen.
-    assert.include(policy, "already booted, use that one");
-    assert.include(policy, "device_install and device_launch");
-    assert.include(policy, "com.apple.Preferences");
-
-    // Expo/RN CLI paths boot the sim through Simulator.app, which foregrounds
-    // a window the user is not watching and leaves the Synara pane empty. A
-    // real demo also stalled for minutes on a dev server holding the shell.
-    assert.include(policy, "For Expo or React Native work");
-    assert.include(policy, "expo start --ios");
-    assert.include(policy, "npm run ios");
-    assert.include(policy, "opens Simulator.app");
-    assert.include(policy, "exp://127.0.0.1:8081");
-    assert.include(policy, "start it detached in the background");
-
-    // Interaction discipline: describe before tapping, verify after.
-    assert.include(policy, "device points from device_describe_ui, never screenshot pixels");
-    assert.include(policy, "again afterwards to confirm the screen changed");
-
-    // Semantic targeting is the headline: making the model do the coordinate
-    // arithmetic is where taps go wrong, so label targeting leads.
-    assert.include(policy, "Tap by label rather than by coordinates");
-    assert.include(policy, "device_tap {udid, label}");
-    assert.include(policy, "device_tap {udid, label, role}");
-    assert.include(policy, "only when nothing in the tree labels the target");
-
-    // Why a row-centre tap does nothing, for the cases still using coordinates.
-    assert.include(policy, "the row's frame centre is dead space");
-
-    // Scrolling is motor control the server owns. A demo agent swiped three
-    // times to reach Developer when one call should have done it.
-    assert.include(policy, "Never write a swipe loop");
-    assert.include(policy, "device_scroll_to_element {udid, label}");
-    assert.include(policy, "device_tap with a label already scrolls");
-    // device_swipe still has a job; this must not read as a blanket ban.
-    assert.include(policy, "gestures that are the point in themselves");
-
-    // Reading and verifying toggle state from the tree instead of pixels. The
-    // same run took a screenshot purely to work out whether the switch moved.
-    assert.include(policy, "A toggle reports its state in the node's value");
-    assert.include(policy, "Never take a screenshot to check state");
-    assert.include(policy, "device_screenshot is for showing the user a result");
-
-    // The traps that made the demo agent report success it never observed.
-    assert.include(policy, "an unchanged tree after a tap means the tap missed");
-    assert.include(policy, "not delivered to the simulator");
-    assert.include(policy, "Never report success you have not observed");
-    assert.include(policy, "device_open_url always requires explicit user approval");
-    assert.include(policy, "Airplane Mode");
+  it("keeps the gateway policy below its prompt budget", () => {
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_030);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {
@@ -169,4 +148,72 @@ describe("Synara harness policy", () => {
     assert.notInclude(policy, "device_list");
     assert.notInclude(policy, "device_describe_ui");
   });
+
+  it("includes Computer tool guidance only when the session can use Computer", () => {
+    for (const gatewayControlAvailable of [true, false] as const) {
+      for (const enableComputerControl of [true, false, undefined] as const) {
+        const policy = renderSynaraHarnessPolicy({
+          gatewayControlAvailable,
+          ...(enableComputerControl === undefined ? {} : { enableComputerControl }),
+        });
+        const scope = `${gatewayControlAvailable}/${enableComputerControl}`;
+        if (gatewayControlAvailable && enableComputerControl === true) {
+          assert.include(policy, "## Synara computer use", scope);
+          assert.include(policy, "The computer_* tools are live on this session", scope);
+        } else {
+          assert.notInclude(policy, "## Synara computer use", scope);
+          assert.notInclude(policy, "computer_", scope);
+          assert.notInclude(policy, "turn Computer control on in Settings", scope);
+        }
+      }
+    }
+  });
+});
+
+it("adds Computer guidance only for an explicitly enabled scoped session across all providers", () => {
+  const providers = [
+    "codex",
+    "claudeAgent",
+    "cursor",
+    "grok",
+    "droid",
+    "devin",
+    "opencode",
+    "pi",
+    "antigravity",
+  ] as const;
+  for (const provider of providers) {
+    const off = takeSynaraHarnessPolicyForProviderSession(
+      {},
+      { provider, scopedGatewayConnectionAvailable: true },
+    );
+    const explicitOff = takeSynaraHarnessPolicyForProviderSession(
+      { enableComputerControl: false },
+      { provider, scopedGatewayConnectionAvailable: true },
+    );
+    assert.strictEqual(off, explicitOff);
+    assert.notInclude(off ?? "", "## Synara computer use");
+    assert.notInclude(off ?? "", "computer_", provider);
+    const state = { enableComputerControl: true };
+    const on =
+      takeSynaraHarnessPolicyForProviderSession(state, {
+        provider,
+        scopedGatewayConnectionAvailable: true,
+      }) ?? "";
+    assert.equal(on.split("## Synara computer use").length - 1, 1, provider);
+    assert.include(on, "never replay it");
+    assert.isNull(
+      takeSynaraHarnessPolicyForProviderSession(state, {
+        provider,
+        scopedGatewayConnectionAvailable: true,
+      }),
+    );
+    assert.notInclude(
+      takeSynaraHarnessPolicyForProviderSession(
+        { enableComputerControl: true },
+        { provider, scopedGatewayConnectionAvailable: false },
+      ) ?? "",
+      "## Synara computer use",
+    );
+  }
 });

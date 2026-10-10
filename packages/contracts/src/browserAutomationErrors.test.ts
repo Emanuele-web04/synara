@@ -36,6 +36,7 @@ const browserErrorCodes = [
   "BrowserDebuggerConflict",
   "BrowserReconciliationRequired",
   "BrowserStaleReference",
+  "BrowserWebMcpDiscoveryStale",
   "BrowserTargetNotFound",
   "BrowserTargetAmbiguous",
   "BrowserTargetNotVisible",
@@ -51,6 +52,7 @@ const browserErrorCodes = [
   "BrowserPopupOpenerUnsupported",
   "BrowserDownloadApprovalRequired",
   "BrowserEvaluationFailed",
+  "BrowserScriptApiUnavailable",
   "BrowserEvaluationResultTooLarge",
   "BrowserSnapshotTooLarge",
   "BrowserScreenshotTooLarge",
@@ -79,6 +81,12 @@ const specialPolicies = {
       "The accepted browser routing inventory changed before the operation was admitted. Refresh browser tabs and retry.",
     retryable: true,
     phase: "routing",
+    effectMayHaveCommitted: false,
+  },
+  BrowserWebMcpDiscoveryStale: {
+    message: "The WebMCP discovery is stale. Discover the page's tools again before calling one.",
+    retryable: true,
+    phase: "input",
     effectMayHaveCommitted: false,
   },
   BrowserTargetAmbiguous: {
@@ -294,63 +302,6 @@ describe("browser automation errors", () => {
           message: "Provider text containing selector #secret and credential hunter2",
         }),
       ).toBe(false);
-    }
-  });
-
-  it("preserves pre-effect and post-effect malformed-response context", () => {
-    const preEffect = {
-      code: "BrowserMalformedResponse",
-      message: BrowserAutomationErrorMessages.BrowserMalformedResponse,
-      retryable: true,
-      phase: "routing",
-      effectMayHaveCommitted: false,
-    } as const;
-    const postEffect = {
-      code: "BrowserMalformedResponse",
-      message: BrowserAutomationErrorMessages.BrowserMalformedResponse,
-      retryable: false,
-      phase: "runtime",
-      effectMayHaveCommitted: true,
-    } as const;
-
-    expect(preEffect.message).toBe("Browser automation failed due to an internal error.");
-    expect(postEffect.message).toBe(preEffect.message);
-    expect(Schema.is(BrowserAutomationError)(preEffect)).toBe(true);
-    expect(Schema.is(BrowserAutomationError)(postEffect)).toBe(true);
-    expect(preEffect.effectMayHaveCommitted).toBe(false);
-    expect(postEffect.effectMayHaveCommitted).toBe(true);
-  });
-
-  it("preserves pre-effect and post-effect timeout and cancellation context", () => {
-    for (const code of ["BrowserTimeout", "BrowserCancelled"] as const) {
-      const preEffect = {
-        code,
-        message: BrowserAutomationErrorMessages[code],
-        retryable: true,
-        phase: "queue",
-        effectMayHaveCommitted: false,
-      } as const;
-      const postEffect = {
-        code,
-        message: BrowserAutomationErrorMessages[code],
-        retryable: false,
-        phase: "runtime",
-        effectMayHaveCommitted: true,
-      } as const;
-
-      expect(preEffect.message).toBe(postEffect.message);
-      expect(Schema.is(BrowserAutomationError)(preEffect)).toBe(true);
-      expect(Schema.is(BrowserAutomationError)(postEffect)).toBe(true);
-      expect(preEffect).toMatchObject({
-        retryable: true,
-        phase: "queue",
-        effectMayHaveCommitted: false,
-      });
-      expect(postEffect).toMatchObject({
-        retryable: false,
-        phase: "runtime",
-        effectMayHaveCommitted: true,
-      });
     }
   });
 

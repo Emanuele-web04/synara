@@ -17,21 +17,20 @@ const pullRequest: OrchestrationThreadPullRequest = {
   changedFiles: 3,
 };
 
-describe("deriveThreadGitMetadataPatch", () => {
-  it("adopts the observed branch and its pull request", () => {
-    expect(
-      deriveThreadGitMetadataPatch({
-        currentBranch: "synara/old-branch",
-        currentPullRequest: null,
-        observedBranch: "feat/provider-usage-snapshot-cache",
-        pullRequestLookup: { status: "resolved", pullRequest },
-      }),
-    ).toEqual({
-      branch: "feat/provider-usage-snapshot-cache",
-      lastKnownPr: pullRequest,
-    });
-  });
+const dedicatedWorktree = {
+  cwd: "/repo/.worktrees/thread",
+  currentPath: "/repo/.worktrees/thread",
+  currentBranch: pullRequest.headBranch,
+};
 
+const otherPullRequest: OrchestrationThreadPullRequest = {
+  ...pullRequest,
+  number: 575,
+  url: "https://github.com/Emanuele-web04/synara/pull/575",
+  headBranch: "feat/next-change",
+};
+
+describe("deriveThreadGitMetadataPatch", () => {
   it("clears a previous PR when the current branch has no PR", () => {
     expect(
       deriveThreadGitMetadataPatch({
@@ -39,19 +38,9 @@ describe("deriveThreadGitMetadataPatch", () => {
         currentPullRequest: pullRequest,
         observedBranch: pullRequest.headBranch,
         pullRequestLookup: { status: "resolved", pullRequest: null },
+        dedicatedWorktree,
       }),
     ).toEqual({ lastKnownPr: null });
-  });
-
-  it("preserves a durable PR when GitHub is unavailable on the unchanged branch", () => {
-    expect(
-      deriveThreadGitMetadataPatch({
-        currentBranch: pullRequest.headBranch,
-        currentPullRequest: pullRequest,
-        observedBranch: pullRequest.headBranch,
-        pullRequestLookup: { status: "unavailable" },
-      }),
-    ).toBeNull();
   });
 
   it("clears a stale PR when the branch changes while GitHub is unavailable", () => {
@@ -61,8 +50,14 @@ describe("deriveThreadGitMetadataPatch", () => {
         currentPullRequest: pullRequest,
         observedBranch: "feat/next-change",
         pullRequestLookup: { status: "unavailable" },
+        dedicatedWorktree,
       }),
-    ).toEqual({ branch: "feat/next-change", lastKnownPr: null });
+    ).toEqual({
+      branch: "feat/next-change",
+      lastKnownPr: null,
+      associatedWorktreeBranch: "feat/next-change",
+      associatedWorktreeRef: "feat/next-change",
+    });
   });
 
   it("clears branch and PR for detached HEAD", () => {
@@ -72,8 +67,50 @@ describe("deriveThreadGitMetadataPatch", () => {
         currentPullRequest: pullRequest,
         observedBranch: null,
         pullRequestLookup: { status: "resolved", pullRequest: null },
+        dedicatedWorktree,
       }),
     ).toEqual({ branch: null, lastKnownPr: null });
+  });
+
+  it.each([
+    {
+      name: "the observed branch has no PR",
+      observedBranch: "main",
+      pullRequestLookup: { status: "resolved", pullRequest: null },
+      expected: { branch: "main" },
+    },
+    {
+      name: "the branch changes while GitHub is unavailable",
+      observedBranch: "main",
+      pullRequestLookup: { status: "unavailable" },
+      expected: { branch: "main" },
+    },
+    {
+      name: "HEAD is detached",
+      observedBranch: null,
+      pullRequestLookup: { status: "resolved", pullRequest: null },
+      expected: { branch: null },
+    },
+  ] as const)("keeps a shared checkout's PR when $name", (testCase) => {
+    expect(
+      deriveThreadGitMetadataPatch({
+        currentBranch: pullRequest.headBranch,
+        currentPullRequest: pullRequest,
+        observedBranch: testCase.observedBranch,
+        pullRequestLookup: testCase.pullRequestLookup,
+      }),
+    ).toEqual(testCase.expected);
+  });
+
+  it("replaces a shared checkout's PR when the observed branch has its own PR", () => {
+    expect(
+      deriveThreadGitMetadataPatch({
+        currentBranch: pullRequest.headBranch,
+        currentPullRequest: pullRequest,
+        observedBranch: otherPullRequest.headBranch,
+        pullRequestLookup: { status: "resolved", pullRequest: otherPullRequest },
+      }),
+    ).toEqual({ branch: otherPullRequest.headBranch, lastKnownPr: otherPullRequest });
   });
 
   it("does not regress a semantic branch to a temporary worktree branch", () => {

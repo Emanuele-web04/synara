@@ -1,6 +1,7 @@
 import * as path from "node:path";
 
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, session } from "electron";
+import { isClipboardWritePermission } from "../../../desktop/src/clipboardPermissions";
 import type { BrowserAnnotationEvent, ThreadBrowserState, ThreadId } from "@synara/contracts";
 
 import {
@@ -19,8 +20,9 @@ const shellPath = process.env.SYNARA_E2E_SHELL_PATH;
 const threadId = process.env.SYNARA_E2E_THREAD_ID as ThreadId | undefined;
 const synaraHome = process.env.SYNARA_HOME;
 const annotationPreloadPath = process.env.SYNARA_E2E_BROWSER_ANNOTATION_PRELOAD;
+const floatingChromePreloadPath = process.env.SYNARA_E2E_FLOATING_CHROME_PRELOAD;
 
-if (!pipePath || !capability || !shellPath || !threadId || !synaraHome || !annotationPreloadPath) {
+if (!pipePath || !capability || !shellPath || !threadId || !synaraHome || !annotationPreloadPath || !floatingChromePreloadPath) {
   throw new Error("The visible-browser Electron fixture requires its isolated E2E environment.");
 }
 
@@ -31,12 +33,17 @@ let mainWindow: BrowserWindow | null = null;
 let latestState: ThreadBrowserState | null = null;
 let shellReady = false;
 let panelRevealEnabled = true;
+let previewEnabled = false;
+let pageZoomFactor = 1;
+let surface: "native" | "renderer" = "native";
 const annotationEvents: BrowserAnnotationEvent[] = [];
 const rendererLifecycleHide = createBrowserPanelHideScheduler();
 function setPanelVisible(visible: boolean): void {
   browserManager.setPanelBounds({
     threadId,
-    surface: "native",
+    surface,
+    preview: previewEnabled,
+    pageZoomFactor,
     bounds: visible ? { x: 0, y: 34, width: 1_000, height: 726 } : null,
   });
   if (!visible) {
@@ -60,6 +67,10 @@ browserManager.subscribe((state) => {
 ipcMain.on("synara-e2e:shell-ready", () => {
   shellReady = true;
   pushState();
+});
+
+ipcMain.on(BROWSER_IPC_CHANNELS.webMcpCompatibilityPolicy, (event) => {
+  event.returnValue = browserManager.isWebMcpCompatibilityAllowed(event.sender.id);
 });
 
 ipcMain.handle(
@@ -97,12 +108,31 @@ Object.assign(globalThis, {
     pipePath,
     setPanelRevealEnabled(enabled: boolean) {
       panelRevealEnabled = enabled;
-      setPanelVisible(enabled);
+      if (!enabled || latestState?.activeTabId) setPanelVisible(enabled);
+    },
+    setPreviewEnabled(enabled: boolean) {
+      previewEnabled = enabled;
+      setPanelVisible(true);
+    },
+    setPageZoomFactor(value: number) {
+      pageZoomFactor = value;
+      setPanelVisible(true);
+    },
+    setSurface(value: "native" | "renderer") {
+      surface = value;
+      setPanelVisible(true);
     },
   },
 });
 
 app.whenReady().then(async () => {
+  const browserSession = session.fromPartition(BROWSER_SESSION_PARTITION);
+  browserSession.setPermissionCheckHandler((contents, permission, origin, details) =>
+    isClipboardWritePermission(contents, permission, details, origin),
+  );
+  browserSession.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(isClipboardWritePermission(contents, permission, details)),
+  );
   mainWindow = new BrowserWindow({
     width: 1_000,
     height: 760,
@@ -122,7 +152,7 @@ app.whenReady().then(async () => {
         !hardenIsolatedWebviewPreferences({
           partition,
           expectedPartition: FLOATING_BROWSER_CHROME_PARTITION,
-          preloadPath: annotationPreloadPath,
+          preloadPath: floatingChromePreloadPath,
           webPreferences,
         })
       ) {

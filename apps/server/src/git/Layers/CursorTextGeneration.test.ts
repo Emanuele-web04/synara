@@ -6,18 +6,35 @@ import { fileURLToPath } from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
-import { expect } from "vitest";
+import { expect, test } from "vitest";
 
 import { TextGenerationError } from "../Errors.ts";
+import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
-import { CursorTextGenerationLive } from "./CursorTextGeneration.ts";
+import { CursorTextGenerationLive, resolveCursorSettings } from "./CursorTextGeneration.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
 
 const CursorTextGenerationTestLayer = CursorTextGenerationLive.pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(
+    Layer.succeed(ServerConfig, {
+      homeDir: os.homedir(),
+      stateDir: path.join(os.tmpdir(), "synara-cursor-text-state"),
+    } as any),
+  ),
 );
+
+test("routes an empty-config nondefault Cursor text-generation account", () => {
+  expect(
+    resolveCursorSettings(undefined, { homeDir: "/home/user", stateDir: "/state" }, "cursor_work"),
+  ).toEqual({
+    homeDir: "/home/user",
+    isolationRootDir: "/state",
+    instanceId: "cursor_work",
+  });
+});
 
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -36,7 +53,7 @@ function makeAcpAgentWrapper(dir: string, env: Record<string, string>): string {
       '  printf "%s\\n" "unexpected args: $*" >&2',
       "  exit 11",
       "fi",
-      `exec bun ${JSON.stringify(mockAgentPath)}`,
+      `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockAgentPath)}`,
       "",
     ].join("\n"),
     "utf8",
@@ -65,16 +82,22 @@ function withFakeAcpAgent<A, E, R>(
   );
 }
 
-function waitForFileContent(filePath: string): Effect.Effect<string> {
+function waitForFileContent(filePath: string, containing?: string): Effect.Effect<string> {
   return Effect.promise(async () => {
     const deadline = Date.now() + 5_000;
     for (;;) {
       try {
-        return readFileSync(filePath, "utf8");
+        const content = readFileSync(filePath, "utf8");
+        if (containing === undefined || content.includes(containing)) {
+          return content;
+        }
       } catch (error) {
         if (Date.now() >= deadline) {
           throw error instanceof Error ? error : new Error(String(error));
         }
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for file content: ${filePath}`);
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -234,6 +257,36 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
     ),
   );
 
+  it.effect("passes provider-instance environment to Cursor ACP text generation", () =>
+    withFakeAcpAgent({}, (agentPath) =>
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const generated = yield* textGeneration.generateDiffSummary({
+          cwd: process.cwd(),
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: {
+            provider: "cursor",
+            instanceId: "cursor_work",
+            model: "composer-2",
+          },
+          providerOptions: {
+            cursor: {
+              binaryPath: agentPath,
+              environment: {
+                ACP_MOCK_PROMPT_RESPONSE_TEXT: JSON.stringify({
+                  summary: "## Summary\n- Used the provider instance env.",
+                }),
+              },
+            },
+          },
+        });
+
+        expect(generated.summary).toBe("## Summary\n- Used the provider instance env.");
+      }),
+    ),
+  );
+
   it.effect("falls back to raw text when Cursor replies without JSON for a thread title", () =>
     withFakeAcpAgent(
       {
@@ -363,7 +416,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
 
           expect(generated.title).toBe("Trim reconnect spinner status after resume");
 
-          const exitLog = yield* waitForFileContent(exitLogPath);
+          const exitLog = yield* waitForFileContent(exitLogPath, "exit:0");
           expect(exitLog).toContain("exit:0");
 
           rmSync(exitLogDir, { recursive: true, force: true });

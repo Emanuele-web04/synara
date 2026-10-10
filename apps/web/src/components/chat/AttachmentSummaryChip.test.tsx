@@ -8,7 +8,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
-import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 
 describe("AssistantSelectionsSummaryChip", () => {
   it("renders a pluralized count and a labelled dismiss control", () => {
@@ -41,26 +40,5 @@ describe("AssistantSelectionsSummaryChip", () => {
 
   it("renders nothing when empty", () => {
     expect(renderToStaticMarkup(<AssistantSelectionsSummaryChip selections={[]} />)).toBe("");
-  });
-});
-
-describe("FileCommentsSummaryChip", () => {
-  it("renders a pluralized count and a labelled dismiss control", () => {
-    const markup = renderToStaticMarkup(
-      <FileCommentsSummaryChip
-        comments={[
-          { path: "a.ts", startLine: 1, endLine: 2, text: "note" },
-          { path: "b.ts", startLine: 3, endLine: 3, text: "note" },
-        ]}
-        onRemove={() => {}}
-      />,
-    );
-
-    expect(markup).toContain("2 comments");
-    expect(markup).toContain("Remove comments");
-  });
-
-  it("renders nothing when empty", () => {
-    expect(renderToStaticMarkup(<FileCommentsSummaryChip comments={[]} />)).toBe("");
   });
 });

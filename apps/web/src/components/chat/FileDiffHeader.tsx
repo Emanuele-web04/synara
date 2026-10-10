@@ -44,7 +44,7 @@ export const FileDiffHeader = function FileDiffHeader(props: {
       data-diff-file-header=""
       className={cn(
         "font-system-ui flex w-full min-w-0 items-center gap-2 px-2.5 py-1.5",
-        "text-[length:var(--app-font-size-ui,12px)] text-foreground",
+        "text-ui text-foreground",
       )}
       title={prevPath ? `${prevPath} → ${filePath}` : filePath}
     >
@@ -59,25 +59,23 @@ export const FileDiffHeader = function FileDiffHeader(props: {
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
         {prevLeaf ? (
           <>
-            <span className="shrink-0 truncate text-[11.5px] text-muted-foreground/65 line-through">
+            <span className="shrink-0 truncate text-ui-sm text-muted-foreground/65 line-through">
               {prevLeaf}
             </span>
-            <span className="shrink-0 text-[11px] text-muted-foreground/45" aria-hidden>
+            <span className="shrink-0 text-ui-sm text-muted-foreground/45" aria-hidden>
               →
             </span>
           </>
         ) : null}
-        <span className="shrink-0 truncate text-[11.5px] font-medium text-foreground/85">
-          {name}
-        </span>
+        <span className="shrink-0 truncate text-ui-sm font-medium text-foreground/85">{name}</span>
         {dir ? (
-          <span className="min-w-0 truncate text-[11px] text-muted-foreground/55">{dir}</span>
+          <span className="min-w-0 truncate text-ui-sm text-muted-foreground/55">{dir}</span>
         ) : null}
       </div>
       <DiffStat
         additions={stat.additions}
         deletions={stat.deletions}
-        className="shrink-0 text-[10px] tabular-nums"
+        className="shrink-0 text-ui-xs tabular-nums"
       />
       {props.trailing ? (
         <span className="inline-flex shrink-0 items-center gap-0.5">{props.trailing}</span>

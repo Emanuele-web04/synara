@@ -1,0 +1,191 @@
+// Shared read-time Claude accounting for Profile Stats and deletion snapshots.
+// Old compact modelUsage may be process-cumulative: only versioned results or
+// retained per-turn main-loop usage are safe. Never infer a version from dates.
+// Rows keep every dispatch origin; callers pick which origins count.
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as Statement from "effect/unstable/sql/Statement";
+
+// Restricts token CTEs to one thread (delete-time archive) or to the threads a
+// subquery returns (time-range recaps), so they skip unrelated history.
+export type TokenStatsThreadScope =
+  | { readonly threadId: string }
+  | { readonly threadIdsQuery: Statement.Fragment };
+
+export function tokenStatsThreadFilter(
+  sql: SqlClient.SqlClient,
+  column: Statement.Fragment,
+  scope: TokenStatsThreadScope | undefined,
+): Statement.Fragment {
+  if (!scope) {
+    return sql.literal("");
+  }
+  return "threadId" in scope
+    ? sql`AND ${column} = ${scope.threadId}`
+    : sql`AND ${column} IN (${scope.threadIdsQuery})`;
+}
+
+export function claudeTokenActivityCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThreadScope) {
+  return sql`
+    claude_completed_source AS (
+      SELECT
+        a.thread_id,
+        a.turn_id,
+        a.activity_id,
+        a.sequence,
+        a.created_at,
+        CASE WHEN json_valid(a.payload_json) THEN a.payload_json ELSE '{}' END AS payload_json
+      FROM projection_thread_activities a
+      WHERE a.kind = 'turn.completed' AND a.turn_id IS NOT NULL
+        ${tokenStatsThreadFilter(sql, sql.literal("a.thread_id"), scope)}
+    ),
+    claude_completed_ranked AS (
+      SELECT a.thread_id, a.turn_id, a.activity_id, a.created_at, a.payload_json,
+        COALESCE(tm.model, CASE WHEN json_valid(th.model_selection_json)
+          AND (json_extract(a.payload_json, '$.provider') IS NULL
+            OR json_extract(a.payload_json, '$.provider') = json_extract(th.model_selection_json, '$.provider'))
+          THEN json_extract(th.model_selection_json, '$.model') END, 'unknown') AS model,
+        pm.dispatch_origin,
+        ROW_NUMBER() OVER (
+          PARTITION BY a.thread_id, a.turn_id
+          ORDER BY a.sequence DESC, a.created_at DESC, a.activity_id DESC
+        ) AS rank
+      FROM claude_completed_source a
+      JOIN projection_threads th ON th.thread_id = a.thread_id
+      LEFT JOIN turn_model tm ON tm.thread_id = a.thread_id AND tm.turn_id = a.turn_id
+      LEFT JOIN projection_turns pt ON pt.thread_id = a.thread_id AND pt.turn_id = a.turn_id
+      LEFT JOIN projection_thread_messages pm
+        ON pm.thread_id = pt.thread_id AND pm.message_id = pt.pending_message_id
+      -- Provider-native children usually mirror usage that the parent result
+      -- already includes. Keep a child when its model has no usable parent
+      -- breakdown, because the child may be the only durable usage evidence
+      -- after an interrupted or result-less parent turn.
+      WHERE (
+        COALESCE(th.creation_source, '') != 'provider_native'
+        OR NOT EXISTS (
+          SELECT 1
+          FROM projection_thread_activities parent_activity
+          JOIN json_each(
+            CASE
+              WHEN json_valid(parent_activity.payload_json)
+                AND json_type(parent_activity.payload_json, '$.modelUsage') = 'object'
+              THEN json_extract(parent_activity.payload_json, '$.modelUsage')
+              ELSE '{}'
+            END
+          ) parent_usage
+          WHERE parent_activity.thread_id = th.parent_thread_id
+            AND parent_activity.kind = 'turn.completed'
+            -- Without source-turn provenance, no parent result is proven to
+            -- include this child. An older same-model turn cannot suppress it.
+            AND parent_activity.turn_id = th.source_turn_id
+            AND json_valid(parent_activity.payload_json)
+            AND json_extract(parent_activity.payload_json, '$.tokenAccountingVersion') = 1
+            AND json_type(parent_activity.payload_json, '$.modelUsage') = 'object'
+            AND LOWER(TRIM(CAST(parent_usage.key AS TEXT))) = LOWER(TRIM(CAST(
+              COALESCE(tm.model, CASE WHEN json_valid(th.model_selection_json)
+                AND (json_extract(a.payload_json, '$.provider') IS NULL
+                  OR json_extract(a.payload_json, '$.provider') = json_extract(th.model_selection_json, '$.provider'))
+                THEN json_extract(th.model_selection_json, '$.model') END, 'unknown') AS TEXT
+            )))
+            AND (
+              CASE
+                WHEN parent_usage.type != 'object' THEN 0
+                WHEN json_type(parent_usage.value, '$.totalTokens') IN ('integer', 'real')
+                  AND json_extract(parent_usage.value, '$.totalTokens') > 0
+                THEN json_extract(parent_usage.value, '$.totalTokens')
+                ELSE
+                  CASE WHEN json_type(parent_usage.value, '$.inputTokens') IN ('integer', 'real')
+                    AND json_extract(parent_usage.value, '$.inputTokens') >= 0
+                    THEN json_extract(parent_usage.value, '$.inputTokens') ELSE 0 END
+                  + CASE WHEN json_type(parent_usage.value, '$.cacheReadInputTokens') IN ('integer', 'real')
+                    AND json_extract(parent_usage.value, '$.cacheReadInputTokens') >= 0
+                    THEN json_extract(parent_usage.value, '$.cacheReadInputTokens') ELSE 0 END
+                  + CASE WHEN json_type(parent_usage.value, '$.cacheCreationInputTokens') IN ('integer', 'real')
+                    AND json_extract(parent_usage.value, '$.cacheCreationInputTokens') >= 0
+                    THEN json_extract(parent_usage.value, '$.cacheCreationInputTokens') ELSE 0 END
+                  + CASE WHEN json_type(parent_usage.value, '$.outputTokens') IN ('integer', 'real')
+                    AND json_extract(parent_usage.value, '$.outputTokens') >= 0
+                    THEN json_extract(parent_usage.value, '$.outputTokens') ELSE 0 END
+              END
+            ) > 0
+        )
+      )
+        AND COALESCE(
+          json_extract(a.payload_json, '$.provider'), tm.provider,
+          CASE WHEN json_valid(th.model_selection_json)
+            THEN json_extract(th.model_selection_json, '$.provider') END
+        ) = 'claudeAgent'
+    ),
+    claude_completed AS (
+      SELECT c.*,
+        CASE WHEN json_extract(payload_json, '$.tokenAccountingVersion') = 1
+          AND json_type(payload_json, '$.modelUsage') = 'object'
+          THEN json_extract(payload_json, '$.modelUsage') END AS models,
+        CASE WHEN json_extract(payload_json, '$.tokenAccountingVersion') = 1
+          AND json_type(payload_json, '$.mainLoopTokens') IN ('integer', 'real')
+          AND json_extract(payload_json, '$.mainLoopTokens') >= 0
+          THEN CAST(json_extract(payload_json, '$.mainLoopTokens') AS INTEGER)
+          ELSE legacy.tokens
+        END AS main_tokens
+      FROM claude_completed_ranked c
+      LEFT JOIN profile_stats_claude_legacy_usage legacy
+        ON legacy.thread_id = c.thread_id AND legacy.turn_id = c.turn_id
+      WHERE rank = 1
+    ),
+    claude_model_usage_entries AS (
+      SELECT c.activity_id, c.thread_id, c.turn_id, c.created_at, c.dispatch_origin,
+        c.model AS fallback_model,
+        m.key AS model,
+        CASE WHEN json_valid(m.value) THEN
+          CASE WHEN json_type(m.value) = 'object' THEN m.value ELSE '{}' END
+        ELSE '{}' END AS usage
+      FROM claude_completed c, json_each(c.models) m
+    ),
+    claude_model_token_candidates AS (
+      SELECT activity_id, thread_id, turn_id, created_at, dispatch_origin,
+        COALESCE(NULLIF(TRIM(CAST(model AS TEXT)), ''), fallback_model) AS model,
+        CAST(
+          CASE
+            -- Private builds of this PR briefly stored a compact form whose
+            -- inputTokens already included cache reads/writes. Its explicit
+            -- total is authoritative so those cache subsets are not added twice.
+            WHEN json_type(usage, '$.totalTokens') IN ('integer', 'real')
+              AND json_extract(usage, '$.totalTokens') > 0
+            THEN json_extract(usage, '$.totalTokens')
+            -- The SDK modelUsage shape has no totalTokens. Its inputTokens is
+            -- uncached input, so all four disjoint counters form the total.
+            ELSE
+              CASE WHEN json_type(usage, '$.inputTokens') IN ('integer', 'real')
+                AND json_extract(usage, '$.inputTokens') >= 0
+                THEN json_extract(usage, '$.inputTokens') ELSE 0 END
+              + CASE WHEN json_type(usage, '$.cacheReadInputTokens') IN ('integer', 'real')
+                AND json_extract(usage, '$.cacheReadInputTokens') >= 0
+                THEN json_extract(usage, '$.cacheReadInputTokens') ELSE 0 END
+              + CASE WHEN json_type(usage, '$.cacheCreationInputTokens') IN ('integer', 'real')
+                AND json_extract(usage, '$.cacheCreationInputTokens') >= 0
+                THEN json_extract(usage, '$.cacheCreationInputTokens') ELSE 0 END
+              + CASE WHEN json_type(usage, '$.outputTokens') IN ('integer', 'real')
+                AND json_extract(usage, '$.outputTokens') >= 0
+                THEN json_extract(usage, '$.outputTokens') ELSE 0 END
+          END AS INTEGER
+        ) AS tokens
+      FROM claude_model_usage_entries
+    ),
+    claude_model_token_rows AS (
+      SELECT activity_id, thread_id, turn_id, created_at, dispatch_origin, model, tokens
+      FROM claude_model_token_candidates
+      WHERE tokens > 0
+    ),
+    claude_token_rows AS (
+      SELECT thread_id, turn_id, created_at, dispatch_origin, model, tokens
+      FROM claude_model_token_rows
+      UNION ALL
+      SELECT c.thread_id, c.turn_id, c.created_at, c.dispatch_origin, c.model,
+        CAST(c.main_tokens AS INTEGER) AS tokens
+      FROM claude_completed c
+      WHERE c.main_tokens > 0
+        AND NOT EXISTS (
+          SELECT 1 FROM claude_model_token_rows m WHERE m.activity_id = c.activity_id
+        )
+    )
+  `;
+}

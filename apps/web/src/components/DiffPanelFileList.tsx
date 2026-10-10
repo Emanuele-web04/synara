@@ -3,16 +3,33 @@
 // Layer: Diff panel UI
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
+import {
+  isSupportedLocalImagePath,
+  isSupportedLocalPreviewFilePath,
+} from "@synara/shared/localPreviewFiles";
 import { type MouseEvent as ReactMouseEvent } from "react";
-import { ChevronDownIcon, CopyIcon, EllipsisIcon, MessageCircleIcon } from "~/lib/icons";
+import { useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
+import {
+  ChevronDownIcon,
+  CopyIcon,
+  EllipsisIcon,
+  MessageCircleIcon,
+  PencilIcon,
+} from "~/lib/icons";
 
-import { buildFileDiffRenderKey, resolveFileDiffPath } from "~/lib/diffRendering";
-import { FileDiffCard, FileDiffSurface } from "./chat/FileDiffView";
+import {
+  buildFileDiffRenderKey,
+  resolveFileDiffPath,
+  hasUneditableGitMode,
+  resolveFileDiffPrevPath,
+} from "~/lib/diffRendering";
+import { FileDiffCard, FileDiffSurface, type DiffLineClickProps } from "./chat/FileDiffView";
+import { resolveDiffLineBlameTarget, type DiffLineBlameTarget } from "./DiffLineBlamePopover";
 import { LocalImagePreview } from "./LocalImagePreview";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { IconButton } from "./ui/icon-button";
+import { TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME } from "./ui/button-group";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 
 type DiffRenderMode = "stacked" | "split";
@@ -20,6 +37,7 @@ type DiffRenderMode = "stacked" | "split";
 export interface DiffFileChatActions {
   onReferenceInChat: (filePath: string) => void;
   onAskWhyChanged: (filePath: string) => void;
+  onEditFile?: ((filePath: string, options?: { basePath?: string | null }) => void) | undefined;
 }
 
 const DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
@@ -27,7 +45,14 @@ const DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-for
 // Per-file actions menu rendered in the custom header's trailing slot, left of
 // the collapse chevron. Marked with data-diff-header-menu so header clicks on
 // it do not toggle the file collapse state.
-function DiffFileHeaderActionsMenu(props: { filePath: string; chatActions: DiffFileChatActions }) {
+function DiffFileHeaderActionsMenu(props: {
+  filePath: string;
+  canEditFile: boolean;
+  basePath: string | null;
+  chatActions: DiffFileChatActions;
+}) {
+  const copyPathToClipboard = useCopyPathToClipboard();
+
   return (
     <Menu>
       <MenuTrigger
@@ -35,15 +60,26 @@ function DiffFileHeaderActionsMenu(props: { filePath: string; chatActions: DiffF
           <IconButton
             variant="ghost"
             size="icon-xs"
+            shape="capsule"
             label="File actions"
             title="File actions"
-            className="text-muted-foreground hover:text-foreground"
+            className={TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME}
           >
             <EllipsisIcon className="size-3.5" />
           </IconButton>
         }
       />
       <ComposerPickerMenuPopup align="end" side="bottom" sideOffset={6} className="w-60 min-w-60">
+        {props.chatActions.onEditFile && props.canEditFile ? (
+          <MenuItem
+            onClick={() => {
+              props.chatActions.onEditFile?.(props.filePath, { basePath: props.basePath });
+            }}
+          >
+            <PencilIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
+            <span>Edit file</span>
+          </MenuItem>
+        ) : null}
         <MenuItem
           onClick={() => {
             props.chatActions.onReferenceInChat(props.filePath);
@@ -60,11 +96,7 @@ function DiffFileHeaderActionsMenu(props: { filePath: string; chatActions: DiffF
           <MessageCircleIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
           <span>Ask why this changed</span>
         </MenuItem>
-        <MenuItem
-          onClick={() => {
-            void navigator.clipboard?.writeText(props.filePath);
-          }}
-        >
+        <MenuItem onClick={() => copyPathToClipboard(props.filePath)}>
           <CopyIcon className={DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME} />
           <span>Copy path</span>
         </MenuItem>
@@ -105,22 +137,51 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   isCollapsed: boolean;
   onToggleFileCollapsed: (fileKey: string) => void;
   chatActions?: DiffFileChatActions | undefined;
+  onBlameLine?: ((target: DiffLineBlameTarget) => void) | undefined;
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
   const { chatActions, isCollapsed } = props;
+  // A deleted file no longer exists in the working tree, binary previews
+  // (images, PDFs) are rejected by the text read, and symlinks or submodule
+  // entries cannot be written as the text shown here.
+  const canEditFile =
+    props.fileDiff.type !== "deleted" &&
+    !isSupportedLocalPreviewFilePath(filePath) &&
+    !hasUneditableGitMode(props.fileDiff);
+  // Renames keep the base-side content under the old path.
+  const basePath = resolveFileDiffPrevPath(props.fileDiff);
   const shouldPreviewImage =
     !isCollapsed && props.workspaceRoot !== null && isSupportedLocalImagePath(filePath);
   const renderHeaderTrailing = () => (
     <>
       {chatActions ? (
         <span data-diff-header-menu="true" className="inline-flex">
-          <DiffFileHeaderActionsMenu filePath={filePath} chatActions={chatActions} />
+          <DiffFileHeaderActionsMenu
+            filePath={filePath}
+            canEditFile={canEditFile}
+            basePath={basePath}
+            chatActions={chatActions}
+          />
         </span>
       ) : null}
       <DiffFileCollapseChevron collapsed={isCollapsed} />
     </>
   );
+  const { onBlameLine } = props;
+  const handleLineClick = onBlameLine
+    ? (line: DiffLineClickProps) => {
+        // Deletion lines blame the tree that still has the content: for a
+        // rename that is the old path, since the new name does not exist at
+        // the blame revision.
+        const blamePath =
+          line.lineType === "change-deletion"
+            ? (resolveFileDiffPrevPath(props.fileDiff) ?? filePath)
+            : filePath;
+        const target = resolveDiffLineBlameTarget(blamePath, line);
+        if (target) onBlameLine(target);
+      }
+    : undefined;
   const handleClickCapture = (event: ReactMouseEvent<HTMLDivElement>) => {
     const nativeEvent = event.nativeEvent;
     const composedPath = nativeEvent.composedPath?.() ?? [];
@@ -155,6 +216,7 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
         overflow={props.diffWordWrap ? "wrap" : "scroll"}
         collapsed={props.isCollapsed}
         renderHeaderTrailing={renderHeaderTrailing}
+        onLineClick={handleLineClick}
       />
       {shouldPreviewImage ? (
         <LocalImagePreview
@@ -178,6 +240,7 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
   collapsedFiles: ReadonlySet<string>;
   onToggleFileCollapsed: (fileKey: string) => void;
   chatActions?: DiffFileChatActions | undefined;
+  onBlameLine?: ((target: DiffLineBlameTarget) => void) | undefined;
 }) {
   if (props.renderableFiles.length === 0) {
     return (
@@ -207,6 +270,7 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
             isCollapsed={props.collapsedFiles.has(fileKey)}
             onToggleFileCollapsed={props.onToggleFileCollapsed}
             chatActions={props.chatActions}
+            onBlameLine={props.onBlameLine}
           />
         );
       })}

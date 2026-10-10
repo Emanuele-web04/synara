@@ -13,10 +13,11 @@ import {
   AntigravityIcon,
   ClaudeAI,
   CursorIcon,
+  DevinIcon,
   DroidIcon,
   GrokIcon,
   type Icon,
-  KiloIcon,
+  OmpIcon,
   OpenAI,
   OpenCodeIcon,
   PiIcon,
@@ -67,19 +68,20 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
+  devin: DevinIcon,
   antigravity: AntigravityIcon,
   grok: GrokIcon,
   droid: DroidIcon,
-  kilo: KiloIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
+  omp: OmpIcon,
 };
 
 export function providerIconToneClassName(
   provider: ProviderKind | null | undefined,
   tone: ProviderIconTone = "default",
 ): string {
-  if (provider === "kilo" || provider === "opencode") {
+  if (provider === "opencode") {
     return "text-muted-foreground/70";
   }
   if (provider === "codex") {

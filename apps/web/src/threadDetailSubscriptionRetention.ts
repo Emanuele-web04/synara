@@ -319,10 +319,17 @@ export function isThreadDetailRetained(threadId: ThreadId): boolean {
   return retainedThreadEntries.has(threadId);
 }
 
+/**
+ * Stream leases are capped below the retention cache, so retained threads
+ * compete for the slots left after visible ones. Threads with live or
+ * actionable work go first: a running thread that loses its lease freezes its
+ * cached detail mid-turn, and reopening it later has to replay the whole gap.
+ */
 export function resolveThreadDetailSubscriptionLeaseIds(input: {
   readonly visibleThreadIds: readonly ThreadId[];
   readonly retainedThreadIds: readonly ThreadId[];
   readonly serverThreadIds: ReadonlySet<ThreadId>;
+  readonly retentionExcludedThreadIds?: ReadonlySet<ThreadId>;
 }): ThreadId[] {
   const threadIds = new Set<ThreadId>();
   for (const threadId of input.visibleThreadIds) {
@@ -331,11 +338,17 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
     // provider events cannot outrun promotion into the server snapshot.
     threadIds.add(threadId);
   }
-  for (const threadId of input.retainedThreadIds) {
+  const leasableRetainedThreadIds = input.retainedThreadIds.filter(
+    (threadId) =>
+      !input.retentionExcludedThreadIds?.has(threadId) && input.serverThreadIds.has(threadId),
+  );
+  // Same predicate that shields detail from eviction: live or actionable work.
+  for (const threadId of [
+    ...leasableRetainedThreadIds.filter((threadId) => isThreadDetailEvictionUnsafe(threadId)),
+    ...leasableRetainedThreadIds,
+  ]) {
     if (threadIds.size >= WS_STREAM_LIMITS.threadPerClient) break;
-    if (input.serverThreadIds.has(threadId)) {
-      threadIds.add(threadId);
-    }
+    threadIds.add(threadId);
   }
   return [...threadIds];
 }

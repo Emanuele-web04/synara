@@ -1,7 +1,9 @@
 import {
   formatModelDisplayName,
   humanizeModelSlug,
+  normalizeModelDisplayName,
   normalizeModelSlug,
+  resolveNewestKnownClaudeFamilyModel,
 } from "@synara/shared/model";
 import {
   MODEL_OPTIONS_BY_PROVIDER,
@@ -16,14 +18,19 @@ import {
   type CursorModelSelection,
   type DroidModelOptions,
   type DroidModelSelection,
+  type DevinModelOptions,
+  type DevinModelSelection,
   type GrokModelOptions,
   type GrokModelSelection,
-  type KiloModelSelection,
   type ModelSelection,
+  type OmpModelOptions,
+  type OmpModelSelection,
+  type OmpThinkingLevel,
   type OpenCodeModelOptions,
   type OpenCodeModelSelection,
   type PiModelOptions,
   type PiModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelOptions,
 } from "@synara/contracts";
@@ -31,18 +38,29 @@ import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 
 export type ProviderOptions = ProviderModelOptions[ProviderKind];
 
+export interface ModelSelectionBuildMetadata {
+  readonly instanceId?: ProviderInstanceId | null | undefined;
+}
+
 export interface ProviderModelOption {
   slug: string;
   name: string;
   description?: string;
   upstreamProviderId?: string;
   upstreamProviderName?: string;
+  role?: { name: string; model: string; thinkingLevel?: OmpThinkingLevel };
 }
 
 export interface ProviderModelOptionGroup {
   key: string;
   label: string | null;
   options: ProviderModelOption[];
+}
+
+// Normalize known families to their canonical casing, keeping the provider's
+// variant wording. Unknown or freeform names pass through unchanged.
+function normalizeCatalogModelName(name: string): string {
+  return normalizeModelDisplayName(name);
 }
 
 /**
@@ -81,7 +99,7 @@ export function formatProviderModelOptionName(input: {
     return trimmedSlug;
   }
 
-  if (input.provider === "kilo" || input.provider === "opencode" || input.provider === "pi") {
+  if (input.provider === "opencode" || input.provider === "pi" || input.provider === "omp") {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
@@ -105,6 +123,21 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
   return normalizeModelSlug(slug, provider) ?? slug;
 }
 
+// Claude Code lists its current models by alias (`opus[1m]`) with the concrete id
+// in `resolvedModel`. When that id is a release newer than the catalog knows, list
+// it under its own id; otherwise the alias would fold into an older catalog model.
+export function normalizeClaudeModelOptionSlug(model: {
+  slug: string;
+  resolvedModel?: string | undefined;
+}): string {
+  const resolvedSlug = model.resolvedModel
+    ? normalizeDynamicModelSlug("claudeAgent", model.resolvedModel)
+    : null;
+  return resolvedSlug && resolveNewestKnownClaudeFamilyModel(resolvedSlug)
+    ? resolvedSlug
+    : normalizeDynamicModelSlug("claudeAgent", model.slug);
+}
+
 // Claude discovery order comes from the CLI's own catalog, which interleaves
 // families (Haiku ahead of Opus) and shifts with every CLI release. Rank Claude
 // models by our curated catalog instead so the picker stays strongest-first and
@@ -114,14 +147,23 @@ const CLAUDE_CATALOG_RANK_BY_SLUG: ReadonlyMap<string, number> = new Map(
 );
 
 // Models the CLI exposes but the catalog does not know yet (a release landing
-// before Synara updates) sort first so they stay visible at the top.
+// before Synara updates) sort just ahead of their family's newest catalog model,
+// so a new Opus stays below Fable. Other unknown models sort first.
+function claudeModelRank(slug: string): number {
+  const catalogRank = CLAUDE_CATALOG_RANK_BY_SLUG.get(slug);
+  if (catalogRank !== undefined) {
+    return catalogRank;
+  }
+  const newestKnown = resolveNewestKnownClaudeFamilyModel(slug);
+  const familyRank = newestKnown ? CLAUDE_CATALOG_RANK_BY_SLUG.get(newestKnown) : undefined;
+  return familyRank === undefined ? -1 : familyRank - 0.5;
+}
+
 function orderClaudeModelOptions<T extends ProviderModelOption>(
   options: ReadonlyArray<T>,
 ): ReadonlyArray<T> {
   return options.toSorted(
-    (left, right) =>
-      (CLAUDE_CATALOG_RANK_BY_SLUG.get(left.slug) ?? -1) -
-      (CLAUDE_CATALOG_RANK_BY_SLUG.get(right.slug) ?? -1),
+    (left, right) => claudeModelRank(left.slug) - claudeModelRank(right.slug),
   );
 }
 
@@ -129,7 +171,8 @@ function orderClaudeModelOptions<T extends ProviderModelOption>(
  * Folds runtime-discovered models into the static option list for a provider:
  * discovered models lead (with display names recovered from the static list when
  * possible), static built-ins fill gaps unless discovery fully owns the catalog
- * (antigravity/kilo/opencode/cursor/grok), and user-defined custom models always survive.
+ * (codex/antigravity/opencode/cursor/droid/grok/devin). Codex also owns a successful
+ * empty catalog. User-defined custom models survive except for Droid.
  * Claude is the exception: its discovered and static built-in models are merged
  * into the curated catalog order.
  */
@@ -138,13 +181,17 @@ export function mergeDynamicModelOptions(input: {
   staticOptions: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>;
   dynamicModels: ReadonlyArray<{
     slug: string;
+    resolvedModel?: string | undefined;
     name?: string | null | undefined;
     description?: string | null | undefined;
     upstreamProviderId?: string | null | undefined;
     upstreamProviderName?: string | null | undefined;
   }>;
 }): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
-  const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
+  // Custom and selected-model placeholders have generated names, not curated metadata.
+  const staticNameBySlug = new Map(
+    input.staticOptions.filter((model) => !model.isCustom).map((model) => [model.slug, model.name]),
+  );
   const dynamicNormalizedSlugs = new Set<string>();
   const normalizedDynamicOptions: ProviderModelOption[] = [];
 
@@ -159,8 +206,11 @@ export function mergeDynamicModelOptions(input: {
       continue;
     }
 
-    const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
-    const rawSlug = dynamicModel.slug.trim().toLowerCase();
+    const normalizedSlug =
+      input.provider === "claudeAgent"
+        ? normalizeClaudeModelOptionSlug(dynamicModel)
+        : normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
+    const modelIdentifier = normalizedSlug.slice(normalizedSlug.lastIndexOf("/") + 1);
     const displayNameFallback = formatProviderModelOptionName({
       provider: input.provider,
       slug: normalizedSlug,
@@ -173,10 +223,16 @@ export function mergeDynamicModelOptions(input: {
       slug: normalizedSlug,
       name:
         staticNameBySlug.get(normalizedSlug) ??
+        // Claude Code names rows by alias ("Opus (1M context)"); an uncatalogued
+        // Claude release reads better as its versioned id ("Claude Opus 6").
+        (input.provider === "claudeAgent" && resolveNewestKnownClaudeFamilyModel(normalizedSlug)
+          ? displayNameFallback
+          : undefined) ??
         (rawName.length > 0 &&
-        rawName.toLowerCase() !== rawSlug &&
-        rawName.toLowerCase() !== normalizedSlug.toLowerCase()
-          ? rawName
+        rawName !== dynamicModel.slug.trim() &&
+        rawName !== normalizedSlug &&
+        rawName !== modelIdentifier
+          ? normalizeCatalogModelName(rawName)
           : displayNameFallback),
       ...(dynamicModel.description?.trim() ? { description: dynamicModel.description.trim() } : {}),
       ...(dynamicModel.upstreamProviderId?.trim()
@@ -188,30 +244,57 @@ export function mergeDynamicModelOptions(input: {
     });
   }
 
+  // Scoped providers (omp/pi/opencode) surface catalog slugs as
+  // `<upstream-provider>/<model>`. A bare custom slug naming the same model id
+  // duplicates the discovered row; drop it only when exactly one discovered
+  // option carries that id so an ambiguous name never silently wins.
+  const scopedProvider =
+    input.provider === "omp" || input.provider === "pi" || input.provider === "opencode";
+  const dynamicIdPartCounts = scopedProvider
+    ? normalizedDynamicOptions.reduce((counts, option) => {
+        const idPart = option.slug.slice(option.slug.lastIndexOf("/") + 1);
+        counts.set(idPart, (counts.get(idPart) ?? 0) + 1);
+        return counts;
+      }, new Map<string, number>())
+    : undefined;
+
   // Droid validates model values against its live ACP select options, so an
   // arbitrary custom slug is guaranteed to fail at session configuration.
   const customOnlyModels =
     input.provider === "droid"
       ? []
-      : input.staticOptions.filter(
-          (model) =>
-            "isCustom" in model &&
-            model.isCustom &&
-            !dynamicNormalizedSlugs.has(normalizeDynamicModelSlug(input.provider, model.slug)),
-        );
+      : input.staticOptions.filter((model) => {
+          if (!("isCustom" in model) || !model.isCustom) {
+            return false;
+          }
+          const normalizedCustomSlug = normalizeDynamicModelSlug(input.provider, model.slug);
+          if (dynamicNormalizedSlugs.has(normalizedCustomSlug)) {
+            return false;
+          }
+          if (
+            dynamicIdPartCounts !== undefined &&
+            !normalizedCustomSlug.includes("/") &&
+            dynamicIdPartCounts.get(normalizedCustomSlug) === 1
+          ) {
+            return false;
+          }
+          return true;
+        });
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
-  const missingStaticBuiltIns =
-    (input.provider === "antigravity" ||
-      input.provider === "kilo" ||
-      input.provider === "opencode" ||
-      input.provider === "cursor" ||
-      input.provider === "droid" ||
-      input.provider === "grok") &&
-    normalizedDynamicOptions.length > 0
-      ? []
-      : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
+  const hasAuthoritativeCatalog =
+    input.provider === "codex" ||
+    (normalizedDynamicOptions.length > 0 &&
+      (input.provider === "antigravity" ||
+        input.provider === "opencode" ||
+        input.provider === "cursor" ||
+        input.provider === "droid" ||
+        input.provider === "grok" ||
+        input.provider === "devin"));
+  const missingStaticBuiltIns = hasAuthoritativeCatalog
+    ? []
+    : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
   if (input.provider === "claudeAgent") {
     return [
@@ -223,7 +306,6 @@ export function mergeDynamicModelOptions(input: {
   return [...normalizedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
 }
 
-/** Returns a compact label for provider descriptions that begin with an `Nx` cost multiplier. */
 export function providerModelCostMultiplierLabel(description?: string): string | null {
   const multiplier = description?.trim().match(/^(\d+(?:\.\d+)?)x(?:\s|$)/i)?.[1];
   return multiplier ? `${multiplier}×` : null;
@@ -346,11 +428,23 @@ export function buildNextProviderOptions(
       ...patch,
     } as DroidModelOptions;
   }
+  if (provider === "devin") {
+    return {
+      ...(modelOptions as DevinModelOptions | undefined),
+      ...patch,
+    } as DevinModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
       ...patch,
     } as OpenCodeModelOptions;
+  }
+  if (provider === "omp") {
+    return {
+      ...(modelOptions as OmpModelOptions | undefined),
+      ...patch,
+    } as OmpModelOptions;
   }
   return {
     ...(modelOptions as PiModelOptions | undefined),
@@ -370,131 +464,148 @@ export function buildModelSelection(
   provider: "codex",
   model: string,
   options?: CodexModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): CodexModelSelection;
 export function buildModelSelection(
   provider: "claudeAgent",
   model: string,
   options?: ClaudeModelOptions | null | undefined,
-  supportsAutoMode?: boolean | undefined,
+  supportsAutoModeOrMetadata?: boolean | ModelSelectionBuildMetadata | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ClaudeModelSelection;
 export function buildModelSelection(
   provider: "cursor",
   model: string,
   options?: CursorModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): CursorModelSelection;
 export function buildModelSelection(
   provider: "antigravity",
   model: string,
   options?: AntigravityModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): AntigravityModelSelection;
 export function buildModelSelection(
   provider: "grok",
   model: string,
   options?: GrokModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): GrokModelSelection;
 export function buildModelSelection(
   provider: "droid",
   model: string,
   options?: DroidModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): DroidModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
   options?: OpenCodeModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): OpenCodeModelSelection;
-export function buildModelSelection(
-  provider: "kilo",
-  model: string,
-  options?: OpenCodeModelOptions | null | undefined,
-): KiloModelSelection;
 export function buildModelSelection(
   provider: "pi",
   model: string,
   options?: PiModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): PiModelSelection;
+export function buildModelSelection(
+  provider: "devin",
+  model: string,
+  options?: DevinModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
+): DevinModelSelection;
+export function buildModelSelection(
+  provider: "omp",
+  model: string,
+  options?: OmpModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
+): OmpModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
-  supportsAutoMode?: boolean | undefined,
+  supportsAutoModeOrMetadata?: boolean | ModelSelectionBuildMetadata | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
-  supportsAutoMode?: boolean | undefined,
+  supportsAutoModeOrMetadata?: boolean | ModelSelectionBuildMetadata | undefined,
+  explicitMetadata?: ModelSelectionBuildMetadata,
 ): ModelSelection {
+  const supportsAutoMode =
+    typeof supportsAutoModeOrMetadata === "boolean" ? supportsAutoModeOrMetadata : undefined;
+  const metadata =
+    typeof supportsAutoModeOrMetadata === "object" ? supportsAutoModeOrMetadata : explicitMetadata;
   switch (provider) {
     case "antigravity":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as AntigravityModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? { provider, model, options: options as AntigravityModelOptions }
+          : { provider, model },
+        metadata,
+      );
     case "codex":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CodexModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as CodexModelOptions } : { provider, model },
+        metadata,
+      );
     case "claudeAgent":
-      return {
-        provider,
-        model,
-        ...(options ? { options: options as ClaudeModelOptions } : {}),
-        ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
-      };
+      return attachModelSelectionMetadata(
+        {
+          provider,
+          model,
+          ...(options ? { options: options as ClaudeModelOptions } : {}),
+          ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
+        },
+        metadata,
+      );
     case "cursor":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CursorModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as CursorModelOptions } : { provider, model },
+        metadata,
+      );
+    case "devin":
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as DevinModelOptions } : { provider, model },
+        metadata,
+      );
     case "grok":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GrokModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as GrokModelOptions } : { provider, model },
+        metadata,
+      );
     case "droid":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as DroidModelOptions,
-          }
-        : { provider, model };
-    case "kilo":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as DroidModelOptions } : { provider, model },
+        metadata,
+      );
     case "opencode":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? { provider, model, options: options as OpenCodeModelOptions }
+          : { provider, model },
+        metadata,
+      );
     case "pi":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as PiModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as PiModelOptions } : { provider, model },
+        metadata,
+      );
+    case "omp":
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as OmpModelOptions } : { provider, model },
+        metadata,
+      );
   }
+}
+
+function attachModelSelectionMetadata<T extends ModelSelection>(
+  selection: T,
+  metadata: ModelSelectionBuildMetadata | null | undefined,
+): T {
+  const instanceId = metadata?.instanceId?.trim();
+  return instanceId ? ({ ...selection, instanceId } as T) : selection;
 }

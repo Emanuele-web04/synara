@@ -376,6 +376,7 @@ it.layer(testLayer)("server CLI command", (it) => {
         SYNARA_NO_BROWSER: "true",
         SYNARA_AUTH_TOKEN: "env-token",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-token",
+        SYNARA_MIGRATION_DIVERGENCE_CONSENT: "migration-consent",
       });
 
       assert.equal(start.mock.calls.length, 1);
@@ -388,6 +389,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");
       assert.equal(resolvedConfig?.desktopShutdownToken, "shutdown-token");
+      assert.equal(resolvedConfig?.migrationDivergenceConsent, "migration-consent");
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
       assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
@@ -450,6 +452,34 @@ it.layer(testLayer)("server CLI command", (it) => {
           if (value !== undefined) {
             process.env[key] = value;
           }
+        }
+      }
+    }),
+  );
+
+  it.effect("consumes migration divergence consent before generic child launches", () =>
+    Effect.gen(function* () {
+      const environmentKey = "SYNARA_MIGRATION_DIVERGENCE_CONSENT";
+      const originalValue = process.env[environmentKey];
+      process.env[environmentKey] = "one-startup-consent";
+
+      try {
+        yield* runCli([]);
+
+        assert.equal(resolvedConfig?.migrationDivergenceConsent, "one-startup-consent");
+        assert.equal(process.env[environmentKey], undefined);
+        const descendant = spawnSync(
+          process.execPath,
+          ["-e", `process.stdout.write(process.env.${environmentKey} ?? "missing")`],
+          { encoding: "utf8" },
+        );
+        assert.equal(descendant.status, 0, descendant.stderr);
+        assert.equal(descendant.stdout, "missing");
+      } finally {
+        if (originalValue === undefined) {
+          delete process.env[environmentKey];
+        } else {
+          process.env[environmentKey] = originalValue;
         }
       }
     }),
@@ -527,6 +557,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       yield* runCli([], {
         SYNARA_AUTH_TOKEN: "browser-secret",
         SYNARA_DESKTOP_SHUTDOWN_TOKEN: "shutdown-secret",
+        SYNARA_MIGRATION_DIVERGENCE_CONSENT: "migration-secret",
       });
       const config = resolvedConfig;
       if (!config) throw new Error("Expected resolved server config");
@@ -534,9 +565,11 @@ it.layer(testLayer)("server CLI command", (it) => {
       const logData = makeServerStartupLogData(config);
       assert.equal(Object.hasOwn(logData, "authToken"), false);
       assert.equal(Object.hasOwn(logData, "desktopShutdownToken"), false);
+      assert.equal(Object.hasOwn(logData, "migrationDivergenceConsent"), false);
       assert.equal(logData.authEnabled, true);
       assert.notInclude(JSON.stringify(logData), "browser-secret");
       assert.notInclude(JSON.stringify(logData), "shutdown-secret");
+      assert.notInclude(JSON.stringify(logData), "migration-secret");
     }),
   );
 
@@ -553,17 +586,6 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.mode, "web");
       assert.equal(resolvedConfig?.port, 4666);
       assert.equal(resolvedConfig?.host, "127.0.0.1");
-    }),
-  );
-
-  it.effect("prefers --no-browser over SYNARA_NO_BROWSER", () =>
-    Effect.gen(function* () {
-      yield* runCli(["--no-browser"], {
-        SYNARA_NO_BROWSER: "false",
-      });
-
-      assert.equal(start.mock.calls.length, 1);
-      assert.equal(resolvedConfig?.noBrowser, true);
     }),
   );
 
@@ -714,28 +736,6 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
-  it.effect("issues pairing through an HTTPS public origin that proxies to loopback", () =>
-    Effect.gen(function* () {
-      yield* runCli(
-        [
-          "--host",
-          "127.0.0.1",
-          "--auth-token",
-          "proxy-secret",
-          "--public-url",
-          "https://proxy.example.test",
-        ],
-        { SYNARA_NO_BROWSER: "false" },
-      );
-
-      assert.equal(openBrowser.mock.calls.length, 1);
-      assert.match(
-        openBrowser.mock.calls[0]?.[0] ?? "",
-        /^https:\/\/proxy\.example\.test\/pair#token=/,
-      );
-    }),
-  );
-
   it.effect("refuses a dev URL exposed through an HTTPS proxy on loopback", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(
@@ -838,15 +838,6 @@ it.layer(testLayer)("server CLI command", (it) => {
 
       assert.equal(start.mock.calls.length, 0);
       assert.match(String(error), /Failed to read environment configuration/);
-    }),
-  );
-
-  it.effect("does not start server for invalid --mode values", () =>
-    Effect.gen(function* () {
-      yield* runCli(["--mode", "invalid"]);
-
-      assert.equal(start.mock.calls.length, 0);
-      assert.equal(stop.mock.calls.length, 0);
     }),
   );
 

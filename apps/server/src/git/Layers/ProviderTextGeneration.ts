@@ -1,51 +1,271 @@
-import { Effect, Layer } from "effect";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type DroidModelSelection,
+  type ModelSelection,
+  type ProviderKind,
+  type ProviderStartOptions,
+} from "@synara/contracts";
+import {
+  mergeProviderStartOptions,
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
+import { Effect, Layer, Option } from "effect";
 
 import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
-import {
-  CodexTextGeneration,
-  CursorTextGeneration,
-  KiloTextGeneration,
-  OpenCodeTextGeneration,
-  type TextGenerationShape,
-  TextGeneration,
-} from "../Services/TextGeneration.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { TextGenerationError } from "../Errors.ts";
+import * as TextGen from "../Services/TextGeneration.ts";
+import * as Selection from "../textGenerationSelection.ts";
+import { GitCore } from "../Services/GitCore.ts";
+import { GitHubCli } from "../Services/GitHubCli.ts";
+
+const parseDroidModelSlug = (model: string | undefined): { readonly model: string } | null => {
+  const match = model && /^droid[:/](.+)$/.exec(model);
+  return match && match[1] ? { model: match[1] } : null;
+};
+
+interface RoutableTextGenerationInput {
+  readonly model?: string;
+  readonly modelSelection?: ModelSelection;
+  readonly providerOptions?: ProviderStartOptions;
+  readonly cwd: string;
+}
 
 const makeProviderTextGeneration = Effect.gen(function* () {
-  const codexTextGeneration = yield* CodexTextGeneration;
-  const cursorTextGeneration = yield* CursorTextGeneration;
-  const kiloTextGeneration = yield* KiloTextGeneration;
-  const openCodeTextGeneration = yield* OpenCodeTextGeneration;
+  const claudeTextGeneration = yield* TextGen.ClaudeTextGeneration;
+  const codexTextGeneration = yield* TextGen.CodexTextGeneration;
+  const cursorTextGeneration = yield* TextGen.CursorTextGeneration;
+  const droidTextGeneration = yield* TextGen.DroidTextGeneration;
+  const openCodeTextGeneration = yield* TextGen.OpenCodeTextGeneration;
+  const serverSettings = yield* ServerSettingsService;
+  const gitCore = yield* GitCore;
+  const gitHubCli = yield* GitHubCli;
 
-  const resolveImplementation = (input: {
-    readonly model?: string;
-    readonly modelSelection?: { provider: string };
-  }): TextGenerationShape => {
-    if (input.modelSelection?.provider === "cursor") {
-      return cursorTextGeneration;
+  // Optional style references must not block generation in empty/offline repositories.
+  const readRepositoryWritingExamples = (cwd: string) =>
+    Effect.all(
+      {
+        recentCommitSubjects: gitCore.listRecentCommits({ cwd, limit: 10 }).pipe(
+          Effect.map(({ commits }) => commits.map((commit) => commit.subject)),
+          Effect.catch(() => Effect.succeed([] as string[])),
+          Effect.timeoutOption("3 seconds"),
+          Effect.map(Option.getOrElse(() => [] as string[])),
+        ),
+        recentPrTitles: gitHubCli
+          .withRead(
+            gitHubCli.execute({
+              cwd,
+              args: ["pr", "list", "--state", "all", "--limit", "10", "--json", "title"],
+              timeoutMs: 2500,
+              maxBufferBytes: 16_000,
+            }),
+          )
+          .pipe(
+            Effect.map((result) => {
+              try {
+                const rows: unknown = JSON.parse(result.stdout);
+                return Array.isArray(rows)
+                  ? rows.flatMap((row: unknown) =>
+                      typeof row === "object" &&
+                      row !== null &&
+                      "title" in row &&
+                      typeof row.title === "string"
+                        ? [row.title]
+                        : [],
+                    )
+                  : [];
+              } catch {
+                return [];
+              }
+            }),
+            Effect.catch(() => Effect.succeed([] as string[])),
+            Effect.timeoutOption("3 seconds"),
+            Effect.map(Option.getOrElse(() => [] as string[])),
+          ),
+      },
+      { concurrency: "unbounded" },
+    );
+
+  const implementations = {
+    claudeAgent: claudeTextGeneration,
+    codex: codexTextGeneration,
+    cursor: cursorTextGeneration,
+    droid: droidTextGeneration,
+    opencode: openCodeTextGeneration,
+  } satisfies Record<Selection.GitTextGenerationProvider, TextGen.TextGenerationShape>;
+
+  const implementationForDriver = (
+    operation: TextGen.TextGenerationOperation,
+    driver: ProviderKind,
+  ): Effect.Effect<TextGen.TextGenerationShape, TextGenerationError> => {
+    if (Selection.hasDedicatedTextGenerationProvider(driver)) {
+      return Effect.succeed(implementations[driver]);
     }
-    if (input.modelSelection?.provider === "kilo") {
-      return kiloTextGeneration;
-    }
-    if (input.modelSelection?.provider === "opencode") {
-      return openCodeTextGeneration;
-    }
-    return parseOpenCodeModelSlug(input.model) !== null
-      ? openCodeTextGeneration
-      : codexTextGeneration;
+    return Effect.fail(
+      new TextGenerationError({
+        operation,
+        detail: `${PROVIDER_DISPLAY_NAMES[driver]} does not support Git text generation.`,
+      }),
+    );
   };
 
+  const resolveRequestedProvider = (input: RoutableTextGenerationInput): ProviderKind =>
+    input.modelSelection?.provider ??
+    (parseDroidModelSlug(input.model) !== null
+      ? "droid"
+      : parseOpenCodeModelSlug(input.model) !== null
+        ? "opencode"
+        : "codex");
+
+  const resolveInvocation = <TInput extends RoutableTextGenerationInput>(
+    operation: TextGen.TextGenerationOperation,
+    input: TInput,
+  ): Effect.Effect<
+    { readonly implementation: TextGen.TextGenerationShape; readonly input: TInput },
+    TextGenerationError
+  > =>
+    Effect.gen(function* () {
+      const requestedProvider = resolveRequestedProvider(input);
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: "Failed to load provider instance settings.",
+              cause,
+            }),
+        ),
+      );
+
+      const fallbackModelSelection = Selection.hasDedicatedTextGenerationProvider(requestedProvider)
+        ? undefined
+        : settings.textGenerationModelSelection;
+      const selectedProvider = fallbackModelSelection?.provider ?? requestedProvider;
+      if (!Selection.hasDedicatedTextGenerationProvider(selectedProvider)) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: `${PROVIDER_DISPLAY_NAMES[requestedProvider]} does not support Git text generation, and no supported fallback is enabled.`,
+        });
+      }
+
+      const modelSelectionOverride =
+        selectedProvider === "droid" && !input.modelSelection && !fallbackModelSelection
+          ? ({
+              provider: "droid",
+              instanceId: "droid",
+              model: parseDroidModelSlug(input.model)?.model ?? "droid",
+            } satisfies DroidModelSelection)
+          : undefined;
+      const selectedModelSelection =
+        fallbackModelSelection ?? input.modelSelection ?? modelSelectionOverride;
+      const selectedInstanceId = selectedModelSelection
+        ? resolveModelSelectionInstanceId(selectedModelSelection)
+        : selectedProvider;
+      const instance = resolveProviderInstance(settings, {
+        instanceId: selectedInstanceId,
+      });
+      if (!instance) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: `No provider instance registered for id '${selectedInstanceId}'.`,
+        });
+      }
+      if (!instance.enabled) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: `Provider instance '${instance.instanceId}' is disabled.`,
+        });
+      }
+
+      const implementation = yield* implementationForDriver(operation, instance.driver);
+      const routedSelection = selectedModelSelection
+        ? ({
+            ...selectedModelSelection,
+            provider: instance.driver,
+            instanceId: instance.instanceId,
+          } as ModelSelection)
+        : undefined;
+      const providerOptions = mergeProviderStartOptions(
+        input.providerOptions,
+        providerStartOptionsFromInstance(instance),
+      );
+      const writingPreferences =
+        operation === "generateCommitMessage" || operation === "generatePrContent"
+          ? {
+              style: settings.sourceControlWritingStyle,
+              customInstructions: settings.sourceControlCustomInstructions,
+              ...(settings.sourceControlWritingStyle === "repository"
+                ? yield* readRepositoryWritingExamples(input.cwd)
+                : { recentCommitSubjects: [], recentPrTitles: [] }),
+            }
+          : undefined;
+      return {
+        implementation,
+        input: {
+          ...input,
+          ...(writingPreferences ? { writingPreferences } : {}),
+          ...(selectedModelSelection ? { model: selectedModelSelection.model } : {}),
+          ...(routedSelection ? { modelSelection: routedSelection } : {}),
+          ...(providerOptions ? { providerOptions } : {}),
+        },
+      } as { readonly implementation: TextGen.TextGenerationShape; readonly input: TInput };
+    });
+
+  const dispatch = <TInput extends RoutableTextGenerationInput, TResult>(
+    operation: TextGen.TextGenerationOperation,
+    input: TInput,
+    run: (
+      service: TextGen.TextGenerationShape,
+      routedInput: TInput,
+    ) => Effect.Effect<TResult, TextGenerationError>,
+  ) =>
+    resolveInvocation(operation, input).pipe(
+      Effect.flatMap(({ implementation, input: routedInput }) => run(implementation, routedInput)),
+    );
+
   return {
-    generateCommitMessage: (input) => resolveImplementation(input).generateCommitMessage(input),
-    generatePrContent: (input) => resolveImplementation(input).generatePrContent(input),
-    generateDiffSummary: (input) => resolveImplementation(input).generateDiffSummary(input),
-    generateBranchName: (input) => resolveImplementation(input).generateBranchName(input),
-    generateThreadTitle: (input) => resolveImplementation(input).generateThreadTitle(input),
-    generateThreadRecap: (input) => resolveImplementation(input).generateThreadRecap(input),
+    generateCommitMessage: (input) =>
+      dispatch("generateCommitMessage", input, (service, routedInput) =>
+        service.generateCommitMessage(routedInput),
+      ),
+    generatePrContent: (input) =>
+      dispatch("generatePrContent", input, (service, routedInput) =>
+        service.generatePrContent(routedInput),
+      ),
+    generateDiffSummary: (input) =>
+      dispatch("generateDiffSummary", input, (service, routedInput) =>
+        service.generateDiffSummary(routedInput),
+      ),
+    generateBranchName: (input) =>
+      dispatch("generateBranchName", input, (service, routedInput) =>
+        service.generateBranchName(routedInput),
+      ),
+    generateThreadTitle: (input) =>
+      dispatch("generateThreadTitle", input, (service, routedInput) =>
+        service.generateThreadTitle(routedInput),
+      ),
+    generateThreadRecap: (input) =>
+      dispatch("generateThreadRecap", input, (service, routedInput) =>
+        service.generateThreadRecap(routedInput),
+      ),
+    generateProjectDigest: (input) =>
+      dispatch("generateProjectDigest", input, (service, routedInput) =>
+        service.generateProjectDigest(routedInput),
+      ),
     generateAutomationIntent: (input) =>
-      resolveImplementation(input).generateAutomationIntent(input),
+      dispatch("generateAutomationIntent", input, (service, routedInput) =>
+        service.generateAutomationIntent(routedInput),
+      ),
     evaluateAutomationCompletion: (input) =>
-      resolveImplementation(input).evaluateAutomationCompletion(input),
-  } satisfies TextGenerationShape;
+      dispatch("evaluateAutomationCompletion", input, (service, routedInput) =>
+        service.evaluateAutomationCompletion(routedInput),
+      ),
+  } satisfies TextGen.TextGenerationShape;
 });
 
-export const ProviderTextGenerationLive = Layer.effect(TextGeneration, makeProviderTextGeneration);
+export const ProviderTextGenerationLive = Layer.effect(
+  TextGen.TextGeneration,
+  makeProviderTextGeneration,
+);

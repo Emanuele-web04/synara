@@ -14,6 +14,7 @@ const PROJECT_READ_FILE_PATH_MAX_LENGTH = 2048;
 const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
 const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
+export const PROJECT_RESOLVE_WORKSPACE_FILE_REFERENCES_MAX_PATHS = 128;
 const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
 export const ProjectFileEncoding = Schema.Literals(["utf8", "utf8-bom"]);
@@ -22,7 +23,7 @@ export type ProjectFileEncoding = typeof ProjectFileEncoding.Type;
 export const ProjectFileLineEnding = Schema.Literals(["lf", "crlf", "cr", "mixed"]);
 export type ProjectFileLineEnding = typeof ProjectFileLineEnding.Type;
 
-export const ProjectKind = Schema.Literals(["project", "chat", "studio"]);
+export const ProjectKind = Schema.Literals(["project", "chat", "studio", "group"]);
 export type ProjectKind = typeof ProjectKind.Type;
 
 export const ProjectSearchEntriesInput = Schema.Struct({
@@ -206,8 +207,47 @@ export const ProjectReadFileResult = Schema.Struct({
   version: Schema.NullOr(TrimmedNonEmptyString),
   encoding: Schema.NullOr(ProjectFileEncoding),
   lineEnding: Schema.NullOr(ProjectFileLineEnding),
+  /** True when the requested path itself is a symbolic link; reads follow it, writes must not edit through it. */
+  symlink: Schema.optional(Schema.Boolean),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
+
+export const ProjectWatchFileInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectWatchFileInput = typeof ProjectWatchFileInput.Type;
+
+export const ProjectFileChangeEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("changed"),
+    relativePath: TrimmedNonEmptyString,
+    mtimeMs: Schema.Number,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("deleted"),
+    relativePath: TrimmedNonEmptyString,
+  }),
+]);
+export type ProjectFileChangeEvent = typeof ProjectFileChangeEvent.Type;
+
+export const ProjectResolveWorkspaceFileReferencesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePaths: Schema.Array(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+  ).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(PROJECT_RESOLVE_WORKSPACE_FILE_REFERENCES_MAX_PATHS),
+  ),
+});
+export type ProjectResolveWorkspaceFileReferencesInput =
+  typeof ProjectResolveWorkspaceFileReferencesInput.Type;
+
+export const ProjectResolveWorkspaceFileReferencesResult = Schema.Struct({
+  relativePaths: Schema.Array(Schema.NullOr(TrimmedNonEmptyString)),
+});
+export type ProjectResolveWorkspaceFileReferencesResult =
+  typeof ProjectResolveWorkspaceFileReferencesResult.Type;
 
 // Locates a chat file reference that failed to read inside the workspace root:
 // the server retries the workspace-relative path against ancestor directories

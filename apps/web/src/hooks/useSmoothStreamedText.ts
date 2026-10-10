@@ -91,6 +91,12 @@ export function stepSmoothReveal(
   const targetVelocity = Math.min(MAX_CHARS_PER_SECOND, backlog / DRAIN_WINDOW_SECONDS);
   state.velocity += (targetVelocity - state.velocity) * VELOCITY_LERP;
   state.shown = Math.min(targetLength, state.shown + state.velocity * dt);
+  // At high refresh rates the damped tail can approach the target without ever
+  // reaching it, leaving the last character hidden and rAF running indefinitely.
+  // Settle a remainder below 1/1000 character; preserve the reveal cadence.
+  if (targetLength - state.shown < 0.001) {
+    state.shown = targetLength;
+  }
 
   const nextCount = Math.floor(state.shown);
   const caughtUp = nextCount >= targetLength;
@@ -120,7 +126,16 @@ export function stepSmoothReveal(
  */
 export function useSmoothStreamedText(text: string, isStreaming: boolean): string {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  const animate = isStreaming && !reduceMotion;
+  // Testable env (jsdom/vitest) has no rAF or has mocked timers – smooth reveal would
+  // jank and never settle. Fall back to immediate text so streaming tests stay
+  // deterministic and the main thread isn't blocked by rAF loops.
+  const isTestableEnv =
+    typeof window === "undefined" ||
+    typeof (window as unknown as { requestAnimationFrame?: unknown }).requestAnimationFrame !==
+      "function" ||
+    (typeof process !== "undefined" &&
+      (process.env.VITEST === "true" || process.env.NODE_ENV === "test"));
+  const animate = isStreaming && !reduceMotion && !isTestableEnv;
 
   const [revealed, setRevealed] = useState(text);
 

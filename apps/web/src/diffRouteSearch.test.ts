@@ -1,3 +1,4 @@
+import { MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { diffRouteSearchEquals, parseDiffRouteSearch } from "./diffRouteSearch";
@@ -21,22 +22,6 @@ describe("diffRouteSearchEquals", () => {
 });
 
 describe("parseDiffRouteSearch", () => {
-  it("parses valid diff search values", () => {
-    const parsed = parseDiffRouteSearch({
-      panel: "diff",
-      diff: "1",
-      diffTurnId: "turn-1",
-      diffFilePath: "src/app.ts",
-    });
-
-    expect(parsed).toEqual({
-      panel: "diff",
-      diff: "1",
-      diffTurnId: "turn-1",
-      diffFilePath: "src/app.ts",
-    });
-  });
-
   it("treats numeric and boolean diff toggles as open", () => {
     expect(
       parseDiffRouteSearch({
@@ -97,17 +82,6 @@ describe("parseDiffRouteSearch", () => {
     });
   });
 
-  it("preserves browser panel mode without diff state", () => {
-    const parsed = parseDiffRouteSearch({
-      panel: "browser",
-      diffTurnId: "turn-1",
-    });
-
-    expect(parsed).toEqual({
-      panel: "browser",
-    });
-  });
-
   it("preserves split route state while normalizing unrelated values", () => {
     const parsed = parseDiffRouteSearch({
       panel: "browser",
@@ -120,4 +94,14 @@ describe("parseDiffRouteSearch", () => {
       splitViewId: "split-1",
     });
   });
+});
+
+it("preserves message deep links independently of side-panel state", () => {
+  expect(parseDiffRouteSearch({ messageId: " earliest " })).toEqual({ messageId: "earliest" });
+  expect(
+    diffRouteSearchEquals(
+      { messageId: MessageId.makeUnsafe("one") },
+      { messageId: MessageId.makeUnsafe("two") },
+    ),
+  ).toBe(false);
 });

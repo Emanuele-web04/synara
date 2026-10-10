@@ -28,6 +28,12 @@ export interface ProjectMenuPickerOption {
   readonly spaceName?: string;
 }
 
+/** A first row that clears the choice, e.g. "No project" on a to-do. */
+export interface ProjectMenuPickerNoneOption {
+  readonly label: string;
+  readonly onSelect: () => void;
+}
+
 interface ResolvedProjectOption extends ProjectMenuPickerOption {
   readonly resolvedSpaceId: SpaceId | null;
   readonly resolvedSpaceName: string;
@@ -43,6 +49,10 @@ export function ProjectMenuPicker(props: {
   children?: ReactNode;
   align?: "start" | "center" | "end";
   popupClassName?: string;
+  /** Adds a first row that clears the choice. */
+  noneOption?: ProjectMenuPickerNoneOption;
+  /** Closes the menu once a row is picked instead of leaving it open. */
+  closeOnSelect?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -62,6 +72,8 @@ export function ProjectMenuPicker(props: {
             projectOptions={props.projectOptions}
             selectedProjectId={props.selectedProjectId}
             onProjectIdChange={props.onProjectIdChange}
+            noneOption={props.noneOption}
+            closeOnSelect={props.closeOnSelect ?? false}
           />
         ) : null}
       </ComposerPickerMenuPopup>
@@ -73,6 +85,8 @@ function ProjectMenuPickerList(props: {
   projectOptions: ReadonlyArray<ProjectMenuPickerOption>;
   selectedProjectId: ProjectId | null;
   onProjectIdChange: (projectId: ProjectId) => void;
+  noneOption?: ProjectMenuPickerNoneOption | undefined;
+  closeOnSelect: boolean;
 }) {
   const [query, setQuery] = useState("");
   const projects = useStore((state) => state.projects);
@@ -128,25 +142,38 @@ function ProjectMenuPickerList(props: {
       bleedParentPadding
       listMaxHeightClassName="max-h-64"
     >
-      {groupedOptions.length > 0 ? (
+      {groupedOptions.length > 0 || props.noneOption ? (
         <MenuRadioGroup
           value={props.selectedProjectId ?? ""}
           onValueChange={(value) => {
-            if (value === props.selectedProjectId) return;
+            if (value === (props.selectedProjectId ?? "")) return;
+            if (value === "") {
+              props.noneOption?.onSelect();
+              return;
+            }
             const option = props.projectOptions.find((candidate) => candidate.id === value);
             if (option) props.onProjectIdChange(option.id);
           }}
         >
+          {props.noneOption ? (
+            <MenuRadioItem value="" closeOnClick={props.closeOnSelect}>
+              <span className="min-w-0 truncate">{props.noneOption.label}</span>
+            </MenuRadioItem>
+          ) : null}
           {groupedOptions.map((group, index) => (
             <Fragment key={group.key}>
-              {index > 0 ? <MenuSeparator /> : null}
+              {index > 0 || props.noneOption ? <MenuSeparator /> : null}
               <MenuGroup>
                 <MenuGroupLabel className="flex items-center gap-1.5">
                   <SpaceIcon icon={group.icon} className="size-3 shrink-0" />
                   <span className="min-w-0 truncate">{group.label}</span>
                 </MenuGroupLabel>
                 {group.items.map((option) => (
-                  <MenuRadioItem key={option.id} value={option.id}>
+                  <MenuRadioItem
+                    key={option.id}
+                    value={option.id}
+                    closeOnClick={props.closeOnSelect}
+                  >
                     <span className="min-w-0 truncate">{option.name}</span>
                   </MenuRadioItem>
                 ))}
@@ -154,11 +181,13 @@ function ProjectMenuPickerList(props: {
             </Fragment>
           ))}
         </MenuRadioGroup>
-      ) : (
-        <p className="px-3 py-6 text-center text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/60">
+      ) : null}
+      {/* Shown under the "none" row too, so an empty search still says why. */}
+      {groupedOptions.length === 0 ? (
+        <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground/60">
           {props.projectOptions.length === 0 ? "No projects yet" : "No matching projects"}
         </p>
-      )}
+      ) : null}
     </PickerPanelShell>
   );
 }

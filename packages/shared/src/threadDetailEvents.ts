@@ -2,6 +2,14 @@ import type { OrchestrationEvent, ThreadId } from "@synara/contracts";
 
 export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.message-sent",
+  // Names the request a newly started turn answers, so the client can group a
+  // queued request's turn under it (provider options are sanitized on send).
+  "thread.turn-start-requested",
+  // Cache decisions and stopping a session clear or restore that pending request.
+  "thread.claude-cache-set",
+  "thread.claude-cache-response-requested",
+  "thread.session-stop-requested",
+  "thread.async-user-input-answered",
   "thread.proposed-plan-upserted",
   "thread.activity-appended",
   "thread.turn-diff-completed",
@@ -13,12 +21,10 @@ export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.pinned-message-removed",
   "thread.pinned-message-done-set",
   "thread.pinned-message-label-set",
-  "thread.marker-added",
-  "thread.marker-removed",
-  "thread.marker-done-set",
-  "thread.marker-label-set",
   "thread.archived",
   "thread.unarchived",
+  "thread.sidechat-activity-recorded",
+  "thread.sidechat-expired",
 ] as const satisfies ReadonlyArray<OrchestrationEvent["type"]>;
 
 const THREAD_DETAIL_EVENT_TYPE_SET = new Set<OrchestrationEvent["type"]>(THREAD_DETAIL_EVENT_TYPES);

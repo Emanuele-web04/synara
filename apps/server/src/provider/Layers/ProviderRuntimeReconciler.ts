@@ -13,7 +13,7 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Cause, Duration, Effect, Layer, Option, Schedule } from "effect";
+import { Cause, Duration, Effect, Layer, Schedule } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../../orchestration/Services/OrchestrationReactor.ts";
@@ -48,9 +48,14 @@ export interface ProviderRuntimeReconcilerLiveOptions {
 }
 
 function reconciliationKey(plan: ProviderRuntimeReconciliationPlan): string {
+  // A stale turn can move through multiple settlement plans while the session
+  // and turn projections converge. Those are retries/refinements of one
+  // recovery, not separate user-visible recoveries. Runtime realignment stays
+  // distinct because each live runtime turn is independent evidence.
+  const operation = plan.action === "align-running-turn" ? plan.action : "settle-running-turn";
   return `provider-runtime-reconcile:${JSON.stringify([
     plan.provider,
-    plan.action,
+    operation,
     plan.threadId,
     plan.projectedTurnId,
     plan.runtimeTurnId,
@@ -89,6 +94,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       current !== null &&
       current.status === next.status &&
       current.providerName === next.providerName &&
+      current.providerInstanceId === next.providerInstanceId &&
       current.runtimeMode === next.runtimeMode &&
       current.activeTurnId === next.activeTurnId &&
       current.lastError === next.lastError;
@@ -115,6 +121,13 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
           plan.action === "settle-terminal-projection"
             ? plan.terminalSession.providerName
             : plan.provider,
+        providerInstanceId:
+          plan.action === "settle-terminal-projection"
+            ? plan.terminalSession.providerInstanceId
+            : (input.binding?.providerInstanceId ??
+              thread.session?.providerInstanceId ??
+              thread.modelSelection.instanceId ??
+              thread.modelSelection.provider),
         runtimeMode:
           plan.action === "settle-terminal-projection"
             ? plan.terminalSession.runtimeMode
@@ -225,11 +238,9 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         ],
         { concurrency: 4 },
       );
-      const threads = (yield* Effect.forEach(
-        candidateThreadIds,
-        (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
-        { concurrency: 8 },
-      )).flatMap(Option.toArray);
+      // One batched read instead of up to `candidateLimit` point reads
+      // contending on the single SQLite handle every reconciliation tick.
+      const threads = yield* projectionSnapshotQuery.getThreadShellsByIds(candidateThreadIds);
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));
       const bindingByThreadId = new Map(bindings.map((binding) => [binding.threadId, binding]));
       const plans = planProviderRuntimeReconciliation({
