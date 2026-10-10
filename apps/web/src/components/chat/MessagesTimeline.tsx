@@ -2185,11 +2185,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
-          const collapsedSubagentCount = (collapsedTurnItems ?? []).reduce(
-            (count, item) =>
-              count + (item.kind === "work" ? (item.entry.subagentRun?.members.length ?? 0) : 0),
-            0,
-          );
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
             : false;
