@@ -133,6 +133,7 @@ export function useThreadHistory(threadId: string) {
     nextCursor: history?.olderCursor ?? history?.olderActivityCursor ?? null,
     totalMessageCount: history?.totalMessageCount ?? 0,
     available: history !== undefined,
+    detailAuthoritative: sync !== "cached" && (history === undefined || sync === "synced"),
     loading:
       loading.loading ||
       ((history?.olderCursor != null || history?.olderActivityCursor != null) && sync !== "synced"),

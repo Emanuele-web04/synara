@@ -432,6 +432,8 @@ interface MessagesTimelineProps {
   isWorking: boolean;
   workingLabel?: WorkingLabel | undefined;
   activeTurnInProgress: boolean;
+  /** Restored detail may display a turn, but cannot establish a witnessed live completion. */
+  allowLiveTurnTransitions?: boolean;
   /** Keeps the latest turn expanded while background subagents are still running. */
   subagentsRunning?: boolean;
   /** User setting: false keeps every finished turn expanded instead of folding it. */
@@ -571,6 +573,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   workingLabel: workingLabelProp,
   activeTurnInProgress,
+  allowLiveTurnTransitions,
   subagentsRunning,
   collapseFinishedTurns,
   activeTurnStartedAt,
@@ -984,7 +987,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return ids;
   }, [rows, subagentThread]);
-  const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
+  const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(
+    rows,
+    allowLiveTurnTransitions !== false,
+  );
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
     () => ({
@@ -3264,6 +3270,7 @@ function reconcileWorktreeSetupPresentation(params: {
 // animation, so settled turns do not disappear in one height recalculation.
 function useSettledTurnCollapseTransitions(
   rows: readonly MessagesTimelineRow[],
+  allowLiveTurnTransitions: boolean,
 ): Readonly<Record<string, SettledTurnCollapseTransition>> {
   const [transitions, setTransitions] = useState<Record<string, SettledTurnCollapseTransition>>({});
   const previousAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
@@ -3326,6 +3333,7 @@ function useSettledTurnCollapseTransitions(
   useLayoutEffect(() => {
     applySettledTurnCollapseTransitions({
       rows,
+      allowLiveTurnTransitions,
       previousAssistantMessageIdsRef,
       previousCollapsedSignaturesRef,
       watchedLiveMessageIdsRef,
@@ -3333,7 +3341,7 @@ function useSettledTurnCollapseTransitions(
       scheduleTransitionClose,
       setTransitions,
     });
-  }, [clearTransitionTimer, rows, scheduleTransitionClose]);
+  }, [allowLiveTurnTransitions, clearTransitionTimer, rows, scheduleTransitionClose]);
 
   useEffect(
     () => () => {
@@ -3353,6 +3361,7 @@ function useSettledTurnCollapseTransitions(
 // before it schedules the closing rAF — is preserved exactly.
 function applySettledTurnCollapseTransitions(params: {
   rows: readonly MessagesTimelineRow[];
+  allowLiveTurnTransitions: boolean;
   previousAssistantMessageIdsRef: RefObject<ReadonlySet<string>>;
   previousCollapsedSignaturesRef: RefObject<ReadonlyMap<string, string>>;
   watchedLiveMessageIdsRef: RefObject<Set<string>>;
@@ -3362,6 +3371,7 @@ function applySettledTurnCollapseTransitions(params: {
 }): void {
   const {
     rows,
+    allowLiveTurnTransitions,
     previousAssistantMessageIdsRef,
     previousCollapsedSignaturesRef,
     watchedLiveMessageIdsRef,
@@ -3375,6 +3385,7 @@ function applySettledTurnCollapseTransitions(params: {
     { signature: string; items: readonly CollapsedTurnItem[] }
   >();
   const watchedLiveMessageIds = watchedLiveMessageIdsRef.current;
+  if (!allowLiveTurnTransitions) watchedLiveMessageIds.clear();
 
   for (const row of rows) {
     if (row.kind !== "message" || row.message.role !== "assistant") {
@@ -3385,7 +3396,7 @@ function applySettledTurnCollapseTransitions(params: {
     // Only the assistant row belonging to the live turn has an expanded layout
     // on screen worth animating away. Thread-wide working state also covers
     // reconnects, approvals, and newer turns, so it must not qualify history.
-    if (row.assistantTurnInProgress || row.message.streaming) {
+    if (allowLiveTurnTransitions && (row.assistantTurnInProgress || row.message.streaming)) {
       watchedLiveMessageIds.add(messageId);
     }
     if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
@@ -3411,6 +3422,7 @@ function applySettledTurnCollapseTransitions(params: {
 
   for (const [messageId, collapsed] of currentCollapsed) {
     if (
+      allowLiveTurnTransitions &&
       watchedLiveMessageIds.has(messageId) &&
       previousAssistantMessageIds.has(messageId) &&
       !previousCollapsedSignatures.has(messageId)
@@ -3432,7 +3444,7 @@ function applySettledTurnCollapseTransitions(params: {
     };
 
     for (const messageId of Object.keys(current)) {
-      if (!currentCollapsed.has(messageId)) {
+      if (!allowLiveTurnTransitions || !currentCollapsed.has(messageId)) {
         clearTransitionTimer(messageId);
         delete ensureNext()[messageId];
       }
