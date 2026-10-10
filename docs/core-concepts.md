@@ -66,6 +66,11 @@ composer; it is not sent twice.
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
+  The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
+  summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
+  where finished subagents stay one click away after the strip hides. In split view, the list
+  stays beside the chat in its pane when opening a child or returning to its parent. Failed
+  Stop or background requests report an error so the run is not mistaken for stopped.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
@@ -159,6 +164,14 @@ Thread runtime errors appear above the transcript. Use **Show details** to read 
 or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
 quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
 not offer a generic Retry because an error message alone cannot prove that resending is safe.
+
+Messages queued above the composer while a turn runs are sent one by one after it completes.
+If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it
+stays visible with **Queue paused** and the reason. **Resume** sends the queue in order;
+**Edit** moves the next queued message back into the composer. Sending a new message
+yourself goes first, and the queue resumes once that turn completes. The pause is per
+thread and survives a reload. A message already shown in the conversation was accepted by
+the server rather than queued here, and the server still sends it after a Stop.
 
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
