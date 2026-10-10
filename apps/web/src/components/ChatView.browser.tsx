@@ -2649,6 +2649,7 @@ describe("ChatView transcript geometry (full app)", () => {
                 index === 0 || hint.closest("[data-thread-item]")!.textContent?.includes("Atlas"),
             )) {
               const row = hoverHint.closest<HTMLElement>("[data-thread-item]")!;
+              let interaction = "hover";
               await userEvent.hover(row);
               const actions = activityViewEnabled
                 ? row.querySelector<HTMLElement>(
@@ -2656,8 +2657,43 @@ describe("ChatView transcript geometry (full app)", () => {
                   )!
                 : row.querySelector<HTMLElement>('[data-testid^="thread-hover-actions-"]')!;
               const assertHoverLayout = () => {
-                expect(Number(getComputedStyle(hoverHint).opacity)).toBe(0);
-                expect(Number(getComputedStyle(actions).opacity)).toBe(1);
+                const hintOpacity = Number(getComputedStyle(hoverHint).opacity);
+                const actionsOpacity = Number(getComputedStyle(actions).opacity);
+                const rect = row.getBoundingClientRect();
+                const group = hoverHint.closest<HTMLElement>(
+                  '[class~="group/thread-row"], [class~="group/activity-row"]',
+                );
+                const target = row.matches('[role="button"]')
+                  ? row
+                  : row.querySelector<HTMLElement>('button, [role="button"]');
+                const debug =
+                  hintOpacity === 0 && actionsOpacity === 1
+                    ? undefined
+                    : JSON.stringify({
+                        interaction,
+                        fontSize,
+                        width,
+                        hint: hoverHint.textContent,
+                        rowHover: row.matches(":hover"),
+                        rowFocusWithin: row.matches(":focus-within"),
+                        groupHover: group?.matches(":hover"),
+                        groupFocusWithin: group?.matches(":focus-within"),
+                        connected: row.isConnected && hoverHint.isConnected,
+                        target: target?.outerHTML.slice(0, 250),
+                        activeElement: document.activeElement?.outerHTML.slice(0, 250),
+                        activeFocusVisible: document.activeElement?.matches(":focus-visible"),
+                        documentHasFocus: document.hasFocus(),
+                        rowRect: rect.toJSON(),
+                        rowCenterHit: document
+                          .elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+                          ?.outerHTML.slice(0, 250),
+                        hintOpacity,
+                        actionsOpacity,
+                        hintClasses: hoverHint.className,
+                        actionsClasses: actions.className,
+                      });
+                expect(hintOpacity, debug).toBe(0);
+                expect(actionsOpacity, debug).toBe(1);
                 const actionsRect = actions.getBoundingClientRect();
                 for (const label of [...row.querySelectorAll<HTMLElement>("span")].filter(
                   (element) =>
@@ -2680,6 +2716,7 @@ describe("ChatView transcript geometry (full app)", () => {
               const focusTarget = row.matches('[role="button"]')
                 ? row
                 : row.querySelector<HTMLElement>('button, [role="button"]')!;
+              interaction = "focus";
               focusTarget.focus();
               await vi.waitFor(assertHoverLayout);
               focusTarget.blur();
