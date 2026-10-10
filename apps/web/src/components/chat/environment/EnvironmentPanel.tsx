@@ -34,7 +34,6 @@ import { toastManager } from "~/components/ui/toast";
 import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
 import { ChangesIcon, ExternalLinkIcon, GitHubIcon, SettingsIcon, FolderIcon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { revealFolderInShell } from "~/lib/revealFolder";
@@ -331,20 +330,7 @@ export function EnvironmentPanel({
           }
           trailing={<ExternalLinkIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
-            const api = readNativeApi();
-            if (!api) {
-              showFileManagerErrorToast({
-                kind: "folder",
-                error: "The desktop connection is not available yet.",
-              });
-              return;
-            }
-            void api.shell
-              .showInFolder(groupFolderPath)
-              .then(onClose)
-              .catch((error: unknown) => {
-                showFileManagerErrorToast({ kind: "folder", error });
-              });
+            revealFolderInShell({ path: groupFolderPath, onRevealed: onClose });
           }}
         />
       ) : null}
