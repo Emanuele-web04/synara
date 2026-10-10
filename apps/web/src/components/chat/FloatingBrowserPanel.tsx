@@ -189,20 +189,6 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     };
   }, []);
 
-  const applyPanelRect = useCallback((next: FloatingBrowserPanelRect, host: HTMLElement) => {
-    const clamped = clampFloatingBrowserPanelRect(next, hostSize(host));
-    panelRectRef.current = clamped;
-    const panel = panelRef.current;
-    if (panel) {
-      panel.style.left = `${clamped.left}px`;
-      panel.style.top = `${clamped.top}px`;
-      panel.style.width = `${clamped.width}px`;
-      panel.style.height = `${clamped.height}px`;
-    }
-    requestBrowserPanelBoundsSync();
-    return clamped;
-  }, []);
-
   const closeIntentRef = useRef<"close" | "handoff">("handoff");
   const startDragFromClientRef = useRef<
     (x: number, y: number, options: { reopenMenuOnRelease: boolean }) => void
@@ -234,6 +220,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
         panel.style.height = `${clamped.height}px`;
         syncFloatingBrowserGuestSlot(props.threadId, panel);
       }
+      requestBrowserPanelBoundsSync();
       return clamped;
     },
     [props.threadId],
@@ -452,11 +439,11 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
     startDragFromClientRef.current = startDragFromClient;
   });
 
-  const startHandleGesture = (event: ReactPointerEvent<HTMLElement>) => {
+  const startHandleGesture = (event: ReactPointerEvent<HTMLElement>, expandOnClick = false) => {
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    startDragFromClient(event.clientX, event.clientY, { reopenMenuOnRelease: true });
+    startDragFromClient(event.clientX, event.clientY, { reopenMenuOnRelease: !expandOnClick });
   };
 
   useLayoutEffect(() => {
@@ -520,18 +507,6 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
         }}
         onPointerDown={startResize}
       >
-        <div
-          data-floating-browser-content="true"
-          className="absolute inset-0 min-h-0 min-w-0 overflow-hidden rounded-[inherit]"
-        >
-          <Suspense fallback={<FloatingBrowserPanelFallback />}>
-            <LazyBrowserPanel
-              mode="floating"
-              threadId={props.threadId}
-              onClosePanel={props.onClose}
-            />
-          </Suspense>
-        </div>
         <button
           type="button"
           aria-label="Expand browser"

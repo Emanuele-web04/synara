@@ -85,6 +85,11 @@ describe("browser annotation protocol", () => {
     ).toBe(false);
   });
 
+  it("accepts tokenless announce-ready before document-token validation", () => {
+    expect(isGuestAnnotationCommand({ version: 1, kind: "announce-ready" })).toBe(true);
+    expect(isGuestAnnotationCommand({ version: 1, kind: "start" })).toBe(false);
+  });
+
   it("normalizes an empty optional comment to null without exposing form text", () => {
     const parsed = parseAnnotationGuestMessage({
       version: 1,
