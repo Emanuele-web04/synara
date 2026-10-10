@@ -10,6 +10,17 @@ import {
 } from "@synara/shared/subagents";
 import { formatModelDisplayName } from "@synara/shared/model";
 
+const SUBAGENT_ACCENT_PALETTE = [
+  "#b84e44",
+  "#2f7a5d",
+  "#345fa8",
+  "#a86834",
+  "#7352a8",
+  "#2f7480",
+  "#a84d71",
+  "#6a8531",
+] as const;
+
 const GENERIC_SUBAGENT_TITLES = new Set([
   "",
   "agent",
@@ -31,6 +42,7 @@ export interface SubagentPresentation {
   role: string | null;
   title: string | null;
   fullLabel: string;
+  accentColor: string;
 }
 
 type SubagentThreadActivityLike = {
@@ -69,6 +81,27 @@ const siblingThreadIdsByThreads = new WeakMap<
   ReadonlyArray<SubagentThreadLike>,
   Map<string, ReadonlyArray<string>>
 >();
+
+function basename(value: string): string {
+  const slashIndex = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+  return slashIndex >= 0 ? value.slice(slashIndex + 1) : value;
+}
+
+// Seeds the accent color only. Provider ids (tool_use ids, conversation uuids,
+// the `subagent:<parent>:<id>` tail) are never shown as a label.
+function fallbackAccentSeed(value: string | null): string | null {
+  const normalized = normalizeWhitespace(value);
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.startsWith("subagent:")) {
+    const segments = normalized.split(":").filter((segment) => segment.length > 0);
+    return segments.at(-1) ?? normalized;
+  }
+
+  return basename(normalized);
+}
 
 // Mirrors the server's prompt-derived child title: first non-empty line,
 // whitespace-collapsed, clipped to 60 characters.
@@ -286,10 +319,17 @@ export function hashLabelSeed(seed: string): number {
   return hash;
 }
 
+function subagentAccentColor(seed: string | null | undefined): string {
+  const normalized = normalizeWhitespace(seed)?.toLowerCase() ?? "subagent";
+  const index = hashLabelSeed(normalized) % SUBAGENT_ACCENT_PALETTE.length;
+  return SUBAGENT_ACCENT_PALETTE[index] ?? SUBAGENT_ACCENT_PALETTE[0];
+}
+
 export function resolveSubagentPresentation(input: {
   nickname?: string | null | undefined;
   role?: string | null | undefined;
   title?: string | null | undefined;
+  fallbackId?: string | null | undefined;
   // Shown when no nickname, role, or usable title is known (defaults to
   // "Subagent"). Provider ids are never shown as a label.
   placeholderLabel?: string | null | undefined;
@@ -314,12 +354,16 @@ export function resolveSubagentPresentation(input: {
     identityLabel ?? normalizeWhitespace(input.placeholderLabel) ?? DEFAULT_SUBAGENT_LABEL;
   const fullLabel = role && nickname ? `${nickname} [${role}]` : primaryLabel;
 
+  const accentSeed =
+    identityLabel ?? fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ?? primaryLabel;
+
   return {
     primaryLabel,
     nickname,
     role,
     title: resolvedTitle,
     fullLabel,
+    accentColor: subagentAccentColor(accentSeed),
   };
 }
 
@@ -343,6 +387,7 @@ export function resolveSubagentPresentationForThread(input: {
     nickname: input.thread.subagentNickname ?? derivedIdentity?.nickname,
     role: input.thread.subagentRole ?? derivedIdentity?.role,
     title: input.thread.title,
+    fallbackId: input.thread.id,
     placeholderLabel:
       derivedIdentity?.promptLabel ??
       (threads ? resolveSubagentSiblingLabel({ thread: input.thread, threads }) : null),

@@ -36,6 +36,7 @@ export interface ComposerSubagentStripItem {
   // sibling from inside a subagent thread).
   isViewed: boolean;
   isBackground: boolean;
+  accentColor: string;
 }
 
 // Leading "back to the main thread" row shown while a subagent thread is open.
@@ -109,6 +110,7 @@ export function toSubagentStripItem(
     nickname: subagent.nickname,
     role: subagent.role,
     title: subagent.title,
+    fallbackId: subagent.threadId,
     placeholderLabel: anonymousSubagentLabel(statusKind),
   });
   const modelLabel = formatSubagentModelLabel(subagent.model);
@@ -132,6 +134,7 @@ export function toSubagentStripItem(
     isViewed: viewedThreadId !== null && threadId === viewedThreadId,
     // Confirmed patches key by the Task tool_use_id — the same handle the
     // background command dispatches with — which can differ from the row key.
+    accentColor: presentation.accentColor,
     isBackground:
       subagent.background === true ||
       backgroundedThreadIds.has(subagent.providerThreadId ?? subagent.threadId),
