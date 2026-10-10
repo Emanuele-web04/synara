@@ -80,8 +80,11 @@ export function OneTimeCoachmark({
         align={visible ? "start" : "center"}
         sideOffset={visible ? 8 : 4}
         className={cn(
+          // The shared popup surface paints its fill from unlayered CSS (`.app-popup-surface`),
+          // which outranks a plain utility: without `!` the accent fill lost and the white
+          // copy rendered on a white card, reading as an empty popup.
           visible &&
-            "max-w-64 border-[var(--color-text-accent)] bg-[var(--color-text-accent)] text-white shadow-lg",
+            "max-w-64 border-[var(--color-text-accent)] ![background:var(--color-text-accent)] text-white shadow-lg",
         )}
         viewportClassName={cn(visible && "px-3 py-2.5")}
       >
