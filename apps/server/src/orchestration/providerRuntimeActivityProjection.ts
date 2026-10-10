@@ -492,6 +492,21 @@ function buildConfiguredContextWindowPayload(
   });
 }
 
+// Claude Code reports whether fast mode actually serves requests; the requested
+// option alone cannot tell the composer that the account refused it.
+function buildFastModeStatePayload(event: ProviderRuntimeEvent): ActivityPayload | undefined {
+  if (event.type !== "session.configured") {
+    return undefined;
+  }
+  const config = asObject(event.payload.config);
+  const state = asString(config?.fast_mode_state);
+  if (state !== "on" && state !== "off" && state !== "cooldown") {
+    return undefined;
+  }
+  const disabledReason = asString(config?.fast_mode_disabled_reason);
+  return toActivityPayload({ state, ...(disabledReason ? { disabledReason } : {}) });
+}
+
 export function runtimePayloadRecord(
   event: ProviderRuntimeEvent,
 ): Record<string, unknown> | undefined {
@@ -697,21 +712,36 @@ export function projectProviderRuntimeActivities(
   switch (event.type) {
     case "session.configured": {
       const payload = buildConfiguredContextWindowPayload(event);
-      if (!payload) {
-        return [];
-      }
-
+      const fastModePayload = buildFastModeStatePayload(event);
       return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "info",
-          kind: "context-window.configured",
-          summary: "Context window configured",
-          payload,
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
+        ...(payload
+          ? [
+              {
+                id: event.eventId,
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "context-window.configured",
+                summary: "Context window configured",
+                payload,
+                turnId: toTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
+        ...(fastModePayload
+          ? [
+              {
+                id: payload ? EventId.makeUnsafe(`${event.eventId}:fast-mode`) : event.eventId,
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "fast-mode.state",
+                summary: "Fast mode state reported",
+                payload: fastModePayload,
+                turnId: toTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
       ];
     }
 
