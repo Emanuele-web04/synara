@@ -2,11 +2,12 @@
 // Purpose: Normalizes URL search state for chat side panels and diff-file deep links.
 // Layer: Route state utility
 
-import { TurnId } from "@synara/contracts";
+import { MessageId, TurnId } from "@synara/contracts";
 
 export type ChatRightPanel = "browser" | "diff";
 
 export interface DiffRouteSearch {
+  messageId?: MessageId | undefined;
   splitViewId?: string | undefined;
   view?: "editor" | undefined;
   editorFilePath?: string | undefined;
@@ -18,6 +19,7 @@ export interface DiffRouteSearch {
 
 export function diffRouteSearchEquals(left: DiffRouteSearch, right: DiffRouteSearch): boolean {
   return (
+    left.messageId === right.messageId &&
     left.splitViewId === right.splitViewId &&
     left.view === right.view &&
     left.editorFilePath === right.editorFilePath &&
@@ -54,6 +56,7 @@ export function stripDiffSearchParams<T extends Record<string, unknown>>(
 }
 
 export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRouteSearch {
+  const messageId = normalizeSearchString(search.messageId);
   const splitViewId = normalizeSearchString(search.splitViewId);
   const viewRaw = normalizeSearchString(search.view);
   const view = viewRaw === "editor" ? "editor" : undefined;
@@ -68,6 +71,7 @@ export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRoute
   const diffFilePath = diff ? normalizeSearchString(search.diffFilePath) : undefined;
 
   return {
+    ...(messageId ? { messageId: MessageId.makeUnsafe(messageId) } : {}),
     ...(splitViewId ? { splitViewId } : {}),
     ...(view ? { view } : {}),
     ...(editorFilePath ? { editorFilePath } : {}),

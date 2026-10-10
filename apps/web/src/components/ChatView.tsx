@@ -1,3 +1,4 @@
+import { ensureThreadHistoryLoaded, useThreadHistory } from "../threadHistory";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -856,6 +857,15 @@ export default function ChatView({
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
   const [threadFindOpen, setThreadFindOpen] = useState(false);
+  const threadHistory = useThreadHistory(threadId);
+  useEffect(() => {
+    if (!threadFindOpen) return;
+    let cancelled = false;
+    void ensureThreadHistoryLoaded(threadId, undefined, () => cancelled);
+    return () => {
+      cancelled = true;
+    };
+  }, [threadFindOpen, threadId]);
   const [threadFindFocusNonce, setThreadFindFocusNonce] = useState(0);
   const [threadFindHighlightStore] = useState(() => createThreadFindHighlightStore());
   const handleThreadFindJump = (match: ThreadFindMatch) => {
@@ -2072,11 +2082,23 @@ export default function ChatView({
         // `handleNotesChange` already surfaces the save failure through the shared notes toast.
       });
   }, [activeThreadId, handleNotesChange, projectInstructions, threadNotes]);
+  const historyJumpThreadRef = useRef<ThreadId | null>(threadId);
+  useLayoutEffect(() => {
+    historyJumpThreadRef.current = threadId;
+    return () => {
+      historyJumpThreadRef.current = null;
+    };
+  }, [threadId]);
   const handleJumpToPinnedMessage = useCallback(
     (messageId: MessageId) => {
-      timelineControllerRef.current?.scrollToMessage(messageId);
+      const cancelled = () => historyJumpThreadRef.current !== threadId;
+      void ensureThreadHistoryLoaded(threadId, messageId, cancelled).then(() => {
+        requestAnimationFrame(() => {
+          if (!cancelled()) timelineControllerRef.current?.scrollToMessage(messageId);
+        });
+      });
     },
-    [timelineControllerRef],
+    [threadId, timelineControllerRef],
   );
 
   // Before treating an empty timeline as a genuinely new thread, wait for the
@@ -3336,6 +3358,20 @@ export default function ChatView({
     composerTranscriptInsetPx,
     isInactiveSplitPane,
   });
+  useEffect(() => {
+    const messageId = rawSearch.messageId;
+    if (!messageId || threadDetailSyncState !== "synced") return;
+    let cancelled = false;
+    onTranscriptNavigate();
+    void ensureThreadHistoryLoaded(threadId, messageId, () => cancelled).then(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) timelineControllerRef.current?.scrollToMessage(messageId);
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rawSearch.messageId, threadId, threadDetailSyncState, onTranscriptNavigate]);
   useLayoutEffect(() => {
     if (settings.anchorSentMessagesToTop) return;
     tailAnchorScrollInFlightRef.current = false;
@@ -6544,6 +6580,8 @@ export default function ChatView({
       {shouldRenderChatPaneContent ? (
         <ChatThreadFindHost
           open={threadFindOpen}
+          historyIncomplete={threadHistory.nextCursor !== null}
+          historyError={threadHistory.error}
           focusNonce={threadFindFocusNonce}
           timelineEntries={timelineEntries}
           threadId={threadId}

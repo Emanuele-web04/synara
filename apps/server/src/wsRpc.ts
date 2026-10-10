@@ -682,11 +682,17 @@ const makeWsRpcHandlersLayer = () =>
       // is actively running. Waiting here is safe because the cursor-safe
       // stream attaches its live tap before evaluating the snapshot effect, so
       // no event that commits during the wait is lost.
-      const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
+      const loadThreadDetailSnapshotWithBootstrapWait = (
+        threadId: ThreadId,
+        messageWindow?: import("@synara/contracts").OrchestrationThreadMessageWindow,
+      ) =>
         Effect.gen(function* () {
           const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
           while (true) {
-            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
+            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(
+              threadId,
+              messageWindow,
+            );
             if (Option.isSome(detail) || Date.now() >= deadline) {
               return detail;
             }
@@ -1378,7 +1384,7 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
           rpcEffect(
             projectionReadModelQuery
-              .getThreadDetailSnapshotById(input.threadId)
+              .getThreadDetailSnapshotById(input.threadId, input.messageWindow)
               .pipe(Effect.map(Option.getOrNull)),
             "Failed to load orchestration thread detail snapshot",
           ),
@@ -1562,7 +1568,10 @@ const makeWsRpcHandlersLayer = () =>
                 label: "orchestration.thread-detail",
                 onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
               },
-              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
+              snapshot: loadThreadDetailSnapshotWithBootstrapWait(
+                input.threadId,
+                input.messageWindow,
+              ).pipe(
                 Effect.flatMap(
                   Option.match({
                     onNone: () =>
@@ -1610,6 +1619,7 @@ const makeWsRpcHandlersLayer = () =>
                   return Stream.succeed<OrchestrationThreadStreamItem>({
                     kind: "replay",
                     events: item.events,
+                    threadId: input.threadId,
                   });
                 }
                 // A silently empty snapshot would leave the client waiting forever

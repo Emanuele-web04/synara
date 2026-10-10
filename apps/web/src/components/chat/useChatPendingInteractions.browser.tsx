@@ -1,3 +1,5 @@
+import { useStore } from "../../store";
+import { initialState } from "../../storeState";
 import { ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
 import { afterEach, expect, it } from "vitest";
 import { renderHook } from "vitest-browser-react";
@@ -7,7 +9,10 @@ import { makeActivity, makeThread } from "../../storeTestFixtures";
 import type { Thread } from "../../types";
 import { useChatPendingInteractions } from "./useChatPendingInteractions";
 
-afterEach(() => resetComposerDraftStore());
+afterEach(() => {
+  resetComposerDraftStore();
+  useStore.setState(initialState);
+});
 
 const threadId = ThreadId.makeUnsafe("pending-gate-thread");
 const turnId = TurnId.makeUnsafe("pending-gate-turn");
@@ -114,3 +119,21 @@ it.each([
     expect(result.current.pendingUserInputs).toEqual([]);
   },
 );
+
+it("holds cached approvals and input controls until replay confirms authority", async () => {
+  useStore.setState({ threadDetailSyncById: { [threadId]: "cached" } });
+  const { result } = await renderPendingInteractions(
+    threadWithPendingRequests({
+      provider: "codex",
+      status: "running",
+      orchestrationStatus: "running",
+      activeTurnId: turnId,
+      createdAt,
+      updatedAt: createdAt,
+    }),
+  );
+  expect(result.current.pendingApprovals).toEqual([]);
+  expect(result.current.pendingUserInputs).toEqual([]);
+  useStore.getState().confirmThreadDetailReplay(threadId);
+  await expect.poll(() => result.current.pendingApprovals.length).toBe(1);
+});

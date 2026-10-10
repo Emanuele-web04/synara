@@ -237,9 +237,7 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
             // client can apply the whole catch-up in a single store update.
             const replayItems: Stream.Stream<SnapshotLiveStreamItem<Snapshot>> =
               input.batchReplay === true
-                ? resumeRows.length === 0
-                  ? Stream.empty
-                  : Stream.succeed({ kind: "replay", events: [...resumeRows] })
+                ? Stream.succeed({ kind: "replay", events: [...resumeRows] })
                 : Stream.fromIterable(resumeRows).pipe(
                     Stream.map(
                       (event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event }),

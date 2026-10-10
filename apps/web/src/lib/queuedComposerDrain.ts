@@ -340,6 +340,7 @@ function threadDrainSignal(state: AppState, threadId: ThreadId): string {
     },
   ).length;
   return [
+    state.threadDetailSyncById?.[threadId] === "cached" ? "cached" : "live",
     thread.session?.status ?? "",
     thread.session?.orchestrationStatus ?? "",
     thread.session?.activeTurnId ?? "",
@@ -408,7 +409,8 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
     hasQueueableLiveTurn: hasLiveTurn && thread?.session?.activeTurnId != null,
     phase,
     isSendBusy: autoDispatchLocks.has(threadId),
-    isConnecting: phase === "connecting",
+    isConnecting:
+      phase === "connecting" || useStore.getState().threadDetailSyncById?.[threadId] === "cached",
     isAwaitingTurnStart: awaitingTurnStartsByThreadId.has(threadId),
     steerGate: getQueuedComposerSteerGate(threadId),
     hasPendingApproval: pendingApprovals.length > 0,

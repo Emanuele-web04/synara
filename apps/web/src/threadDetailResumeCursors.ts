@@ -81,8 +81,8 @@ export function resetThreadDetailResumeCursors(): void {
 export function buildThreadSubscribeInput(threadId: ThreadId): OrchestrationSubscribeThreadInput {
   const afterSequence = resumeCursorByThreadId.get(threadId);
   return afterSequence === undefined
-    ? { threadId }
-    : { threadId, afterSequence, batchReplay: true };
+    ? { threadId, messageWindow: { limit: 100 } }
+    : { threadId, afterSequence, batchReplay: true, messageWindow: { limit: 100 } };
 }
 
 export function resetThreadDetailResumeCursorsForTests(): void {

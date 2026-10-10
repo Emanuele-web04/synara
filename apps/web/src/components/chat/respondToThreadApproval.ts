@@ -45,6 +45,9 @@ export async function respondToThreadApproval(input: {
   const api = readNativeApi();
   if (!api) return;
   const { threadId, requestId, decision, lifecycleGeneration } = input;
+  if (useStore.getState().threadDetailSyncById?.[threadId] === "cached") {
+    throw new Error("Wait for the conversation to reconnect before answering.");
+  }
   const setThreadError = useStore.getState().setError;
   // Persist supervised "always allow" client-side so the next turn (after an
   // idle-stop or runtime restart) uses full access. Auto remains the durable
