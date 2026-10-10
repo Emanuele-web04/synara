@@ -153,6 +153,10 @@ export interface WorkLogEntry {
   // A task the agent moved to the background finished. Its completion wakes the
   // agent into a new turn, so the row also marks where that new response starts.
   backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
+  // One background task for its whole life: the row sits where the agent
+  // launched it and its status updates in place (running, finished, failed,
+  // stopped) instead of adding a row per lifecycle event.
+  backgroundTask?: WorkLogBackgroundTask;
   // A subagent's own progress, reported to the thread that launched it. It is
   // that subagent's current step, never the launcher's reasoning.
   subagentProgress?: WorkLogSubagentProgress;
@@ -248,6 +252,22 @@ export interface WorkLogBackgroundTaskCompletion {
   taskId: string;
   taskType: string | null;
   description: string | null;
+  // How the task ended; absent on completions derived before outcomes existed.
+  outcome?: WorkLogBackgroundTaskOutcome;
+}
+
+export type WorkLogBackgroundTaskOutcome = "finished" | "failed" | "stopped";
+
+export interface WorkLogBackgroundTask {
+  taskId: string;
+  taskType: string | null;
+  description: string | null;
+  // The command that runs in the background, from the launching tool call.
+  command: string | null;
+  status: "running" | WorkLogBackgroundTaskOutcome;
+  startedAt: string;
+  completedAt: string | null;
+  exitCode: number | null;
 }
 
 export interface WorkLogSubagentProgress {
