@@ -1,7 +1,8 @@
 // FILE: useComposerVoiceController.ts
 // Purpose: Own the composer voice-note state machine for recording, cancellation, and transcription.
 // Layer: Chat composer hook
-// Depends on: useVoiceRecorder, ChatView voice helper logic, and the native API voice endpoint.
+// Depends on: useVoiceRecorder, the live dictation stream, ChatView voice helper logic, and the
+// native API voice endpoints.
 
 import {
   type ProviderInstanceId,
@@ -17,6 +18,10 @@ import {
   isVoiceRecordingCancelledError,
   useVoiceRecorder,
 } from "../../lib/voiceRecorder";
+import {
+  startVoiceDictationStream,
+  type VoiceDictationStream,
+} from "../../lib/voiceDictationStream";
 import { readNativeApi } from "../../nativeApi";
 import type { RefreshProviderStatusesNow } from "../../hooks/useProviderStatusRefresh";
 import { toastManager, reportToastIssue } from "../ui/toast";
@@ -50,6 +55,11 @@ export interface UseComposerVoiceControllerOptions {
   activeProviderStatus: ServerProviderStatus | null;
   pendingUserInputCount: number;
   onTranscriptReady: (transcript: string) => void;
+  /**
+   * Receives the live transcript while dictating, or null when it should be
+   * dropped (cancel, failure). The final text still arrives via onTranscriptReady.
+   */
+  onLiveTranscript?: (transcript: string | null) => void;
   refreshVoiceStatus: RefreshProviderStatusesNow;
   actionArmDelayMs?: number;
   failureCopy?: Partial<ComposerVoiceFailureCopy>;
@@ -95,6 +105,7 @@ export function useComposerVoiceController(
     activeProviderStatus,
     pendingUserInputCount,
     onTranscriptReady,
+    onLiveTranscript,
     refreshVoiceStatus,
     actionArmDelayMs: actionArmDelayMsProp,
     failureCopy: failureCopyOverrides,
@@ -118,6 +129,9 @@ export function useComposerVoiceController(
   const composerProviderInstanceRef = useRef<ProviderInstanceId>(selectedProviderInstanceId);
   const voiceProviderInstanceRef = useRef<ProviderInstanceId>(voiceProviderInstanceId);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
+  // The live stream of the current recording; null when the server cannot stream.
+  const dictationStreamRef = useRef<VoiceDictationStream | null>(null);
+  const onLiveTranscriptRef = useRef(onLiveTranscript);
   const failureCopy = {
     ...DEFAULT_FAILURE_COPY,
     ...failureCopyOverrides,
@@ -129,7 +143,23 @@ export function useComposerVoiceController(
     voiceProviderRef.current = selectedProvider;
     composerProviderInstanceRef.current = selectedProviderInstanceId;
     voiceProviderInstanceRef.current = voiceProviderInstanceId;
-  }, [threadId, selectedProvider, selectedProviderInstanceId, voiceProviderInstanceId]);
+    onLiveTranscriptRef.current = onLiveTranscript;
+  }, [
+    threadId,
+    selectedProvider,
+    selectedProviderInstanceId,
+    voiceProviderInstanceId,
+    onLiveTranscript,
+  ]);
+
+  // Drops the live stream of the current recording and any text it showed.
+  const discardDictationStream = () => {
+    const stream = dictationStreamRef.current;
+    dictationStreamRef.current = null;
+    if (!stream) return;
+    stream.cancel();
+    onLiveTranscriptRef.current?.(null);
+  };
 
   const voiceRecordingDurationLabel = formatVoiceRecordingDuration(voiceRecordingDurationMs);
   const { canStartVoiceNotes, showVoiceNotesControl } = deriveComposerVoiceState({
@@ -145,6 +175,7 @@ export function useComposerVoiceController(
     const invalidatedRequestId = voiceTranscriptionRequestIdRef.current + 1;
     voiceTranscriptionRequestIdRef.current = invalidatedRequestId;
     voiceRecordingStartedAtRef.current = null;
+    discardDictationStream();
     // The spinner reset rides the cancel promise so no state is written
     // synchronously inside the effect (keeps the hook compiler-eligible).
     void cancelVoiceRecording().finally(() => {
@@ -164,6 +195,8 @@ export function useComposerVoiceController(
     () => () => {
       voiceTranscriptionRequestIdRef.current += 1;
       voiceRecordingStartedAtRef.current = null;
+      dictationStreamRef.current?.cancel();
+      dictationStreamRef.current = null;
     },
     [],
   );
@@ -180,6 +213,7 @@ export function useComposerVoiceController(
     const invalidatedRequestId = voiceTranscriptionRequestIdRef.current + 1;
     voiceTranscriptionRequestIdRef.current = invalidatedRequestId;
     voiceRecordingStartedAtRef.current = null;
+    discardDictationStream();
     void cancelVoiceRecording().finally(() => {
       if (voiceTranscriptionRequestIdRef.current === invalidatedRequestId) {
         setIsVoiceTranscribing(false);
@@ -234,19 +268,38 @@ export function useComposerVoiceController(
       return;
     }
 
-    try {
-      await startVoiceRecording();
-      voiceRecordingStartedAtRef.current = performance.now();
-      const api = readNativeApi();
-      void api?.server
-        .prewarmVoice?.({
-          provider: "codex",
-          providerInstanceId: voiceProviderInstanceId,
-          cwd: activeProject.cwd,
-          ...(activeThreadId ? { threadId: activeThreadId } : {}),
+    discardDictationStream();
+    const api = readNativeApi();
+    const voiceRequest = {
+      provider: "codex" as const,
+      providerInstanceId: voiceProviderInstanceId,
+      cwd: activeProject.cwd,
+      ...(activeThreadId ? { threadId: activeThreadId } : {}),
+    };
+    // Connect while the microphone opens; audio captured before the session
+    // is ready waits in the stream's buffer.
+    const stream = api
+      ? startVoiceDictationStream({
+          api: api.server,
+          request: voiceRequest,
+          onTranscript: (text) => {
+            if (dictationStreamRef.current === stream) {
+              onLiveTranscriptRef.current?.(text);
+            }
+          },
         })
-        .catch(() => undefined);
+      : null;
+    dictationStreamRef.current = stream;
+    try {
+      await startVoiceRecording(
+        stream ? { onAudioChunk: (samples, rate) => stream.pushAudio(samples, rate) } : undefined,
+      );
+      voiceRecordingStartedAtRef.current = performance.now();
+      void api?.server.prewarmVoice?.(voiceRequest).catch(() => undefined);
     } catch (error) {
+      if (dictationStreamRef.current === stream) {
+        discardDictationStream();
+      }
       if (isVoiceRecordingCancelledError(error)) {
         return;
       }
@@ -295,15 +348,26 @@ export function useComposerVoiceController(
       voiceProviderRef.current === requestProvider &&
       composerProviderInstanceRef.current === requestProviderInstanceId &&
       voiceProviderInstanceRef.current === requestVoiceProviderInstanceId;
+    const dictationStream = dictationStreamRef.current;
+    const discardLiveTranscript = () => {
+      if (dictationStreamRef.current !== dictationStream) return;
+      dictationStreamRef.current = null;
+      if (dictationStream) {
+        dictationStream.cancel();
+        onLiveTranscriptRef.current?.(null);
+      }
+    };
 
     // Promise chain instead of async/try-catch-finally: React Compiler does
     // not yet support try/finally, and it would skip optimizing this hook.
     return stopVoiceRecording()
       .then((payload): Promise<boolean> | boolean => {
         if (!isCurrentVoiceRequest()) {
+          dictationStream?.cancel();
           return false;
         }
         if (!payload) {
+          discardLiveTranscript();
           toastManager.add({
             type: "warning",
             title: "No audio was captured.",
@@ -311,26 +375,40 @@ export function useComposerVoiceController(
           return false;
         }
         transcriptionStarted = true;
-        return api.server
-          .transcribeVoice({
-            provider: "codex",
-            providerInstanceId: requestVoiceProviderInstanceId,
-            cwd: activeProject.cwd,
-            ...(activeThreadId ? { threadId: activeThreadId } : {}),
-            ...payload,
-          })
-          .then((result) => {
-            if (!isCurrentVoiceRequest()) {
-              return false;
-            }
-            onTranscriptReady(result.text);
-            return true;
-          });
+        const uploadRecording = () =>
+          api.server
+            .transcribeVoice({
+              provider: "codex",
+              providerInstanceId: requestVoiceProviderInstanceId,
+              cwd: activeProject.cwd,
+              ...(activeThreadId ? { threadId: activeThreadId } : {}),
+              ...payload,
+            })
+            .then((result) => result.text);
+        // The live stream already heard everything, so its final text is
+        // usually ready right away; a failed or empty stream uploads the clip once.
+        const transcript = dictationStream
+          ? dictationStream
+              .finish()
+              .catch(() => "")
+              .then((text) => text.trim() || (isCurrentVoiceRequest() ? uploadRecording() : ""))
+          : uploadRecording();
+        return transcript.then((text) => {
+          if (!isCurrentVoiceRequest()) {
+            return false;
+          }
+          if (dictationStreamRef.current === dictationStream) {
+            dictationStreamRef.current = null;
+          }
+          onTranscriptReady(text);
+          return true;
+        });
       })
       .catch((error: unknown) => {
         if (!isCurrentVoiceRequest()) {
           return false;
         }
+        discardLiveTranscript();
 
         const description =
           error instanceof Error
@@ -376,6 +454,7 @@ export function useComposerVoiceController(
     }
     voiceTranscriptionRequestIdRef.current += 1;
     voiceRecordingStartedAtRef.current = null;
+    discardDictationStream();
     setIsVoiceTranscribing(false);
     void cancelVoiceRecording();
   };

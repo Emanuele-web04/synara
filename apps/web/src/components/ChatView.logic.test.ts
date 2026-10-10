@@ -17,6 +17,8 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
+  applyLiveVoiceTranscript,
+  discardLiveVoiceTranscript,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
@@ -949,6 +951,39 @@ describe("voice helpers", () => {
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
     expect(appendVoiceTranscriptToPrompt("Hello there   ", "  next line  ")).toBe(
       "Hello there\nnext line",
+    );
+  });
+
+  it("shows a live transcript after the prompt and replaces it as it grows", () => {
+    const first = applyLiveVoiceTranscript(null, "Fix the bug", " Hola");
+    expect(first.prompt).toBe("Fix the bug\nHola");
+
+    const second = applyLiveVoiceTranscript(first.draft, first.prompt, " Hola, esto es");
+    expect(second.prompt).toBe("Fix the bug\nHola, esto es");
+
+    expect(
+      applyLiveVoiceTranscript(second.draft, second.prompt, "Hola, esto es todo.").prompt,
+    ).toBe("Fix the bug\nHola, esto es todo.");
+    expect(discardLiveVoiceTranscript(second.draft, second.prompt)).toBe("Fix the bug");
+  });
+
+  it("keeps edits made before the live transcript while dictating", () => {
+    const first = applyLiveVoiceTranscript(null, "", "Hola");
+    const edited = `Contexto\n${first.prompt}`;
+
+    const next = applyLiveVoiceTranscript(first.draft, edited, "Hola mundo");
+    expect(next.prompt).toBe("Contexto\nHola mundo");
+    expect(discardLiveVoiceTranscript(next.draft, next.prompt)).toBe("Contexto");
+  });
+
+  it("hands edited dictated words to the user and only adds newer words", () => {
+    const first = applyLiveVoiceTranscript(null, "", "Hola mundo");
+    const edited = "Hola mundo!!";
+
+    const next = applyLiveVoiceTranscript(first.draft, edited, "Hola mundo, sigo");
+    expect(next.prompt).toBe("Hola mundo!!\n, sigo");
+    expect(discardLiveVoiceTranscript(next.draft, "Hola mundo!! changed")).toBe(
+      "Hola mundo!! changed",
     );
   });
 

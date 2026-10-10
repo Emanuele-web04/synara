@@ -464,6 +464,49 @@ export const ServerVoiceTranscriptionResult = Schema.Struct({
 });
 export type ServerVoiceTranscriptionResult = typeof ServerVoiceTranscriptionResult.Type;
 
+// Live dictation: the stream opens a provider session, the client pushes raw
+// 16-bit little-endian mono PCM chunks with `appendVoiceDictationAudio`, and
+// `finishVoiceDictation` asks for the final transcript. The batch upload stays
+// the fallback whenever the stream fails.
+export const SERVER_VOICE_DICTATION_SAMPLE_RATE_HZ = 24_000;
+export const SERVER_VOICE_DICTATION_MAX_CHUNK_BYTES = 96_000;
+const SERVER_VOICE_DICTATION_MAX_CHUNK_BASE64_CHARS = 128_000;
+
+export const ServerVoiceDictationStreamInput = Schema.Struct({
+  provider: ProviderKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  cwd: TrimmedNonEmptyString,
+  threadId: Schema.optional(ThreadId),
+  sampleRateHz: NonNegativeInt,
+});
+export type ServerVoiceDictationStreamInput = typeof ServerVoiceDictationStreamInput.Type;
+
+const VoiceDictationSessionId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+
+export const ServerVoiceDictationEvent = Schema.Union([
+  // The provider session accepted the stream; audio and finish calls carry this id.
+  Schema.Struct({ type: Schema.Literal("ready"), sessionId: VoiceDictationSessionId }),
+  // The whole transcript so far, including words the provider may still revise.
+  Schema.Struct({ type: Schema.Literal("transcript"), text: Schema.String }),
+  // The finalized transcript after `finishVoiceDictation`; the stream ends next.
+  Schema.Struct({ type: Schema.Literal("completed"), text: Schema.String }),
+]);
+export type ServerVoiceDictationEvent = typeof ServerVoiceDictationEvent.Type;
+
+export const ServerVoiceDictationAudioInput = Schema.Struct({
+  sessionId: VoiceDictationSessionId,
+  audioBase64: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(SERVER_VOICE_DICTATION_MAX_CHUNK_BASE64_CHARS),
+  ),
+});
+export type ServerVoiceDictationAudioInput = typeof ServerVoiceDictationAudioInput.Type;
+
+export const ServerVoiceDictationFinishInput = Schema.Struct({
+  sessionId: VoiceDictationSessionId,
+});
+export type ServerVoiceDictationFinishInput = typeof ServerVoiceDictationFinishInput.Type;
+
 // Compact, stateless recap generation. The caller owns debounce/cache policy so
 // this endpoint never participates in the hot transcript projection path.
 export const ServerGenerateThreadRecapInput = Schema.Struct({

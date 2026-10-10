@@ -46,6 +46,8 @@ import {
   type GitCreateDetachedWorktreeResult,
   type GitRunStackedActionResult,
   type GitWorktreeSetupProgressEvent,
+  type ServerVoiceDictationEvent,
+  type ServerVoiceDictationStreamInput,
   type GitHubProjectProvisionProgressEvent,
   type GitHubProjectProvisionResult,
   type OrchestrationEvent,
@@ -1246,6 +1248,26 @@ export class WsTransport {
       this.projectFileSubscriptions.delete(key);
       void this.stopStream(key);
     };
+  }
+
+  /**
+   * Runs one live dictation stream until the server ends it or `signal`
+   * aborts. It bypasses `request`: the stream stays open for the whole
+   * recording and must not read as a slow request.
+   */
+  async streamVoiceDictation(
+    input: ServerVoiceDictationStreamInput,
+    onEvent: (event: ServerVoiceDictationEvent) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (this.disposed) throw new Error("Transport disposed");
+    const client = await awaitWithAbort(this.getClient(), signal);
+    await this.getClientRuntime(client).runPromise(
+      Stream.runForEach(client[WS_METHODS.serverStreamVoiceDictation](input), (event) =>
+        Effect.sync(() => onEvent(event)),
+      ),
+      { signal },
+    );
   }
 
   getLatestPush<C extends WsPushChannel>(channel: C): WsPushMessage<C> | null {

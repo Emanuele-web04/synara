@@ -25,6 +25,7 @@ import {
   WsProjectAgentRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
+  SERVER_VOICE_DICTATION_SAMPLE_RATE_HZ,
   type DeviceEvent,
   type ComputerEvent,
   type GitRemoveWorktreeInput,
@@ -35,6 +36,8 @@ import {
   type OrchestrationEvent,
   type OrchestrationProject,
   type ProjectDevServerEvent,
+  type ProviderInstanceId,
+  type ProviderKind,
   type ProviderStartOptions,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
@@ -45,9 +48,21 @@ import {
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
   type ServerSettings,
+  type ServerVoiceDictationEvent,
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
-import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
+import {
+  Cause,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Queue,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -210,6 +225,7 @@ import { ProviderRuntimeEventRepository } from "./persistence/Services/ProviderR
 import { requireWsOwnerSession } from "./wsOwnerAuthorization";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
 import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
+import { voiceDictationSessions } from "./voiceDictationSessions";
 import {
   provideWsConnectionSession,
   WS_CONNECTION_SESSION_HEADER,
@@ -1176,6 +1192,33 @@ const makeWsRpcHandlersLayer = () =>
 
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+
+      // Voice requests name the provider instance the composer picked; a
+      // disabled or mismatched instance is refused rather than rerouted.
+      const resolveVoiceProvider = (input: {
+        readonly provider: ProviderKind;
+        readonly providerInstanceId?: ProviderInstanceId | undefined;
+      }) =>
+        Effect.gen(function* () {
+          const settings = yield* serverSettings.getSettings;
+          const instance = resolveProviderInstance(settings, {
+            provider: input.provider,
+            ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
+          });
+          if (!instance || instance.driver !== input.provider || !instance.enabled) {
+            return yield* Effect.fail(
+              new Error(
+                `Voice transcription provider instance '${input.providerInstanceId ?? input.provider}' is unavailable.`,
+              ),
+            );
+          }
+          const adapter = yield* providerAdapterRegistry.getByProvider(instance.driver);
+          return {
+            instance,
+            adapter,
+            providerOptions: providerStartOptionsFromInstance(instance),
+          } as const;
+        });
 
       const tasksEnabled = isServerBetaFeatureEnabled("tasks");
       const tasksUnavailableError = () =>
@@ -2338,19 +2381,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
             Effect.gen(function* () {
-              const settings = yield* serverSettings.getSettings;
-              const instance = resolveProviderInstance(settings, {
-                provider: input.provider,
-                ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
-              });
-              if (!instance || instance.driver !== input.provider || !instance.enabled) {
-                return yield* Effect.fail(
-                  new Error(
-                    `Voice transcription provider instance '${input.providerInstanceId ?? input.provider}' is unavailable.`,
-                  ),
-                );
-              }
-              const adapter = yield* providerAdapterRegistry.getByProvider(instance.driver);
+              const { instance, adapter, providerOptions } = yield* resolveVoiceProvider(input);
               if (!adapter.prewarmVoice) {
                 return yield* Effect.fail(
                   new Error(`Voice transcription is unavailable for provider '${input.provider}'.`),
@@ -2358,7 +2389,6 @@ const makeWsRpcHandlersLayer = () =>
               }
               const { providerOptions: _ignoredProviderOptions, ...prewarmInput } = input;
               void _ignoredProviderOptions;
-              const providerOptions = providerStartOptionsFromInstance(instance);
               return yield* adapter.prewarmVoice({
                 ...prewarmInput,
                 providerInstanceId: instance.instanceId,
@@ -2371,19 +2401,7 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             voiceUploadAdmissionGate.run(
               Effect.gen(function* () {
-                const settings = yield* serverSettings.getSettings;
-                const instance = resolveProviderInstance(settings, {
-                  provider: input.provider,
-                  ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
-                });
-                if (!instance || instance.driver !== input.provider || !instance.enabled) {
-                  return yield* Effect.fail(
-                    new Error(
-                      `Voice transcription provider instance '${input.providerInstanceId ?? input.provider}' is unavailable.`,
-                    ),
-                  );
-                }
-                const adapter = yield* providerAdapterRegistry.getByProvider(instance.driver);
+                const { instance, adapter, providerOptions } = yield* resolveVoiceProvider(input);
                 if (!adapter.transcribeVoice) {
                   return yield* Effect.fail(
                     new Error(
@@ -2393,7 +2411,6 @@ const makeWsRpcHandlersLayer = () =>
                 }
                 const { providerOptions: _ignoredProviderOptions, ...transcriptionInput } = input;
                 void _ignoredProviderOptions;
-                const providerOptions = providerStartOptionsFromInstance(instance);
                 return yield* adapter.transcribeVoice({
                   ...transcriptionInput,
                   providerInstanceId: instance.instanceId,
@@ -2402,6 +2419,90 @@ const makeWsRpcHandlersLayer = () =>
               }),
             ),
             "Voice transcription failed",
+          ),
+        [WS_METHODS.serverStreamVoiceDictation]: (input) =>
+          bufferLiveUiStream(
+            Stream.callback<ServerVoiceDictationEvent, WsRpcError>((queue) =>
+              Effect.gen(function* () {
+                if (input.sampleRateHz !== SERVER_VOICE_DICTATION_SAMPLE_RATE_HZ) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `Live dictation requires ${SERVER_VOICE_DICTATION_SAMPLE_RATE_HZ} Hz audio.`,
+                    ),
+                  );
+                }
+                const { instance, adapter, providerOptions } = yield* resolveVoiceProvider(input);
+                const openVoiceDictation = adapter.openVoiceDictation;
+                if (!openVoiceDictation) {
+                  return yield* Effect.fail(
+                    new Error(`Live dictation is unavailable for provider '${input.provider}'.`),
+                  );
+                }
+                if (!voiceDictationSessions.hasCapacity()) {
+                  return yield* Effect.fail(
+                    new Error("Too many live dictation sessions are already open."),
+                  );
+                }
+                const { providerOptions: _ignoredProviderOptions, ...dictationInput } = input;
+                void _ignoredProviderOptions;
+                // The stream scope owns the provider session: ending, failing, or
+                // interrupting the stream closes the upstream connection.
+                const session = yield* Effect.acquireRelease(
+                  openVoiceDictation(
+                    {
+                      ...dictationInput,
+                      providerInstanceId: instance.instanceId,
+                      ...(providerOptions ? { providerOptions } : {}),
+                    },
+                    {
+                      onTranscript: (text) => {
+                        Queue.offerUnsafe(queue, { type: "transcript", text });
+                      },
+                      onCompleted: (text) => {
+                        Queue.offerUnsafe(queue, { type: "completed", text });
+                        Queue.endUnsafe(queue);
+                      },
+                      onFailure: (error) => {
+                        Queue.failCauseUnsafe(
+                          queue,
+                          Cause.fail(toWsRpcError(error, "Live dictation failed")),
+                        );
+                      },
+                    },
+                  ),
+                  (openedSession) => Effect.sync(() => openedSession.close()),
+                );
+                const sessionId = yield* Effect.acquireRelease(
+                  Effect.try({
+                    try: () => voiceDictationSessions.register(session),
+                    catch: (cause) => cause,
+                  }),
+                  (registeredId) => Effect.sync(() => voiceDictationSessions.release(registeredId)),
+                );
+                yield* Queue.offer(queue, { type: "ready", sessionId });
+              }).pipe(
+                Effect.catch((error) =>
+                  Queue.fail(queue, toWsRpcError(error, "Live dictation failed")),
+                ),
+              ),
+            ),
+            { label: "server.voice-dictation" },
+          ),
+        [WS_METHODS.serverAppendVoiceDictationAudio]: (input) =>
+          rpcEffect(
+            Effect.try({
+              try: () => voiceDictationSessions.appendAudio(input.sessionId, input.audioBase64),
+              catch: (cause) => cause,
+            }),
+            "Failed to send dictation audio",
+          ),
+        [WS_METHODS.serverFinishVoiceDictation]: (input) =>
+          rpcEffect(
+            Effect.try({
+              try: () => voiceDictationSessions.finish(input.sessionId),
+              catch: (cause) => cause,
+            }),
+            "Failed to finish dictation",
           ),
         [WS_METHODS.serverGenerateThreadRecap]: (input) =>
           rpcEffect(

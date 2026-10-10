@@ -18,6 +18,11 @@ export interface VoiceRecordingPayload {
   readonly durationMs: number;
 }
 
+export interface VoiceRecordingStartOptions {
+  /** Receives each mono chunk with real signal while recording, for live transcription. */
+  readonly onAudioChunk?: (samples: Float32Array, sampleRateHz: number) => void;
+}
+
 interface RecorderRuntime {
   readonly audioContext: AudioContext;
   readonly sourceNode: MediaStreamAudioSourceNode;
@@ -102,7 +107,7 @@ export function useVoiceRecorder() {
     };
   }, [clearTimer]);
 
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (options?: VoiceRecordingStartOptions) => {
     if (runtimeRef.current || isStartingRef.current) {
       throw new Error("Voice recording is already running.");
     }
@@ -204,6 +209,7 @@ export function useVoiceRecorder() {
         }
 
         runtime.chunks.push(monoSamples);
+        options?.onAudioChunk?.(monoSamples, runtime.sampleRateHz);
 
         const rmsLevel = Math.min(
           1,

@@ -1,5 +1,5 @@
 // FILE: ComposerVoiceRecorderBar.browser.tsx
-// Purpose: Verifies voice recording exposes cancel plus a send-styled primary stop action.
+// Purpose: Verifies voice recording exposes discard, a secondary stop, and a send-styled send action.
 // Layer: Browser UI test
 // Depends on: vitest browser rendering and ComposerVoiceRecorderBar.
 
@@ -16,35 +16,57 @@ describe("ComposerVoiceRecorderBar", () => {
     document.body.innerHTML = "";
   });
 
-  it("uses the send treatment for stop while keeping cancel separate", async () => {
+  it("keeps discard and stop separate from the send-styled send action", async () => {
     const onDiscard = vi.fn();
     const onStop = vi.fn();
+    const onSend = vi.fn();
     const screen = await render(
       <ComposerVoiceRecorderBar
-        durationLabel="0:03"
         isRecording
         isTranscribing={false}
         waveformLevels={[0.2, 0.6, 0.4]}
         onDiscard={onDiscard}
         onStop={onStop}
+        onSend={onSend}
       />,
     );
 
-    const stopButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Stop voice recording"]',
+    const sendButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send voice note"]',
     );
-    expect(stopButton).not.toBeNull();
-    expect(stopButton?.className).toContain("bg-[var(--color-text-foreground)]");
-    expect(stopButton?.className).toContain("text-[var(--color-background-surface)]");
-    expect(document.querySelector('button[aria-label="Send voice note"]')).toBeNull();
+    expect(sendButton).not.toBeNull();
+    expect(sendButton?.className).toContain("bg-[var(--color-text-foreground)]");
+    expect(sendButton?.className).toContain("text-[var(--color-background-surface)]");
 
     await page.getByRole("button", { name: "Stop voice recording" }).click();
     expect(onStop).toHaveBeenCalledTimes(1);
-    expect(onDiscard).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+
+    await page.getByRole("button", { name: "Send voice note" }).click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onStop).toHaveBeenCalledTimes(1);
 
     await page.getByRole("button", { name: "Cancel voice recording" }).click();
     expect(onDiscard).toHaveBeenCalledTimes(1);
     expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    await screen.unmount();
+  });
+
+  it("omits send where the surface has no send step", async () => {
+    const screen = await render(
+      <ComposerVoiceRecorderBar
+        isRecording
+        isTranscribing={false}
+        waveformLevels={[]}
+        onDiscard={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    );
+
+    await expect.element(page.getByRole("button", { name: "Stop voice recording" })).toBeVisible();
+    expect(document.querySelector('button[aria-label="Send voice note"]')).toBeNull();
 
     await screen.unmount();
   });

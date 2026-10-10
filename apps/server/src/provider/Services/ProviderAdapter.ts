@@ -36,6 +36,7 @@ import type {
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStartOptions,
+  ServerVoiceDictationStreamInput,
   ServerVoicePrewarmInput,
   ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
@@ -410,4 +411,31 @@ export interface ProviderAdapterShape<TError> {
   readonly transcribeVoice?: (
     input: ServerVoiceTranscriptionInput,
   ) => Effect.Effect<ServerVoiceTranscriptionResult, TError>;
+
+  /**
+   * Open a live dictation session that transcribes audio while it is recorded.
+   * Succeeds once the provider accepted the session; later outcomes arrive
+   * through `handlers`.
+   */
+  readonly openVoiceDictation?: (
+    input: ServerVoiceDictationStreamInput,
+    handlers: VoiceDictationHandlers,
+  ) => Effect.Effect<VoiceDictationSession, TError>;
+}
+
+/** Callbacks for one live dictation session; at most one of completed/failure fires. */
+export interface VoiceDictationHandlers {
+  /** The whole transcript so far, including words the provider may still revise. */
+  readonly onTranscript: (text: string) => void;
+  readonly onCompleted: (text: string) => void;
+  readonly onFailure: (error: Error) => void;
+}
+
+export interface VoiceDictationSession {
+  /** Forwards 16-bit little-endian mono PCM at the session sample rate. */
+  readonly appendAudio: (pcm16: Uint8Array) => void;
+  /** Asks for the final transcript; `onCompleted` or `onFailure` follows. */
+  readonly finish: () => void;
+  /** Drops the session without further callbacks. Safe to call repeatedly. */
+  readonly close: () => void;
 }

@@ -1,34 +1,39 @@
 // FILE: ComposerVoiceRecorderBar.tsx
-// Purpose: Renders the expanded WhatsApp-style voice recorder UI inside the chat composer.
+// Purpose: Renders the expanded voice recorder UI inside the chat composer.
 // Layer: Chat composer presentation
-// Depends on: live waveform samples and caller-owned record/cancel/send actions.
+// Depends on: live waveform samples and caller-owned discard/stop/send actions.
 
 import { useEffect, useRef, useState } from "react";
 
-import { Loader2Icon, XIcon } from "~/lib/icons";
+import { ComposerSendArrowIcon, Loader2Icon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 
 interface ComposerVoiceRecorderBarProps {
   disabled?: boolean;
-  durationLabel: string;
   isRecording: boolean;
   // Recording has started but the device has not delivered real audio yet.
   isWaitingForAudio?: boolean;
   isTranscribing: boolean;
   waveformLevels: readonly number[];
+  // Throws the recording away without transcribing it.
   onDiscard: () => void;
+  // Transcribes into the composer draft.
   onStop: () => void;
+  // Transcribes and sends the message. Surfaces without a send step omit it.
+  onSend?: () => void;
 }
 
+// Quiet samples render as round dots; louder ones grow into rounded bars.
 const BAR_WIDTH_PX = 2;
-const BAR_GAP_PX = 2;
-const BAR_MIN_HEIGHT_PX = 3;
-const BAR_MAX_HEIGHT_PX = 22;
+const BAR_GAP_PX = 3;
+const BAR_MAX_HEIGHT_PX = 14;
+const BAR_NOISE_FLOOR = 0.06;
 
 export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const [visibleBarCount, setVisibleBarCount] = useState(96);
+  const [sendRequested, setSendRequested] = useState(false);
 
   useEffect(() => {
     const node = trackRef.current;
@@ -40,7 +45,9 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
       if (width <= 0) {
         return;
       }
-      setVisibleBarCount(Math.max(8, Math.floor(width / (BAR_WIDTH_PX + BAR_GAP_PX))));
+      setVisibleBarCount(
+        Math.max(8, Math.floor((width + BAR_GAP_PX) / (BAR_WIDTH_PX + BAR_GAP_PX))),
+      );
     };
     computeVisibleBars();
     const observer = new ResizeObserver(computeVisibleBars);
@@ -48,42 +55,42 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
     return () => observer.disconnect();
   }, []);
 
-  const visibleLevels = props.waveformLevels.slice(-visibleBarCount);
+  // Newest samples sit on the right; silence fills the rest of the track with dots.
+  const recentLevels = props.waveformLevels.slice(-visibleBarCount);
+  const visibleLevels = [
+    ...Array.from({ length: visibleBarCount - recentLevels.length }, () => 0),
+    ...recentLevels,
+  ];
   const isWaitingForAudio = props.isWaitingForAudio === true && !props.isTranscribing;
+  const actionsDisabled = props.disabled || props.isTranscribing;
+  const { onSend } = props;
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
-      <div ref={trackRef} className="relative flex h-7 min-w-0 flex-1 items-center overflow-hidden">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed border-zinc-300 dark:border-zinc-700"
-        />
-        <div
-          className="relative ml-auto flex h-full items-center"
-          style={{ gap: `${BAR_GAP_PX}px` }}
-        >
-          {visibleLevels.map((level, index) => {
-            const clamped = Math.max(0.04, Math.min(1, level));
-            const height = Math.round(
-              BAR_MIN_HEIGHT_PX + clamped * (BAR_MAX_HEIGHT_PX - BAR_MIN_HEIGHT_PX),
-            );
-            const positionFromRight = visibleLevels.length - index;
-            return (
-              <span
-                key={positionFromRight}
-                aria-hidden="true"
-                className={cn(
-                  "shrink-0 rounded-[1px] bg-zinc-900 dark:bg-zinc-100",
-                  props.isTranscribing && "opacity-55",
-                )}
-                style={{
-                  width: `${BAR_WIDTH_PX}px`,
-                  height: `${height}px`,
-                }}
-              />
-            );
-          })}
-        </div>
+      <div
+        ref={trackRef}
+        aria-hidden="true"
+        className={cn(
+          "flex h-7 min-w-0 flex-1 items-center justify-end overflow-hidden",
+          props.isTranscribing && "opacity-55",
+        )}
+        style={{ gap: `${BAR_GAP_PX}px` }}
+      >
+        {visibleLevels.map((level, index) => {
+          const clamped = level < BAR_NOISE_FLOOR ? 0 : Math.min(1, level);
+          const height = Math.round(BAR_WIDTH_PX + clamped * (BAR_MAX_HEIGHT_PX - BAR_WIDTH_PX));
+          const positionFromRight = visibleLevels.length - index;
+          return (
+            <span
+              key={positionFromRight}
+              className="shrink-0 rounded-full bg-[var(--color-text-foreground-secondary)]"
+              style={{
+                width: `${BAR_WIDTH_PX}px`,
+                height: `${height}px`,
+              }}
+            />
+          );
+        })}
       </div>
 
       {isWaitingForAudio ? (
@@ -94,41 +101,62 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
           <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
           Waiting for microphone…
         </span>
-      ) : (
-        <span className="shrink-0 text-ui leading-snug font-medium tabular-nums tracking-[0.02em] text-zinc-500 dark:text-zinc-400">
-          {props.durationLabel}
-        </span>
-      )}
-
-      <button
-        type="button"
-        className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-zinc-200/80 text-zinc-700 transition-colors hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-zinc-100 dark:hover:bg-white/15 sm:h-7 sm:w-7"
-        aria-label={props.isTranscribing ? "Transcribing voice note" : "Cancel voice recording"}
-        disabled={props.disabled || props.isTranscribing}
-        onClick={props.onDiscard}
-      >
-        {props.isTranscribing ? (
-          <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
-        ) : (
-          <XIcon aria-hidden="true" className="size-3.5" />
-        )}
-      </button>
+      ) : null}
 
       <Button
         type="button"
-        variant="prominent"
+        variant="ghost"
+        size="icon-xs"
+        className="size-7 rounded-full sm:size-7"
+        aria-label="Cancel voice recording"
+        title="Discard the recording"
+        disabled={actionsDisabled}
+        onClick={props.onDiscard}
+      >
+        <XIcon aria-hidden="true" className="size-3.5" />
+      </Button>
+
+      <Button
+        type="button"
+        variant="subtle"
         size="icon-xs"
         className="size-7 rounded-full sm:size-7"
         aria-label={props.isTranscribing ? "Transcribing voice note" : "Stop voice recording"}
-        disabled={props.disabled || props.isTranscribing}
-        onClick={props.onStop}
+        title="Stop and add the transcript to the draft"
+        disabled={actionsDisabled}
+        onClick={() => {
+          setSendRequested(false);
+          props.onStop();
+        }}
       >
-        {props.isTranscribing ? (
+        {props.isTranscribing && !sendRequested ? (
           <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
         ) : (
           <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
         )}
       </Button>
+
+      {onSend ? (
+        <Button
+          type="button"
+          variant="prominent"
+          size="icon-xs"
+          className="size-7 rounded-full sm:size-7"
+          aria-label={props.isTranscribing ? "Transcribing voice note" : "Send voice note"}
+          title="Stop and send the transcript"
+          disabled={actionsDisabled}
+          onClick={() => {
+            setSendRequested(true);
+            onSend();
+          }}
+        >
+          {props.isTranscribing && sendRequested ? (
+            <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
+          ) : (
+            <ComposerSendArrowIcon aria-hidden="true" className="size-5 shrink-0 translate-y-px" />
+          )}
+        </Button>
+      ) : null}
     </div>
   );
 }

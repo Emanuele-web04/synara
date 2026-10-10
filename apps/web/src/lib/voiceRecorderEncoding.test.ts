@@ -1,6 +1,65 @@
 import { describe, expect, it } from "vitest";
 
-import { encodeVoiceRecordingWav } from "./voiceRecorderEncoding";
+import {
+  createPcm16StreamEncoder,
+  encodeBytesBase64,
+  encodeVoiceRecordingWav,
+} from "./voiceRecorderEncoding";
+
+describe("createPcm16StreamEncoder", () => {
+  const samples = Float32Array.from(
+    { length: 10_003 },
+    (_, index) => Math.sin((index * Math.PI * 2) / 97) * 0.8,
+  );
+
+  function concat(parts: readonly Uint8Array[]): Uint8Array {
+    const bytes = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0));
+    let offset = 0;
+    for (const part of parts) {
+      bytes.set(part, offset);
+      offset += part.byteLength;
+    }
+    return bytes;
+  }
+
+  it.each([48_000, 44_100, 24_000, 16_000])(
+    "streams the same PCM across chunk boundaries as the WAV encoder at %i Hz",
+    (inputSampleRateHz) => {
+      const encode = createPcm16StreamEncoder(inputSampleRateHz, 24_000);
+      const streamed = concat(
+        [samples.slice(0, 1), samples.slice(1, 4_098), samples.slice(4_098)].map(encode),
+      );
+      const wav = encodeVoiceRecordingWav([samples], inputSampleRateHz, 24_000);
+      const wavPcm = new Int16Array((wav?.bytes ?? new ArrayBuffer(0)).slice(44));
+      const streamedPcm = new Int16Array(streamed.buffer);
+
+      // The clip encoder rounds its final sample count, so compare the shared span;
+      // float32 interpolation may move a sample by one step.
+      const length = Math.min(wavPcm.length, streamedPcm.length);
+      expect(Math.abs(wavPcm.length - streamedPcm.length)).toBeLessThanOrEqual(1);
+      for (let index = 0; index < length; index += 1) {
+        expect(Math.abs((streamedPcm[index] ?? 0) - (wavPcm[index] ?? 0))).toBeLessThanOrEqual(1);
+      }
+    },
+  );
+
+  it("does not depend on how the microphone splits the audio", () => {
+    const whole = createPcm16StreamEncoder(44_100, 24_000)(samples);
+    const encode = createPcm16StreamEncoder(44_100, 24_000);
+    const parts: Uint8Array[] = [];
+    for (let offset = 0; offset < samples.length; offset += 777) {
+      parts.push(encode(samples.subarray(offset, offset + 777)));
+    }
+    expect(concat(parts)).toEqual(whole);
+  });
+});
+
+describe("encodeBytesBase64", () => {
+  it("encodes bytes larger than one conversion block", () => {
+    const bytes = Uint8Array.from({ length: 70_000 }, (_, index) => index % 256);
+    expect(encodeBytesBase64(bytes)).toBe(Buffer.from(bytes).toString("base64"));
+  });
+});
 
 describe("encodeVoiceRecordingWav", () => {
   it.each([48_000, 44_100, 24_000, 16_000])(

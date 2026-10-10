@@ -21,6 +21,10 @@ const CONTROL_METHODS = new Set<string>([
   WS_METHODS.terminalAckOutput,
   WS_METHODS.terminalResize,
   WS_METHODS.terminalClose,
+  // Live dictation audio arrives several times a second and must not queue
+  // behind slower reads, or the transcript falls behind the speaker.
+  WS_METHODS.serverAppendVoiceDictationAudio,
+  WS_METHODS.serverFinishVoiceDictation,
   WS_METHODS.serverStopLocalServer,
   WS_METHODS.automationCancelRun,
   WS_METHODS.automationMarkRunRead,

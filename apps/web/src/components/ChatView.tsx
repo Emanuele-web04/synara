@@ -242,13 +242,16 @@ import {
   DismissedProviderHealthBannersSchema,
   PullRequestDialogState,
   appendVoiceTranscriptToPrompt,
+  applyLiveVoiceTranscript,
   buildCollapsedCursorModelOptionsReset,
   buildLocalDraftThread,
   buildThreadBreadcrumbs,
   canApplyComposerFocus,
   commitAfterRuntimeModePersistence,
   derivePromptHistoryFromMessages,
+  discardLiveVoiceTranscript,
   hasFileUndoSettled,
+  type LiveVoiceDraft,
   resolveActiveThreadTitle,
   type TurnDispatchSettings,
   resolveActiveTurnLiveDiffState,
@@ -2845,20 +2848,55 @@ export default function ChatView({
     },
     [dismissEffortPreview, setIsModelPickerOpen, setIsTraitsPickerOpen],
   );
-  const appendVoiceTranscriptToComposer = useCallback(
-    (transcript: string) => {
-      const nextPrompt = appendVoiceTranscriptToPrompt(promptRef.current, transcript);
-      if (!nextPrompt) {
-        return;
-      }
-
+  // The dictated tail live dictation is showing, tied to the thread whose
+  // draft holds it so a thread switch never writes into another draft.
+  const liveVoiceDraftRef = useRef<{ threadId: ThreadId; draft: LiveVoiceDraft } | null>(null);
+  const writeVoicePromptToComposer = useCallback(
+    (nextPrompt: string) => {
       promptRef.current = nextPrompt;
       setPrompt(nextPrompt);
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
+    },
+    [promptRef, setComposerCursor, setComposerTrigger, setPrompt],
+  );
+  const takeLiveVoiceDraft = useCallback(() => {
+    const live = liveVoiceDraftRef.current;
+    liveVoiceDraftRef.current = null;
+    return live?.threadId === threadId ? live.draft : null;
+  }, [threadId]);
+  const showLiveVoiceTranscript = useCallback(
+    (transcript: string | null) => {
+      const draft = takeLiveVoiceDraft();
+      if (transcript === null) {
+        const nextPrompt = draft ? discardLiveVoiceTranscript(draft, promptRef.current) : null;
+        if (nextPrompt !== null && nextPrompt !== promptRef.current) {
+          writeVoicePromptToComposer(nextPrompt);
+        }
+        return;
+      }
+      const next = applyLiveVoiceTranscript(draft, promptRef.current, transcript);
+      liveVoiceDraftRef.current = { threadId, draft: next.draft };
+      if (next.prompt !== promptRef.current) {
+        writeVoicePromptToComposer(next.prompt);
+      }
+    },
+    [promptRef, takeLiveVoiceDraft, threadId, writeVoicePromptToComposer],
+  );
+  const appendVoiceTranscriptToComposer = useCallback(
+    (transcript: string) => {
+      const draft = takeLiveVoiceDraft();
+      const nextPrompt = draft
+        ? applyLiveVoiceTranscript(draft, promptRef.current, transcript).prompt
+        : appendVoiceTranscriptToPrompt(promptRef.current, transcript);
+      if (!nextPrompt) {
+        return;
+      }
+
+      writeVoicePromptToComposer(nextPrompt);
       scheduleComposerFocus();
     },
-    [promptRef, setComposerCursor, setComposerTrigger, scheduleComposerFocus, setPrompt],
+    [promptRef, scheduleComposerFocus, takeLiveVoiceDraft, writeVoicePromptToComposer],
   );
   const {
     isVoiceRecording,
@@ -2881,6 +2919,7 @@ export default function ChatView({
     activeProviderStatus: voiceProviderStatus,
     pendingUserInputCount: pendingUserInputs.length,
     onTranscriptReady: appendVoiceTranscriptToComposer,
+    onLiveTranscript: showLiveVoiceTranscript,
     refreshVoiceStatus: refreshProviderStatuses,
     actionArmDelayMs: VOICE_RECORDER_ACTION_ARM_DELAY_MS,
     failureCopy: {
@@ -2888,19 +2927,32 @@ export default function ChatView({
     },
     onGuardWarning: warnVoiceGuard,
   });
-  // Bumped when Enter finishes a voice note under the "send" setting; the
-  // effect next to the late send handlers sends once the transcript commits.
+  // Bumped when a voice note finishes with a send (the recorder's send button,
+  // or Enter under the "send" setting); the effect next to the late send
+  // handlers sends once the transcript commits.
   const [voiceAutoSendRequest, setVoiceAutoSendRequest] = useState(0);
+  const finishComposerVoiceRecording = useCallback(
+    (autoSend: boolean) => {
+      // Live dictation already wrote words into the draft; compare against the
+      // prompt from before dictation so the final text still counts as new.
+      const liveVoiceDraft = liveVoiceDraftRef.current;
+      const promptBeforeTranscript =
+        liveVoiceDraft?.threadId === threadId ? liveVoiceDraft.draft.base : promptRef.current;
+      void submitComposerVoiceRecording().then((transcribed) => {
+        // An empty transcript leaves the draft untouched; don't send it blind.
+        if (autoSend && transcribed && promptRef.current !== promptBeforeTranscript) {
+          setVoiceAutoSendRequest((current) => current + 1);
+        }
+      });
+    },
+    [promptRef, submitComposerVoiceRecording, threadId],
+  );
   const finishComposerVoiceRecordingFromEnter = useCallback(() => {
-    const autoSend = settings.voiceEnterBehavior === "send";
-    const promptBeforeTranscript = promptRef.current;
-    void submitComposerVoiceRecording().then((transcribed) => {
-      // An empty transcript leaves the draft untouched; don't send it blind.
-      if (autoSend && transcribed && promptRef.current !== promptBeforeTranscript) {
-        setVoiceAutoSendRequest((current) => current + 1);
-      }
-    });
-  }, [promptRef, settings.voiceEnterBehavior, submitComposerVoiceRecording]);
+    finishComposerVoiceRecording(settings.voiceEnterBehavior === "send");
+  }, [finishComposerVoiceRecording, settings.voiceEnterBehavior]);
+  const sendComposerVoiceRecording = useCallback(() => {
+    finishComposerVoiceRecording(true);
+  }, [finishComposerVoiceRecording]);
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       if (!activeThreadId) {
@@ -3848,6 +3900,7 @@ export default function ChatView({
     isVoiceRecording,
     isVoiceTranscribing,
     onVoiceRecordingEnter: finishComposerVoiceRecordingFromEnter,
+    onVoiceRecordingEscape: cancelComposerVoiceRecording,
     isComposerApprovalState,
     terminalState,
     terminalWorkspaceOpen,
@@ -6262,6 +6315,7 @@ export default function ChatView({
                     waveformLevels: voiceWaveformLevels,
                     onCancel: cancelComposerVoiceRecording,
                     onSubmit: submitComposerVoiceRecording,
+                    onSend: sendComposerVoiceRecording,
                     onToggle: toggleComposerVoiceRecording,
                   }}
                   pendingInput={
