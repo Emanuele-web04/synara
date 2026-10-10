@@ -2,6 +2,7 @@ import {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpPairInput,
   ExternalMcpRefreshPairingInput,
+  ExternalMcpUpdateIntegrationInput,
   ExternalMcpRevokeIntegrationInput,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema, Semaphore } from "effect";
@@ -84,6 +85,7 @@ const decodeCreateIntegration = Schema.decodeUnknownEffect(ExternalMcpCreateInte
 const decodeRevokeIntegration = Schema.decodeUnknownEffect(ExternalMcpRevokeIntegrationInput);
 const decodePair = Schema.decodeUnknownEffect(ExternalMcpPairInput);
 const decodeRefreshPairing = Schema.decodeUnknownEffect(ExternalMcpRefreshPairingInput);
+const decodeUpdateIntegration = Schema.decodeUnknownEffect(ExternalMcpUpdateIntegrationInput);
 const decodeRuntimeChallenge = Schema.decodeUnknownEffect(
   Schema.Struct({
     nonce: Schema.String.check(Schema.isMinLength(24)).check(Schema.isMaxLength(128)),
@@ -289,6 +291,20 @@ const createIntegration = HttpRouter.add(
   }).pipe(Effect.catch((error) => Effect.succeed(managementError(error)))),
 );
 
+const updateIntegration = HttpRouter.add(
+  "POST",
+  "/api/mcp/external/integrations/update",
+  Effect.gen(function* () {
+    if (!(yield* localExternalMcpEnabled)) return disabledResponse();
+    yield* requireOwner(true);
+    const externalMcp = yield* ExternalMcpService;
+    const input = yield* decodeUpdateIntegration(yield* readManagementBody).pipe(
+      Effect.mapError(() => ({ message: "Invalid integration update.", status: 400 as const })),
+    );
+    return HttpServerResponse.jsonUnsafe(yield* externalMcp.updateIntegration(input));
+  }).pipe(Effect.catch((error) => Effect.succeed(managementError(error)))),
+);
+
 const revokeIntegration = HttpRouter.add(
   "POST",
   "/api/mcp/external/integrations/revoke",
@@ -359,6 +375,7 @@ export const externalMcpRouteLayer = Layer.mergeAll(
   externalMethodNotAllowed("DELETE"),
   listIntegrations,
   createIntegration,
+  updateIntegration,
   revokeIntegration,
   refreshPairing,
   runtimeChallenge,
