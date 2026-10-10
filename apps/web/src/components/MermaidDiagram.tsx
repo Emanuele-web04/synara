@@ -1,5 +1,6 @@
 // Mermaid stays in this lazy chunk; ordinary markdown does not load its renderers.
 import mermaid from "mermaid";
+import type { FlowDB } from "mermaid/dist/diagrams/flowchart/flowDb.js";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 // Mermaid has process-global configuration. Serialize initialization with rendering so
@@ -53,6 +54,17 @@ export default function MermaidDiagram({
           // including themes, HTML handling, sanitizer options or resource limits.
           secure: Object.keys(mermaid.mermaidAPI.defaultConfig),
         });
+        const parsed = await mermaid.mermaidAPI.getDiagramFromText(code);
+        if (cancelled) return;
+        // Image nodes load and decode their source during layout, before the SVG
+        // becomes passive. Keep their source visible so a stalled image cannot
+        // hold either Mermaid's internal queue or our shared render queue open.
+        if (
+          (parsed.type === "flowchart-v2" || parsed.type === "flowchart-elk") &&
+          Array.from((parsed.db as FlowDB).getVertices().values()).some((node) => node.img)
+        ) {
+          return;
+        }
         const container = document.createElement("div");
         container.setAttribute("aria-hidden", "true");
         Object.assign(container.style, {

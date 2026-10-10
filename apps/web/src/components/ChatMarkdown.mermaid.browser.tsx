@@ -1,5 +1,5 @@
 import "../index.css";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import ChatMarkdown from "./ChatMarkdown";
 
@@ -52,6 +52,46 @@ it("keeps invalid source without breaking the following diagram or leaking error
     expect(document.body.textContent).not.toContain("Syntax error in text");
   } finally {
     await screen.unmount();
+  }
+});
+
+it("keeps image-node source without loading images or blocking the following diagram", async () => {
+  const imageUrl = "https://example.invalid/mermaid-image-must-not-load.png";
+  const source = `flowchart LR\nA@{ img: "${imageUrl}", w: 40, h: 40 } --> B`;
+  const setImageSource = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src")?.set;
+  if (!setImageSource) throw new Error("Missing native image source setter");
+  let imageRequests = 0;
+  let rejectPendingDecode: ((reason: Error) => void) | undefined;
+  const sourceSetter = vi
+    .spyOn(HTMLImageElement.prototype, "src", "set")
+    .mockImplementation(function (this: HTMLImageElement, value) {
+      if (value === imageUrl) {
+        imageRequests += 1;
+        return;
+      }
+      setImageSource.call(this, value);
+    });
+  const decode = vi.spyOn(HTMLImageElement.prototype, "decode").mockImplementation(
+    () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectPendingDecode = reject;
+      }),
+  );
+  const screen = await render(
+    <ChatMarkdown text={`${fence(source)}\n\n${fence(diagram)}`} cwd={undefined} />,
+  );
+  try {
+    await renderedSvg("Review flow");
+    expect(imageRequests).toBe(0);
+    expect(decode).not.toHaveBeenCalled();
+    expect(document.querySelector(".chat-markdown pre")?.textContent).toContain(source);
+    expect(document.querySelectorAll(".chat-markdown img")).toHaveLength(1);
+    expect(document.querySelector('[id^="dsynara-mermaid-"]')).toBeNull();
+  } finally {
+    await screen.unmount();
+    rejectPendingDecode?.(new Error("Release the controlled pending image decode"));
+    sourceSetter.mockRestore();
+    decode.mockRestore();
   }
 });
 
