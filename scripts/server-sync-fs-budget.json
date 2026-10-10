@@ -18,13 +18,13 @@
     }
   },
   "apps/server/src/betaImport.ts": {
-    "reason": "Startup-only one-way Stable to Beta import; excluded from the streaming hot path.",
+    "reason": "Startup-only one-way Stable to Beta import, before the server opens its database or starts streaming. The home-directory handoff adds linked-parent validation and staging/rollback directories; no running-session path calls these operations.",
     "references": {
       "readFileSync": 1,
       "writeFileSync": 1,
       "renameSync": 5,
-      "lstatSync": 7,
-      "mkdirSync": 4,
+      "lstatSync": 9,
+      "mkdirSync": 7,
       "readdirSync": 1,
       "cpSync": 5,
       "statSync": 2,
