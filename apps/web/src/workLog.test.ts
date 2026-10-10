@@ -4267,42 +4267,105 @@ describe("deriveWorkLogEntries", () => {
           subagentTitle: title,
         },
       });
-    const entries = deriveWorkLogEntries(
-      [
-        progress("progress-stopped", "toolu_stopped", "Waiter A"),
-        progress("progress-failed", "toolu_failed", "Waiter B"),
-        progress("progress-running", "toolu_running", "Waiter C"),
-        // The launching call closed with the subagent stopped (parent interrupted).
-        makeActivity({
-          id: "launch-stopped",
-          createdAt: "2026-02-23T00:00:02.000Z",
-          kind: "tool.completed",
-          payload: {
-            itemType: "collab_agent_tool_call",
-            status: "failed",
-            data: {
-              toolCallId: "toolu_stopped",
-              toolName: "Agent",
-              receiverThreadId: "toolu_stopped",
-              agentStates: { toolu_stopped: { status: "stopped" } },
-            },
+    const activities: OrchestrationThreadActivity[] = [
+      progress("progress-stopped", "toolu_stopped", "Waiter A"),
+      progress("progress-failed", "toolu_failed", "Waiter B"),
+      progress("progress-running", "toolu_running", "Waiter C"),
+      // The launching call closed with the subagent stopped (parent interrupted).
+      makeActivity({
+        id: "launch-stopped",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "failed",
+          data: {
+            toolCallId: "toolu_stopped",
+            toolName: "Agent",
+            receiverThreadId: "toolu_stopped",
+            agentStates: { toolu_stopped: { status: "stopped" } },
           },
-        }),
-        makeActivity({
-          id: "task-failed",
-          createdAt: "2026-02-23T00:00:03.000Z",
-          kind: "task.completed",
-          tone: "error",
-          payload: { taskId: "task-toolu_failed", status: "failed", toolUseId: "toolu_failed" },
-        }),
-      ],
-      undefined,
-    );
+        },
+      }),
+      makeActivity({
+        id: "task-failed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.completed",
+        tone: "error",
+        payload: { taskId: "task-toolu_failed", status: "failed", toolUseId: "toolu_failed" },
+      }),
+    ];
+    const entries = deriveWorkLogEntries(activities, undefined);
     const outcomeOf = (id: string) =>
       entries.find((entry) => entry.id === id)?.subagentProgress?.outcome;
     expect(outcomeOf("progress-stopped")).toBe("stopped");
     expect(outcomeOf("progress-failed")).toBe("failed");
     expect(outcomeOf("progress-running")).toBeUndefined();
+
+    // SendMessage resumes the same native task/tool id in a new invocation.
+    const resumedStart = makeActivity({
+      id: "resumed-start",
+      createdAt: "2026-02-23T00:00:04.000Z",
+      turnId: TurnId.makeUnsafe("turn-resumed"),
+      kind: "task.started",
+      payload: { taskId: "task-toolu_stopped", toolUseId: "toolu_stopped" },
+    });
+    const resumedActivities = [
+      ...activities,
+      resumedStart,
+      {
+        ...progress("progress-resumed", "toolu_stopped", "Waiter A"),
+        createdAt: "2026-02-23T00:00:05.000Z",
+        turnId: TurnId.makeUnsafe("turn-resumed"),
+      },
+      // A repeated live start must not discard progress already in this run.
+      makeActivity({
+        id: "resumed-start-repeat",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        turnId: "turn-resumed",
+        kind: "task.started",
+        payload: resumedStart.payload,
+      }),
+      // The background task can keep running into another parent turn.
+      {
+        ...progress("progress-background", "toolu_stopped", "Waiter A"),
+        createdAt: "2026-02-23T00:00:07.000Z",
+        turnId: TurnId.makeUnsafe("turn-next-parent"),
+      },
+    ];
+    const runningEntries = deriveWorkLogEntries(resumedActivities, undefined);
+    expect(
+      runningEntries.find((entry) => entry.id === "progress-stopped")?.subagentProgress?.outcome,
+    ).toBe("stopped");
+    expect(
+      runningEntries.find((entry) => entry.id === "progress-resumed")?.subagentProgress?.outcome,
+    ).toBeUndefined();
+
+    const settledEntries = deriveWorkLogEntries(
+      [
+        ...resumedActivities,
+        makeActivity({
+          id: "resumed-completed",
+          createdAt: "2026-02-23T00:00:08.000Z",
+          turnId: TurnId.makeUnsafe("turn-next-parent"),
+          kind: "task.completed",
+          payload: {
+            taskId: "task-toolu_stopped",
+            toolUseId: "toolu_stopped",
+            status: "completed",
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(
+      settledEntries.find((entry) => entry.id === "progress-stopped")?.subagentProgress?.outcome,
+    ).toBe("stopped");
+    for (const id of ["progress-resumed", "progress-background"]) {
+      expect(settledEntries.find((entry) => entry.id === id)?.subagentProgress?.outcome).toBe(
+        "completed",
+      );
+    }
   });
 
   it("keeps the native subagent cap notice visible outside rendered turns", () => {
