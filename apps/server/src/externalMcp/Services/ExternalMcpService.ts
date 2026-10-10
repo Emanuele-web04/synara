@@ -4,7 +4,6 @@ import type {
   ExternalMcpIntegration,
   ExternalMcpPairResult,
   ExternalMcpRefreshPairingInput,
-  ExternalMcpUpdateIntegrationInput,
 } from "@synara/contracts";
 import { Data, ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -40,9 +39,6 @@ export interface ExternalMcpServiceShape {
     ReadonlyArray<ExternalMcpIntegration>,
     ExternalMcpError
   >;
-  readonly updateIntegration: (
-    input: ExternalMcpUpdateIntegrationInput,
-  ) => Effect.Effect<ExternalMcpIntegration, ExternalMcpError>;
   readonly revokeIntegration: (integrationId: string) => Effect.Effect<boolean, ExternalMcpError>;
   readonly refreshPairing: (
     input: ExternalMcpRefreshPairingInput,

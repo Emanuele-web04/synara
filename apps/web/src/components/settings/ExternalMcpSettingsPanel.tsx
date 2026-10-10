@@ -2,8 +2,6 @@ import {
   ProjectId,
   type ExternalMcpCapability,
   type ExternalMcpCreateIntegrationResult,
-  type ExternalMcpIntegration,
-  type ExternalMcpUpdateIntegrationInput,
 } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -59,45 +57,6 @@ function copyWithToast(value: string, title: string): void {
   );
 }
 
-function parseConcurrencyLimit(value: string): number | null | undefined {
-  if (value.trim() === "") return null;
-  const limit = Number(value);
-  return Number.isInteger(limit) && limit >= 1 && limit <= 100 ? limit : undefined;
-}
-
-function ConcurrencyLimitInput(props: {
-  value: string;
-  onChange: (value: string) => void;
-  label: string;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <Input
-        type="number"
-        min={1}
-        max={100}
-        step={1}
-        className="w-28"
-        aria-label={props.label}
-        aria-invalid={parseConcurrencyLimit(props.value) === undefined}
-        placeholder="No limit"
-        value={props.value}
-        disabled={props.disabled}
-        onChange={(event) => props.onChange(event.target.value)}
-      />
-      <Button
-        size="xs"
-        variant="ghost"
-        disabled={props.disabled || props.value === ""}
-        onClick={() => props.onChange("")}
-      >
-        No limit
-      </Button>
-    </div>
-  );
-}
-
 export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState<string>(DEFAULT_NAME);
@@ -109,9 +68,6 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const [allowLocal, setAllowLocal] = useState(false);
   const [allowFullAccess, setAllowFullAccess] = useState(false);
   const [allowComputerControl, setAllowComputerControl] = useState(false);
-  const [concurrencyLimitDraft, setConcurrencyLimitDraft] = useState("");
-  const [editingIntegrationId, setEditingIntegrationId] = useState<string | null>(null);
-  const [editedConcurrencyLimit, setEditedConcurrencyLimit] = useState("");
   const [setup, setSetup] = useState<ExternalMcpCreateIntegrationResult | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -145,10 +101,8 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   }, [allowComputerControl, allowFullAccess, allowLocal, allowProjectRead]);
 
   const createMutation = useMutation({
-    mutationFn: () => {
-      const concurrencyLimit = parseConcurrencyLimit(concurrencyLimitDraft);
-      if (concurrencyLimit === undefined) throw new Error("Choose a task limit from 1 to 100.");
-      return ensureNativeApi().server.createExternalMcpIntegration({
+    mutationFn: () =>
+      ensureNativeApi().server.createExternalMcpIntegration({
         name: name.trim(),
         projectScope: allProjects ? "all" : "selected",
         ...(allProjects
@@ -157,10 +111,8 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               projectIds: [...selectedProjects].map((projectId) => ProjectId.makeUnsafe(projectId)),
             }),
         capabilities,
-        concurrencyLimit,
         expiresInDays: 30,
-      });
-    },
+      }),
     onSuccess: (result) => {
       setManualOpen(false);
       setSetup(result);
@@ -176,27 +128,6 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
         type: "error",
         title: "Could not create connection",
         description: error instanceof Error ? error.message : "External MCP setup failed.",
-      }),
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (input: ExternalMcpUpdateIntegrationInput) =>
-      ensureNativeApi().server.updateExternalMcpIntegration(input),
-    onSuccess: (result) => {
-      queryClient.setQueryData<ReadonlyArray<ExternalMcpIntegration>>(
-        INTEGRATIONS_QUERY_KEY,
-        (current) =>
-          current?.map((value) => (value.integrationId === result.integrationId ? result : value)),
-      );
-      setEditingIntegrationId((current) => (current === result.integrationId ? null : current));
-      void queryClient.invalidateQueries({ queryKey: INTEGRATIONS_QUERY_KEY });
-      toastManager.add({ type: "success", title: "Task limit saved" });
-    },
-    onError: (error: unknown) =>
-      toastManager.add({
-        type: "error",
-        title: "Could not save task limit",
-        description: error instanceof Error ? error.message : "Connection update failed.",
       }),
   });
 
@@ -270,7 +201,6 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const projects = projectsQuery.data?.projects ?? [];
   const canCreate =
     name.trim().length > 0 &&
-    parseConcurrencyLimit(concurrencyLimitDraft) !== undefined &&
     (allProjects || selectedProjects.size > 0) &&
     !createMutation.isPending;
   const paired = setupIntegration?.pairedAt != null;
@@ -375,18 +305,6 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               </div>
             </DisclosureRegion>
           </SettingsRow>
-          <SettingsRow
-            title="Concurrent tasks"
-            description="Leave empty for no limit, or choose a maximum from 1 to 100. Per-minute request limits still apply."
-            control={
-              <ConcurrencyLimitInput
-                value={concurrencyLimitDraft}
-                onChange={setConcurrencyLimitDraft}
-                label="Concurrent task limit"
-                disabled={createMutation.isPending}
-              />
-            }
-          />
           <SettingsRow
             title="Advanced permissions"
             description="Optional access for existing tasks, shared checkouts, or execution without approvals. The safe defaults are recommended."
@@ -667,73 +585,16 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     <div>
                       Permissions: {describeExternalMcpPermissions(integration.capabilities)}
                     </div>
-                    <div>Concurrent tasks: {integration.concurrencyLimit ?? "No limit"}</div>
                     <div>
                       Created {formatDate(integration.createdAt)} · Last used{" "}
                       {formatDate(integration.lastUsedAt)} · Expires{" "}
                       {formatDate(integration.expiresAt)}
                     </div>
-                    {editingIntegrationId === integration.integrationId && active ? (
-                      <div className="space-y-2 pt-3">
-                        <div>Applies to new tasks. Running tasks keep going.</div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <ConcurrencyLimitInput
-                            value={editedConcurrencyLimit}
-                            onChange={setEditedConcurrencyLimit}
-                            label={`${integration.name} concurrent task limit`}
-                            disabled={updateMutation.isPending}
-                          />
-                          <Button
-                            size="xs"
-                            disabled={
-                              updateMutation.isPending ||
-                              parseConcurrencyLimit(editedConcurrencyLimit) === undefined
-                            }
-                            onClick={() => {
-                              const concurrencyLimit =
-                                parseConcurrencyLimit(editedConcurrencyLimit);
-                              if (concurrencyLimit !== undefined) {
-                                updateMutation.mutate({
-                                  integrationId: integration.integrationId,
-                                  concurrencyLimit,
-                                });
-                              }
-                            }}
-                          >
-                            {updateMutation.isPending ? "Saving..." : "Save limit"}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            disabled={updateMutation.isPending}
-                            onClick={() => setEditingIntegrationId(null)}
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
                   </div>
                 }
                 actions={
                   active ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        disabled={updateMutation.isPending}
-                        aria-label={`Edit task limit for ${integration.name}`}
-                        onClick={() => {
-                          setEditingIntegrationId(integration.integrationId);
-                          setEditedConcurrencyLimit(
-                            integration.concurrencyLimit === null
-                              ? ""
-                              : String(integration.concurrencyLimit),
-                          );
-                        }}
-                      >
-                        Task limit
-                      </Button>
+                    <div className="flex items-center gap-2">
                       <Button
                         size="xs"
                         variant="outline"

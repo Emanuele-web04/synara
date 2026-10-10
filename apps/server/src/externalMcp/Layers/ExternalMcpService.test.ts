@@ -102,51 +102,6 @@ describe("ExternalMcpService", () => {
     );
   });
 
-  it("defaults new pairings to unlimited and round-trips edits without rotating credentials", async () => {
-    await run(
-      Effect.gen(function* () {
-        const service = yield* loadServiceWithProject;
-        const created = yield* service.createIntegration({
-          name: "Editable limit",
-          projectScope: "all",
-          capabilities: ["projects:read"],
-        });
-        const integrationId = created.integration.integrationId;
-        expect(created.integration.concurrencyLimit).toBeNull();
-        const paired = yield* service.pair(created.pairingCode, "syn_mcp_v1_editable-limit-secret");
-        for (const concurrencyLimit of [8, null]) {
-          expect(
-            (yield* service.updateIntegration({ integrationId, concurrencyLimit }))
-              .concurrencyLimit,
-          ).toBe(concurrencyLimit);
-          expect(
-            (yield* service.listIntegrations()).find(
-              (value) => value.integrationId === integrationId,
-            )?.concurrencyLimit,
-          ).toBe(concurrencyLimit);
-          const verified = yield* service.verifyCredential(paired.credential);
-          expect(verified.integration.concurrencyLimit).toBe(concurrencyLimit);
-          expect(verified.integration.rateLimitPerMinute).toBe(
-            created.integration.rateLimitPerMinute,
-          );
-        }
-        const capped = yield* service.createIntegration({
-          name: "Explicit cap",
-          projectScope: "all",
-          capabilities: ["projects:read"],
-          concurrencyLimit: 3,
-        });
-        expect(capped.integration.concurrencyLimit).toBe(3);
-        yield* service.revokeIntegration(integrationId);
-        expect(
-          (yield* service
-            .updateIntegration({ integrationId, concurrencyLimit: 1 })
-            .pipe(Effect.exit))._tag,
-        ).toBe("Failure");
-      }),
-    );
-  });
-
   it("grants every current and future project with the all-projects scope", async () => {
     await run(
       Effect.gen(function* () {
