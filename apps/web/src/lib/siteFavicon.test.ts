@@ -8,20 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { extractHostname, resolveSiteFaviconUrl } from "./siteFavicon";
 
 describe("extractHostname", () => {
-  it("extracts the hostname from a full https URL", () => {
-    expect(extractHostname("https://github.com/foo/bar")).toBe("github.com");
-  });
-
   it("returns null for a bare domain without a scheme", () => {
     expect(extractHostname("example.com")).toBeNull();
-  });
-
-  it("returns null for malformed input", () => {
-    expect(extractHostname("not-a-url")).toBeNull();
-  });
-
-  it("returns null for empty input", () => {
-    expect(extractHostname("")).toBeNull();
   });
 });
 

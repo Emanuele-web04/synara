@@ -173,7 +173,7 @@ describe("buildQuitInterruptCommand", () => {
 });
 
 describe("planQuitResumeTurns", () => {
-  it("queues an ordinary user turn on each unchanged thread using its own runtime settings", () => {
+  it("queues an automatic continuation using each unchanged thread's runtime settings", () => {
     const plan = planQuitResumeTurns({
       record: makeRecord([{ threadId: "a", turnId: "a-turn" }]),
       threads: [makeThread("a", { runtimeMode: "approval-required", interactionMode: "plan" })],
@@ -194,6 +194,7 @@ describe("planQuitResumeTurns", () => {
           attachments: [],
         },
         dispatchMode: "queue",
+        dispatchOrigin: "automation",
         runtimeMode: "approval-required",
         interactionMode: "plan",
         // Re-checked by the decider inside the serialized dispatch.

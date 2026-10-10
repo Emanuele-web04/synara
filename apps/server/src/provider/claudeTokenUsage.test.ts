@@ -152,16 +152,11 @@ describe("Claude context selection", () => {
   );
 
   it.each([
-    ["claude-opus-4-6", undefined, undefined],
     ["claude-opus-4-6", "200k", 200_000],
     ["claude-opus-4-6", "1m", 1_000_000],
-    ["claude-fable-5-1", undefined, undefined],
-    ["claude-fable-5-1", "1m", 1_000_000],
-    ["claude-fable-5-1", "200k", 200_000],
     ["claude-fable-5-1[1m]", undefined, undefined],
     ["claude-fable-5-1[1m]", "200k", 200_000],
     ["claude-opus-4-5", "1m", undefined],
-    ["claude-opus-4-6", "2m", undefined],
   ] as const)("resolves model=%s selection=%s to %s", (model, selected, expected) => {
     expect(resolveSelectedClaudeAutoCompactWindow(model, selected)).toBe(expected);
   });

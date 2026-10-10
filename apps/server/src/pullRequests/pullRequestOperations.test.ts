@@ -71,6 +71,7 @@ function makeTestOperations(github: GitHubCliShape) {
         deleteBranchOnMerge: false,
       }),
     withGitHubRead: (effect) => effect,
+    cacheDetail: (_input, load) => load,
     finalizeMutationCaches: () => Effect.void,
   });
 }
@@ -114,6 +115,7 @@ describe("makePullRequestOperations", () => {
                 deleteBranchOnMerge: false,
               }),
             withGitHubRead: (effect) => effect,
+            cacheDetail: (_input, load) => load,
             finalizeMutationCaches: () => Effect.void,
           });
 

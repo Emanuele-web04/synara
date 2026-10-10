@@ -59,7 +59,11 @@ A creation plan should specify:
 - Provider/model target discovered from capabilities
 - Local or worktree environment
 - Base ref when a worktree must start from a specific revision
-- Approval-required or full-access runtime mode
+- Optional approval-required or full-access runtime mode override
+
+Hub tasks inherit the coordinator thread’s approval mode when `runtimeMode` is omitted, including **Approve for me** (Auto). The mode is saved when the Hub accepts the task and retained while it waits in the queue. An explicit `runtimeMode` takes precedence; the MCP input supports approval-required and full-access overrides.
+
+The access selector reflects the saved thread mode. A mode changed during an active turn is marked **next turn**: Synara saves it immediately and applies it when the next turn prepares the provider session. The current turn keeps its original permissions.
 
 Prefer a managed worktree for an independently editing child.
 
@@ -223,3 +227,7 @@ One integration owner must compare actual diffs and evidence. Do not ask childre
 ## Model metadata and provider compatibility
 
 Gateway model metadata includes Claude context windows so agents can inspect model capacity. Pi and OpenCode calls use compatible tool schemas; a model catalog entry still describes capabilities rather than granting provider account access.
+
+## Returned task results in 0.9.0
+
+Eligible delegated runs created through the gateway can return their completed result to the originating task automatically. Delivery waits for durable output settlement and follows the initial delegated request, rather than accidentally returning a later turn. Failure and interruption remain distinct outcomes. This scoped handoff is not a promise of automatic completion delivery for every persistent-goal workflow; inspect task status and use the returned read-task reference when more detail is needed.

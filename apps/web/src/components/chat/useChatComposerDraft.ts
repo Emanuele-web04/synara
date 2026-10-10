@@ -91,6 +91,12 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
+  const setComposerDraftComputerControlMode = useComposerDraftStore(
+    (store) => store.setComputerControlMode,
+  );
+  const setComposerDraftComputerControl = useComposerDraftStore(
+    (store) => store.setEnableComputerControl,
+  );
   const enqueueQueuedComposerTurn = useComposerDraftStore((store) => store.enqueueQueuedTurn);
   const insertQueuedComposerTurn = useComposerDraftStore((store) => store.insertQueuedTurn);
   const removeQueuedComposerTurnFromDraft = useComposerDraftStore(
@@ -481,6 +487,8 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     setComposerDraftProviderModelOptions,
     setComposerDraftRuntimeMode,
     setComposerDraftInteractionMode,
+    setComposerDraftComputerControlMode,
+    setComposerDraftComputerControl,
     enqueueQueuedComposerTurn,
     insertQueuedComposerTurn,
     removeQueuedComposerTurnFromDraft,

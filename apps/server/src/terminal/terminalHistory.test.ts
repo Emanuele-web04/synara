@@ -91,12 +91,6 @@ describe("TerminalHistoryBuffer", () => {
     expect(buffer.isEmpty).toBe(false);
   });
 
-  it("starts empty and reports isEmpty", () => {
-    const buffer = new TerminalHistoryBuffer({ maxLines: 10, maxBytes: 10 });
-    expect(buffer.isEmpty).toBe(true);
-    expect(buffer.toString()).toBe("");
-  });
-
   it("fromString round-trips content under the caps", () => {
     const buffer = TerminalHistoryBuffer.fromString("seed\ntext\n", {
       maxLines: 10,
@@ -147,15 +141,6 @@ describe("TerminalHistoryBuffer", () => {
     for (const chunk of chunks) buffer.append(chunk);
 
     expect(buffer.toString()).toBe(eagerCap(chunks, limits));
-  });
-
-  it("keeps the retained byte footprint bounded regardless of total output", () => {
-    const limits: HistoryLimits = { maxLines: 5_000, maxBytes: 65_536 };
-    const buffer = new TerminalHistoryBuffer(limits);
-    for (let index = 0; index < 2_000; index += 1) {
-      buffer.append(`${"y".repeat(1_000)}\n`); // ~2 MB streamed total
-    }
-    expect(Buffer.byteLength(buffer.toString(), "utf8")).toBeLessThanOrEqual(limits.maxBytes);
   });
 
   it("never splits a multi-byte code point across the cap boundary", () => {

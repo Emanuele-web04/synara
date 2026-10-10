@@ -5,21 +5,15 @@
 // Layer: Web UI state utilities
 // Exports: load/save helpers for the confirmed-path record.
 
-import type { ProviderKind } from "@synara/contracts";
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { ProviderInstanceId } from "@synara/contracts";
+import { Schema } from "effect";
 import { isPlainObject } from "./persistedRecord";
 
 const STORAGE_KEY = "synara:confirmed-custom-binary-paths:v1";
 
-const PROVIDER_KINDS: ReadonlySet<ProviderKind> = new Set(
-  PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind),
-);
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
 
-function isProviderKind(value: string): value is ProviderKind {
-  return PROVIDER_KINDS.has(value as ProviderKind);
-}
-
-export function loadConfirmedCustomBinaryPaths(): Partial<Record<ProviderKind, string>> {
+export function loadConfirmedCustomBinaryPaths(): Partial<Record<ProviderInstanceId, string>> {
   if (typeof window === "undefined") {
     return {};
   }
@@ -41,11 +35,11 @@ export function loadConfirmedCustomBinaryPaths(): Partial<Record<ProviderKind, s
   if (!isPlainObject(parsed)) {
     return {};
   }
-  // Validating keys against the known provider set also blocks prototype
+  // Validating keys against the provider-instance id schema also blocks prototype
   // pollution (e.g. "__proto__") from untrusted persisted input.
-  const result: Partial<Record<ProviderKind, string>> = {};
+  const result: Partial<Record<ProviderInstanceId, string>> = {};
   for (const [key, value] of Object.entries(parsed)) {
-    if (!isProviderKind(key) || typeof value !== "string") {
+    if (!isProviderInstanceId(key) || typeof value !== "string") {
       continue;
     }
     const trimmed = value.trim();
@@ -56,7 +50,9 @@ export function loadConfirmedCustomBinaryPaths(): Partial<Record<ProviderKind, s
   return result;
 }
 
-export function saveConfirmedCustomBinaryPaths(paths: Partial<Record<ProviderKind, string>>): void {
+export function saveConfirmedCustomBinaryPaths(
+  paths: Partial<Record<ProviderInstanceId, string>>,
+): void {
   if (typeof window === "undefined") {
     return;
   }
