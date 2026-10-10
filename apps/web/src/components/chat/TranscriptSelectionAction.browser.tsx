@@ -23,6 +23,7 @@ function props() {
     canUseWorktree: true,
     canAddToSide: true,
     onDismiss: vi.fn(),
+    canAddToChat: vi.fn(() => true),
     onAddToChat: vi.fn(),
     onAddToSide: vi.fn().mockResolvedValue(undefined),
     onNewChat: vi.fn().mockResolvedValue(undefined),
@@ -160,3 +161,71 @@ it.each([""])(
     }
   },
 );
+
+it("asks for a comment before adding the quote to the chat", async () => {
+  const callbacks = props();
+  const screen = await render(<TranscriptSelectionActionLayer {...callbacks} />);
+  try {
+    await page.getByRole("button", { name: "Add to Chat", exact: true }).click();
+    expect(callbacks.onDismiss).toHaveBeenCalledOnce();
+    await screen.rerender(<TranscriptSelectionActionLayer {...callbacks} action={null} />);
+    const input = page.getByRole("textbox", { name: "Comment on selection" });
+    await expect.element(input).toHaveFocus();
+    await expect.element(page.getByText("1 selection")).toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Local", exact: true }))
+      .not.toBeInTheDocument();
+    await input.fill("Too vague, add numbers");
+    await userEvent.keyboard("{Enter}");
+    expect(callbacks.onAddToChat).toHaveBeenCalledExactlyOnceWith(
+      action.selection,
+      "Too vague, add numbers",
+    );
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("adds the bare quote when the comment is left empty", async () => {
+  const callbacks = props();
+  const screen = await render(<TranscriptSelectionActionLayer {...callbacks} />);
+  try {
+    await page.getByRole("button", { name: "Add to Chat", exact: true }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Add to Chat", exact: true })
+      .click();
+    expect(callbacks.onAddToChat).toHaveBeenCalledExactlyOnceWith(action.selection, "");
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("closes the comment field on Escape without adding the quote", async () => {
+  const callbacks = props();
+  const screen = await render(<TranscriptSelectionActionLayer {...callbacks} />);
+  try {
+    await page.getByRole("button", { name: "Add to Chat", exact: true }).click();
+    await page.getByRole("textbox", { name: "Comment on selection" }).fill("Draft");
+    await userEvent.keyboard("{Escape}");
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    expect(callbacks.onAddToChat).not.toHaveBeenCalled();
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("does not open the comment field when the quote can't be added", async () => {
+  const callbacks = { ...props(), canAddToChat: vi.fn(() => false) };
+  const screen = await render(<TranscriptSelectionActionLayer {...callbacks} />);
+  try {
+    await page.getByRole("button", { name: "Add to Chat", exact: true }).click();
+    expect(callbacks.canAddToChat).toHaveBeenCalledExactlyOnceWith(action.selection);
+    expect(callbacks.onDismiss).toHaveBeenCalledOnce();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    expect(callbacks.onAddToChat).not.toHaveBeenCalled();
+  } finally {
+    await screen.unmount();
+  }
+});

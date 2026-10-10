@@ -1,4 +1,5 @@
-// Purpose: Floating composer that retains a transcript quote while the user writes a new prompt.
+// Purpose: Floating composer that retains a transcript quote while the user writes a new prompt,
+// a comment to attach next to the quote in the current chat, or edits that comment later.
 
 import type { ThreadEnvironmentMode } from "@synara/contracts";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -20,26 +21,38 @@ import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { TRANSCRIPT_SELECTION_ACTION_HEIGHT_PX } from "./chatSelectionActions";
 import type { PendingTranscriptSelectionAction } from "./useTranscriptAssistantSelectionAction";
 
-interface SelectionNewChatComposerProps {
+type SelectionNewChatComposerProps = {
   action: PendingTranscriptSelectionAction;
-  defaultEnvMode: ThreadEnvironmentMode;
-  canUseWorktree: boolean;
-  onSend: (prompt: string, envMode: ThreadEnvironmentMode) => Promise<void>;
-  onOpenInChat: (prompt: string, envMode: ThreadEnvironmentMode) => Promise<void>;
   onClose: () => void;
-}
+} & (
+  | {
+      variant: "new-chat";
+      defaultEnvMode: ThreadEnvironmentMode;
+      canUseWorktree: boolean;
+      onSend: (prompt: string, envMode: ThreadEnvironmentMode) => Promise<void>;
+      onOpenInChat: (prompt: string, envMode: ThreadEnvironmentMode) => Promise<void>;
+    }
+  | {
+      variant: "comment";
+      onAddComment: (comment: string) => void;
+    }
+  | {
+      variant: "edit-comment";
+      initialComment: string;
+      onSaveComment: (comment: string) => void;
+      onRemove: () => void;
+    }
+);
 
-export function SelectionNewChatComposer({
-  action,
-  defaultEnvMode,
-  canUseWorktree,
-  onSend,
-  onOpenInChat,
-  onClose,
-}: SelectionNewChatComposerProps) {
-  const [prompt, setPrompt] = useState("");
-  const [cursor, setCursor] = useState(0);
-  const [envMode, setEnvMode] = useState(canUseWorktree ? defaultEnvMode : "local");
+export function SelectionNewChatComposer(props: SelectionNewChatComposerProps) {
+  const { action, onClose } = props;
+  const isComment = props.variant !== "new-chat";
+  const initialComment = props.variant === "edit-comment" ? props.initialComment : "";
+  const [prompt, setPrompt] = useState(initialComment);
+  const [cursor, setCursor] = useState(initialComment.length);
+  const [envMode, setEnvMode] = useState(
+    props.variant === "new-chat" && props.canUseWorktree ? props.defaultEnvMode : "local",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submittingRef = useRef(false);
@@ -85,7 +98,7 @@ export function SelectionNewChatComposer({
         !surfaceRef.current?.contains(event.target) &&
         !(
           event.target instanceof Element &&
-          event.target.closest("[data-composer-environment-menu]")
+          event.target.closest("[data-composer-environment-menu], [data-slot=popover-popup]")
         )
       ) {
         onClose();
@@ -108,12 +121,23 @@ export function SelectionNewChatComposer({
 
   const submit = async (intent: "send" | "compose") => {
     const nextPrompt = inputRef.current?.readSnapshot().value ?? prompt;
+    if (props.variant === "comment") {
+      // An empty comment still adds the bare quote, like the old one-click Add to Chat.
+      props.onAddComment(nextPrompt);
+      onClose();
+      return;
+    }
+    if (props.variant === "edit-comment") {
+      props.onSaveComment(nextPrompt);
+      onClose();
+      return;
+    }
     if (submittingRef.current || (intent === "send" && !nextPrompt.trim())) return;
     submittingRef.current = true;
     setBusy(true);
     setError(null);
     try {
-      await (intent === "send" ? onSend : onOpenInChat)(nextPrompt, envMode);
+      await (intent === "send" ? props.onSend : props.onOpenInChat)(nextPrompt, envMode);
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not start the chat. Try again.");
@@ -128,7 +152,7 @@ export function SelectionNewChatComposer({
       ref={surfaceRef}
       data-transcript-selection-action="true"
       role="dialog"
-      aria-label="New chat from selection"
+      aria-label={isComment ? "Comment on selection" : "New chat from selection"}
       className="fixed z-50 w-[320px] max-w-[calc(100vw-16px)] text-foreground"
       // No overflow on this wrapper: a scroll box is square and would clip the rounded
       // surface's shadow into hard corners. The editor caps and scrolls its own height.
@@ -148,23 +172,25 @@ export function SelectionNewChatComposer({
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <AssistantSelectionsSummaryChip selections={selections} />
                   <div className="flex items-center gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      disabled={busy}
-                      onClick={() => {
-                        void submit("compose");
-                      }}
-                    >
-                      Open in chat
-                      <ArrowUpRightIcon className="size-3" />
-                    </Button>
+                    {isComment ? null : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        disabled={busy}
+                        onClick={() => {
+                          void submit("compose");
+                        }}
+                      >
+                        Open in chat
+                        <ArrowUpRightIcon className="size-3" />
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon-xs"
-                      aria-label="Close new chat composer"
+                      aria-label={isComment ? "Close comment" : "Close new chat composer"}
                       disabled={busy}
                       onClick={onClose}
                     >
@@ -178,9 +204,9 @@ export function SelectionNewChatComposer({
                   cursor={cursor}
                   terminalContexts={[]}
                   disabled={busy}
-                  ariaLabel="Message for new chat"
+                  ariaLabel={isComment ? "Comment on selection" : "Message for new chat"}
                   className="min-h-[1lh]"
-                  placeholder="Ask about this selection…"
+                  placeholder={isComment ? "Add a comment…" : "Ask about this selection…"}
                   onRemoveTerminalContext={() => {}}
                   onPaste={() => {}}
                   onChange={(value, nextCursor) => {
@@ -199,33 +225,60 @@ export function SelectionNewChatComposer({
                   {error}
                 </p>
               ) : null}
-              <div className={cn(COMPOSER_FOOTER_ROW_CLASS_NAME, "gap-2")}>
-                <ComposerEnvironmentPicker
-                  environmentPresentation={resolveThreadEnvironmentPresentation({ envMode })}
-                  onEnvModeChange={setEnvMode}
-                  canSwitchToWorktree={canUseWorktree && envMode === "local"}
-                  disabled={busy}
-                  onOpenChange={(open) => {
-                    environmentMenuOpenRef.current = open;
-                  }}
-                />
-                <Button
-                  type="submit"
-                  variant="prominent"
-                  size="icon-xs"
-                  className="size-7 rounded-full sm:size-7"
-                  aria-label="Send to new chat"
-                  disabled={busy || !prompt.trim()}
-                >
-                  {busy ? (
-                    <LoaderCircleIcon className="size-3 animate-spin" />
-                  ) : (
-                    <ComposerSendArrowIcon
-                      aria-hidden="true"
-                      className="size-5 shrink-0 translate-y-px"
-                    />
-                  )}
-                </Button>
+              <div
+                className={cn(COMPOSER_FOOTER_ROW_CLASS_NAME, "gap-2", isComment && "justify-end")}
+              >
+                {props.variant === "new-chat" ? (
+                  <ComposerEnvironmentPicker
+                    environmentPresentation={resolveThreadEnvironmentPresentation({ envMode })}
+                    onEnvModeChange={setEnvMode}
+                    canSwitchToWorktree={props.canUseWorktree && envMode === "local"}
+                    disabled={busy}
+                    onOpenChange={(open) => {
+                      environmentMenuOpenRef.current = open;
+                    }}
+                  />
+                ) : null}
+                {props.variant === "edit-comment" ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => {
+                        props.onRemove();
+                        onClose();
+                      }}
+                    >
+                      Remove
+                    </Button>
+                    <Button type="submit" variant="prominent" size="xs">
+                      Save
+                    </Button>
+                  </>
+                ) : isComment ? (
+                  <Button type="submit" variant="prominent" size="xs">
+                    Add to Chat
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    variant="prominent"
+                    size="icon-xs"
+                    className="size-7 rounded-full sm:size-7"
+                    aria-label="Send to new chat"
+                    disabled={busy || !prompt.trim()}
+                  >
+                    {busy ? (
+                      <LoaderCircleIcon className="size-3 animate-spin" />
+                    ) : (
+                      <ComposerSendArrowIcon
+                        aria-hidden="true"
+                        className="size-5 shrink-0 translate-y-px"
+                      />
+                    )}
+                  </Button>
+                )}
               </div>
             </form>
           </DisclosureRegion>

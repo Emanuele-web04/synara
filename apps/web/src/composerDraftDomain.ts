@@ -392,6 +392,11 @@ export interface ComposerDraftStoreState {
     selection: ComposerAssistantSelectionAttachment,
   ) => boolean;
   removeAssistantSelection: (threadId: ThreadId, selectionId: string) => void;
+  updateAssistantSelectionComment: (
+    threadId: ThreadId,
+    selectionId: string,
+    comment: string,
+  ) => void;
   clearAssistantSelections: (threadId: ThreadId) => void;
   addBrowserAnnotation: (
     threadId: ThreadId,
@@ -606,13 +611,16 @@ export function terminalContextDedupKey(context: TerminalContextDraft): string {
 }
 
 export function assistantSelectionDedupKey(
-  selection: Pick<ComposerAssistantSelectionAttachment, "assistantMessageId" | "text">,
+  selection: Pick<ComposerAssistantSelectionAttachment, "assistantMessageId" | "text" | "comment">,
 ): string {
-  return `${selection.assistantMessageId}\u0000${selection.text}`;
+  return `${selection.assistantMessageId}\u0000${selection.text}\u0000${selection.comment ?? ""}`;
 }
 
 export function normalizeAssistantSelection(
-  selection: Pick<ComposerAssistantSelectionAttachment, "id" | "assistantMessageId" | "text">,
+  selection: Pick<
+    ComposerAssistantSelectionAttachment,
+    "id" | "assistantMessageId" | "text" | "comment"
+  >,
 ): ComposerAssistantSelectionAttachment | null {
   const normalized = normalizeAssistantSelectionAttachment(selection);
   if (!normalized) {
@@ -620,15 +628,14 @@ export function normalizeAssistantSelection(
   }
   return {
     type: "assistant-selection",
-    ...selection,
-    assistantMessageId: normalized.assistantMessageId,
-    text: normalized.text,
+    id: selection.id,
+    ...normalized,
   };
 }
 
 export function normalizeAssistantSelections(
   selections: ReadonlyArray<
-    Pick<ComposerAssistantSelectionAttachment, "id" | "assistantMessageId" | "text">
+    Pick<ComposerAssistantSelectionAttachment, "id" | "assistantMessageId" | "text" | "comment">
   >,
 ): ComposerAssistantSelectionAttachment[] {
   const normalizedSelections: ComposerAssistantSelectionAttachment[] = [];

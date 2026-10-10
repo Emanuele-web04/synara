@@ -152,3 +152,34 @@ export function resolveTranscriptSelectionActionLayout(input: {
     placement,
   };
 }
+
+// Locates a quoted selection inside rendered assistant markdown. Whitespace is ignored on both
+// sides because `Selection.toString()` inserts line breaks between blocks that the DOM text lacks.
+export function findTextRangeInElement(root: Element, text: string): Range | null {
+  const needle = text.replace(/\s+/g, "");
+  if (needle.length === 0) {
+    return null;
+  }
+  const nodes: Text[] = [];
+  const offsets: number[] = [];
+  let haystack = "";
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const value = node.nodeValue ?? "";
+    for (let offset = 0; offset < value.length; offset += 1) {
+      if (/\s/.test(value[offset]!)) continue;
+      haystack += value[offset];
+      nodes.push(node as Text);
+      offsets.push(offset);
+    }
+  }
+  const start = haystack.indexOf(needle);
+  if (start < 0) {
+    return null;
+  }
+  const end = start + needle.length - 1;
+  const range = document.createRange();
+  range.setStart(nodes[start]!, offsets[start]!);
+  range.setEnd(nodes[end]!, offsets[end]! + 1);
+  return range;
+}
