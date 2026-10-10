@@ -158,8 +158,13 @@ export interface WorkLogEntry {
   // batch roll-up) render as compact centered pills in the coordinator
   // conversation, each carrying a link into the reported thread.
   synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
-  // A task the agent moved to the background finished. Its completion wakes the
-  // agent into a new turn, so the row also marks where that new response starts.
+  // Completion notices and Monitor updates both anchor the response they woke.
+  monitorNotification?: {
+    taskId: string;
+    name: string;
+    output: string;
+    outcome: "updated" | "completed" | "failed" | "stopped";
+  };
   backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
   // A subagent's own progress, reported to the thread that launched it. It is
   // that subagent's current step, never the launcher's reasoning.
@@ -254,6 +259,7 @@ export interface WorkLogSynaraWorkerNoticeThread {
 
 export interface WorkLogBackgroundTaskCompletion {
   taskId: string;
+  outcome?: "completed" | "failed" | "stopped";
   taskType: string | null;
   description: string | null;
 }
@@ -759,7 +765,15 @@ function deriveBackgroundTaskCompletionEntries(
       label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
       tone: payload.status === "failed" ? "error" : "info",
       activityKind: activity.kind,
-      backgroundTaskCompletion: { taskId: payload.taskId, ...task },
+      backgroundTaskCompletion: {
+        taskId: payload.taskId,
+        ...task,
+        ...(payload.status === "completed" ||
+        payload.status === "failed" ||
+        payload.status === "stopped"
+          ? { outcome: payload.status }
+          : {}),
+      },
     });
   }
   return completions;
@@ -1388,6 +1402,25 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (payload?.willRetry === true || asRecord(payload?.data)?.willRetry === true) {
       entry.label = "Provider retrying";
     }
+  }
+  // A Claude Monitor event wakes the agent like a finished background task, so
+  // it gets the same standalone row that marks where the new response starts.
+  if (activity.kind === "runtime.warning" && nativeEventType === "monitor_event") {
+    const taskId = asTrimmedString(asRecord(payload?.data)?.task_id);
+    const data = asRecord(payload?.data);
+    const outcome =
+      data?.outcome === "completed" || data?.outcome === "failed" || data?.outcome === "stopped"
+        ? data.outcome
+        : "updated";
+    const name = asTrimmedString(data?.name) ?? "";
+    entry.monitorNotification = {
+      taskId: taskId ?? activity.id,
+      name,
+      output: asTrimmedString(data?.output) ?? runtimeWarningMessage ?? "",
+      outcome,
+    };
+    entry.label = `Monitor${name ? ` · ${name}` : ""} ${outcome === "completed" ? "finished" : outcome}`;
+    if (outcome === "failed") entry.tone = "error";
   }
   if (activity.kind === "auth.status") {
     entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;
@@ -3453,6 +3486,40 @@ function isSequenced(row: TimelineEntry): boolean {
   return row.kind === "work" && row.sequence !== undefined;
 }
 
+// The SDK and transcript can report one Monitor termination twice. Coalesce
+// adjacent matching native task/outcome notices only; any reply or different
+// outcome remains a distinct boundary. Keep the exact output and earlier anchor.
+function coalesceMonitorTerminalNotices(entries: TimelineEntry[]): TimelineEntry[] {
+  let result: TimelineEntry[] | undefined;
+  for (let index = 1; index < entries.length; index += 1) {
+    const previous = result?.at(-1) ?? entries[index - 1]!;
+    const current = entries[index]!;
+    if (previous.kind === "work" && current.kind === "work") {
+      const monitorRow = previous.entry.monitorNotification ? previous : current;
+      const completionRow = previous.entry.backgroundTaskCompletion ? previous : current;
+      const monitor = monitorRow.entry.monitorNotification;
+      const completion = completionRow.entry.backgroundTaskCompletion;
+      if (
+        monitorRow !== completionRow &&
+        monitor &&
+        completion &&
+        monitor.outcome !== "updated" &&
+        monitor.taskId === completion.taskId &&
+        monitor.outcome === completion.outcome &&
+        (!previous.entry.turnId ||
+          !current.entry.turnId ||
+          previous.entry.turnId === current.entry.turnId)
+      ) {
+        result ??= entries.slice(0, index);
+        result[result.length - 1] = { ...monitorRow, createdAt: previous.createdAt };
+        continue;
+      }
+    }
+    result?.push(current);
+  }
+  return result ?? entries;
+}
+
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
@@ -3611,22 +3678,24 @@ export function deriveTimelineEntries(
   const sequencedWorkRows = workRows.filter(isSequenced);
   const timedWorkRows =
     sequencedWorkRows.length === workRows.length ? [] : workRows.filter((row) => !isSequenced(row));
-  return coalesceAdjacentMessageSegments(
-    mergeTimelineEntries(
+  return coalesceMonitorTerminalNotices(
+    coalesceAdjacentMessageSegments(
       mergeTimelineEntries(
         mergeTimelineEntries(
-          sortedTimelineEntries(messageRows, compare),
-          sortedTimelineEntries(proposedPlanRows, compare),
+          mergeTimelineEntries(
+            sortedTimelineEntries(messageRows, compare),
+            sortedTimelineEntries(proposedPlanRows, compare),
+            compare,
+          ),
+          sortedTimelineEntries(timedWorkRows, compare),
           compare,
         ),
-        sortedTimelineEntries(timedWorkRows, compare),
+        sortedTimelineEntries(
+          sequencedWorkRows.length === workRows.length ? workRows : sequencedWorkRows,
+          compare,
+        ),
         compare,
       ),
-      sortedTimelineEntries(
-        sequencedWorkRows.length === workRows.length ? workRows : sequencedWorkRows,
-        compare,
-      ),
-      compare,
     ),
   );
 }
