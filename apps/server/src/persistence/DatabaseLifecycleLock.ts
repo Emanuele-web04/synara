@@ -145,6 +145,28 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+async function removeEmptyLockDirectory(targetPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(targetPath);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    const entries = await fs.readdir(targetPath, { withFileTypes: true });
+    if (entries.length === 1 && entries[0]?.name === ".DS_Store" && entries[0].isFile()) {
+      // Finder metadata is not ownership. A directory containing only this
+      // file must recover just like an empty abandoned lock directory.
+      await fs.unlink(path.join(targetPath, ".DS_Store"));
+    } else if (entries.length !== 0) {
+      return false;
+    }
+    // Never recursively remove an unowned path. Owners publish a complete,
+    // nonempty directory atomically, so rmdir refuses if another contender
+    // has already published its owner.json. It also refuses directory links.
+    await fs.rmdir(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function tryPublishOwnedDirectory(
   targetPath: string,
   owner: DatabaseLifecycleLockOwner,
@@ -156,6 +178,14 @@ async function tryPublishOwnedDirectory(
     published = true;
   } catch (cause) {
     if (!(await pathExists(targetPath))) throw cause;
+    if (await removeEmptyLockDirectory(targetPath)) {
+      try {
+        await fs.rename(stagingPath, targetPath);
+        published = true;
+      } catch (retryCause) {
+        if (!(await pathExists(targetPath))) throw retryCause;
+      }
+    }
   } finally {
     if (!published) {
       await fs.rm(stagingPath, { recursive: true, force: true }).catch(() => undefined);

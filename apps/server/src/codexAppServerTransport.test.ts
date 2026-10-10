@@ -25,7 +25,7 @@ function buildCompleteJsonlFrame(frameBytes: number): Buffer {
 }
 
 describe("Codex app-server transport", () => {
-  it("frames split UTF-8 and rejects invalid, oversize, or unterminated input", () => {
+  it("frames split UTF-8 and rejects oversize or unterminated input", () => {
     const framer = new CodexJsonlFramer(64);
     const encoded = Buffer.from('{"text":"A😀B"}\r\n{"id":2}\n', "utf8");
     const emojiStart = encoded.indexOf(Buffer.from("😀", "utf8"));
@@ -44,10 +44,16 @@ describe("Codex app-server transport", () => {
     expect(() => unterminated.finish()).toThrowError(
       expect.objectContaining({ reason: "unterminated-frame" }),
     );
+  });
 
-    expect(() => new CodexJsonlFramer(64).push(Buffer.from([0xff, 0x0a]))).toThrowError(
-      expect.objectContaining({ reason: "invalid-utf8" }),
-    );
+  it("drops an invalid UTF-8 line without ending the stream", () => {
+    // Subprocess output can leak onto app-server stdout; one undecodable line
+    // must not take the session down with it.
+    const framer = new CodexJsonlFramer(64);
+    expect(
+      framer.push(Buffer.concat([Buffer.from([0xff, 0x0a]), Buffer.from('{"id":3}\n')])),
+    ).toEqual(['{"id":3}']);
+    expect(framer.push(Buffer.from('{"id":4}\n'))).toEqual(['{"id":4}']);
   });
 
   it("accepts the frame limit, rejects larger frames, and releases retained input", () => {
@@ -142,5 +148,16 @@ describe("Codex app-server transport", () => {
     await expect(writer.write({ payload: "x".repeat(32) })).rejects.toBeInstanceOf(
       CodexAppServerTransportError,
     );
+  });
+
+  it("uses the Codex-specific message in the error stack header", () => {
+    const error = new CodexAppServerTransportError({
+      reason: "frame-too-large",
+      maxBytes: 16,
+      observedBytes: 17,
+    });
+
+    expect(error.message).toBe("Codex app-server JSONL frame exceeded its byte limit (17/16).");
+    expect(error.stack?.split("\n", 1)[0]).toContain(error.message);
   });
 });

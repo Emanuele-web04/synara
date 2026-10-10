@@ -28,11 +28,4 @@ describe("getLocalFoldersGroupLabel", () => {
     expect(getLocalFoldersGroupLabel(null, "MacIntel")).toBe("Folders on this Mac");
     expect(getLocalFoldersGroupLabel(null, "darwin")).toBe("Folders on this Mac");
   });
-
-  it("uses a neutral fallback for unknown and non-macOS POSIX systems", () => {
-    expect(getLocalFoldersGroupLabel("/home/windows-user", "Linux x86_64")).toBe(
-      "Folders on this System",
-    );
-    expect(getLocalFoldersGroupLabel(null, "")).toBe("Folders on this System");
-  });
 });

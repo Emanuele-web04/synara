@@ -39,10 +39,10 @@ export function FileCommentsSummaryChip(props: FileCommentsSummaryChipProps) {
       onRemove={props.onRemove}
       tooltip={props.comments.map((comment, index) => (
         <div key={`${formatFileCommentLabel(comment)}:${index}`} className="space-y-0.5">
-          <p className="text-[0.6875rem] font-medium text-muted-foreground">
+          <p className="text-ui-sm font-medium text-muted-foreground">
             {formatFileCommentLabel(comment)}
           </p>
-          <p className="text-xs leading-relaxed">{comment.text}</p>
+          <p className="text-ui leading-relaxed">{comment.text}</p>
         </div>
       ))}
     />

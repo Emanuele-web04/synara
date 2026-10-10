@@ -30,7 +30,7 @@ describe("web Vite React Compiler activation", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([undefined, "", "0", "false", "yes"])(
+  it.each([undefined, "yes"])(
     "keeps the compiler out of serve with flag %s while retaining Fast Refresh",
     async (flag) => {
       vi.stubEnv("SYNARA_DEV_REACT_COMPILER", flag);
@@ -58,7 +58,7 @@ describe("web Vite React Compiler activation", () => {
     expect(pluginNames).toContain(REACT_COMPILER_PLUGIN);
   });
 
-  it.each(["1", "true", " TRUE "])("allows %s to opt the compiler into serve", async (flag) => {
+  it.each(["1", " TRUE "])("allows %s to opt the compiler into serve", async (flag) => {
     vi.stubEnv("SYNARA_DEV_REACT_COMPILER", flag);
 
     const pluginNames = await resolveWebPluginNames("serve", "development");

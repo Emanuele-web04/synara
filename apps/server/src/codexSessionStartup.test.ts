@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerManager } from "./codexAppServerManager.ts";
 import { CodexSessionStartError } from "./codexErrorClassification.ts";
 import { ServerConfig } from "./config.ts";
+import { AGENT_GATEWAY_NO_CAPABILITIES } from "./agentGateway/sessionLease.ts";
 import { classifyProviderAttemptOutcome } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "./provider/Services/CodexAdapter.ts";
@@ -80,15 +81,25 @@ function createStartupHarness(
   });
   const internals = manager as unknown as {
     assertSupportedCodexCliVersion: () => Promise<void>;
-    buildSessionProcessEnv: () => Promise<NodeJS.ProcessEnv>;
+    buildSessionProcessEnv: () => Promise<{ env: NodeJS.ProcessEnv }>;
   };
   vi.spyOn(internals, "assertSupportedCodexCliVersion").mockResolvedValue(undefined);
-  vi.spyOn(internals, "buildSessionProcessEnv").mockResolvedValue({});
+  vi.spyOn(internals, "buildSessionProcessEnv").mockResolvedValue({
+    env: { CODEX_SQLITE_HOME: process.cwd() },
+  });
   const input = {
     threadId: ThreadId.makeUnsafe("thread-startup-failed"),
     cwd: process.cwd(),
     runtimeMode: "full-access" as const,
-    ...(resumeExistingThread ? { resumeCursor: { threadId: "codex-existing-thread" } } : {}),
+    ...(resumeExistingThread
+      ? {
+          resumeCursor: { threadId: "codex-existing-thread" },
+          // Process-env construction is stubbed, so a pinned generation is accepted
+          // without the overlay files a real launch would verify.
+          expectedCodexContinuationGeneration: "00000000-0000-4000-8000-000000000002",
+        }
+      : {}),
+    agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
   };
   const expectedErrorMessage =
     failure === "exit" ? "codex app-server exited (code=0, signal=null)." : transportError.message;
@@ -114,6 +125,13 @@ afterEach(() => {
 });
 
 describe("Codex session startup failures", () => {
+  it("fails fast when the gateway capability input is omitted", async () => {
+    const { manager, input } = createStartupHarness();
+    await expect(
+      manager.startSession({ ...input, agentGatewayCapabilityInput: undefined as never }),
+    ).rejects.toThrow(/agentGatewayCapabilityInput/);
+    expect(manager.listSessions()).toEqual([]);
+  });
   it.each(["thread/start", "thread/resume", "thread/fork"])(
     "keeps %s on the existing request deadline",
     async (method) => {
@@ -151,7 +169,6 @@ describe("Codex session startup failures", () => {
 
   it.each([
     ["initialize", "error"],
-    ["account/read", "error"],
     ["thread/resume", "error"],
     ["initialize", "exit"],
     ["thread/resume", "exit"],

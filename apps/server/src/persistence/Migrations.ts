@@ -121,6 +121,32 @@ import Migration0102 from "./Migrations/102_ProjectionThreadMessagesTurnBoundary
 import AsyncUserInputMigration from "./Migrations/105_AsyncUserInput.ts";
 import ClaudeTokenAccountingMigration from "./Migrations/103_ClaudeTokenAccounting.ts";
 import Migration0104 from "./Migrations/104_ProjectionThreadsClaudeCacheReview.ts";
+import ProjectImportOriginsMigration from "./Migrations/106_ProjectImportOrigins.ts";
+import Migration0108 from "./Migrations/108_GatewayCompletions.ts";
+import Migration0107 from "./Migrations/107_ProjectionThreadsHumanMessage.ts";
+import Migration0109 from "./Migrations/109_ProjectAgent.ts";
+import Migration0110 from "./Migrations/110_Groups.ts";
+import Migration0111 from "./Migrations/111_GroupLibraryHosting.ts";
+import Migration0112 from "./Migrations/112_CoordinatorAppearance.ts";
+import Migration0113 from "./Migrations/113_ProjectAgentWakeCursor.ts";
+import Migration0114 from "./Migrations/114_ProjectAgentLifecycle.ts";
+import Migration0115 from "./Migrations/115_ProjectAgentManagedWorkers.ts";
+import Migration0116 from "./Migrations/116_ProjectAgentWorkerRecovery.ts";
+import Migration0117 from "./Migrations/117_WorkerMonitoringLiveness.ts";
+import Migration0118 from "./Migrations/118_ProjectionThreadSessionProviderInstance.ts";
+import Migration0119 from "./Migrations/119_ProviderSessionRuntimeInstanceId.ts";
+import Migration0120 from "./Migrations/120_ProfileStatsDeletedProviderInstances.ts";
+import Migration0121 from "./Migrations/121_ClearAutomationDefinitionProviderOptions.ts";
+import Migration0122 from "./Migrations/122_ClearAutomationRunProviderOptions.ts";
+import Migration0123 from "./Migrations/123_ScrubOrchestrationEventProviderOptions.ts";
+import Migration0124 from "./Migrations/124_ProjectionTurnsPendingMessageIndex.ts";
+import Migration0125 from "./Migrations/125_Todos.ts";
+import Migration0126 from "./Migrations/126_ProjectionThreadsSidechatContext.ts";
+import Migration0127 from "./Migrations/127_ProjectImportHistory.ts";
+import Migration0128 from "./Migrations/128_HubWork.ts";
+import Migration0129 from "./Migrations/129_ProjectionThreadsSnooze.ts";
+import Migration0130 from "./Migrations/130_PullRequestAutoFix.ts";
+import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -242,6 +268,32 @@ export const migrationEntries = [
   [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
   [104, "ProjectionThreadsClaudeCacheReview", Migration0104],
   [105, "AsyncUserInput", AsyncUserInputMigration],
+  [106, "ProjectImportOrigins", ProjectImportOriginsMigration],
+  [107, "ProjectionThreadsHumanMessage", Migration0107],
+  [108, "GatewayCompletions", Migration0108],
+  [109, "ProjectAgent", Migration0109],
+  [110, "Groups", Migration0110],
+  [111, "GroupLibraryHosting", Migration0111],
+  [112, "CoordinatorAppearance", Migration0112],
+  [113, "ProjectAgentWakeCursor", Migration0113],
+  [114, "ProjectAgentLifecycle", Migration0114],
+  [115, "ProjectAgentManagedWorkers", Migration0115],
+  [116, "ProjectAgentWorkerRecovery", Migration0116],
+  [117, "WorkerMonitoringLiveness", Migration0117],
+  [118, "ProjectionThreadSessionProviderInstance", Migration0118],
+  [119, "ProviderSessionRuntimeInstanceId", Migration0119],
+  [120, "ProfileStatsDeletedProviderInstances", Migration0120],
+  [121, "ClearAutomationDefinitionProviderOptions", Migration0121],
+  [122, "ClearAutomationRunProviderOptions", Migration0122],
+  [123, "ScrubOrchestrationEventProviderOptions", Migration0123],
+  [124, "ProjectionTurnsPendingMessageIndex", Migration0124],
+  [125, "Todos", Migration0125],
+  [126, "ProjectionThreadsSidechatContext", Migration0126],
+  [127, "ProjectImportHistory", Migration0127],
+  [128, "HubWork", Migration0128],
+  [129, "ProjectionThreadsSnooze", Migration0129],
+  [130, "PullRequestAutoFix", Migration0130],
+  [131, "ProjectSourceFolders", Migration0131],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -267,7 +319,7 @@ export const makeMigrationLoader = (throughId?: number) =>
  * prevented at the source instead, by `scripts/check-migration-lineage.ts`.
  */
 export const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
-const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
+export const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
 
 const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
   migrationEntries.map(([id, name]) => [id, name] as const),

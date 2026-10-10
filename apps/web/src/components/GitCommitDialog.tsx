@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DiffStat } from "~/components/ui/diff-stat";
-import { SubmitShortcutKbd } from "~/components/ui/kbd";
+import { getSubmitShortcutKeyShortcuts, SubmitShortcutKbd } from "~/components/ui/kbd";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import {
   type GitCommitDialogAction,
@@ -131,7 +131,7 @@ export function GitCommitDialog({
           onChange={(event) => setMessage(event.target.value)}
         />
         <div className="space-y-1">
-          <div className="flex items-center gap-2 py-1 text-sm">
+          <div className="flex items-center gap-2 py-1 text-ui leading-snug">
             {isEditingFiles && allFiles.length > 0 ? (
               <Checkbox
                 checked={allSelected}
@@ -147,7 +147,7 @@ export function GitCommitDialog({
               {summarizeSelection(allFiles.length, selectedFiles.length, allSelected)}
             </span>
             <DiffStat
-              className="shrink-0 font-mono text-xs"
+              className="shrink-0 font-mono text-ui leading-snug"
               insertions={selectedFiles.reduce((sum, file) => sum + file.insertions, 0)}
               deletions={selectedFiles.reduce((sum, file) => sum + file.deletions, 0)}
             />
@@ -189,7 +189,12 @@ export function GitCommitDialog({
             disabledReason={action.disabledReason}
             icon={<GitActionGlyph name={action.icon} className="size-4" />}
             label={action.label}
-            {...(action.id === "commit" ? { trailing: <SubmitShortcutKbd /> } : {})}
+            {...(action.id === "commit"
+              ? {
+                  trailing: <SubmitShortcutKbd />,
+                  "aria-keyshortcuts": getSubmitShortcutKeyShortcuts(),
+                }
+              : {})}
             onClick={() => submit(action)}
           />
         ))}
@@ -218,7 +223,7 @@ function ChangedFileRow({
   onOpen: () => void;
 }) {
   return (
-    <div className="flex w-full items-center gap-2 rounded-md px-2 py-1 font-mono text-xs transition-colors hover:bg-[var(--color-background-button-secondary-hover)]">
+    <div className="flex w-full items-center gap-2 rounded-md px-2 py-1 font-mono text-ui leading-snug transition-colors hover:bg-[var(--color-background-button-secondary-hover)]">
       {selectable ? <Checkbox checked={!excluded} onCheckedChange={onToggle} /> : null}
       {/* Raw <button> intentionally — list-row click target, not a shadcn Button. */}
       <button

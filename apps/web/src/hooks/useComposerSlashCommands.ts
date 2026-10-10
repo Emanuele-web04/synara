@@ -31,14 +31,11 @@ import {
   parseSideSlashCommandArgs,
   type ForkSlashCommandTarget,
 } from "../composerSlashCommands";
-import {
-  buildThreadHandoffImportedMessages,
-  resolveThreadHandoffModelSelection,
-} from "../lib/threadHandoff";
+import { resolveThreadHandoffModelSelection } from "../lib/threadHandoff";
 import { toastManager } from "../components/ui/toast";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import { buildNextProviderOptions } from "../providerModelOptions";
-import { resolveForkThreadEnvironment } from "../lib/threadEnvironment";
+import { dispatchThreadFork } from "../lib/threadFork";
 import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
@@ -60,6 +57,7 @@ import {
   sendSidechatPrompt,
   type SidechatCreationFlight,
 } from "../lib/sidechatCreation";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 type ComposerSnapshot = {
   value: string;
@@ -466,38 +464,15 @@ export function useComposerSlashCommands(input: {
         return true;
       }
 
-      const importedMessages = buildThreadHandoffImportedMessages(activeThread, {
-        throughMessageId: inputOptions?.throughMessageId ?? null,
-      });
-
-      const nextThreadId = newThreadId();
-      const createdAt = new Date().toISOString();
-      // Fork first, then let the normal first-send worktree bootstrap create the cwd if needed.
-      const resolvedTarget = resolveForkThreadEnvironment({
-        target: inputOptions?.target ?? "local",
-        activeRootBranch,
+      const nextThreadId = await dispatchThreadFork({
+        api,
         sourceThread: activeThread,
-      });
-
-      await api.orchestration.dispatchCommand({
-        type: "thread.fork.create",
-        commandId: newCommandId(),
-        threadId: nextThreadId,
-        sourceThreadId: activeThread.id,
-        projectId: activeProject.id,
-        title: activeThread.title,
+        target: inputOptions?.target ?? "local",
+        rootBranch: activeRootBranch,
         modelSelection: selectedModelSelection,
         runtimeMode,
         interactionMode,
-        envMode: resolvedTarget.envMode,
-        branch: resolvedTarget.branch,
-        worktreePath: resolvedTarget.worktreePath,
-        workingDirectory: activeThread.workingDirectory ?? null,
-        associatedWorktreePath: resolvedTarget.associatedWorktreePath,
-        associatedWorktreeBranch: resolvedTarget.associatedWorktreeBranch,
-        associatedWorktreeRef: resolvedTarget.associatedWorktreeRef,
-        importedMessages: [...importedMessages],
-        createdAt,
+        throughMessageId: inputOptions?.throughMessageId ?? null,
       });
       const snapshot = await api.orchestration.getShellSnapshot();
       syncServerShellSnapshot(snapshot);
@@ -526,7 +501,8 @@ export function useComposerSlashCommands(input: {
         !activeProject ||
         !activeThread ||
         !isServerThread ||
-        activeThread.sidechatSourceThreadId
+        // No sidechat of a sidechat, forked or standalone.
+        isSidechatThread(activeThread)
       ) {
         toastManager.add({
           type: "warning",
@@ -617,7 +593,7 @@ export function useComposerSlashCommands(input: {
   // Publish a stable host capability. Composer drafts, attachments, and modes only
   // affect whether `/side` is offered; they must not make the dock action disappear.
   useEffect(() => {
-    if (!activeProject || !activeThread || !isServerThread || activeThread.sidechatSourceThreadId) {
+    if (!activeProject || !activeThread || !isServerThread || isSidechatThread(activeThread)) {
       return;
     }
     return registerSidechatCreator(threadId, createSidechatFromSlashCommand);
@@ -899,6 +875,16 @@ export function useComposerSlashCommands(input: {
       if (!slashInvocation || slashInvocation.command === "model") {
         return false;
       }
+      if (slashInvocation.command === "computer-use") {
+        if (slashInvocation.args) return false; // The normal send freezes one-turn activation.
+        toastManager.add({
+          type: "info",
+          title: "Add a task after /computer-use",
+          description: "For example: /computer-use open Calculator and calculate 123 × 45.",
+        });
+        editorActions.scheduleComposerFocus();
+        return true;
+      }
       if (slashInvocation.command === "clear") {
         editorActions.clearComposerSlashDraft();
         await handleClearConversation();
@@ -1175,6 +1161,21 @@ export function useComposerSlashCommands(input: {
         );
         if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+
+      if (item.command === "computer-use") {
+        const replacement = "/computer-use ";
+        const applied = editorActions.applyPromptReplacement(
+          trigger.rangeStart,
+          trigger.rangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
+        );
+        if (wasPromptReplacementApplied(applied)) {
+          editorActions.setComposerHighlightedItemId(null);
+          editorActions.scheduleComposerFocus();
         }
         return;
       }

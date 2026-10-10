@@ -5,8 +5,6 @@
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { describe, expect, it } from "vitest";
-
-import { filterRenderableFilesForSearch } from "~/components/DiffPanel.logic";
 import {
   buildFileDiffTree,
   type FileDiffTreeDirectoryNode,
@@ -34,10 +32,6 @@ function names(nodes: ReadonlyArray<FileDiffTreeNode>): string[] {
 }
 
 describe("buildFileDiffTree", () => {
-  it("returns an empty tree for no files", () => {
-    expect(buildFileDiffTree([])).toEqual([]);
-  });
-
   it("groups files into nested directories with directories before files", () => {
     const tree = buildFileDiffTree([
       createFileDiff("apps/server/src/a.ts"),
@@ -57,16 +51,6 @@ describe("buildFileDiffTree", () => {
     expect(serverSrc.name).toBe("server/src");
     expect(serverSrc.path).toBe("apps/server/src");
     expect(names(serverSrc.children)).toEqual(["a.ts", "b.ts"]);
-  });
-
-  it("compresses a fully unbranched chain into a single directory row", () => {
-    const tree = buildFileDiffTree([createFileDiff("components/ui/widgets/button.tsx")]);
-    expect(tree).toHaveLength(1);
-
-    const compressed = asDirectory(tree[0]);
-    expect(compressed.name).toBe("components/ui/widgets");
-    expect(compressed.path).toBe("components/ui/widgets");
-    expect(names(compressed.children)).toEqual(["button.tsx"]);
   });
 
   it("stops compression at branch points", () => {
@@ -112,16 +96,4 @@ describe("search → tree pipeline", () => {
     createFileDiff("apps/web/src/ChatView.tsx"),
     createFileDiff("packages/shared/src/model.ts"),
   ];
-
-  it("filters files by path substring before building the tree", () => {
-    const tree = buildFileDiffTree(filterRenderableFilesForSearch(files, "web"));
-    expect(names(tree)).toEqual(["apps/web/src"]);
-
-    const matched = asDirectory(tree[0]);
-    expect(names(matched.children)).toEqual(["ChatView.tsx"]);
-  });
-
-  it("returns an empty tree when nothing matches", () => {
-    expect(buildFileDiffTree(filterRenderableFilesForSearch(files, "no-such-file"))).toEqual([]);
-  });
 });

@@ -1,9 +1,8 @@
 import type { KeyboardEvent, ReactNode } from "react";
 
-import { GitHubIcon } from "~/lib/icons";
+import { GitHubIcon, FolderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-import { FolderClosed } from "./FolderClosed";
 import { Button } from "./ui/button";
 import { dialogFieldLabelClassName } from "./ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
@@ -33,9 +32,7 @@ export function CreateGitHubProjectFields(props: {
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-foreground/10 bg-foreground/[0.025] px-3.5 py-3">
-        <p className="text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground">
-          What you need
-        </p>
+        <p className="text-ui font-medium text-foreground">What you need</p>
         <ol className="mt-2.5 space-y-2">
           <GitHubRequirement index={1} title="Repository">
             Paste an <span className="font-medium text-foreground">owner/repository</span> name or
@@ -55,11 +52,7 @@ export function CreateGitHubProjectFields(props: {
       <div className="space-y-2">
         <label
           htmlFor={props.repositoryInputId}
-          className={cn(
-            "block",
-            dialogFieldLabelClassName,
-            "text-[length:var(--app-font-size-ui,12px)] text-foreground",
-          )}
+          className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
         >
           Repository
         </label>
@@ -85,18 +78,14 @@ export function CreateGitHubProjectFields(props: {
       <div className="space-y-2">
         <label
           htmlFor={props.destinationParentInputId}
-          className={cn(
-            "block",
-            dialogFieldLabelClassName,
-            "text-[length:var(--app-font-size-ui,12px)] text-foreground",
-          )}
+          className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
         >
           Clone into
         </label>
         <div className="flex items-center gap-2">
           <InputGroup className={cn(PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME, "min-w-0 flex-1")}>
             <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
-              <FolderClosed className="size-4 text-muted-foreground/70" aria-hidden="true" />
+              <FolderIcon className="size-4 text-muted-foreground/70" aria-hidden="true" />
             </InputGroupAddon>
             <InputGroupInput
               id={props.destinationParentInputId}
@@ -126,11 +115,7 @@ export function CreateGitHubProjectFields(props: {
       <div className="space-y-2">
         <label
           htmlFor={props.directoryNameInputId}
-          className={cn(
-            "block",
-            dialogFieldLabelClassName,
-            "text-[length:var(--app-font-size-ui,12px)] text-foreground",
-          )}
+          className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
         >
           Folder name
         </label>
@@ -147,17 +132,14 @@ export function CreateGitHubProjectFields(props: {
           />
         </InputGroup>
         {props.finalClonePath ? (
-          <p className="truncate text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+          <p className="truncate text-ui-xs text-muted-foreground/70">
             Final location: {props.finalClonePath}
           </p>
         ) : null}
       </div>
 
       {props.provisionProgress ? (
-        <p
-          role="status"
-          className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground"
-        >
+        <p role="status" className="text-ui-xs text-muted-foreground">
           {props.provisionProgress}
         </p>
       ) : null}
@@ -171,10 +153,10 @@ function GitHubRequirement(props: {
   readonly children: ReactNode;
 }) {
   return (
-    <li className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-2 text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground">
+    <li className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-2 text-ui-xs leading-4 text-muted-foreground">
       <span
         aria-hidden
-        className="mt-px flex size-4 items-center justify-center rounded-full bg-foreground/7 text-[9px] font-semibold text-foreground/70"
+        className="mt-px flex size-4 items-center justify-center rounded-full bg-foreground/7 text-ui-2xs font-semibold text-foreground/70"
       >
         {props.index}
       </span>

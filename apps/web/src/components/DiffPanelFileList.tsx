@@ -29,6 +29,7 @@ import { LocalImagePreview } from "./LocalImagePreview";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { IconButton } from "./ui/icon-button";
+import { TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME } from "./ui/button-group";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 
 type DiffRenderMode = "stacked" | "split";
@@ -59,9 +60,10 @@ function DiffFileHeaderActionsMenu(props: {
           <IconButton
             variant="ghost"
             size="icon-xs"
+            shape="capsule"
             label="File actions"
             title="File actions"
-            className="text-muted-foreground hover:text-foreground"
+            className={TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME}
           >
             <EllipsisIcon className="size-3.5" />
           </IconButton>

@@ -1,25 +1,161 @@
 // FILE: storeNormalization.test.ts
-// Purpose: Pins the incremental activity accumulator to the `normalizeActivities` fold it replaces.
+// Purpose: pins the incremental activity accumulator to the `normalizeActivities` fold it
+// replaces, and locks the legacy session provider-name → ProviderKind mapping.
 
-import { MessageId, TurnId, type PendingClaudeCacheReview } from "@synara/contracts";
+import { EventId, MessageId, TurnId, type PendingClaudeCacheReview } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ProviderKind } from "@synara/contracts";
+
 import {
+  capThreadActivities,
   createThreadActivityAccumulator,
-  dedupeActivitiesById,
-  dedupeActivitiesByIdAfterAppend,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
   normalizeChatMessage,
   normalizeThreadFromReadModel,
   normalizeThreadShellSnapshot,
   threadShellsEqual,
+  toLegacyProvider,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
 import type { Thread } from "./types";
+import { derivePendingUserInputs } from "./pendingInteractionDerivation";
 
 type ThreadActivity = Thread["activities"][number];
+
+describe("pending interaction activity retention", () => {
+  const request = makeActivity({
+    id: "expired-question",
+    kind: "user-input.requested",
+    sequence: 2_479_474,
+    createdAt: "2026-10-06T19:53:00.000Z",
+    payload: {
+      requestId: "expired-request",
+      lifecycleGeneration: "expired-generation",
+      questions: [{ id: "next", header: "Next", question: "Continue?", options: [] }],
+    },
+  });
+  const failure = makeActivity({
+    id: "expired-question-failure",
+    kind: "provider.user-input.respond.failed",
+    sequence: 874_284,
+    createdAt: "2026-10-06T22:16:27.000Z",
+    payload: {
+      requestId: "expired-request",
+      lifecycleGeneration: "expired-generation",
+      detail: "Stale pending user-input request: expired-request. Restart the turn to continue.",
+    },
+  });
+  const filler = Array.from({ length: 2005 }, (_, index) =>
+    makeActivity({ id: `retention-${index}`, sequence: 1_000_000 + index }),
+  );
+
+  it("does not retain an expired request outside the window when its failure sorts first", () => {
+    const retained = capThreadActivities([failure, request, ...filler]);
+    expect(retained).not.toContain(request);
+    expect(derivePendingUserInputs(retained)).toEqual([]);
+  });
+
+  it.each(["provider.user-input.respond.failed", "user-input.resolved"])(
+    "keeps %s evidence for a request retained in the window",
+    (kind) => {
+      const settlement = {
+        ...failure,
+        kind,
+        sequence: kind === "user-input.resolved" ? request.sequence! + 1 : failure.sequence,
+      };
+      const retained = capThreadActivities([settlement, ...filler, request]);
+      expect(retained).toContain(request);
+      expect(retained).toContain(settlement);
+      expect(derivePendingUserInputs(retained)).toEqual([]);
+    },
+  );
+
+  it("preserves a reused request ID when only the previous generation expired", () => {
+    const freshRequest = {
+      ...request,
+      id: EventId.makeUnsafe("fresh-question"),
+      createdAt: "2026-10-06T22:17:00.000Z",
+      payload: {
+        ...(request.payload as Record<string, unknown>),
+        lifecycleGeneration: "fresh-generation",
+      },
+    };
+    const retained = capThreadActivities([failure, freshRequest, ...filler]);
+    expect(derivePendingUserInputs(retained).map((input) => input.lifecycleGeneration)).toEqual([
+      "fresh-generation",
+    ]);
+  });
+
+  it("does not retain all settled generations of a reused request ID", () => {
+    const settledGenerations = Array.from({ length: 1500 }, (_, index) => [
+      makeActivity({
+        id: `old-request-${index}`,
+        kind: "user-input.requested",
+        sequence: index * 2,
+        payload: { requestId: "reused-request", lifecycleGeneration: `old-${index}` },
+      }),
+      makeActivity({
+        id: `old-resolution-${index}`,
+        kind: "user-input.resolved",
+        sequence: index * 2 + 1,
+        payload: { requestId: "reused-request", lifecycleGeneration: `old-${index}` },
+      }),
+    ]).flat();
+    const current = makeActivity({
+      id: "current-request",
+      kind: "user-input.requested",
+      sequence: 3000,
+      payload: { requestId: "reused-request", lifecycleGeneration: "current" },
+    });
+    const retained = capThreadActivities([...settledGenerations, current]);
+    expect(retained).toHaveLength(2000);
+    expect(retained).toContain(current);
+    expect(retained).not.toContain(settledGenerations[0]);
+  });
+
+  it.each([false, true])("bounds delivery failure history (expired=%s)", (expired) => {
+    const retries = Array.from({ length: 3000 }, (_, index) => ({
+      ...failure,
+      id: EventId.makeUnsafe(`retry-${index}`),
+      sequence: failure.sequence! + index + 1,
+      createdAt: new Date(Date.parse(failure.createdAt) + index + 1).toISOString(),
+      payload: {
+        ...(failure.payload as Record<string, unknown>),
+        detail: "Provider transport unavailable; try again.",
+        settlementStatus: "retryable",
+      },
+    }));
+    const retained = capThreadActivities(
+      expired ? [failure, ...retries, ...filler, request] : [request, ...retries],
+    );
+    expect(retained).toHaveLength(expired ? 2002 : 2001);
+    expect(retained).toContain(request);
+    expect(retained).toContain(retries.at(-1));
+    expect(retained).not.toContain(retries[0]);
+    if (expired) expect(retained).toContain(failure);
+    expect(derivePendingUserInputs(retained)).toHaveLength(expired ? 0 : 1);
+  });
+
+  it.each([true, false])(
+    "retains legacy failures only after the retained request (later=%s)",
+    (later) => {
+      const legacy = {
+        ...failure,
+        createdAt: later ? failure.createdAt : "2026-10-06T19:52:00.000Z",
+        payload: {
+          requestId: "expired-request",
+          detail: "Stale pending user-input request: expired-request.",
+        },
+      };
+      const retained = capThreadActivities([legacy, ...filler, request]);
+      expect(retained.includes(legacy)).toBe(later);
+      expect(derivePendingUserInputs(retained)).toHaveLength(later ? 0 : 1);
+    },
+  );
+});
 
 const cacheReview: PendingClaudeCacheReview = {
   reviewId: "cache-review-1",
@@ -143,6 +279,19 @@ const richPayload = {
   data: { item: { type: "commandExecution", command: "echo hello" } },
 };
 
+const KNOWN_PROVIDERS: ReadonlyArray<ProviderKind> = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "antigravity",
+  "grok",
+  "droid",
+  "devin",
+  "opencode",
+  "pi",
+  "omp",
+];
+
 describe("createThreadActivityAccumulator", () => {
   it("matches the normalizeActivities fold for appends, in-place merges and exact duplicates", () => {
     const existing = makeActivity({
@@ -173,16 +322,6 @@ describe("createThreadActivityAccumulator", () => {
     ];
 
     expectEquivalent(previous, batch);
-  });
-
-  it("matches the fold when the previous list still contains duplicate ids", () => {
-    const duplicated = makeActivity({ id: "activity-dup", sequence: 1 });
-    const previous = [duplicated, makeActivity({ id: "activity-other", sequence: 2 }), duplicated];
-
-    // The very first append has to report "changed" because dedupe of `previous` alone rewrote
-    // the list, exactly like `normalizeActivities` did on its first call.
-    expectEquivalent(previous, [{ ...duplicated }]);
-    expectEquivalent(previous, [makeActivity({ id: "activity-new", sequence: 3 })]);
   });
 
   it("matches the fold across the activity cap, including pending-request retention", () => {
@@ -255,62 +394,6 @@ describe("createThreadActivityAccumulator", () => {
 describe("dedupeActivitiesByIdAfterAppend", () => {
   const byIdOf = (activities: readonly ThreadActivity[]) =>
     Object.fromEntries(activities.map((activity) => [activity.id, activity]));
-
-  it("returns the input by reference when unique activities are appended to a deduped prefix", () => {
-    const previous = [
-      makeActivity({ id: "activity-a", sequence: 0 }),
-      makeActivity({ id: "activity-b", sequence: 1 }),
-    ];
-    const next = [...previous, makeActivity({ id: "activity-c", sequence: 2 })];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous))).toBe(next);
-  });
-
-  it("matches the full dedupe when an appended activity repeats a previous id", () => {
-    const previous = [makeActivity({ id: "activity-a", sequence: 0 })];
-    const next = [
-      ...previous,
-      makeActivity({ id: "activity-a", payload: richPayload, sequence: 0 }),
-    ];
-
-    const result = dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous));
-    expect(result).toEqual(dedupeActivitiesById(next));
-    expect(result.map((activity) => activity.id)).toEqual(["activity-a"]);
-  });
-
-  it("matches the full dedupe when the appended tail repeats its own ids", () => {
-    const previous = [makeActivity({ id: "activity-a", sequence: 0 })];
-    const duplicate = makeActivity({ id: "activity-b", sequence: 1 });
-    const next = [...previous, duplicate, { ...duplicate, payload: richPayload }];
-
-    const result = dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous));
-    expect(result).toEqual(dedupeActivitiesById(next));
-    expect(result.map((activity) => activity.id)).toEqual(["activity-a", "activity-b"]);
-  });
-
-  it("falls back to the full dedupe when a previous slot was replaced", () => {
-    const previous = [
-      makeActivity({ id: "activity-a", sequence: 0 }),
-      makeActivity({ id: "activity-b", sequence: 1 }),
-    ];
-    const next = [
-      previous[0]!,
-      makeActivity({ id: "activity-b", payload: richPayload, sequence: 1 }),
-    ];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous))).toEqual(
-      dedupeActivitiesById(next),
-    );
-  });
-
-  it("falls back to the full dedupe without a previous slice", () => {
-    const duplicate = makeActivity({ id: "activity-a", sequence: 0 });
-    const next = [duplicate, { ...duplicate, payload: richPayload }];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, undefined, undefined)).toEqual(
-      dedupeActivitiesById(next),
-    );
-  });
 });
 
 describe("mergeReadModelThreadDetailWithLiveHotPath", () => {
@@ -532,5 +615,28 @@ describe("asynchronous question hydration", () => {
     const restored = normalizeChatMessage(pending, answered);
     expect(restored.asyncUserInput?.response).toEqual(response);
     expect(restored.completedAt).toBe(createdAt);
+  });
+});
+
+describe("toLegacyProvider", () => {
+  it("maps each known provider name to itself", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      expect(toLegacyProvider(provider)).toBe(provider);
+    }
+  });
+
+  it("maps omp to omp (regression: omp threads were coerced to codex)", () => {
+    // The server stamps providerName "omp" for OMP threads; before the fix this
+    // fell through to "codex", mislabeling every OMP thread across the UI
+    // (ChatHeader, Sidebar, ChatView activeProvider, kanban, threadDisplay).
+    expect(toLegacyProvider("omp")).toBe("omp");
+  });
+
+  it("falls back to codex for an unknown provider name", () => {
+    expect(toLegacyProvider("unknown-provider")).toBe("codex");
+  });
+
+  it("falls back to codex for null", () => {
+    expect(toLegacyProvider(null)).toBe("codex");
   });
 });

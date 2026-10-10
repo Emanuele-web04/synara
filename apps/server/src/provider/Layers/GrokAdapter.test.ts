@@ -6,7 +6,6 @@
 import { TurnId } from "@synara/contracts";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
 import {
   extractGrokUserInputQuestions,
   extractGrokExitPlanMarkdown,
@@ -20,6 +19,7 @@ import {
 } from "../acp/GrokAcpExtension.ts";
 
 import {
+  buildGrokModelDiscoveryEnv,
   buildGrokPromptMeta,
   buildGrokTurnPromptText,
   extractGrokTerminalPlanMarkdown,
@@ -30,10 +30,59 @@ import {
   selectGrokDiscoveredModelGroups,
   resolveGrokPlanHookResponse,
   resolveGrokRuntimeModelSettings,
+  resolveGrokStartInstanceId,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
-  takeGrokSynaraHarnessPolicyTextPart,
 } from "./GrokAdapter.ts";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+describe("GrokAdapter runtime event scoping", () => {
+  it("resolves modelSelection-only account identity before Grok launch", () => {
+    expect(
+      resolveGrokStartInstanceId({
+        modelSelection: {
+          provider: "grok",
+          instanceId: "grok_work",
+          model: "grok/model",
+        },
+      } as never),
+    ).toBe("grok_work");
+  });
+
+  it("isolates model discovery credentials from ambient xAI aliases", () => {
+    const env = buildGrokModelDiscoveryEnv(
+      {
+        instanceId: "grok_work",
+        environment: { GROK_CODE_XAI_API_KEY: "selected-account-b" },
+      },
+      {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://proxy.example",
+        XAI_API_KEY: "ambient-account-a",
+        XAI_API_BASE_URL: "https://account-a.example",
+      },
+    );
+
+    expect(env.XAI_API_KEY).toBeUndefined();
+    expect(env.XAI_API_BASE_URL).toBeUndefined();
+    expect(env.GROK_CODE_XAI_API_KEY).toBe("selected-account-b");
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HTTPS_PROXY).toBe("http://proxy.example");
+  });
+
+  it("uses the configured Synara state root for nondefault discovery without env", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "synara-grok-discovery-"));
+    const env = buildGrokModelDiscoveryEnv({
+      instanceId: "grok_work",
+      homeDir: "/home/user",
+      isolationRootDir: stateDir,
+    });
+    expect(env.HOME).toContain(`${stateDir}/provider-homes/grok/`);
+    expect(env.GROK_AUTH_PATH).toContain(`${stateDir}/provider-homes/grok/`);
+  });
+});
 
 describe("Grok runtime model settings", () => {
   it("keeps only reasoning efforts supported by the selected model family", () => {
@@ -55,16 +104,6 @@ describe("Grok runtime model settings", () => {
         options: { reasoningEffort: "high" },
       }),
     ).toEqual({ model: "grok-build", reasoningEffort: "high" });
-  });
-});
-
-describe("Grok Synara harness policy", () => {
-  it("delivers private scoped host context once", () => {
-    const state: { harnessPolicyDelivered?: boolean } = {};
-    expect(takeGrokSynaraHarnessPolicyTextPart(state, true)?.text).toContain(
-      SYNARA_HARNESS_POLICY_MARKER,
-    );
-    expect(takeGrokSynaraHarnessPolicyTextPart(state, true)).toBeNull();
   });
 });
 

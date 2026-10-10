@@ -3,8 +3,13 @@ import { Schema } from "effect";
 import { NonNegativeInt } from "./baseSchemas";
 
 export const WS_PROTOCOL_EPOCH = 1;
-export const WS_PROTOCOL_MIN_REVISION = 1;
-export const WS_PROTOCOL_MAX_REVISION = 1;
+// Revision 2 changes PullRequestCommit.authors to permit name-only authors.
+// Revision 3 replaces pullRequests.list and pullRequests.reviewRequestCount with
+// githubInbox.list and adds the "rate-limited" PullRequestsUnavailableError reason.
+// Keep older revisions out of the compatibility range: a revision-2 client would
+// call methods this server no longer serves and could not decode the new error.
+export const WS_PROTOCOL_MIN_REVISION = 3;
+export const WS_PROTOCOL_MAX_REVISION = 3;
 export const WS_BOOTSTRAP_METHOD = "bootstrap.negotiate";
 export const WS_BOOTSTRAP_PATH = "/ws/bootstrap";
 export const WS_NEGOTIATE_HTTP_PATH = "/ws/negotiate";
@@ -35,6 +40,9 @@ export const WS_NEGOTIATE_QUERY = {
 
 export const WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY = "projects.github-provisioning";
 export const WS_PROJECT_FILE_WATCH_CAPABILITY = "projects.file-watch";
+export const WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY = "orchestration.turn-dispatch-settlement";
+export const WS_SERVER_RUNTIME_STATUS_CAPABILITY = "server.runtime-status";
+export const WS_GIT_ACTION_RECOVERY_CAPABILITY = "git.action-recovery";
 
 // Capabilities the current client refuses to run without. Kept separate from
 // the advertised server list so a newer client can still negotiate with an
@@ -56,6 +64,9 @@ export const WS_SERVER_CAPABILITIES = [
   // rest of a newer client unusable during a staggered rollout.
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
+  WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
+  WS_GIT_ACTION_RECOVERY_CAPABILITY,
+  WS_SERVER_RUNTIME_STATUS_CAPABILITY,
   // Single-handshake connect: negotiation is available over plain HTTP at
   // WS_NEGOTIATE_HTTP_PATH, so a connect costs exactly one WebSocket upgrade.
   "transport.http-negotiate",

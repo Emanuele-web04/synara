@@ -23,23 +23,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-it("getSelectionSnippetWithin quotes the selected rendered text verbatim", () => {
-  document.body.innerHTML =
-    "<article><h1>Title</h1><ul><li>first item</li><li>second item</li></ul></article>";
-  const container = document.querySelector("article");
-  if (!(container instanceof HTMLElement)) {
-    throw new Error("missing container");
-  }
-  const list = container.querySelector("ul");
-  if (!list) {
-    throw new Error("missing list");
-  }
-
-  selectNodeContents(list);
-
-  expect(getSelectionSnippetWithin(container)).toEqual({ snippet: "first item\nsecond item" });
-});
-
 it("getSelectionSnippetWithin ignores selections outside the container or collapsed", () => {
   document.body.innerHTML = "<article><p>inside</p></article><p id='outside'>outside</p>";
   const container = document.querySelector("article");

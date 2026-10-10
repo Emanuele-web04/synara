@@ -1,0 +1,349 @@
+{
+  "run": "livecert-mu6mzqv5",
+  "date": "2026-09-18T07:29:07.723Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-BUl8aR/host.sock",
+  "elapsedMs": 51143,
+  "rows": [
+    {
+      "name": "launch-isolation",
+      "verdict": "pass",
+      "detail": "open -g TextEdit pid 31034; front stayed TextEdit",
+      "evidence": {
+        "pid": 31034,
+        "window": 637,
+        "front": "TextEdit"
+      },
+      "elapsedMs": 638
+    },
+    {
+      "name": "visible-nonkey-write",
+      "verdict": "pass",
+      "detail": "effect=confirmed readback=exact",
+      "evidence": {
+        "effect": "confirmed",
+        "readback": "livecert-mu6mzqv5-visible"
+      },
+      "elapsedMs": 1446
+    },
+    {
+      "name": "hidden-write",
+      "verdict": "pass",
+      "detail": "is_on_screen=false readback=exact",
+      "evidence": {
+        "visible": false,
+        "elements": 37,
+        "readback": "livecert-mu6mzqv5-hidden"
+      },
+      "elapsedMs": 1961
+    },
+    {
+      "name": "minimized-write",
+      "verdict": "pass",
+      "detail": "minimized=off-screen readback=exact",
+      "evidence": {
+        "isOnScreen": false,
+        "readback": "livecert-mu6mzqv5-minimized"
+      },
+      "elapsedMs": 3752
+    },
+    {
+      "name": "concurrent-writes",
+      "verdict": "pass",
+      "detail": "3 targets, readbacks 3/3 exact",
+      "evidence": {
+        "readbacks": [
+          "livecert-mu6mzqv5-conc-0",
+          "livecert-mu6mzqv5-conc-1",
+          "livecert-mu6mzqv5-conc-2"
+        ]
+      },
+      "elapsedMs": 4702
+    },
+    {
+      "name": "operator-typing",
+      "verdict": "pass",
+      "detail": "front doc got human-only=true; hidden doc exact=true",
+      "evidence": {
+        "opValue": "HUMAN-OPERATOR-TYPING",
+        "agentValue": "livecert-mu6mzqv5-bgagent"
+      },
+      "elapsedMs": 4402
+    },
+    {
+      "name": "hidden-launch-default",
+      "verdict": "pass",
+      "detail": "manager.launchApp(no opts) → pid 32874 on_screen=false front 31024→31024",
+      "evidence": {
+        "launch": "{\"computerId\":\"desktop\",\"app\":\"Calculator\",\"window\":null}",
+        "launchPid": 32874,
+        "winNum": 685,
+        "listed": {
+          "app_name": "Calculator",
+          "bounds": {
+            "height": 408,
+            "width": 230,
+            "x": 350,
+            "y": 559
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 32874,
+          "space_ids": null,
+          "title": "Calculator",
+          "window_id": 685,
+          "z_index": 83
+        },
+        "frontBefore": 31024,
+        "frontAfter": 31024
+      },
+      "elapsedMs": 3139
+    },
+    {
+      "name": "chromium-semantic",
+      "verdict": "pass",
+      "detail": "pid=34433 on_screen=false elements=139 field=Address and search bar readback=exact front 31024→31024",
+      "evidence": {
+        "chromePid": 34433,
+        "win": 691,
+        "rehiddenOnScreen": false,
+        "elements": 139,
+        "field": "Address and search bar",
+        "readback": "livecert-mu6mzqv5-chromium",
+        "axFocusExcursionExempted": true,
+        "frontBefore": 31024,
+        "frontAfter": 31024,
+        "write": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [3] AXTextField.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readback\"}],\"route\":\"accessibility\"}},\"desktopEpoch\":3,\"desktopPauses\":[],\"desktopInterruptions\":0}"
+      },
+      "elapsedMs": 8681
+    },
+    {
+      "name": "space-roundtrip",
+      "verdict": "pass",
+      "detail": "switch 1→3: true; write: true; back: true",
+      "evidence": {
+        "sw1": "set-current rc=0 active=3 verified=1",
+        "writeOk": true,
+        "sw2": "set-current rc=0 active=1 verified=1",
+        "win": 707
+      },
+      "elapsedMs": 2795
+    },
+    {
+      "name": "off-space-refusal",
+      "verdict": "pass",
+      "detail": "off-space window: elements=50, write=verified, readback=exact",
+      "evidence": {
+        "win": 717,
+        "elements": 50,
+        "outcome": "verified, readback=exact"
+      },
+      "elapsedMs": 2721
+    },
+    {
+      "name": "screenshot-fresh",
+      "verdict": "pass",
+      "detail": "png=true valid=true freshness=captured_current_space",
+      "evidence": {
+        "hasPng": true,
+        "valid": true,
+        "freshness": "captured_current_space",
+        "bounds": {
+          "height": 488,
+          "width": 586,
+          "x": 165,
+          "y": 86
+        },
+        "pngBytes": 36780
+      },
+      "elapsedMs": 182
+    },
+    {
+      "name": "stale-token",
+      "verdict": "pass",
+      "detail": "forged token → {\"ok\":true,\"result\":{\"content\":[{\"text\":\"element_token is stale; call get_window_state again to refresh\",\"type\":\"text\"}],\"isError\":true,\"structuredContent\":{\"re",
+      "evidence": {
+        "reply": {
+          "ok": true,
+          "result": {
+            "content": [
+              {
+                "text": "element_token is stale; call get_window_state again to refresh",
+                "type": "text"
+              }
+            ],
+            "isError": true,
+            "structuredContent": {
+              "refusal": {
+                "code": "stale_element_token",
+                "message": "element_token is stale; call get_window_state again to refresh"
+              },
+              "status": "refused"
+            }
+          },
+          "desktopEpoch": 3,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        }
+      },
+      "elapsedMs": 16
+    },
+    {
+      "name": "verify-state",
+      "verdict": "pass",
+      "detail": "{\"elapsed_ms\":272,\"predicates\":[{\"index\":0,\"observed_json\":\"{\\\"element_index\\\":1,\\\"frame\\\":{\\\"h\\\":382.0,\\\"w\\\":586.0,\\\"x\\\":165.0,\\\"y\\\":186.0},\\\"label\\\":\\\"livecert-mu6mzqv5-conc-0\\\",\\\"role\\\":\\\"AXTextAre",
+      "evidence": {
+        "reply": {
+          "ok": true,
+          "result": {
+            "content": [
+              {
+                "text": "verify_state: satisfied after 2 sample(s) in 272 ms",
+                "type": "text"
+              }
+            ],
+            "structuredContent": {
+              "elapsed_ms": 272,
+              "predicates": [
+                {
+                  "index": 0,
+                  "observed_json": "{\"element_index\":1,\"frame\":{\"h\":382.0,\"w\":586.0,\"x\":165.0,\"y\":186.0},\"label\":\"livecert-mu6mzqv5-conc-0\",\"role\":\"AXTextArea\",\"value\":\"livecert-mu6mzqv5-conc-0\"}",
+                  "status": "satisfied",
+                  "unknown_reason": null
+                }
+              ],
+              "samples": 2,
+              "stable": true,
+              "status": "satisfied"
+            }
+          },
+          "desktopEpoch": 3,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        }
+      },
+      "elapsedMs": 289
+    },
+    {
+      "name": "masked-activation",
+      "verdict": "pass",
+      "detail": "panel=1 front=34638 (want 34638) masked=1 wrote=true released=true",
+      "evidence": {
+        "engage": {
+          "ok": true,
+          "result": {
+            "engaged": true,
+            "shield_id": "lc9cc8fe7d9e40"
+          },
+          "desktopEpoch": 3,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panels": [
+          {
+            "id": 731,
+            "bounds": {
+              "x": 165,
+              "y": 86,
+              "width": 586,
+              "height": 488
+            },
+            "layer": 25
+          }
+        ],
+        "raise": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"Brought exact window 726 for pid 34638 to the foreground.\",\"type\":\"text\"}],\"structuredContent\":{\"activated\":true,\"code\":\"bring_to_front_exact_window_verified\",",
+        "frontPid": 34638,
+        "targetPid": 34638,
+        "write": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readback\"}],\"route\":\"accessibility\"}},\"desktopE",
+        "value": "livecert-mu6mzqv5-masked",
+        "release": {
+          "ok": true,
+          "desktopEpoch": 3,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panelsAfter": []
+      },
+      "elapsedMs": 5106
+    },
+    {
+      "name": "escape-kill-switch",
+      "verdict": "pass",
+      "detail": "baseline=true hostArmed=true immune=true engaged=true refused=true rearmed=true (physical key unverified — VM)",
+      "evidence": {
+        "armedByHost": true,
+        "escArmEvents": [true, false, true, false, true, false, true, false],
+        "baseline": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confi",
+        "afterSynthetic": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readbac",
+        "engaged": true,
+        "refused": "{\"ok\":true,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"Computer input was stopped with the Escape key. It stays stopped until the user re-arms computer control; do not retry actions.\"}],\"structuredContent\":{\"effect\":\"refused\"",
+        "rearm": "{\"ok\":true,\"result\":{\"rearmed\":true,\"wasStopped\":true},\"desktopEpoch\":4,\"desktopPauses\":[],\"desktopInterruptions\":0}",
+        "afterRearm": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readbac",
+        "value": "livecert-mu6mzqv5-esc-rearmed"
+      },
+      "elapsedMs": 6016
+    },
+    {
+      "name": "cancellation",
+      "verdict": "pass",
+      "detail": "cancelled=true effect=undefined delivered=18/2518 chars",
+      "evidence": {
+        "delivered": 18,
+        "afterLen": 41,
+        "reply": "{\"ok\":false,\"error\":\"Error: Computer operation cancelled. Input already dispatched may have taken effect; do not replay.\"}"
+      },
+      "elapsedMs": 2683
+    },
+    {
+      "name": "focus-invariant",
+      "verdict": "fail",
+      "detail": "1 hard + 0 persistent violations (0 blips)",
+      "evidence": {
+        "theft": [
+          {
+            "index": 1127,
+            "tMs": 22568.7,
+            "durationMs": 1031.3999999999978,
+            "sampleCount": 54,
+            "changedFields": ["focusedPid"],
+            "observed": [
+              {
+                "pid": 31024,
+                "app": "TextEdit",
+                "keyWin": 628,
+                "topWin": null,
+                "space": 1,
+                "focusedPid": 34433,
+                "focused": "34433:AXTextField:Address and search bar"
+              },
+              {
+                "pid": 31024,
+                "app": "TextEdit",
+                "keyWin": 628,
+                "topWin": 628,
+                "space": 1,
+                "focusedPid": 34433,
+                "focused": "34433:AXTextField:Address and search bar"
+              }
+            ]
+          }
+        ],
+        "persistent": [],
+        "warnings": [],
+        "drift": [],
+        "sampleCount": 1844,
+        "issues": []
+      },
+      "elapsedMs": 0
+    }
+  ],
+  "summary": {
+    "total": 17,
+    "pass": 16,
+    "fail": 1,
+    "skipped": 0,
+    "verdict": "fail"
+  }
+}

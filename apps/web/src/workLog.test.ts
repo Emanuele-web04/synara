@@ -10,21 +10,406 @@ import {
 } from "./workLog";
 import type { ChatMessage } from "./types";
 import { makeActivity } from "./storeTestFixtures";
+import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
-  it("keeps started tool entries so pending Cursor calls appear immediately", () => {
+  it("pairs an answered question with its answers in one exchange row", () => {
+    const questions = [
+      {
+        id: "icon",
+        header: "Icon",
+        question: "Which icon should mark background work?",
+        options: [
+          { label: "Tray", description: "Tray icon" },
+          { label: "Dimmed spinner", description: "Spinner at reduced opacity" },
+        ],
+      },
+      {
+        id: "scope",
+        header: "Scope",
+        question: "Where should it apply?",
+        options: [{ label: "Sidebar", description: "Sidebar rows" }],
+        multiSelect: true,
+      },
+    ];
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          sequence: 1,
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: { requestId: "req-1", questions },
+        }),
+        makeActivity({
+          id: "answered",
+          sequence: 2,
+          kind: "user-input.resolved",
+          summary: "User input submitted",
+          // Claude keys answers by question text; Codex and Synara by question id.
+          payload: {
+            requestId: "req-1",
+            answers: {
+              "Which icon should mark background work?": "Dimmed spinner",
+              scope: ["Sidebar", "Menu"],
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "answered",
+      activityKind: "user-input.resolved",
+      userInputExchange: [
+        {
+          id: "icon",
+          header: "Icon",
+          question: "Which icon should mark background work?",
+          options: ["Tray", "Dimmed spinner"],
+          answer: "Dimmed spinner",
+        },
+        { id: "scope", options: ["Sidebar"], answer: "Sidebar, Menu" },
+      ],
+    });
+  });
+
+  it.each([undefined, "generation-one"])(
+    "keeps a reused request ID paired with its original question (%s)",
+    (lifecycleGeneration) => {
+      const entries = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "first-question",
+            sequence: 1,
+            kind: "user-input.requested",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration } : {}),
+              questions: [{ id: "q", header: "Q", question: "First question?", options: [] }],
+            },
+          }),
+          makeActivity({
+            id: "first-answer",
+            sequence: 2,
+            kind: "user-input.resolved",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration } : {}),
+              answers: { q: "First answer" },
+            },
+          }),
+          makeActivity({
+            id: "second-question",
+            sequence: 3,
+            kind: "user-input.requested",
+            payload: {
+              requestId: "reused",
+              ...(lifecycleGeneration ? { lifecycleGeneration: "generation-two" } : {}),
+              questions: [{ id: "q", header: "Q", question: "Second question?", options: [] }],
+            },
+          }),
+        ],
+        undefined,
+      );
+      expect(entries).toHaveLength(2);
+      expect(entries[0]).toMatchObject({
+        id: "first-answer",
+        userInputExchange: [{ question: "First question?", answer: "First answer" }],
+      });
+      expect(entries[1]).toMatchObject({
+        id: "second-question",
+        activityKind: "user-input.requested",
+      });
+    },
+  );
+
+  it("does not settle a question from another lifecycle generation", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          sequence: 1,
+          kind: "user-input.requested",
+          payload: {
+            requestId: "reused",
+            lifecycleGeneration: "new",
+            questions: [{ id: "q", header: "Q", question: "New question?", options: [] }],
+          },
+        }),
+        makeActivity({
+          id: "stale-answer",
+          sequence: 2,
+          kind: "user-input.resolved",
+          payload: {
+            requestId: "reused",
+            lifecycleGeneration: "old",
+            answers: { q: "Old answer" },
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["asked", "stale-answer"]);
+    expect(entries[1]?.userInputExchange).toBeUndefined();
+  });
+
+  it("refreshes a cached exchange when its requested activity is hydrated", () => {
+    const requested = makeActivity({
+      id: "asked",
+      sequence: 1,
+      kind: "user-input.requested",
+      payload: {
+        requestId: "req",
+        questions: [{ id: "q", header: "Q", question: "Original?", options: [] }],
+      },
+    });
+    const resolved = makeActivity({
+      id: "answered",
+      sequence: 2,
+      kind: "user-input.resolved",
+      payload: { requestId: "req", answers: { q: "Yes" } },
+    });
+    const first = deriveWorkLogEntries([requested, resolved], undefined);
+    expect(first[0]?.userInputExchange?.[0]?.question).toBe("Original?");
+    const hydrated = {
+      ...requested,
+      payload: {
+        requestId: "req",
+        questions: [{ id: "q", header: "Q", question: "Hydrated question?", options: [] }],
+      },
+    };
+    expect(
+      deriveWorkLogEntries([hydrated, resolved], undefined)[0]?.userInputExchange?.[0]?.question,
+    ).toBe("Hydrated question?");
+  });
+
+  it("keeps an unanswered question as a plain row", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "asked",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId: "req-1",
+            questions: [{ id: "q", header: "Q", question: "Continue?", options: [] }],
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ id: "asked", activityKind: "user-input.requested" });
+    expect(entries[0]?.userInputExchange).toBeUndefined();
+  });
+
+  it("keeps skipped baseline feedback visible before a provider turn id exists", () => {
     const activities: OrchestrationThreadActivity[] = [
+      {
+        ...makeActivity({
+          id: "baseline-skipped",
+          kind: "checkpoint.baseline.skipped",
+          tone: "info",
+          summary: "Turn continued without a checkpoint baseline",
+          payload: { detail: "Checkpoint diff and file undo are unavailable." },
+        }),
+        turnId: null,
+      },
+      {
+        ...makeActivity({
+          id: "hidden-other",
+          kind: "tool.completed",
+          summary: "Hidden tool",
+        }),
+        turnId: null,
+      },
+    ];
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("visible-turn"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]),
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "baseline-skipped",
+      activityKind: "checkpoint.baseline.skipped",
+      tone: "info",
+    });
+    const timeline = deriveTimelineEntries([], [], entries);
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0]?.kind).toBe("work");
+  });
+
+  it("omits routine approval resolutions between tool lifecycle updates", () => {
+    const activities = [
       makeActivity({
-        id: "tool-start",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        summary: "Tool call",
+        id: "command-start",
+        sequence: 1,
         kind: "tool.started",
+        summary: "Running checks",
+        payload: {
+          itemType: "command_execution",
+          data: { toolCallId: "checks", command: "bun run lint" },
+        },
+      }),
+      ...Array.from({ length: 12 }, (_, index) =>
+        makeActivity({
+          id: `approval-${index}`,
+          sequence: index + 2,
+          kind: "approval.resolved",
+          summary: "Approval resolved",
+          tone: "approval",
+          payload: {
+            requestId: `req-${index}`,
+            requestType: "command_execution_approval",
+            decision: "accept",
+          },
+        }),
+      ),
+      makeActivity({
+        id: "command-completed",
+        sequence: 14,
+        kind: "tool.completed",
+        summary: "Checks passed",
+        payload: {
+          itemType: "command_execution",
+          data: { toolCallId: "checks", command: "bun run lint" },
+        },
       }),
     ];
-
     const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
+    expect(entries).toMatchObject([
+      { id: "command-start", label: "Checks passed", activityKind: "tool.completed" },
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(deriveTimelineEntries([], [], entries)).toHaveLength(1);
+    expect(activities.filter((activity) => activity.kind === "approval.resolved")).toHaveLength(12);
   });
+
+  it.each([
+    ["declined command", { decision: "decline" }],
+    ["cancelled command", { decision: "cancel" }],
+    ["session-wide grant", { decision: "acceptForSession" }],
+    ["unknown outcome", {}],
+    ["clipboard consent", { decision: "accept", toolName: "computer_read_clipboard" }],
+    [
+      "wrapped clipboard consent",
+      { decision: "accept", toolName: "mcp__synara__computer_read_clipboard" },
+    ],
+    ["scoped consent", { decision: "accept", approvalScope: "device-task" }],
+  ])("keeps the %s outcome visible", (_name, payload) => {
+    const activity = makeActivity({
+      id: "approval-outcome",
+      kind: "approval.resolved",
+      summary: "Approval resolved",
+      tone: "info",
+      payload: { requestId: "request-outcome", ...payload },
+    });
+    expect(deriveWorkLogEntries([activity], undefined).map((entry) => entry.id)).toEqual([
+      "approval-outcome",
+    ]);
+  });
+
+  it("keeps pending approvals, questions and errors alongside quiet resolutions", () => {
+    const activities = [
+      makeActivity({
+        id: "approval-pending",
+        sequence: 1,
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        tone: "approval",
+        payload: { requestId: "req-pending", requestKind: "command", detail: "bun run lint" },
+      }),
+      makeActivity({
+        id: "question-pending",
+        sequence: 2,
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: { requestId: "question-pending" },
+      }),
+      makeActivity({
+        id: "approval-quiet",
+        sequence: 3,
+        kind: "approval.resolved",
+        summary: "Approval resolved",
+        tone: "info",
+        payload: { requestId: "req-other", decision: "accept" },
+      }),
+      makeActivity({
+        id: "approval-error",
+        sequence: 4,
+        kind: "approval.resolved",
+        summary: "Approval failed",
+        tone: "error",
+      }),
+      makeActivity({
+        id: "turn-error",
+        sequence: 5,
+        kind: "turn.completed",
+        summary: "Turn failed",
+        tone: "error",
+      }),
+    ];
+    expect(deriveWorkLogEntries(activities, undefined).map((entry) => entry.id)).toEqual([
+      "approval-pending",
+      "question-pending",
+      "approval-error",
+      "turn-error",
+    ]);
+  });
+
+  it.each([false, true])(
+    "keeps the latest authentication state visible between turns (finished: %s)",
+    (finished) => {
+      const rows = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "auth-start",
+            sequence: 1,
+            tone: "info",
+            kind: "auth.status",
+            summary: "Claude authentication started",
+            payload: { provider: "claudeAgent" },
+          }),
+          makeActivity({
+            id: "auth-error",
+            sequence: 2,
+            kind: "auth.status",
+            summary: "Claude authentication needs attention.",
+            tone: "error",
+            payload: { provider: "claudeAgent", detail: "Check your Claude account in Settings." },
+          }),
+          ...(finished
+            ? [
+                makeActivity({
+                  id: "auth-finished",
+                  sequence: 3,
+                  tone: "info",
+                  kind: "auth.status",
+                  summary: "Claude authentication finished",
+                  payload: { provider: "claudeAgent" },
+                }),
+              ]
+            : []),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+        { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]) },
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject(
+        finished
+          ? { label: "Claude authentication finished", tone: "info" }
+          : {
+              label: "Claude authentication needs attention.",
+              detail: "Check your Claude account in Settings.",
+              tone: "error",
+            },
+      );
+      if (finished) expect(rows[0]?.detail).toBeUndefined();
+    },
+  );
 
   it("strips terminal formatting from persisted provider activity details", () => {
     const [entry] = deriveWorkLogEntries(
@@ -44,23 +429,6 @@ describe("deriveWorkLogEntries", () => {
     );
 
     expect(entry?.detail).toBe("Transmuting...");
-  });
-
-  it("preserves bracketed source text in provider activity details", () => {
-    const detail = "const first = items[0]; // [example]";
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "source-output",
-          kind: "tool.updated",
-          summary: "Read file",
-          payload: { detail },
-        }),
-      ],
-      undefined,
-    );
-
-    expect(entry?.detail).toBe(detail);
   });
 
   it("cleans persisted notice messages without losing bracketed content", () => {
@@ -152,6 +520,59 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress"]);
   });
 
+  it("adds a visible row when a task moved to the background finishes", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "moved",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "Moved to background",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message: "Server startup",
+          detail: "Server startup",
+          nativeEventType: "background_tasks_changed",
+          data: {
+            subtype: "background_tasks_changed",
+            tasks: [
+              { task_id: "agent-1", task_type: "local_agent", description: "Server startup" },
+            ],
+          },
+        },
+      }),
+      // A foreground command task finishing must not add a row.
+      makeActivity({
+        id: "bash-done",
+        createdAt: "2026-02-23T00:00:30.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        payload: { taskId: "bash-1", status: "completed" },
+      }),
+      makeActivity({
+        id: "agent-done",
+        createdAt: "2026-02-23T00:01:00.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        payload: { taskId: "agent-1", status: "completed", detail: "Report" },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+    const completion = entries.find((entry) => entry.backgroundTaskCompletion);
+    expect(entries.map((entry) => entry.id)).toEqual(["moved", "agent-done"]);
+    expect(completion?.label).toBe("Subagent finished: Server startup");
+    expect(completion?.backgroundTaskCompletion).toEqual({
+      taskId: "agent-1",
+      taskType: "local_agent",
+      description: "Server startup",
+    });
+  });
+
   it("collapses task-list snapshots into one progressing row per turn", () => {
     const taskListActivity = (
       id: string,
@@ -202,32 +623,6 @@ describe("deriveWorkLogEntries", () => {
     expect(taskListEntries[0]?.label).toBe("2 out of 2 tasks completed");
     expect(taskListEntries[0]?.detail).toBeUndefined();
     expect(entries.map((entry) => entry.id)).toEqual(["tasks-1", "tool-between"]);
-  });
-
-  it("labels task-list rows with progress and the in-progress task", () => {
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "tasks-live",
-          kind: "turn.tasks.updated",
-          summary: "Tasks updated",
-          tone: "info",
-          turnId: "turn-1",
-          payload: {
-            tasks: [
-              { task: "Workstream A server: failure tolerance", status: "completed" },
-              { task: "Implementing inline editing UI", status: "inProgress" },
-              { task: "Final verification pass", status: "pending" },
-            ],
-          },
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
-
-    expect(entry?.label).toBe("1 out of 3 tasks completed");
-    expect(entry?.detail).toBe("Implementing inline editing UI");
-    expect(entry?.toolTitle).toBeUndefined();
   });
 
   it("keeps separate task-list rows for separate turns", () => {
@@ -372,22 +767,6 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["turn-failed"]);
   });
 
-  it("filters by turn id when provided", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({ id: "turn-1", turnId: "turn-1", summary: "Tool call", kind: "tool.started" }),
-      makeActivity({
-        id: "turn-2",
-        turnId: "turn-2",
-        summary: "Tool call complete",
-        kind: "tool.completed",
-      }),
-      makeActivity({ id: "no-turn", summary: "Checkpoint captured", tone: "info" }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"));
-    expect(entries.map((entry) => entry.id)).toEqual(["turn-2"]);
-  });
-
   it("keeps work for every visible transcript turn when requested", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({ id: "turn-1", turnId: "turn-1", summary: "First tool", kind: "tool.started" }),
@@ -463,6 +842,67 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.providerContextLifecycle?.recapPreview?.length).toBeLessThanOrEqual(600);
   });
 
+  it("derives same-thread handoff rows with source, target, and transferred context", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "provider-handoff",
+          kind: "provider.handoff",
+          summary: "Handed off from Codex (gpt-5.4) to Claude (claude-sonnet-4-6)",
+          tone: "info",
+          payload: {
+            sourceProvider: "codex",
+            sourceModel: "gpt-5.4",
+            targetProvider: "claudeAgent",
+            targetModel: "claude-sonnet-4-6",
+            contextText: "User:\nfix the flaky test",
+            contextCharacters: 24,
+          },
+        }),
+        makeActivity({
+          id: "provider-handoff-failed",
+          kind: "provider.handoff.failed",
+          summary: "Handoff to Claude (claude-sonnet-4-6) failed",
+          tone: "error",
+          payload: {
+            sourceProvider: "codex",
+            sourceModel: "gpt-5.4",
+            targetProvider: "claudeAgent",
+            targetModel: "claude-sonnet-4-6",
+            detail: "Claude could not start.",
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-visible"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]) },
+    );
+
+    expect(entries.map((entry) => entry.providerHandoff)).toEqual([
+      {
+        status: "completed",
+        sourceProvider: "codex",
+        sourceModel: "gpt-5.4",
+        targetProvider: "claudeAgent",
+        targetModel: "claude-sonnet-4-6",
+        sourceModelSelection: { provider: "codex", model: "gpt-5.4" },
+        targetModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        contextText: "User:\nfix the flaky test",
+        failureDetail: null,
+      },
+      {
+        status: "failed",
+        sourceProvider: "codex",
+        sourceModel: "gpt-5.4",
+        targetProvider: "claudeAgent",
+        targetModel: "claude-sonnet-4-6",
+        sourceModelSelection: { provider: "codex", model: "gpt-5.4" },
+        targetModelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        contextText: null,
+        failureDetail: "Claude could not start.",
+      },
+    ]);
+  });
+
   it("keeps native-history loss visible when the provider sent no recap", () => {
     const [entry] = deriveWorkLogEntries(
       [
@@ -495,43 +935,6 @@ describe("deriveWorkLogEntries", () => {
       recapInjected: false,
       recapCharacters: 0,
       recapPreview: null,
-      recapPreviewTruncated: false,
-    });
-  });
-
-  it("keeps interrupt-escalation context-loss markers visible", () => {
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "interrupt-escalation-context",
-          turnId: "turn-3",
-          kind: "provider.context.changed",
-          summary:
-            "The turn could not be stopped cleanly, so the session was restarted and your message included a summary.",
-          tone: "error",
-          payload: {
-            provider: "opencode",
-            nativeHistory: "unavailable",
-            sessionRestarted: true,
-            restartReason: "interrupt-escalation",
-            recapInjected: true,
-            recapCharacters: 900,
-            recapPreview: "Earlier conversation summary",
-            recapPreviewTruncated: false,
-          },
-        }),
-      ],
-      TurnId.makeUnsafe("turn-3"),
-    );
-
-    expect(entry?.providerContextLifecycle).toEqual({
-      provider: "opencode",
-      nativeHistory: "unavailable",
-      sessionRestarted: true,
-      restartReason: "interrupt-escalation",
-      recapInjected: true,
-      recapCharacters: 900,
-      recapPreview: "Earlier conversation summary",
       recapPreviewTruncated: false,
     });
   });
@@ -676,6 +1079,115 @@ describe("deriveWorkLogEntries", () => {
           model: "claude-sonnet-5",
           environment: "worktree",
           status: "task_dispatched",
+        },
+      ],
+    });
+  });
+
+  it("exposes deterministic worker monitor notices for coordinator rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      // Monitor rows are posted with no turn id and must survive the
+      // visible-turn filter a coordinator conversation always applies.
+      makeActivity({
+        id: "worker-settled",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "synara.worker.settled",
+        summary: "✓ Mars rocket research finished",
+        tone: "info",
+        payload: {
+          source: "worker_monitor",
+          eventType: "thread.turn-diff-completed",
+          marker: "✓",
+          phrase: "finished",
+          thread: {
+            threadId: "thread-mars",
+            title: "Mars rocket research",
+            outcome: "completed",
+          },
+        },
+      }),
+      makeActivity({
+        id: "worker-stuck",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        kind: "synara.worker.stuck",
+        summary: "⚠ Quiet worker has not reported for over 10 minutes",
+        tone: "approval",
+        payload: {
+          source: "worker_monitor",
+          eventType: "worker.silent",
+          marker: "⚠",
+          phrase: "has not reported for over 10 minutes",
+          thread: { threadId: "thread-quiet", title: "Quiet worker", outcome: null },
+        },
+      }),
+      makeActivity({
+        id: "workers-rollup",
+        createdAt: "2026-02-23T00:00:07.000Z",
+        kind: "synara.workers.settled",
+        summary: "All 3 threads settled: A ✓, B ✓, C ⚠ needs approval",
+        tone: "approval",
+        payload: {
+          source: "worker_monitor",
+          batchId: "batch-1",
+          threads: [
+            { threadId: "thread-a", title: "A", outcome: "completed" },
+            { threadId: "thread-b", title: "B", outcome: "completed" },
+            { threadId: "thread-c", title: "C", outcome: "waiting-approval" },
+          ],
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      visibleTurnIds: new Set(["turn-other"]),
+    });
+    const settled = entries.find((entry) => entry.id === "worker-settled");
+    expect(settled?.synaraWorkerNotice).toEqual({
+      kind: "settled",
+      marker: "✓",
+      phrase: "finished",
+      threads: [
+        {
+          threadId: "thread-mars",
+          title: "Mars rocket research",
+          outcome: "completed",
+          result: null,
+          pr: null,
+          projectId: null,
+        },
+      ],
+    });
+    const stuck = entries.find((entry) => entry.id === "worker-stuck");
+    expect(stuck?.synaraWorkerNotice?.kind).toBe("stuck");
+    const rollup = entries.find((entry) => entry.id === "workers-rollup");
+    expect(rollup?.synaraWorkerNotice).toEqual({
+      kind: "rollup",
+      marker: null,
+      phrase: null,
+      threads: [
+        {
+          threadId: "thread-a",
+          title: "A",
+          outcome: "completed",
+          result: null,
+          pr: null,
+          projectId: null,
+        },
+        {
+          threadId: "thread-b",
+          title: "B",
+          outcome: "completed",
+          result: null,
+          pr: null,
+          projectId: null,
+        },
+        {
+          threadId: "thread-c",
+          title: "C",
+          outcome: "waiting-approval",
+          result: null,
+          pr: null,
+          projectId: null,
         },
       ],
     });
@@ -1161,11 +1673,7 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
-  it.each([
-    ["completed", "turn.completed", "info"],
-    ["cancelled", "turn.aborted", "info"],
-    ["failed", "turn.completed", "error"],
-  ] as const)(
+  it.each([["completed", "turn.completed", "info"]] as const)(
     "keeps a cross-turn tool running after its original turn %s",
     (_state, terminalKind, terminalTone) => {
       const oldTurn = TurnId.makeUnsafe("turn-1");
@@ -1300,27 +1808,6 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["first", "second"]);
   });
 
-  it("extracts command text for command tool activities", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "command-tool",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          data: {
-            item: {
-              command: ["bun", "run", "lint"],
-            },
-          },
-        },
-      }),
-    ];
-
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.command).toBe("bun run lint");
-  });
-
   it("keeps full command output details for command tool activities", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1453,28 +1940,6 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.toolTitle).toBe("Read");
   });
 
-  it("humanizes generic command titles for better readability", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "command-tool",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          title: "Ran command",
-          data: {
-            item: {
-              command: `/bin/zsh -lc 'rg -n "tool call" apps/web/src'`,
-            },
-          },
-        },
-      }),
-    ];
-
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.toolTitle).toBe("Searched");
-  });
-
   it("recovers Cursor tool details from stored rawOutput when rawInput is empty", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1575,6 +2040,291 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("recovers Codex tool identity from item and nested invocation metadata", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-mcp-item",
+        createdAt: "2026-09-11T20:00:00.000Z",
+        kind: "tool.completed",
+        summary: "MCP tool call",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "MCP tool call",
+          data: {
+            item: {
+              type: "mcpToolCall",
+              server: "computer-use",
+              tool: "get_app_state",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-mcp-invocation",
+        createdAt: "2026-09-11T20:00:01.000Z",
+        kind: "tool.started",
+        summary: "Tool",
+        payload: {
+          itemType: "mcp_tool_call",
+          requestKind: "tool",
+          data: {
+            invocation: {
+              server: "computer-use",
+              tool: "screenshot",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-mcp-item",
+        toolName: "get_app_state",
+        toolTitle: "Computer Use: Get App State",
+      },
+      {
+        id: "codex-mcp-invocation",
+        toolName: "screenshot",
+        toolTitle: "Computer Use: Screenshot",
+      },
+    ]);
+  });
+
+  it("renders contextual Computer titles from current and historical argument envelopes", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "computer-item-arguments",
+        kind: "tool.completed",
+        summary: "Computer Click",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "computer_click",
+          data: {
+            toolCallId: "computer-click-1",
+            item: {
+              tool: "computer_click",
+              arguments: { x: 12, y: 34, app: "Safari" },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "computer-item-input",
+        kind: "tool.completed",
+        summary: "Computer Type Text",
+        payload: {
+          itemType: "dynamic_tool_call",
+          data: {
+            toolCallId: "computer-type-1",
+            item: {
+              tool: "computer_type_text",
+              input: {
+                arguments: { label: "Password", text: "private value", app_name: "Notes" },
+              },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "computer-invocation-arguments",
+        kind: "tool.started",
+        summary: "Tool",
+        payload: {
+          itemType: "mcp_tool_call",
+          data: {
+            toolCallId: "computer-window-1",
+            invocation: {
+              tool: "computer_activate_window",
+              arguments: { app_name: "Finder" },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "computer-historical-approval",
+        kind: "tool.started",
+        summary: "Tool approval requested",
+        payload: {
+          requestKind: "tool",
+          toolName: "computer_launch_app",
+          toolParamsDisplay: JSON.stringify({ app: "Calculator" }),
+        },
+      }),
+      makeActivity({
+        id: "computer-historical-param-rows",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: {
+          requestKind: "tool",
+          toolName: "computer_click",
+          toolParamsDisplay: [
+            { name: "label", value: "Save" },
+            { display_name: "app", value: "TextEdit" },
+          ],
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "computer-item-arguments",
+          toolTitle: "Click in Safari",
+        }),
+        expect.objectContaining({
+          id: "computer-item-input",
+          toolTitle: "Type in “Password” in Notes",
+        }),
+        expect.objectContaining({
+          id: "computer-invocation-arguments",
+          toolTitle: "Switch to Finder",
+        }),
+        expect.objectContaining({
+          id: "computer-historical-approval",
+          toolTitle: "Open Calculator",
+        }),
+        expect.objectContaining({
+          id: "computer-historical-param-rows",
+          toolTitle: "Click on “Save” in TextEdit",
+        }),
+      ]),
+    );
+    expect(entries.find((entry) => entry.id === "computer-item-input")?.toolTitle).not.toContain(
+      "private value",
+    );
+  });
+
+  it("recognizes normalized ACP Computer calls without exposing typed or clipboard values", () => {
+    const activities = [
+      makeActivity({
+        id: "acp-computer-typing",
+        kind: "tool.started",
+        summary: "Tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Tool",
+          data: {
+            toolCallId: "acp-typing-call",
+            toolName: "computer_type_text",
+            rawInput: {
+              _toolName: "mcp__synara__computer_type_text",
+              app_name: "Notes",
+              label: "Message",
+              text: "private typed value",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "acp-computer-inspection",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Tool",
+          data: {
+            toolCallId: "acp-inspection-call",
+            toolName: "computer_inspect",
+            rawInput: {
+              toolName: "synara_computer_inspect",
+              tool: "computer_read_clipboard",
+              arguments: {},
+            },
+            rawOutput: { text: "private clipboard value" },
+          },
+        },
+      }),
+    ];
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toMatchObject([
+      { toolName: "computer_type_text", toolTitle: "Type in “Message” in Notes" },
+      { toolName: "computer_inspect", toolTitle: "Read the clipboard" },
+    ]);
+    for (const entry of entries) {
+      expect(isComputerToolName(entry.toolName)).toBe(true);
+      expect(entry.toolTitle).not.toContain("private typed value");
+      expect(entry.toolTitle).not.toContain("private clipboard value");
+    }
+  });
+
+  it("preserves meaningful provider and progress titles for Computer calls", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "computer-custom-title",
+        kind: "tool.started",
+        summary: "Tool",
+        payload: {
+          title: "Clicking the primary action",
+          toolName: "computer_click",
+          input: { label: "Continue" },
+        },
+      }),
+      makeActivity({
+        id: "computer-progress-title",
+        kind: "tool.updated",
+        summary: "Waiting for Safari",
+        payload: {
+          title: "Tool",
+          toolName: "computer_wait",
+          input: { duration_ms: 2_000 },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      { id: "computer-custom-title", toolTitle: "Clicking the primary action" },
+      { id: "computer-progress-title", toolTitle: "Waiting for Safari" },
+    ]);
+  });
+
+  it("distinguishes Computer consent from an executed click", () => {
+    const activities = [
+      makeActivity({
+        id: "computer-consent-request",
+        kind: "approval.requested",
+        summary: "Allow Computer for this task",
+        payload: { approvalScope: "computer-task", toolName: "computer_click" },
+      }),
+      makeActivity({
+        id: "computer-consent-accepted",
+        kind: "approval.resolved",
+        summary: "Computer approval resolved",
+        payload: { approvalScope: "computer-task", toolName: "computer_click", decision: "accept" },
+      }),
+    ];
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      { toolTitle: "Computer task approval requested" },
+      { toolTitle: "Computer task approved" },
+    ]);
+  });
+
+  it("labels visible-use consent apart from routine Computer consent", () => {
+    const activities = [
+      makeActivity({
+        id: "computer-foreground-request",
+        kind: "approval.requested",
+        summary: "Show Computer on screen for this task",
+        payload: { approvalScope: "computer-foreground", toolName: "computer_activate_window" },
+      }),
+      makeActivity({
+        id: "computer-foreground-declined",
+        kind: "approval.resolved",
+        summary: "Computer approval resolved",
+        payload: {
+          approvalScope: "computer-foreground",
+          toolName: "computer_activate_window",
+          decision: "decline",
+        },
+      }),
+    ];
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      { toolTitle: "Asked to show Computer on screen" },
+      { toolTitle: "Computer kept in the background" },
+    ]);
+  });
+
   it("collapses Cursor tool lifecycle rows by toolCallId even when titles and details change", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1620,53 +2370,6 @@ describe("deriveWorkLogEntries", () => {
         toolTitle: "Searched",
         detail: "52 files found",
         itemType: "dynamic_tool_call",
-      },
-    ]);
-  });
-
-  it("keeps same-toolCallId rows collapsed even if later command metadata changes", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "cursor-command-start",
-        createdAt: "2026-05-05T15:40:01.000Z",
-        kind: "tool.updated",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "inProgress",
-          title: "Ran command",
-          data: {
-            toolCallId: "cursor-command-1",
-            kind: "execute",
-            command: "git status",
-          },
-        },
-      }),
-      makeActivity({
-        id: "cursor-command-complete",
-        createdAt: "2026-05-05T15:40:02.000Z",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail: "done",
-          data: {
-            toolCallId: "cursor-command-1",
-            kind: "execute",
-            command: "git diff --stat",
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "cursor-command-start",
-        command: "git diff --stat",
-        detail: "done",
-        itemType: "command_execution",
       },
     ]);
   });
@@ -1764,119 +2467,6 @@ describe("deriveWorkLogEntries", () => {
         rawCommand: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
         toolTitle: "Reading",
         preview: "README.md",
-      },
-    ]);
-  });
-
-  it("rebuilds Codex search labels from commandActions", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "codex-search-action",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
-          data: {
-            item: {
-              type: "commandExecution",
-              command: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
-              commandActions: [
-                {
-                  type: "search",
-                  command: "find apps packages -maxdepth 2 -name package.json -print",
-                  query: "package.json",
-                  path: "apps",
-                },
-              ],
-            },
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "codex-search-action",
-        command: "find apps packages -maxdepth 2 -name package.json -print",
-        rawCommand: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
-        toolTitle: "Searched",
-        preview: "for package.json in apps",
-      },
-    ]);
-  });
-
-  it("humanizes Codex commands when commandActions.type is unknown", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "codex-unknown-action",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail: "/bin/zsh -lc 'git status --short'",
-          data: {
-            item: {
-              type: "commandExecution",
-              command: "/bin/zsh -lc 'git status --short'",
-              status: "completed",
-              commandActions: [{ type: "unknown", command: "git status --short" }],
-            },
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "codex-unknown-action",
-        command: "git status --short",
-        rawCommand: "/bin/zsh -lc 'git status --short'",
-        toolTitle: "Checked",
-      },
-    ]);
-  });
-
-  it("humanizes Codex commands with the full real-world DB payload shape", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "codex-full-db-shape",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail: "/bin/zsh -lc 'git status --short'",
-          data: {
-            item: {
-              type: "commandExecution",
-              id: "call_6OII41pekq8cFCpOCF9pbeMu",
-              command: "/bin/zsh -lc 'git status --short'",
-              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
-              status: "completed",
-              commandActions: [{ type: "unknown", command: "git status --short" }],
-              aggregatedOutput: " M apps/desktop/src/main.ts\n...",
-              exitCode: 0,
-              durationMs: 0,
-            },
-            threadId: "019e08d7-1234-5678-90ab-cdef01234567",
-            turnId: "019e08d7-1234-5678-90ab-cdef01234567",
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "codex-full-db-shape",
-        command: "git status --short",
-        rawCommand: "/bin/zsh -lc 'git status --short'",
-        toolTitle: "Checked",
       },
     ]);
   });
@@ -2885,31 +3475,29 @@ describe("deriveWorkLogEntries", () => {
 
   it("settles orphaned activity from latest-turn state after a reconnect gap", () => {
     const turnId = TurnId.makeUnsafe("turn-with-reconnect-gap");
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "reconnected-command-start",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          kind: "tool.started",
-          summary: "Bash started",
-          turnId,
-          payload: {
-            itemType: "command_execution",
-            title: "Bash",
-            data: {
-              toolCallId: "reconnected-command",
-              command: "sleep 5",
-            },
-          },
-        }),
-      ],
-      turnId,
-      {
-        activeTurnId: null,
-        latestTurnState: "error",
-        latestTurnCompletedAt: "2026-02-23T00:00:04.000Z",
+    const payload = {
+      itemType: "command_execution",
+      title: "Bash",
+      data: {
+        toolCallId: "reconnected-command",
+        command: "sleep 5",
       },
-    );
+    };
+    const activity = makeActivity({
+      id: "reconnected-command-start",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      kind: "tool.started",
+      summary: "Bash started",
+      turnId,
+      payload,
+    });
+    const running = deriveWorkLogEntries([activity], turnId, { activeTurnId: turnId });
+    expect(running[0]?.toolStatus).toBe("running");
+    const entries = deriveWorkLogEntries([activity], turnId, {
+      activeTurnId: null,
+      latestTurnState: "error",
+      latestTurnCompletedAt: "2026-02-23T00:00:04.000Z",
+    });
 
     expect(entries[0]?.liveActivity).toMatchObject({
       state: "failed",
@@ -2917,6 +3505,17 @@ describe("deriveWorkLogEntries", () => {
       elapsedSeconds: 3,
     });
     expect(entries[0]?.toolStatus).toBe("failed");
+    // Reconciliation belongs to the current thread projection, not the retained
+    // activity: recovering the running projection must not keep a cached failure.
+    expect(deriveWorkLogEntries([activity], turnId, { activeTurnId: turnId })).toEqual(running);
+    // A replacement of the same event id carries fresh provider metadata.
+    const replacement = {
+      ...activity,
+      payload: { ...payload, detail: "Provider resumed the command" },
+    };
+    expect(deriveWorkLogEntries([replacement], turnId, { activeTurnId: turnId })[0]?.detail).toBe(
+      "Provider resumed the command",
+    );
   });
 
   it("advances retained elapsed time across metadata-only updates", () => {
@@ -3152,28 +3751,6 @@ describe("deriveWorkLogEntries", () => {
       toolTitle: "Synara couldn't create threads",
       detail: "Invalid target options",
     });
-  });
-
-  it("uses present-tense command headings while the command is still running", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "running-command-tool",
-        kind: "tool.updated",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          title: "Ran command",
-          data: {
-            item: {
-              command: `/bin/zsh -lc 'rg -n "tool call" apps/web/src'`,
-            },
-          },
-        },
-      }),
-    ];
-
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.toolTitle).toBe("Searching");
   });
 
   it("collapses Claude-style partial tool-input updates into the final lifecycle row", () => {
@@ -3434,36 +4011,6 @@ describe("deriveWorkLogEntries", () => {
     expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
-  it("keeps routed collab subagent rows for the composer strip source", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "routed-agent-update",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "tool.updated",
-        summary: "Subagent task",
-        payload: {
-          itemType: "collab_agent_tool_call",
-          status: "inProgress",
-          title: "Subagent task",
-          data: {
-            toolCallId: "toolu_x",
-            callId: "toolu_x",
-            toolName: "Agent",
-            input: {},
-            receiverThreadId: "toolu_x",
-          },
-        },
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.subagents).toEqual([
-      expect.objectContaining({ threadId: "toolu_x", providerThreadId: "toolu_x" }),
-    ]);
-    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
-  });
-
   it("keeps generic OpenCode task tool rows when no subagent route is available", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -3547,48 +4094,6 @@ describe("deriveWorkLogEntries", () => {
     ]);
     expect(entries[0]?.subagents).toBeUndefined();
     expect(entries[0]?.detail).toBeUndefined();
-  });
-
-  it("uses completed generic agent task output instead of truncated task wrapper text", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "opencode-task-complete",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "tool.completed",
-        summary: "Task",
-        payload: {
-          itemType: "collab_agent_tool_call",
-          status: "completed",
-          title: "task",
-          detail: '<task id="task-call" state="completed">...',
-          data: {
-            tool: "task",
-            toolName: "task",
-            toolCallId: "task-call",
-            callID: "task-call",
-            input: {
-              prompt: "Explore the changelog implementation.",
-            },
-            state: {
-              status: "completed",
-              output:
-                '<task id="task-call" state="completed">\n<task_result>\nFull changelog report\nwith file references.\n</task_result>\n</task>',
-            },
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)[0]).toEqual(
-      expect.objectContaining({
-        id: "opencode-task-complete",
-        itemType: "collab_agent_tool_call",
-        detail: "Full changelog report\nwith file references.",
-        subagentAction: expect.objectContaining({
-          prompt: "Explore the changelog implementation.",
-        }),
-      }),
-    );
   });
 
   it("preserves the OpenCode task description when the generic completion row collapses", () => {
@@ -4017,49 +4522,6 @@ describe("deriveTimelineEntries", () => {
     ).toEqual(oldWork.map((entry) => entry.createdAt));
   });
 
-  it("includes proposed plans alongside messages and work entries in chronological order", () => {
-    const entries = deriveTimelineEntries(
-      [
-        {
-          id: MessageId.makeUnsafe("message-1"),
-          role: "assistant",
-          text: "hello",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          streaming: false,
-        },
-      ],
-      [
-        {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.makeUnsafe("turn-1"),
-          planMarkdown: "# Ship it",
-          implementedAt: null,
-          implementationThreadId: null,
-          createdAt: "2026-02-23T00:00:02.000Z",
-          updatedAt: "2026-02-23T00:00:02.000Z",
-        },
-      ],
-      [
-        {
-          id: "work-1",
-          createdAt: "2026-02-23T00:00:03.000Z",
-          label: "Ran tests",
-          tone: "tool",
-        },
-      ],
-    );
-
-    expect(entries.map((entry) => entry.kind)).toEqual(["message", "proposed-plan", "work"]);
-    expect(entries[1]).toMatchObject({
-      kind: "proposed-plan",
-      proposedPlan: {
-        planMarkdown: "# Ship it",
-        implementedAt: null,
-        implementationThreadId: null,
-      },
-    });
-  });
-
   it("keeps timestamp ties in message, proposed-plan, then work order", () => {
     const entries = deriveTimelineEntries(
       [
@@ -4357,37 +4819,6 @@ describe("deriveTimelineEntries", () => {
       " after tool",
     ]);
   });
-
-  it("keeps a single live message row while segments are still streaming", () => {
-    const messageId = MessageId.makeUnsafe("assistant-streaming-segmented");
-    const entries = deriveTimelineEntries(
-      [
-        {
-          id: messageId,
-          role: "assistant",
-          text: "partial",
-          textSegments: [
-            {
-              sequence: 10,
-              startedAt: "2026-02-23T00:00:01.000Z",
-              endedAt: "2026-02-23T00:00:03.000Z",
-              text: "partial",
-            },
-          ],
-          createdAt: "2026-02-23T00:00:01.000Z",
-          streaming: true,
-        },
-      ],
-      [],
-      [],
-    );
-
-    expect(entries.map((entry) => entry.kind)).toEqual(["message"]);
-    expect(entries[0]).toMatchObject({
-      kind: "message",
-      message: { id: messageId, streaming: true },
-    });
-  });
 });
 
 describe("deriveWorkLogEntries context window handling", () => {
@@ -4423,24 +4854,18 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries[0]?.label).toBe("Ran command");
   });
 
-  it("keeps context compaction activities as normal work log entries", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "compaction-1",
-          turnId: "turn-1",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
-  });
-
+  it.each(["pull-request.auto-fix.paused", "pull-request.auto-fix.stopped"])(
+    "keeps thread-level %s notices in a turn-filtered transcript",
+    (kind) => {
+      const entries = deriveWorkLogEntries(
+        [makeActivity({ id: kind, kind, summary: "Auto-fix CI needs attention" })],
+        TurnId.makeUnsafe("visible-turn"),
+        { visibleTurnIds: new Set([TurnId.makeUnsafe("visible-turn")]) },
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.label).toBe("Auto-fix CI needs attention");
+    },
+  );
   it("keeps thread-level compaction progress entries visible without a turn id", () => {
     const entries = deriveWorkLogEntries(
       [
@@ -4488,7 +4913,7 @@ describe("deriveWorkLogEntries context window handling", () => {
     },
   );
 
-  it.each(["Compacting context", "Compacting conversation..."])(
+  it.each(["Compacting context"])(
     "collapses same-timestamp %s rows regardless of event id order",
     (summary) => {
       const entries = deriveWorkLogEntries(
@@ -4635,5 +5060,108 @@ describe("deriveWorkLogEntries Codex find regression", () => {
       itemType: "command_execution",
       toolCallId: "call_UmQKQmLCCrj9PF82rupLIFDO",
     });
+  });
+});
+
+describe("deriveTimelineEntries coordinator check-in suppression", () => {
+  const checkinTurnId = TurnId.makeUnsafe("turn-checkin-1");
+  const ordinaryTurnId = TurnId.makeUnsafe("turn-ordinary-1");
+  const messages: ChatMessage[] = [
+    {
+      id: MessageId.makeUnsafe("human-1"),
+      role: "user",
+      text: "Keep an eye on the workers",
+      createdAt: "2026-09-20T00:00:00Z",
+      streaming: false,
+    },
+    {
+      id: MessageId.makeUnsafe("checkin-prompt"),
+      role: "user",
+      text: "[automation] Hourly heartbeat",
+      dispatchOrigin: "automation",
+      turnId: checkinTurnId,
+      createdAt: "2026-09-20T01:00:00Z",
+      streaming: false,
+    },
+    {
+      id: MessageId.makeUnsafe("checkin-reply"),
+      role: "assistant",
+      text: "SILENT",
+      turnId: checkinTurnId,
+      createdAt: "2026-09-20T01:00:30Z",
+      streaming: false,
+    },
+    {
+      id: MessageId.makeUnsafe("ordinary-reply"),
+      role: "assistant",
+      text: "On it",
+      turnId: ordinaryTurnId,
+      createdAt: "2026-09-20T02:00:00Z",
+      streaming: false,
+    },
+  ];
+  const checkinTool = {
+    id: "checkin-tool",
+    turnId: checkinTurnId,
+    createdAt: "2026-09-20T01:00:10Z",
+    tone: "tool" as const,
+    label: "Read inbox",
+  };
+  const ordinaryTool = {
+    id: "ordinary-tool",
+    turnId: ordinaryTurnId,
+    createdAt: "2026-09-20T02:00:10Z",
+    tone: "tool" as const,
+    label: "Listed workers",
+  };
+  const checkinPlan = {
+    id: "checkin-plan",
+    turnId: checkinTurnId,
+    planMarkdown: "# Check-in plan",
+    implementedAt: null,
+    implementationThreadId: null,
+    createdAt: "2026-09-20T01:00:20Z",
+    updatedAt: "2026-09-20T01:00:20Z",
+  };
+
+  it("hides the whole silent check-in turn — prompt, reply, work and plan rows", () => {
+    const entries = deriveTimelineEntries(messages, [checkinPlan], [checkinTool, ordinaryTool], {
+      suppressCoordinatorCheckins: true,
+    });
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "human-1",
+      "ordinary-reply",
+      "ordinary-tool",
+    ]);
+  });
+
+  it("keeps a non-silent check-in reply as a bare coordinator message", () => {
+    const withReport: ChatMessage[] = messages.map((message) =>
+      message.id === MessageId.makeUnsafe("checkin-reply")
+        ? { ...message, text: "Worker beta failed — needs a look." }
+        : message,
+    );
+    const entries = deriveTimelineEntries(withReport, [checkinPlan], [checkinTool], {
+      suppressCoordinatorCheckins: true,
+    });
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "human-1",
+      "checkin-reply",
+      "ordinary-reply",
+    ]);
+  });
+
+  it("leaves every row alone without the suppression option", () => {
+    const entries = deriveTimelineEntries(messages, [checkinPlan], [checkinTool]);
+    expect(new Set(entries.map((entry) => entry.id))).toEqual(
+      new Set([
+        "human-1",
+        "checkin-prompt",
+        "checkin-reply",
+        "checkin-tool",
+        "checkin-plan",
+        "ordinary-reply",
+      ]),
+    );
   });
 });

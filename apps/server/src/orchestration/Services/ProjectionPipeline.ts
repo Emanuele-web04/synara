@@ -39,8 +39,8 @@ export interface OrchestrationProjectionPipelineShape {
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**
-   * Project only the hot-path repositories required for live transcript and
-   * session updates during streaming.
+   * Project the repositories required for live transcript, session and shell
+   * notifications before their domain events are published.
    *
    * PRECONDITION: the caller MUST already hold an open transaction. This method
    * performs NO transaction management of its own — it runs the hot projectors
@@ -48,23 +48,7 @@ export interface OrchestrationProjectionPipelineShape {
    * with the caller's. Use `projectEvent` (or another wrapping variant) when no
    * surrounding transaction is held.
    */
-  readonly projectHotEventInCurrentTransaction: (event: OrchestrationEvent) => Effect.Effect<
-    {
-      /**
-       * True when the deferred phase had no projector for this event and its
-       * cursor was advanced inside the hot transaction, so the caller must not
-       * run a separate deferred pass for it.
-       */
-      readonly deferredPhaseSettled: boolean;
-    },
-    ProjectionRepositoryError
-  >;
-
-  /**
-   * Project deferred repositories whose derived shell metadata is safe to
-   * compute after the main event transaction commits.
-   */
-  readonly projectDeferredEvent: (
+  readonly projectHotEventInCurrentTransaction: (
     event: OrchestrationEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 

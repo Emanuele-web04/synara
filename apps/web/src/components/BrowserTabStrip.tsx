@@ -9,6 +9,7 @@ import type { BrowserTabState } from "@synara/contracts";
 import { isBlankBrowserTabUrl } from "@synara/shared/browserSession";
 
 import { GlobeIcon, PlusIcon, XIcon } from "~/lib/icons";
+import { scrollTabIntoView } from "~/lib/tabStrip";
 import { cn } from "~/lib/utils";
 
 import {
@@ -18,6 +19,7 @@ import {
 } from "./BrowserPanel.logic";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { useHorizontalWheelScroll } from "./chat/chatHeaderControls";
 
 export interface BrowserTabStripProps {
   tabs: readonly BrowserTabState[];
@@ -31,23 +33,10 @@ export interface BrowserTabStripProps {
   onCreateTab: () => void;
 }
 
-// Scroll only the strip itself (not `scrollIntoView`, which would also scroll every
-// scrollable ancestor such as the dock or chat column when the pane mounts offscreen).
-function scrollTabIntoView(strip: HTMLElement, tab: HTMLElement): void {
-  const stripRect = strip.getBoundingClientRect();
-  const tabRect = tab.getBoundingClientRect();
-  const left = tabRect.left - stripRect.left + strip.scrollLeft;
-  const right = left + tabRect.width;
-  if (left < strip.scrollLeft) {
-    strip.scrollLeft = left;
-  } else if (right > strip.scrollLeft + strip.clientWidth) {
-    strip.scrollLeft = right - strip.clientWidth;
-  }
-}
-
 export function BrowserTabStrip(props: BrowserTabStripProps) {
   const { activeTabId, onCloseTab, onCreateTab, onSelectTab } = props;
   const stripRef = useRef<HTMLDivElement>(null);
+  useHorizontalWheelScroll(stripRef);
 
   // A tab created/selected past the visible edge ("New tab" appends at the end) must come
   // into view or the action looks like it did nothing.
@@ -69,7 +58,11 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
         props.dragRegion && "drag-region",
       )}
     >
-      <div ref={stripRef} className="flex min-w-0 items-center gap-1 overflow-x-auto">
+      <div
+        ref={stripRef}
+        data-testid="browser-tab-strip"
+        className="flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-contain"
+      >
         {props.tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           const tabIsBlank = isBlankBrowserTabUrl(tab);
@@ -77,9 +70,19 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
             <div
               key={tab.id}
               data-browser-tab-active={isActive ? "true" : undefined}
+              onMouseDown={(event) => {
+                // Suppress middle-button autoscroll/paste before auxclick closes the tab.
+                if (event.button === 1) event.preventDefault();
+              }}
+              onAuxClick={(event) => {
+                if (event.button !== 1) return;
+                event.preventDefault();
+                event.stopPropagation();
+                onCloseTab(tab.id);
+              }}
               className={cn(
                 BROWSER_CHROME_CONTROL_CLASS_NAME,
-                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors",
+                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-ui transition-colors [-webkit-app-region:no-drag]",
                 isActive
                   ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
                   : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
@@ -136,7 +139,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
       {props.status ? (
         <div
           className={cn(
-            "ml-auto max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
+            "ml-auto max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-ui-sm leading-none sm:max-w-[16rem]",
             props.status.tone === "error"
               ? "border-destructive/25 bg-destructive/8 text-destructive"
               : "border-border/60 bg-background/80 text-muted-foreground",

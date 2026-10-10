@@ -13,7 +13,7 @@ vi.mock("~/lib/utils", async (importOriginal) => ({
 
 import ChatMarkdown from "./ChatMarkdown";
 import { ThemePackEditor } from "./ThemePackEditor";
-import { DEFAULT_THEME_STATE, parseStoredThemeState } from "~/theme/theme.logic";
+import { DEFAULT_THEME_STATE, getCodeThemeSeed, parseStoredThemeState } from "~/theme/theme.logic";
 
 const root = document.documentElement;
 let previousTheme: string | null;
@@ -33,11 +33,21 @@ async function selectLightPreset(label: string) {
   await page.getByRole("option", { name: label, exact: true }).click();
 }
 
-it("applies and persists Vercel light colors on an opaque desktop, then restores Codex", async () => {
-  localStorage.setItem("synara:theme", JSON.stringify({ ...DEFAULT_THEME_STATE, mode: "light" }));
+it("preserves saved Codex on mount, applies and persists Vercel, then restores Codex", async () => {
+  const stored = JSON.stringify({
+    ...DEFAULT_THEME_STATE,
+    codeThemeIds: { dark: "codex", light: "codex" },
+    chromeThemes: {
+      dark: getCodeThemeSeed("codex", "dark"),
+      light: getCodeThemeSeed("codex", "light"),
+    },
+    mode: "light",
+  });
+  localStorage.setItem("synara:theme", stored);
   await render(<ThemePackEditor variant="light" />);
   await expect.poll(() => root.getAttribute("data-code-theme-id")).toBe("codex");
   expect(root.getAttribute("data-window-material")).toBe("opaque");
+  expect(localStorage.getItem("synara:theme")).toBe(stored);
 
   await selectLightPreset("Vercel");
   await expect.poll(() => root.style.getPropertyValue("--codex-base-accent")).toBe("#006aff");
@@ -61,7 +71,7 @@ it("previews an inactive light preset and applies it only when the user chooses 
   await selectLightPreset("Vercel");
 
   expect(root.getAttribute("data-theme-variant")).toBe("dark");
-  expect(root.getAttribute("data-code-theme-id")).toBe("codex");
+  expect(root.getAttribute("data-code-theme-id")).toBe("synara");
   const preview = page.getByRole("img", { name: "Light theme preview: Vercel" });
   expect(getComputedStyle(preview.element()).backgroundColor).toBe("rgb(255, 255, 255)");
   expect(getComputedStyle(preview.element()).color).toBe("rgb(23, 23, 23)");
@@ -71,7 +81,7 @@ it("previews an inactive light preset and applies it only when the user chooses 
   expect(root.getAttribute("data-code-theme-id")).toBe("vercel");
   const saved = parseStoredThemeState(localStorage.getItem("synara:theme"));
   expect(saved.mode).toBe("light");
-  expect(saved.codeThemeIds.dark).toBe("codex");
+  expect(saved.codeThemeIds.dark).toBe("synara");
   expect(saved.systemUiFont).toBe(true);
 });
 
@@ -101,6 +111,8 @@ it("keeps default Markdown colors and applies independent heading/bold overrides
     </>,
   );
   await expect.poll(() => root.style.getPropertyValue("--chat-bold-color")).toBe("");
+  // Compare the settled syntax theme, not the lazy highlighter's temporary fallback.
+  await expect.poll(() => document.querySelector("#chat-color-test pre.shiki")).not.toBeNull();
   const regular = textColor("#chat-color-test p");
   const muted = textColor("#chat-color-test h6");
   const code = textColor("#chat-color-test code");
@@ -150,7 +162,7 @@ it("isolates inactive previews from active custom colors and activates the saved
     }),
   );
   await render(<ThemePackEditor variant="light" />);
-  const preview = page.getByRole("img", { name: "Light theme preview: Codex" });
+  const preview = page.getByRole("img", { name: "Light theme preview: Synara" });
   expect(getComputedStyle(preview.element().querySelector("h3")!).color).toBe("rgb(13, 13, 13)");
   expect(getComputedStyle(preview.element().querySelector("strong")!).color).toBe(
     "rgb(13, 13, 13)",
@@ -164,3 +176,48 @@ it("isolates inactive previews from active custom colors and activates the saved
   await expect.poll(() => root.style.getPropertyValue("--chat-bold-color")).toBe("#9a6700");
   expect(root.style.getPropertyValue("--chat-heading-color")).toBe("");
 });
+
+it.each(["dark", "light"] as const)(
+  "replaces Linear completely with Codex and an orange accent when selecting Synara (%s)",
+  async (variant) => {
+    const title = variant === "dark" ? "Dark" : "Light";
+    const accent = variant === "dark" ? "#f2612d" : "#c74614";
+    const otherVariant = variant === "dark" ? "light" : "dark";
+    const stored = {
+      ...DEFAULT_THEME_STATE,
+      mode: variant,
+      systemUiFont: false,
+      codeThemeIds: { ...DEFAULT_THEME_STATE.codeThemeIds, [variant]: "linear" },
+      chromeThemes: {
+        ...DEFAULT_THEME_STATE.chromeThemes,
+        [variant]: {
+          ...getCodeThemeSeed("linear", variant),
+          contrast: 22,
+          fonts: { ui: "Inter", code: "Menlo" },
+        },
+      },
+    };
+    localStorage.setItem("synara:theme", JSON.stringify(stored));
+    await render(<ThemePackEditor variant={variant} />);
+    window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
+    await expect.poll(() => root.getAttribute("data-code-theme-id")).toBe("linear");
+
+    await page.getByRole("combobox", { name: `${title} theme code theme` }).click();
+    await page.getByRole("option", { name: "Synara", exact: true }).click();
+    await expect.poll(() => root.getAttribute("data-code-theme-id")).toBe("synara");
+
+    const saved = parseStoredThemeState(localStorage.getItem("synara:theme"));
+    const codex = getCodeThemeSeed("codex", variant);
+    expect(saved.chromeThemes[variant]).toEqual({ ...codex, accent });
+    expect(saved.chromeThemes[otherVariant]).toEqual(stored.chromeThemes[otherVariant]);
+    expect(root.style.getPropertyValue("--codex-base-accent")).toBe(accent);
+    expect(root.style.getPropertyValue("--codex-base-surface")).toBe(codex.surface);
+    expect(root.style.getPropertyValue("--codex-base-ink")).toBe(codex.ink);
+    expect(root.style.getPropertyValue("--color-accent-purple")).toBe(codex.semanticColors.skill);
+    expect(root.style.getPropertyValue("--theme-font-ui-family")).toBe("");
+    const preview = page.getByRole("img", { name: `${title} theme preview: Synara` });
+    const fontFamily = getComputedStyle(preview.element()).fontFamily;
+    expect(fontFamily).toContain("system-ui");
+    expect(fontFamily).not.toContain("Inter");
+  },
+);

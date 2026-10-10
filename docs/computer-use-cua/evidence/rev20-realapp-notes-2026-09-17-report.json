@@ -1,0 +1,239 @@
+{
+  "run": "rev20-realapp-notes-2026-09-17",
+  "date": "2026-09-17",
+  "nativeBuild": {
+    "version": "0.28.2",
+    "nativeRevision": 20,
+    "patchSha256": "a53aca2e440161a2776a255fa8a9c856ddb4dada69927fd5bab08fc6b936623b",
+    "binarySha256": "601382877c7af04543a32959ddff31743425a8d4fdfc4d1d5529d5c1f03589c4"
+  },
+  "host": "external trusted CuaDriverHost (shell-ancestry TCC), bundle com.synara.cua-canary, endpoint synara-cua-cyREYK/host.sock",
+  "target": {
+    "app": "Notes",
+    "pid": 30289,
+    "window_id": 774,
+    "title": "Notes",
+    "launch": "open -g -j -n -a Notes",
+    "note": "fresh instance; first-run 'welcome' AXSheet (Continue) and 'Turn On iCloud' AXSheet (Cancel) were dismissed by driver AXPress while the app was still hidden; Notes then self-unhid"
+  },
+  "cases": [
+    {
+      "case": "probe+handshake",
+      "request": { "method": "probe" },
+      "result": { "ok": true, "version": "0.28.2" },
+      "verdict": "pass"
+    },
+    {
+      "case": "check_permissions",
+      "result": {
+        "accessibility": true,
+        "screen_recording": true,
+        "attribution": "host",
+        "host_bundle_id": "com.synara.cua-canary"
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "dismissal of first-run sheets via named AX action while hidden",
+      "request": {
+        "name": "click",
+        "args": { "element_token": "<Continue|Cancel button>", "action": "press" }
+      },
+      "result": {
+        "effect": "unverifiable",
+        "route": "accessibility",
+        "delivery_mode": "background"
+      },
+      "independent_evidence": "sheets left list_windows; AX tree then exposed the Notes main UI",
+      "verdict": "pass"
+    },
+    {
+      "case": "AXPress 'New Note' toolbar button while hidden",
+      "result": { "effect": "unverifiable", "route": "accessibility" },
+      "independent_evidence": "window label 'Notes – 1 note'; note row appeared in list",
+      "verdict": "pass"
+    },
+    {
+      "case": "set_value into Note Body AXTextArea (app hidden)",
+      "request": {
+        "name": "set_value",
+        "args": {
+          "element_token": "s00000004:8",
+          "value": "REV20-NOTES-CERT-2026-09-22 semantic write via trusted host"
+        }
+      },
+      "result": {
+        "effect": "confirmed",
+        "route": "accessibility",
+        "evidence": ["value_readback"],
+        "elapsed_ms": 1157
+      },
+      "independent_evidence": "fresh get_window_state read-back exact; System Events deep path 'text area 1 of scroll area 3 of splitter group 1 of window 1' returned the same string",
+      "verdict": "pass"
+    },
+    {
+      "case": "set_value into Note Body AXTextArea (deliberate re-hide via set_app_visibility{hidden:true})",
+      "request": { "value": "REV20-NOTES-HIDDEN-WRITE ok" },
+      "result": { "effect": "confirmed", "route": "accessibility", "evidence": ["value_readback"] },
+      "verdict": "pass"
+    },
+    {
+      "case": "select_text exact range {start:0,length:5}",
+      "result": { "effect": "confirmed", "route": "accessibility", "evidence": ["value_readback"] },
+      "verdict": "pass"
+    },
+    {
+      "case": "invoke_menu Edit->Copy + clipboard_read",
+      "result": {
+        "invoke_menu": {
+          "effect": "unverifiable",
+          "route": "accessibility",
+          "delivery_mode": "foreground"
+        },
+        "clipboard": { "text": "REV20", "types_include": "com.apple.notes.richtext" }
+      },
+      "independent_evidence": "osascript 'the clipboard as string' => REV20",
+      "verdict": "pass",
+      "anomaly": "copy landed on attempts 1 and 3; one in-script attempt (select 6..10 immediately followed by Copy) did not land - invoke_menu honestly reported unverifiable rather than confirmed; likely a race between AXSelectedTextRange commit and the menu press, or the Edit menu being momentarily disabled on the hidden app"
+    },
+    {
+      "case": "verify_state element value_equals (matching)",
+      "result": { "status": "satisfied", "stable": true, "samples": 2, "elapsed_ms": 352 },
+      "verdict": "pass"
+    },
+    {
+      "case": "verify_state element value_equals (mismatching)",
+      "result": { "status": "unsatisfied", "stable": false, "samples": 28, "elapsed_ms": 5085 },
+      "verdict": "pass"
+    },
+    {
+      "case": "check_input_ready on hidden window",
+      "result": { "ready": true },
+      "verdict": "pass",
+      "note": "ready reflects driver admission, not window visibility - hidden window still refused synthetic input below"
+    },
+    {
+      "case": "screenshot on visible window",
+      "result": {
+        "screenshot_frame_valid": true,
+        "screenshot_frame_freshness": "captured_current_space",
+        "png": "1000x660"
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "set_app_visibility hide -> unhide cycle",
+      "result": {
+        "hidden": "on_screen=false",
+        "unhidden": "on_screen=true",
+        "frontmost_unchanged": "TextEdit"
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "cancellation: stop during force_synthetic type_text (2000 chars)",
+      "result": {
+        "stop_ms": 425,
+        "in_flight_reply": "native_input_cancelled: driver input generation is retired",
+        "chars_landed": 4,
+        "strict_prefix": true,
+        "driver_pid": "57569 -> 58806 (generation retired; next call spawned a fresh validated generation)",
+        "post_stop_call_ok": true
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "cancellation: stop while AX-route type_text (4800 chars) in flight",
+      "result": {
+        "stop_ms": 395,
+        "outcome": "type_text completed atomically (accessibility route, delivered_count 4800, confirmed) before stop landed; generation still retired (30101 -> 51735)"
+      },
+      "verdict": "pass",
+      "note": "AX attribute writes are atomic; mid-string interruption is only reachable on the synthetic_events route"
+    },
+    {
+      "case": "refusal: type_text force_synthetic while app hidden",
+      "result": {
+        "effect": "refused",
+        "code": "input_target_unavailable",
+        "reason": "The target window is hidden, minimized or unavailable for input."
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: type_text 6000 chars force_synthetic",
+      "result": {
+        "effect": "refused",
+        "code": "type_text_synthesis_budget_exceeded",
+        "delivered_chars": 0,
+        "max_chunk_chars": 2578,
+        "retryable": true
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: set_value on AXButton (non-settable)",
+      "result": { "effect": "refused", "code": "ax_action_refused", "verified": false },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: press_key 'insert'",
+      "result": {
+        "isError": true,
+        "code": "delivery_failed",
+        "message": "Unknown key name: insert"
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: invoke_menu bogus path",
+      "result": {
+        "status": "refused",
+        "refusal": { "code": "menu_path_unavailable", "message": "path segment 0 was not found" }
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: set_value with forged element_token s99999999:99",
+      "result": { "status": "refused", "refusal": { "code": "stale_element_token" } },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: kill_app on process not launched by this runtime",
+      "result": {
+        "status": "refused",
+        "refusal": {
+          "code": "foreign_process_termination_denied",
+          "message": "standard mode may terminate only a process proven to have been launched by this Cua runtime"
+        }
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: host boundary (wrong capability / unsupported tool)",
+      "result": {
+        "wrong_capability": "Computer host authority is required.",
+        "unknown_tool": "Unsupported computer host request.",
+        "effect": "not-dispatched"
+      },
+      "verdict": "pass"
+    }
+  ],
+  "axIndexCheck": {
+    "system_events_deep_path": "text area 1 of scroll area 3 of splitter group 1 of window 1 => value OK",
+    "system_events_direct_index": "text area 1 of window 1 => error -1719 invalid index (body textarea is nested, not a direct window child)",
+    "same_family_as_textedit_finding": true
+  },
+  "focusInvariant": {
+    "frontmost_before": "TextEdit",
+    "frontmost_after": "TextEdit",
+    "theft_free": true,
+    "note": "frontmost never left TextEdit across writes, menu invocation, visibility toggles and cancellation"
+  },
+  "processes": {
+    "notes_pid": 30289,
+    "driver_generations_seen": [30101, 51735, 57569, 58806],
+    "other_drivers_untouched": [8012, 27831]
+  },
+  "summary": "Notes.app certified at rev 20: observation, element-token targeting, confirmed AX writes (hidden and visible), select_text, invoke_menu+clipboard verification, tri-state verify_state, six clean refusal classes, mid-flight synthetic-input cancellation with strict-prefix partial input, and zero focus theft. Anomaly: one raced Edit->Copy no-op (honestly unverifiable) and the AX index-addressing fragility family confirmed via System Events."
+}

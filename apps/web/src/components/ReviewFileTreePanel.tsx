@@ -10,6 +10,7 @@ import type { FileDiffMetadata } from "@pierre/diffs/react";
 import {
   forwardRef,
   memo,
+  useMemo,
   useState,
   type ComponentPropsWithoutRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -166,8 +167,13 @@ export const ReviewFileTreePanel = function ReviewFileTreePanel(props: {
   // match stays visible.
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(() => new Set());
 
-  const filteredFiles = filterRenderableFilesForSearch(props.files, query);
-  const tree = buildFileDiffTree(filteredFiles);
+  // Rebuild only when the file set or query changes; collapse toggles and
+  // unrelated re-renders reuse the tree instead of re-sorting every directory.
+  const filteredFiles = useMemo(
+    () => filterRenderableFilesForSearch(props.files, query),
+    [props.files, query],
+  );
+  const tree = useMemo(() => buildFileDiffTree(filteredFiles), [filteredFiles]);
 
   const isSearching = query.trim().length > 0;
   const isPathCollapsed = (path: string) => !isSearching && collapsedPaths.has(path);

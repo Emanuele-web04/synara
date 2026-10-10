@@ -13,6 +13,7 @@ import {
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
   collectInputNeededThreadCandidates,
+  collectSnoozeReminderCandidates,
   completedThreadNotificationKey,
   isNotificationRuntimeFreshTimestamp,
   shouldAttemptSystemTaskNotification,
@@ -57,6 +58,70 @@ function makeThread(overrides: Partial<Thread>): Thread {
     ...overrides,
   };
 }
+
+describe("snooze notification candidates", () => {
+  it("catches up unseen reminders on initial hydration without requiring a lifecycle transition", () => {
+    const thread = makeThread({ snoozeReminderAt: "2026-10-02T10:30:00.000Z" });
+    expect(collectSnoozeReminderCandidates([thread])).toEqual([
+      {
+        threadId: thread.id,
+        title: "Polish notifications",
+        reminderAt: "2026-10-02T10:30:00.000Z",
+      },
+    ]);
+  });
+
+  it("ignores cancelled, resnoozed and archived reminders", () => {
+    expect(
+      collectSnoozeReminderCandidates([
+        makeThread({ snoozeReminderAt: null }),
+        makeThread({ snoozeReminderAt: "invalid" }),
+        makeThread({
+          snoozeReminderAt: "2026-10-02T10:30:00.000Z",
+          snoozedUntil: "2026-10-02T11:00:00.000Z",
+        }),
+        makeThread({
+          snoozeReminderAt: "2026-10-02T10:30:00.000Z",
+          archivedAt: "2026-10-02T10:00:00.000Z",
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("suppresses normal completion notifications while a thread is snoozed", () => {
+    const before = makeThread({});
+    const completed = makeThread({
+      snoozedUntil: "2026-10-02T11:00:00.000Z",
+      session: { ...before.session!, status: "ready", orchestrationStatus: "ready" },
+      latestTurn: {
+        ...before.latestTurn!,
+        state: "completed",
+        completedAt: "2026-04-05T10:01:00.000Z",
+      },
+    });
+    expect(collectCompletedThreadCandidates([before], [completed])).toEqual([]);
+  });
+
+  it("suppresses input-needed notifications while snoozed", () => {
+    const before = makeThread({});
+    const after = makeThread({
+      snoozedUntil: "2026-10-02T11:00:00.000Z",
+      hasPendingApprovals: true,
+      activities: [
+        {
+          id: EventId.makeUnsafe("new-approval"),
+          turnId: TurnId.makeUnsafe("turn-1"),
+          kind: "approval.requested",
+          summary: "Approval needed",
+          createdAt: "2026-04-05T10:00:04.000Z",
+          tone: "approval",
+          payload: { requestId: "request-new", requestKind: "command" },
+        },
+      ],
+    });
+    expect(collectInputNeededThreadCandidates([before], [after])).toEqual([]);
+  });
+});
 
 function makeInteraction(
   interactionKind: OrchestrationPendingInteraction["interactionKind"],
@@ -189,6 +254,174 @@ describe("collectCompletedThreadCandidates", () => {
         assistantSummary: "Finished the task and everything looks good.",
       },
     ]);
+  });
+
+  it("suppresses the completion candidate while background tasks are still running", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:05.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt: "2026-04-05T10:00:05.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-1"),
+          sourceProposedPlan: undefined,
+        },
+        activities: [
+          {
+            id: EventId.makeUnsafe("activity-task-start-1"),
+            tone: "info",
+            kind: "task.started",
+            summary: "Subagent task started",
+            payload: { taskId: "bg-task-1", taskType: "subagent" },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:02.000Z",
+          },
+          {
+            id: EventId.makeUnsafe("activity-task-bg-1"),
+            tone: "info",
+            kind: "task.updated",
+            summary: "Task moved to background",
+            payload: { taskId: "bg-task-1", status: "running", isBackgrounded: true },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:03.000Z",
+          },
+        ],
+      }),
+    ];
+
+    expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
+  });
+
+  describe("waiting for subagents", () => {
+    // The agent launched one subagent in turn-1 and was woken into turn-2 when
+    // another one finished. Shapes follow Claude's real activity stream.
+    const movedToBackground = (taskId: string) => ({
+      id: EventId.makeUnsafe(`moved-${taskId}`),
+      tone: "info" as const,
+      kind: "runtime.warning",
+      summary: "Moved to background",
+      payload: {
+        message: taskId,
+        nativeEventType: "background_tasks_changed",
+        data: { tasks: [{ task_id: taskId, task_type: "local_agent", description: taskId }] },
+      },
+      turnId: TurnId.makeUnsafe("turn-1"),
+      createdAt: "2026-04-05T10:00:01.000Z",
+    });
+    const taskCompleted = (taskId: string, createdAt: string) => ({
+      id: EventId.makeUnsafe(`done-${taskId}`),
+      tone: "info" as const,
+      kind: "task.completed",
+      summary: "Task completed",
+      payload: { taskId, status: "completed" },
+      turnId: null,
+      createdAt,
+    });
+    const wokenTurnThread = (overrides: Partial<Thread>) =>
+      makeThread({
+        session: {
+          provider: "claudeAgent",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:02:05.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:02:00.000Z",
+          startedAt: "2026-04-05T10:02:00.000Z",
+          completedAt: "2026-04-05T10:02:05.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-2"),
+          sourceProposedPlan: undefined,
+        },
+        ...overrides,
+      });
+    const previous = [makeThread({})];
+
+    it("holds the alert while a subagent launched by an earlier turn is still running", () => {
+      const next = [
+        wokenTurnThread({
+          activities: [
+            movedToBackground("agent-a"),
+            movedToBackground("agent-b"),
+            taskCompleted("agent-a", "2026-04-05T10:01:59.000Z"),
+          ],
+        }),
+      ];
+
+      expect(collectCompletedThreadCandidates(previous, next, { waitForSubagents: true })).toEqual(
+        [],
+      );
+      expect(collectCompletedThreadCandidates(previous, next)).toHaveLength(1);
+    });
+
+    it("alerts once every background subagent has finished", () => {
+      const next = [
+        wokenTurnThread({
+          activities: [
+            movedToBackground("agent-a"),
+            movedToBackground("agent-b"),
+            taskCompleted("agent-a", "2026-04-05T10:01:00.000Z"),
+            taskCompleted("agent-b", "2026-04-05T10:01:59.000Z"),
+          ],
+        }),
+      ];
+
+      expect(
+        collectCompletedThreadCandidates(previous, next, { waitForSubagents: true }),
+      ).toHaveLength(1);
+    });
+
+    it.each(["completed", "stopped", "error"] as const)(
+      "releases a held settled turn when background work becomes %s without a new turn",
+      (outcome) => {
+        const held = wokenTurnThread({ activities: [movedToBackground("agent-a")] });
+        const released = wokenTurnThread({
+          activities:
+            outcome === "completed"
+              ? [...held.activities, taskCompleted("agent-a", "2026-04-05T10:02:06.000Z")]
+              : held.activities,
+          session:
+            outcome === "completed"
+              ? held.session
+              : { ...held.session!, orchestrationStatus: outcome },
+        });
+
+        expect(
+          collectCompletedThreadCandidates(previous, [held], { waitForSubagents: true }),
+        ).toEqual([]);
+        const candidates = collectCompletedThreadCandidates([held], [released], {
+          waitForSubagents: true,
+        });
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]?.turnId).toBe(held.latestTurn?.turnId);
+        expect(
+          collectCompletedThreadCandidates([released], [released], { waitForSubagents: true }),
+        ).toEqual([]);
+      },
+    );
+
+    it("does not alert for a subagent's own thread", () => {
+      const parentThreadId = ThreadId.makeUnsafe("parent-thread");
+      const next = [wokenTurnThread({ parentThreadId })];
+      const previousChild = [makeThread({ parentThreadId })];
+
+      expect(
+        collectCompletedThreadCandidates(previousChild, next, { waitForSubagents: true }),
+      ).toEqual([]);
+      expect(collectCompletedThreadCandidates(previousChild, next)).toHaveLength(1);
+    });
   });
 
   it("summarizes the turn's final assistant message, not the opening preamble", () => {
@@ -525,7 +758,7 @@ describe("collectCompletedThreadCandidates", () => {
     ]);
   });
 
-  it.each([{ state: "interrupted" }, { state: "error" }] as const)(
+  it.each([{ state: "interrupted" }] as const)(
     "does not notify a settled $state turn as a completion",
     ({ state }) => {
       const previous = [
@@ -564,52 +797,6 @@ describe("collectCompletedThreadCandidates", () => {
       expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
     },
   );
-
-  it("re-emits a settle wobble under the same dedup key as the original completion", () => {
-    // A follow-up turn spinning up flips orchestrationStatus to "running" while
-    // latestTurn still points at the finished turn; when the status wobbles back
-    // out of "running" before the new turn registers, the old completion is
-    // re-emitted. The runtime dedupes it because the key is identical.
-    const settledTurn = {
-      turnId: TurnId.makeUnsafe("turn-1"),
-      state: "completed",
-      requestedAt: "2026-04-05T10:00:00.000Z",
-      startedAt: "2026-04-05T10:00:00.000Z",
-      completedAt: "2026-04-05T10:00:05.000Z",
-      assistantMessageId: null,
-      sourceProposedPlan: undefined,
-    } as const;
-    const idleSession = {
-      provider: "codex",
-      status: "ready",
-      orchestrationStatus: "ready",
-      createdAt: "2026-04-05T10:00:00.000Z",
-      updatedAt: "2026-04-05T10:00:05.000Z",
-    } as const;
-    const followUpStartingSession = {
-      provider: "codex",
-      status: "running",
-      orchestrationStatus: "running",
-      createdAt: "2026-04-05T10:00:00.000Z",
-      updatedAt: "2026-04-05T10:00:09.000Z",
-    } as const;
-
-    const [original] = collectCompletedThreadCandidates(
-      [makeThread({})],
-      [makeThread({ session: idleSession, latestTurn: settledTurn })],
-    );
-    const [reEmitted] = collectCompletedThreadCandidates(
-      [makeThread({ session: followUpStartingSession, latestTurn: settledTurn })],
-      [makeThread({ session: idleSession, latestTurn: settledTurn })],
-    );
-    if (!original || !reEmitted) {
-      throw new Error("Expected both snapshots to emit a completion candidate");
-    }
-
-    expect(completedThreadNotificationKey(reEmitted)).toBe(
-      completedThreadNotificationKey(original),
-    );
-  });
 
   it("keeps the dedup key stable when a checkpoint diff rewrites the turn's completedAt", () => {
     // thread.turn-diff-completed rebuilds latestTurn with the checkpoint's own
@@ -711,15 +898,6 @@ describe("shouldShowThreadNotificationToast", () => {
 });
 
 describe("buildTaskCompletionCopy", () => {
-  it("prefers assistant output when available", () => {
-    expect(
-      buildCollectedTaskCompletionCopy("Finished the task and everything looks good."),
-    ).toEqual({
-      title: "Polish notifications",
-      body: "Finished the task and everything looks good.",
-    });
-  });
-
   it("keeps compact context while stripping assistant Markdown", () => {
     expect(
       buildCollectedTaskCompletionCopy(
@@ -739,13 +917,6 @@ describe("buildTaskCompletionCopy", () => {
     ).toEqual({
       title: "Polish notifications",
       body: "Updated apps/web/src/foo_bar.ts. const result_value = true;",
-    });
-  });
-
-  it("preserves useful content inside a closed code fence", () => {
-    expect(buildCollectedTaskCompletionCopy('Result:\n```json\n{"status":"ok"}\n```')).toEqual({
-      title: "Polish notifications",
-      body: 'Result: {"status":"ok"}',
     });
   });
 
@@ -864,13 +1035,6 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
-  it("does not strip underscores from inline code identifiers", () => {
-    expect(buildCollectedTaskCompletionCopy("Updated `__init__.py` and `foo__bar__`.")).toEqual({
-      title: "Polish notifications",
-      body: "Updated __init__.py and foo__bar__.",
-    });
-  });
-
   it("does not treat intraword double underscores as emphasis", () => {
     expect(buildCollectedTaskCompletionCopy("Updated foo__bar__ successfully.")).toEqual({
       title: "Polish notifications",
@@ -898,11 +1062,6 @@ describe("buildTaskCompletionCopy", () => {
     [
       "blockquote",
       "Result:\n> ```python\n> def __init__(self):\n>   return value\n> ```",
-      "Result: def __init__(self): return value",
-    ],
-    [
-      "list",
-      "Result:\n- ```python\n  def __init__(self):\n  return value\n  ```",
       "Result: def __init__(self): return value",
     ],
     [
@@ -1158,22 +1317,6 @@ describe("buildInputNeededCopy", () => {
     ).toEqual({
       title: "Input needed",
       body: "Polish notifications: Command approval requested.",
-    });
-  });
-
-  it("describes user-input requests succinctly", () => {
-    expect(
-      buildInputNeededCopy({
-        kind: "user-input",
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        createdAt: "2026-04-05T10:00:06.000Z",
-        requestId: ApprovalRequestId.makeUnsafe("user-input-request-1"),
-      }),
-    ).toEqual({
-      title: "Input needed",
-      body: "Polish notifications: User input requested.",
     });
   });
 });

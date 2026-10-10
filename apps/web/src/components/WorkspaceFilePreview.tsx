@@ -536,11 +536,15 @@ export interface WorkspaceFilePreviewProps {
    */
   filePath: string | null;
   /**
-   * Initial markdown render mode per file: the dock opens markdown already
-   * parsed, the editor surface stays source-first. The header toggle still
-   * lets the user flip either way.
+   * Initial markdown render mode per file. Editor and dock file panes default
+   * to rendered Preview; omit (or pass false) for source-first surfaces such
+   * as the Explorer pane. The header toggle still lets the user flip either
+   * way. Use the controlled mode to preserve choices across preview remounts.
    */
   markdownPreviewDefault?: boolean;
+  /** Controlled mode for surfaces that preserve choices across preview remounts. */
+  markdownPreviewEnabled?: boolean;
+  onMarkdownPreviewChange?: (rendered: boolean) => void;
   /** Enables guarded editing for complete, supported files inside the workspace. */
   editable?: boolean;
   /** Keeps the file watcher bounded to a currently visible preview surface. */
@@ -597,18 +601,19 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const fileNeedsLocalPreviewGrant =
     filePath !== null && fileIsLocalAbsolute && !fileIsScratchBinaryPreview;
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
-  // Per-file override of the markdown-preview default. Deriving (instead of
-  // syncing state in an effect) means switching files applies the default in
-  // the same render, with no stale-value flash, and the override dies with its
-  // file automatically.
-  const [markdownPreviewOverride, setMarkdownPreviewOverride] = useState<{
-    filePath: string | null;
-    rendered: boolean;
-  } | null>(null);
+  // Per-file overrides of the markdown-preview default, keyed like the
+  // relocation request so each file remembers its own view mode for the
+  // surface's lifetime. Deriving (instead of syncing state in an effect)
+  // means switching files applies that file's choice in the same render, with
+  // no stale-value flash.
+  const [markdownPreviewOverrides, setMarkdownPreviewOverrides] = useState<
+    ReadonlyMap<string, boolean>
+  >(() => new Map());
+  const markdownPreviewKey = `${workspaceRoot ?? ""}\0${filePath ?? ""}`;
   const markdownPreviewEnabled =
-    markdownPreviewOverride !== null && markdownPreviewOverride.filePath === filePath
-      ? markdownPreviewOverride.rendered
-      : markdownPreviewDefault;
+    props.markdownPreviewEnabled ??
+    markdownPreviewOverrides.get(markdownPreviewKey) ??
+    markdownPreviewDefault;
   const localPreviewGrantQuery = useQuery(
     projectLocalPreviewGrantQueryOptions({
       path: filePath,
@@ -960,7 +965,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     void taskWriteQueueRef.current;
   };
   const handleMarkdownPreviewChange = (rendered: boolean) => {
-    setMarkdownPreviewOverride({ filePath, rendered });
+    setMarkdownPreviewOverrides((current) => new Map(current).set(markdownPreviewKey, rendered));
+    props.onMarkdownPreviewChange?.(rendered);
   };
   // Toggling a task rewrites the file, so only enable it when the preview
   // holds the complete contents (writing a truncated read would corrupt it).
@@ -1009,7 +1015,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     if (localPreviewGrantQuery.error) {
       return (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
+          <p className="text-left text-ui-sm text-destructive/85">
             {localPreviewGrantQuery.error instanceof Error
               ? localPreviewGrantQuery.error.message
               : "Could not create local file preview grant."}
@@ -1055,7 +1061,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     hasFileContents && fileReadError !== null && !activeEditBuffer?.error;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface">
       <WorkspaceFilePreviewHeader
         workspaceRoot={props.workspaceRoot}
         filePath={filePath}
@@ -1087,7 +1093,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       {activeEditBuffer?.error ? (
         <div
           role="alert"
-          className="flex shrink-0 items-center gap-3 border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+          className="flex shrink-0 items-center gap-3 border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive"
         >
           <span className="min-w-0 flex-1">{activeEditBuffer.error}</span>
           <button
@@ -1101,7 +1107,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ) : editBufferExternallyChanged ? (
         <div
           role="alert"
-          className="flex shrink-0 items-center gap-3 border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[11px] text-foreground/80"
+          className="flex shrink-0 items-center gap-3 border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-ui-sm text-foreground/80"
         >
           <span className="min-w-0 flex-1">
             This file changed on disk. Your unsaved edits are preserved.
@@ -1119,8 +1125,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           role={fileReadCapacityError ? "status" : "alert"}
           className={
             fileReadCapacityError
-              ? "flex shrink-0 items-center border-b border-border/60 px-3 py-2 text-[11px] text-muted-foreground"
-              : "flex shrink-0 items-center border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+              ? "flex shrink-0 items-center border-b border-border/60 px-3 py-2 text-ui-sm text-muted-foreground"
+              : "flex shrink-0 items-center border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive"
           }
         >
           {fileReadCapacityError
@@ -1162,7 +1168,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         <FilePreviewLoadingState />
       ) : !hasFileContents && fileReadError ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
+          <p className="text-left text-ui-sm text-destructive/85">
             {fileReadError instanceof Error ? fileReadError.message : "Could not read file."}
           </p>
         </PanelStateMessage>
@@ -1206,6 +1212,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
                     cwd={markdownPreviewCwd(props.workspaceRoot, filePath)}
                     wikiLinkRoot={props.workspaceRoot ?? undefined}
                     isStreaming={false}
+                    parseHtml
                     className="editor-markdown-preview__body text-sm leading-relaxed"
                     {...(canToggleTasks ? { onTaskToggle: handleTaskToggle } : {})}
                   />

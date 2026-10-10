@@ -74,6 +74,7 @@ function extensionFor(input: {
 }
 
 export function reserveManagedAttachmentUpload(input: {
+  readonly attachmentId?: string;
   readonly type: "image" | "file";
   readonly threadId: string;
   readonly name: string;
@@ -95,7 +96,16 @@ export function reserveManagedAttachmentUpload(input: {
               cause,
             }),
     });
-    const attachmentId = `${MANAGED_ATTACHMENT_ID_PREFIX}${randomUUID().replaceAll("-", "")}`;
+    const attachmentId =
+      input.attachmentId ?? `${MANAGED_ATTACHMENT_ID_PREFIX}${randomUUID().replaceAll("-", "")}`;
+    if (!/^att_v2_[0-9a-f]{32}$/u.test(attachmentId)) {
+      return yield* Effect.fail(
+        new ManagedAttachmentStoreError("Managed attachment identity is invalid.", {
+          status: 400,
+          code: "attachment_metadata_invalid",
+        }),
+      );
+    }
     const extension = extensionFor({ type: input.type, ...metadata });
     const relativePath = `objects/${attachmentId.slice(MANAGED_ATTACHMENT_ID_PREFIX.length, MANAGED_ATTACHMENT_ID_PREFIX.length + 2)}/${attachmentId}${extension}`;
     const result = yield* input.repository.reserve({

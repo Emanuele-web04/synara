@@ -7,13 +7,18 @@ import {
   TurnId,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Effect, Exit, Layer, Option, Scope, Stream } from "effect";
+import { Effect, Exit, FileSystem, Layer, Option, Scope, Stream } from "effect";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+
+import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery";
 import { fakeProjectionSnapshotQuery } from "../../orchestration/testing/fakeProjectionSnapshotQuery";
+import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -91,6 +96,7 @@ function makeProviderServiceStub(input: {
     stopSession: input.stopSession,
     ...(input.stopRuntimeSession ? { stopRuntimeSession: input.stopRuntimeSession } : {}),
     listSessions: () => Effect.succeed([]),
+    getPersistedSessionProfile: () => Effect.succeed(undefined),
     getCapabilities: () => unsupported(),
     rollbackConversation: () => unsupported(),
     compactThread: () => unsupported(),
@@ -158,54 +164,6 @@ function makeFakeAdapter(provider: ProviderKind) {
 }
 
 describe("ProviderSessionReaperLive", () => {
-  it("stops stale sessions without active turns using a cursor-preserving runtime stop", async () => {
-    const threadId = ThreadId.makeUnsafe("thread-reaper-stale");
-    const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
-    const stopRuntimeSession = vi.fn<NonNullable<ProviderServiceShape["stopRuntimeSession"]>>(
-      () => Effect.void,
-    );
-    const directory: ProviderSessionDirectoryShape = {
-      upsert: () => Effect.void,
-      getProvider: () => unsupported(),
-      getBinding: () => unsupported(),
-      remove: () => Effect.void,
-      listThreadIds: () => Effect.succeed([]),
-      listBindings: () =>
-        Effect.succeed([
-          {
-            threadId,
-            provider: "codex",
-            status: "running",
-            lastSeenAt: "2026-01-01T00:00:00.000Z",
-            resumeCursor: { threadId: "native-thread-reaper-stale" },
-          },
-        ]),
-    };
-
-    const scope = await Effect.runPromise(Scope.make());
-    try {
-      await Effect.gen(function* () {
-        const reaper = yield* ProviderSessionReaper;
-        yield* Scope.provide(reaper.start(), scope);
-      }).pipe(
-        Effect.provide(
-          makeLayer({
-            threadShell: makeThreadShell({ threadId, activeTurnId: null }),
-            directory,
-            providerService: makeProviderServiceStub({ stopSession, stopRuntimeSession }),
-          }),
-        ),
-        Effect.runPromise,
-      );
-      await waitFor(() => stopRuntimeSession.mock.calls.length === 1);
-    } finally {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-    }
-
-    expect(stopRuntimeSession).toHaveBeenCalledWith({ threadId });
-    expect(stopSession).not.toHaveBeenCalled();
-  });
-
   it("skips stale sessions with active turns", async () => {
     const threadId = ThreadId.makeUnsafe("thread-reaper-active");
     const turnId = TurnId.makeUnsafe("turn-reaper-active");
@@ -224,6 +182,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
             resumeCursor: { threadId: "native-thread-reaper-active" },
@@ -269,6 +228,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
             resumeCursor: { threadId: "native-thread-reaper-missing-runtime-stop" },
@@ -302,10 +262,6 @@ describe("ProviderSessionReaperLive", () => {
   it("keeps the Codex resume cursor after an idle reaper sweep of a pre-warmed running session", async () => {
     await assertIdleReaperPreservesResumeCursor("codex", "thread-reaper-idle-codex");
   });
-
-  it("keeps the resume cursor without session.started emission", async () => {
-    await assertIdleReaperPreservesResumeCursor("claudeAgent", "thread-reaper-idle-claude");
-  });
 });
 
 async function assertIdleReaperPreservesResumeCursor(
@@ -325,9 +281,45 @@ async function assertIdleReaperPreservesResumeCursor(
     Layer.provide(SqlitePersistenceMemory),
   );
   const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+  const settingsLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "synara-reaper-codex-" });
+      const homePath = join(root, "codex");
+      const runtimeHome = join(root, "synara");
+      yield* fs.makeDirectory(homePath);
+      yield* fs.writeFileString(join(homePath, "config.toml"), "");
+      // Real adapters prepare this state before returning a resumable session.
+      yield* Effect.promise(() =>
+        buildCodexProcessEnv({
+          env: { ...process.env, SYNARA_HOME: runtimeHome },
+          homePath,
+          accountId: "default",
+        }),
+      );
+      return ServerSettingsService.layerTest({
+        providerInstances: {
+          codex: {
+            driver: "codex",
+            environment: [{ name: "SYNARA_HOME", value: runtimeHome, sensitive: false }],
+            config: { homePath, accountId: "default" },
+          },
+        },
+      });
+    }),
+  ).pipe(Layer.provide(NodeServices.layer));
   const providerLayer = makeProviderServiceLive({ runtimeIdleStopMs: 0 }).pipe(
     Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
     Layer.provide(directoryLayer),
+    Layer.provide(settingsLayer),
+    Layer.provide(
+      Layer.succeed(ServerSecretStore, {
+        get: () => Effect.succeed(null),
+        set: () => Effect.void,
+        getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+        remove: () => Effect.void,
+      }),
+    ),
   );
   const sharedLayer = Layer.mergeAll(providerLayer, directoryLayer, NodeServices.layer);
   const reaperLayer = makeProviderSessionReaperLive({

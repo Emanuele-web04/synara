@@ -19,18 +19,17 @@ const SURFACE_CLASSES: Record<
 > = {
   settings: {
     item: "space-y-0.5",
-    row: "flex items-center justify-between gap-2 text-xs",
+    row: "flex items-center justify-between gap-2 text-ui leading-snug",
     label: "font-medium text-foreground",
     value: "text-right tabular-nums text-muted-foreground",
-    subtitle: "text-[11px] text-muted-foreground/80",
+    subtitle: "text-ui-sm text-muted-foreground/80",
   },
   popover: {
     item: "space-y-0.5",
     row: "flex items-center justify-between gap-2 leading-tight",
-    label: "text-[11px] font-medium text-foreground",
-    value: "text-right text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground",
-    subtitle:
-      "text-[length:var(--app-font-size-chat-meta,10px)] leading-tight text-muted-foreground/80",
+    label: "text-ui-sm font-medium text-foreground",
+    value: "text-right text-chat-meta text-muted-foreground",
+    subtitle: "text-chat-meta leading-tight text-muted-foreground/80",
   },
 };
 

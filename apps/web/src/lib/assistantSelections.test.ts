@@ -5,26 +5,11 @@ import {
   appendAssistantSelectionsToPrompt,
   createAssistantSelectionAttachment,
   extractTrailingAssistantSelections,
-  formatAssistantSelectionQueuePreview,
-  formatAssistantSelectionTitleSeed,
   stripEmbeddedAssistantSelections,
 } from "./assistantSelections";
 import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
 
 describe("assistantSelections", () => {
-  it("appends a trailing assistant selection block", () => {
-    expect(
-      appendAssistantSelectionsToPrompt("Investigate this", [
-        {
-          assistantMessageId: "msg-1",
-          text: "selected line",
-        },
-      ]),
-    ).toBe(
-      "Investigate this\n\n<assistant_selection>\n- assistant message msg-1:\n  selected line\n</assistant_selection>",
-    );
-  });
-
   it("extracts trailing assistant selection blocks from prompts", () => {
     expect(
       extractTrailingAssistantSelections(
@@ -147,12 +132,5 @@ describe("assistantSelections", () => {
         text: "x".repeat(CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS + 1),
       }),
     ).toBeNull();
-  });
-
-  it("formats shared assistant selection labels", () => {
-    expect(formatAssistantSelectionQueuePreview(1)).toBe("1 referenced selection");
-    expect(formatAssistantSelectionQueuePreview(2)).toBe("Referenced selections");
-    expect(formatAssistantSelectionTitleSeed(1)).toBe("Referenced assistant selection");
-    expect(formatAssistantSelectionTitleSeed(2)).toBe("Referenced assistant selections");
   });
 });

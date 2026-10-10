@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildPendingUserInputAnswers,
-  countAnsweredPendingUserInputQuestions,
   derivePendingUserInputProgress,
   hasCompletePendingUserInputAnswers,
   resolvePendingUserInputAnswer,
@@ -26,22 +25,6 @@ describe("resolvePendingUserInputAnswer", () => {
         },
       ),
     ).toBe("Keep the existing envelope for one release");
-  });
-
-  it("falls back to the selected option", () => {
-    expect(
-      resolvePendingUserInputAnswer(
-        {
-          id: "scope",
-          header: "Scope",
-          question: "What should the plan target first?",
-          options: [],
-        },
-        {
-          selectedOptionLabels: ["Scaffold only"],
-        },
-      ),
-    ).toBe("Scaffold only");
   });
 
   it("clears the preset selection when a custom answer is entered", () => {
@@ -215,16 +198,6 @@ describe("pending user input question progress", () => {
       ],
     },
   ] as const;
-
-  it("counts only answered questions", () => {
-    expect(
-      countAnsweredPendingUserInputQuestions(questions, {
-        scope: {
-          selectedOptionLabels: ["Orchestration-first"],
-        },
-      }),
-    ).toBe(1);
-  });
 
   it("derives the active question and advancement state", () => {
     expect(

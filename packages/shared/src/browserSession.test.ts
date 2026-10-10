@@ -4,10 +4,8 @@ import {
   BROWSER_SEARCH_URL_PREFIX,
   buildAcceptLanguageHeader,
   buildChromeClientHints,
-  chromeMajorVersionFromUserAgent,
   classifyBrowserWindowOpen,
   deriveChromeUserAgent,
-  isLikelyOAuthHost,
   normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput,
   isBlankBrowserTabUrl,
@@ -42,23 +40,6 @@ describe("deriveChromeUserAgent", () => {
     expect(deriveChromeUserAgent(ELECTRON_UA, ["Synara"])).toBe(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.91 Safari/537.36",
     );
-  });
-
-  it("preserves the platform and Chrome version from the base UA", () => {
-    const derived = deriveChromeUserAgent(ELECTRON_UA, ["Synara"]);
-    expect(derived).toContain("Chrome/124.0.6367.91");
-    expect(derived).not.toMatch(/Electron/i);
-    expect(derived).not.toMatch(/Synara/i);
-  });
-});
-
-describe("chromeMajorVersionFromUserAgent", () => {
-  it("extracts the Chrome major version", () => {
-    expect(chromeMajorVersionFromUserAgent(ELECTRON_UA)).toBe("124");
-  });
-
-  it("returns null when no Chrome token is present", () => {
-    expect(chromeMajorVersionFromUserAgent("Mozilla/5.0 (X11; Linux)")).toBeNull();
   });
 });
 
@@ -155,30 +136,18 @@ describe("isBlankBrowserTabUrl", () => {
   });
 });
 
-describe("isLikelyOAuthHost", () => {
-  it("matches known auth hosts and their subdomains", () => {
-    expect(isLikelyOAuthHost("accounts.google.com")).toBe(true);
-    expect(isLikelyOAuthHost("appleid.apple.com")).toBe(true);
-    expect(isLikelyOAuthHost("login.microsoftonline.com")).toBe(true);
-  });
-
-  it("does not match arbitrary hosts", () => {
-    expect(isLikelyOAuthHost("example.com")).toBe(false);
-    expect(isLikelyOAuthHost("github.com")).toBe(false);
-    expect(isLikelyOAuthHost("")).toBe(false);
-  });
-});
-
 describe("classifyBrowserWindowOpen", () => {
-  it("does not treat new-window disposition alone as a popup", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://example.com/article",
-        frameName: "",
-        features: "",
-        disposition: "new-window",
-      }),
-    ).toBe("tab");
+  it("does not treat new-window disposition or arbitrary hosts alone as a popup", () => {
+    for (const url of ["https://example.com/article", "https://github.com/", ""]) {
+      expect(
+        classifyBrowserWindowOpen({
+          url,
+          frameName: "",
+          features: "",
+          disposition: "new-window",
+        }),
+      ).toBe("tab");
+    }
   });
 
   it("treats window features as a popup signal", () => {
@@ -193,14 +162,20 @@ describe("classifyBrowserWindowOpen", () => {
   });
 
   it("treats known auth hosts opened via _blank as popups", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://accounts.google.com/o/oauth2/auth",
-        frameName: "_blank",
-        features: "",
-        disposition: "foreground-tab",
-      }),
-    ).toBe("popup");
+    for (const url of [
+      "https://accounts.google.com/o/oauth2/auth",
+      "https://appleid.apple.com/",
+      "https://login.microsoftonline.com/",
+    ]) {
+      expect(
+        classifyBrowserWindowOpen({
+          url,
+          frameName: "_blank",
+          features: "",
+          disposition: "foreground-tab",
+        }),
+      ).toBe("popup");
+    }
   });
 
   it("treats known OAuth endpoints on multi-purpose hosts as popups", () => {
@@ -234,17 +209,6 @@ describe("classifyBrowserWindowOpen", () => {
         disposition: "foreground-tab",
       }),
     ).toBe("popup");
-  });
-
-  it("keeps ordinary _blank links to non-auth hosts as tabs", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://example.com/article",
-        frameName: "_blank",
-        features: "",
-        disposition: "foreground-tab",
-      }),
-    ).toBe("tab");
   });
 
   it("keeps ordinary _blank links to multi-purpose provider hosts as tabs", () => {

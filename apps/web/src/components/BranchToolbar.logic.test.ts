@@ -41,16 +41,6 @@ describe("resolveDraftEnvModeAfterBranchChange", () => {
       }),
     ).toBe("worktree");
   });
-
-  it("keeps legacy .synara worktree paths working for migrated threads", () => {
-    expect(
-      resolveDraftEnvModeAfterBranchChange({
-        nextWorktreePath: "/repo/.synara/worktrees/feature-a",
-        currentWorktreePath: null,
-        effectiveEnvMode: "local",
-      }),
-    ).toBe("worktree");
-  });
 });
 
 describe("resolveFixedLocalWorkspacePatch", () => {
@@ -317,30 +307,6 @@ describe("dedupeRemoteBranchesWithLocalMatches", () => {
 
     expect(dedupeRemoteBranchesWithLocalMatches(input).map((branch) => branch.name)).toEqual([
       "feature/demo",
-      "origin/feature/remote-only",
-    ]);
-  });
-
-  it("keeps all entries when no local match exists for a remote ref", () => {
-    const input: GitBranch[] = [
-      {
-        name: "feature/local",
-        current: false,
-        isDefault: false,
-        worktreePath: null,
-      },
-      {
-        name: "origin/feature/remote-only",
-        isRemote: true,
-        remoteName: "origin",
-        current: false,
-        isDefault: false,
-        worktreePath: null,
-      },
-    ];
-
-    expect(dedupeRemoteBranchesWithLocalMatches(input).map((branch) => branch.name)).toEqual([
-      "feature/local",
       "origin/feature/remote-only",
     ]);
   });

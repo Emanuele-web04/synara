@@ -6,7 +6,7 @@
 //          reserves transcript/composer inset; when the dock is open it overlays only.
 // Layer: Chat header control
 
-import { WindowIcon } from "~/lib/icons";
+import { PanelTopOpenIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { Toggle } from "../../ui/toggle";
@@ -37,7 +37,7 @@ export function EnvironmentToggle({ environment }: { environment: EnvironmentTog
             variant="default"
             size="xs"
           >
-            <SurfaceChipIcon icon={WindowIcon} className="size-4" />
+            <SurfaceChipIcon icon={PanelTopOpenIcon} className="size-4" />
           </Toggle>
         }
       />

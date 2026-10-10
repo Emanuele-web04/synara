@@ -70,11 +70,88 @@ const APPROVAL_ACTIONS: ReadonlyArray<ApprovalAction> = [
   },
 ];
 
+const WITHOUT_SESSION_APPROVAL = APPROVAL_ACTIONS.filter(
+  (action) => action.decision !== "acceptForSession",
+);
+
+// Synara-owned Computer consent: never session-wide, and each scope names its
+// own decision. Visible use is separate from routine consent: allowing desktop
+// actions never covers taking the user's screen.
+const COMPUTER_SCOPES: Record<
+  NonNullable<PendingApproval["approvalScope"]>,
+  { readonly prompt: string; readonly actions: ReadonlyArray<ApprovalAction> }
+> = {
+  "computer-task": {
+    prompt: "Allow Computer for this task?",
+    actions: WITHOUT_SESSION_APPROVAL.map((action) =>
+      action.decision === "accept"
+        ? {
+            ...action,
+            label: "Allow Computer for this task",
+            description:
+              "Continue routine desktop actions until this response ends. Stop cancels access. Clipboard reads still ask separately.",
+          }
+        : action.decision === "decline"
+          ? { ...action, description: "Stop desktop for this turn, agent continues without tools" }
+          : {
+              ...action,
+              label: "Cancel this request",
+              description: "Deny this request; use Stop to end the agent turn.",
+            },
+    ),
+  },
+  "computer-foreground": {
+    prompt: "Show this on your screen?",
+    actions: WITHOUT_SESSION_APPROVAL.map((action) =>
+      action.decision === "accept"
+        ? {
+            ...action,
+            label: "Show on screen for this task",
+            description: "Computer may bring windows to the front until this response ends.",
+          }
+        : action.decision === "decline"
+          ? {
+              ...action,
+              label: "Keep it in the background",
+              description: "No window is raised; the agent continues in the background",
+            }
+          : {
+              ...action,
+              label: "Cancel this request",
+              description: "Use Stop to end the agent turn.",
+            },
+    ),
+  },
+  "device-task": {
+    prompt: "Allow Device for this task?",
+    actions: WITHOUT_SESSION_APPROVAL.map((action) =>
+      action.decision === "accept"
+        ? {
+            ...action,
+            label: "Allow Device for this task",
+            description:
+              "Continue routine device actions until this response ends. Stop cancels access.",
+          }
+        : action.decision === "decline"
+          ? {
+              ...action,
+              description: "Stop device control for this turn, agent continues without tools",
+            }
+          : {
+              ...action,
+              label: "Cancel this request",
+              description: "Use Stop to end the agent turn.",
+            },
+    ),
+  },
+};
+
 const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   command: "Approve this command?",
   "file-read": "Approve reading this file?",
   "file-change": "Approve this file change?",
   permissions: "Grant these permissions?",
+  tool: "Approve this tool call?",
 };
 
 export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPanel({
@@ -88,24 +165,29 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
   const submissionKey = JSON.stringify([requestKey, approval.responseAttemptKey ?? null]);
   const submittedRequestKeyRef = useRef<string | null>(null);
+  const computerScope = approval.approvalScope
+    ? COMPUTER_SCOPES[approval.approvalScope]
+    : undefined;
   const actions =
-    approval.sessionApprovalAvailable === false
-      ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession")
-      : APPROVAL_ACTIONS;
+    computerScope?.actions ??
+    (approval.sessionApprovalAvailable === false ? WITHOUT_SESSION_APPROVAL : APPROVAL_ACTIONS);
 
-  const respondOnce = (decision: ProviderApprovalDecision) => {
+  const respondOnce = (action: ApprovalAction) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;
     submittedRequestKeyRef.current = submissionKey;
-    void onRespond(requestId, decision, approval.lifecycleGeneration, approval.requestKind).catch(
-      () => {
-        // Immediate command failures remain retryable. A successful dispatch keeps
-        // the claim until the request disappears or a newer durable retry attempt
-        // changes `submissionKey`.
-        if (submittedRequestKeyRef.current === submissionKey) {
-          submittedRequestKeyRef.current = null;
-        }
-      },
-    );
+    void onRespond(
+      requestId,
+      action.decision,
+      approval.lifecycleGeneration,
+      approval.requestKind,
+    ).catch(() => {
+      // Immediate command failures remain retryable. A successful dispatch keeps
+      // the claim until the request disappears or a newer durable retry attempt
+      // changes `submissionKey`.
+      if (submittedRequestKeyRef.current === submissionKey) {
+        submittedRequestKeyRef.current = null;
+      }
+    });
   };
 
   // Digit shortcuts bubble from focused controls inside this card only; a bare
@@ -125,7 +207,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     const action = actions[digit - 1];
     if (!action) return;
     event.preventDefault();
-    respondOnce(action.decision);
+    respondOnce(action);
   };
 
   return (
@@ -134,16 +216,16 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden px-3.5 py-3")}
     >
       <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
-          {KIND_PROMPT[approval.requestKind]}
-          {parsed.tool ? (
-            <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">
-              {parsed.tool}
+        <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
+          {computerScope?.prompt ?? KIND_PROMPT[approval.requestKind]}
+          {!computerScope && (approval.toolName ?? parsed.tool) ? (
+            <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
+              {approval.toolName ?? parsed.tool}
             </span>
           ) : null}
         </p>
         {pendingCount > 1 ? (
-          <span className="flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-[9.5px] font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">
+          <span className="flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-ui-2xs font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">
             1/{pendingCount}
           </span>
         ) : null}
@@ -151,6 +233,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       <ApprovalDetail
         parsed={parsed}
         {...(approval.permissionProfile ? { permissionProfile: approval.permissionProfile } : {})}
+        {...(approval.toolName ? { toolName: approval.toolName } : {})}
+        {...(approval.toolParamsDisplay ? { toolParamsDisplay: approval.toolParamsDisplay } : {})}
       />
       <div className="mt-2.5 space-y-0.5">
         {actions.map((action, index) => (
@@ -161,7 +245,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
             description={action.description}
             tone={action.tone}
             disabled={isResponding}
-            onSelect={() => respondOnce(action.decision)}
+            onSelect={() => respondOnce(action)}
           />
         ))}
       </div>
@@ -172,20 +256,24 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
 function ApprovalDetail({
   parsed,
   permissionProfile,
+  toolName,
+  toolParamsDisplay,
 }: {
   parsed: ParsedApproval;
   permissionProfile?: Record<string, unknown>;
+  toolName?: string;
+  toolParamsDisplay?: PendingApproval["toolParamsDisplay"];
 }) {
   if (permissionProfile) {
     return (
       <div className="mt-2">
         {parsed.fallback ? (
-          <p className="mb-1.5 text-[11.5px] leading-snug text-muted-foreground/70">
+          <p className="mb-1.5 text-ui-sm leading-snug text-muted-foreground/70">
             {parsed.fallback}
           </p>
         ) : null}
         <pre
-          className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground/85"
+          className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-ui-sm leading-relaxed text-foreground/85"
           title="Requested permission profile"
         >
           <code>{JSON.stringify(permissionProfile, null, 2)}</code>
@@ -194,18 +282,42 @@ function ApprovalDetail({
     );
   }
 
+  if (toolName || (toolParamsDisplay?.length ?? 0) > 0) {
+    return (
+      <div className="mt-2">
+        {parsed.fallback ? (
+          <p className="text-ui-sm leading-snug text-muted-foreground/70">{parsed.fallback}</p>
+        ) : null}
+        {toolParamsDisplay && toolParamsDisplay.length > 0 ? (
+          <dl className="mt-2 space-y-1 rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 text-ui-xs leading-snug">
+            {toolParamsDisplay.map((parameter) => (
+              <div className="grid grid-cols-[auto_1fr] gap-x-2" key={parameter.name}>
+                <dt className="font-medium text-muted-foreground/65">
+                  {parameter.displayName ?? parameter.name}
+                </dt>
+                <dd className="min-w-0 break-words font-mono text-foreground/80">
+                  {formatToolParameterValue(parameter.value)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+      </div>
+    );
+  }
+
   if (parsed.fileName) {
     return (
       <div className="mt-2">
         <p
-          className="truncate text-[12.5px] font-medium leading-tight text-foreground/85"
+          className="truncate text-ui-lg font-medium leading-tight text-foreground/85"
           title={parsed.fileDir ? `${parsed.fileDir}/${parsed.fileName}` : parsed.fileName}
         >
           {parsed.fileName}
         </p>
         {parsed.fileDir ? (
           <p
-            className="mt-0.5 truncate font-mono text-[10.5px] leading-tight text-muted-foreground/55"
+            className="mt-0.5 truncate font-mono text-ui-xs leading-tight text-muted-foreground/55"
             title={parsed.fileDir}
           >
             {shortenPath(parsed.fileDir)}
@@ -219,7 +331,7 @@ function ApprovalDetail({
   if (code) {
     return (
       <pre
-        className="mt-2 overflow-hidden rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-1.5 font-mono text-[11.5px] leading-snug text-foreground/85"
+        className="mt-2 overflow-hidden rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-1.5 font-mono text-ui-sm leading-snug text-foreground/85"
         title={code}
       >
         <code className="block truncate">{code}</code>
@@ -227,9 +339,21 @@ function ApprovalDetail({
     );
   }
 
-  return (
-    <p className="mt-2 text-[12px] text-muted-foreground/65">Review the request to continue.</p>
-  );
+  return <p className="mt-2 text-ui text-muted-foreground/65">Review the request to continue.</p>;
+}
+
+function formatToolParameterValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null) {
+    return "null";
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /**

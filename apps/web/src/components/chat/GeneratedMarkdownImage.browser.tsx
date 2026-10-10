@@ -1,3 +1,5 @@
+import "../../index.css";
+
 import type { NativeApi } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HttpResponse, http } from "msw";
@@ -5,6 +7,7 @@ import { setupWorker } from "msw/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import ChatMarkdown from "../ChatMarkdown";
 import { downloadUrlAsBlob } from "~/lib/browserDownload";
 import { projectLocalPreviewGrantQueryOptions } from "~/lib/projectReactQuery";
 import { GeneratedMarkdownImage } from "./GeneratedMarkdownImage";
@@ -17,12 +20,10 @@ vi.mock("~/lib/browserDownload", () => ({
   }),
 }));
 
-const png = Uint8Array.from(
-  atob(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==",
-  ),
-  (char) => char.charCodeAt(0),
-);
+// Use screenshot-sized bytes so the owner tests exercise actual preview geometry.
+const canvas = new OffscreenCanvas(1024, 256);
+canvas.getContext("2d")!.fillRect(0, 0, 1024, 256);
+const png = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer());
 const desktopPath = "/Users/tester/Desktop/simulator shot.png";
 const grants = new Map<string, string>();
 const requests: URL[] = [];
@@ -90,7 +91,7 @@ async function expectReady() {
       );
       expect(
         document.querySelector<HTMLImageElement>(".chat-generated-image__img")?.naturalWidth,
-      ).toBe(1);
+      ).toBe(1024);
     },
     { timeout: 5_000 },
   );
@@ -209,4 +210,81 @@ it("resets recovery across source changes and returns to a previously failed sou
   expect(document.querySelector<HTMLImageElement>(".chat-generated-image__img")?.src).not.toContain(
     "grant=",
   );
+});
+
+it.each([
+  { src: "./workspace.png", expandable: true },
+  { src: "./missing.png", expandable: true },
+  { src: "file:///Users/tester/Desktop/simulator%20shot.png", expandable: false },
+])("lets a linked local image follow its link ($src)", async ({ src, expandable }) => {
+  const expand = vi.fn();
+  let releaseLoading: (() => void) | undefined;
+  if (src.includes("missing")) {
+    const pendingResponse = new Promise<void>((resolve) => {
+      releaseLoading = resolve;
+    });
+    worker.use(
+      http.get(
+        "*/api/local-image",
+        async () => {
+          await pendingResponse;
+          return new HttpResponse(null, { status: 404 });
+        },
+        { once: true },
+      ),
+    );
+  }
+  const screen = await render(
+    <QueryClientProvider client={client}>
+      <ChatMarkdown
+        text={`[![Simulator screenshot](${src})](https://example.com/screenshot)`}
+        style={{ width: 800 }}
+        cwd="/Users/tester/project"
+        onImageExpand={expandable ? expand : undefined}
+      />
+    </QueryClientProvider>,
+  );
+  const img = screen.getByRole("img", { name: "Simulator screenshot" });
+  if (releaseLoading) {
+    try {
+      expect((img.element() as HTMLImageElement).complete).toBe(false);
+      expect(img.element().getBoundingClientRect().width).toBeLessThanOrEqual(255);
+      expect(getComputedStyle(img.element()).opacity).toBe("1");
+    } finally {
+      releaseLoading();
+    }
+  }
+  await vi.waitFor(() => {
+    const element = img.element() as HTMLImageElement;
+    expect(element.complete).toBe(true);
+    expect(element.naturalWidth).toBe(src.includes("missing") ? 0 : 1024);
+  });
+  const width = img.element().getBoundingClientRect().width;
+  expect(width).toBeGreaterThan(0);
+  expect(width).toBeLessThanOrEqual(255);
+  if (!src.includes("missing")) expect(width).toBe(255);
+  let cancelledBeforeNavigation: boolean | undefined;
+  const observeClick = (event: MouseEvent) => {
+    cancelledBeforeNavigation = event.defaultPrevented;
+    // Observe browser activation without opening an external test tab.
+    event.preventDefault();
+  };
+  document.addEventListener("click", observeClick, { once: true });
+  try {
+    await img.click();
+  } finally {
+    document.removeEventListener("click", observeClick);
+  }
+  expect(cancelledBeforeNavigation).toBe(false);
+  expect(expand).not.toHaveBeenCalled();
+  const link = screen.getByRole("link", { name: "Simulator screenshot" }).element();
+  expect(link.getAttribute("href")).toBe("https://example.com/screenshot");
+  expect(link.querySelector("button, a")).toBeNull();
+  if (src.startsWith("file:")) {
+    expect(createLocalFilePreviewGrant).toHaveBeenCalledExactlyOnceWith({ path: desktopPath });
+    const url = new URL((img.element() as HTMLImageElement).src);
+    expect(grants.get(url.searchParams.get("grant") ?? "")).toBe(desktopPath);
+  } else {
+    expect(createLocalFilePreviewGrant).not.toHaveBeenCalled();
+  }
 });

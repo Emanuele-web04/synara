@@ -8,9 +8,9 @@ import { ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  describeThreadUnblockResult,
   isProviderDeliveryReconciliationConflict,
   PROVIDER_DELIVERY_RECONCILIATION_CONFLICT_CODE,
+  resolveThreadUnblockTarget,
   unblockThreadFromClient,
 } from "./threadUnblock";
 
@@ -155,25 +155,28 @@ describe("unblockThreadFromClient", () => {
   });
 });
 
+describe("resolveThreadUnblockTarget", () => {
+  it("keeps a real thread id target", () => {
+    expect(resolveThreadUnblockTarget(threadId, null)).toBe(threadId);
+    expect(resolveThreadUnblockTarget(threadId, ThreadId.makeUnsafe("other"))).toBe(threadId);
+  });
+
+  it("falls back to the bound thread when a click event arrives instead", () => {
+    // A `() => void` prop wired straight into `onClick` delivers the DOM event
+    // as the first argument; it must never reach the server as a thread id.
+    const clickEventLike = { type: "click", nativeEvent: {}, target: {} };
+    expect(resolveThreadUnblockTarget(clickEventLike, threadId)).toBe(threadId);
+    expect(resolveThreadUnblockTarget(clickEventLike, null)).toBeNull();
+    expect(resolveThreadUnblockTarget(undefined, threadId)).toBe(threadId);
+    expect(resolveThreadUnblockTarget(null, threadId)).toBe(threadId);
+  });
+});
+
 describe("isProviderDeliveryReconciliationConflict", () => {
   it("matches only the server conflict code", () => {
     expect(isProviderDeliveryReconciliationConflict(conflictError())).toBe(true);
     expect(isProviderDeliveryReconciliationConflict(new Error("Socket closed"))).toBe(false);
     expect(isProviderDeliveryReconciliationConflict(null)).toBe(false);
     expect(isProviderDeliveryReconciliationConflict({ code: "WS_REQUEST_TIMEOUT" })).toBe(false);
-  });
-});
-
-describe("describeThreadUnblockResult", () => {
-  it("always tells the user to resend the failed message", () => {
-    for (const result of [
-      { kind: "unblocked", reconciledCount: 1 },
-      { kind: "already-clear" },
-      { kind: "resolved-elsewhere" },
-    ] as const) {
-      const notice = describeThreadUnblockResult(result);
-      expect(notice.title.length).toBeGreaterThan(0);
-      expect(notice.description.toLowerCase()).toContain("resend");
-    }
   });
 });

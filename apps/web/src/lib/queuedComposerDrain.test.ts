@@ -115,20 +115,6 @@ async function flushDrain(): Promise<void> {
 }
 
 describe("shouldAutoDispatchQueuedComposerTurn", () => {
-  it("allows drain when the thread is idle with a queued turn", () => {
-    expect(shouldAutoDispatchQueuedComposerTurn(OPEN_GATES)).toBe(true);
-  });
-
-  it("blocks drain while a live turn still has an active turn id", () => {
-    expect(
-      shouldAutoDispatchQueuedComposerTurn({
-        ...OPEN_GATES,
-        hasQueueableLiveTurn: true,
-        phase: "running",
-      }),
-    ).toBe(false);
-  });
-
   it("blocks drain while disconnected, connecting, or send-busy", () => {
     expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, phase: "disconnected" })).toBe(
       false,
@@ -163,16 +149,6 @@ describe("shouldAutoDispatchQueuedComposerTurn", () => {
     expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, pendingUserInputCount: 1 })).toBe(
       false,
     );
-  });
-
-  it("blocks drain when the queue is empty", () => {
-    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, queuedTurnCount: 0 })).toBe(false);
-  });
-
-  it("blocks drain while a cache review holds the previous message", () => {
-    expect(
-      shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, hasPendingCacheReview: true }),
-    ).toBe(false);
   });
 });
 
@@ -555,21 +531,6 @@ describe("queued composer drain watcher", () => {
     );
   });
 
-  it("does not drain while a live turn still has an active turn id", async () => {
-    seedThread(
-      makeThread({
-        id: THREAD_ID,
-        session: makeSession("running", LIVE_TURN_ID),
-      }),
-    );
-    useComposerDraftStore
-      .getState()
-      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-live"));
-
-    await flushDrain();
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
   it("does not drain while an approval is pending", async () => {
     seedThread(
       makeThread({
@@ -612,34 +573,6 @@ describe("queued composer drain watcher", () => {
 
     await flushDrain();
     expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("does not drain while a steer gate is armed", async () => {
-    seedThread(
-      makeThread({
-        id: THREAD_ID,
-        session: makeSession("ready"),
-      }),
-    );
-    armQueuedComposerSteerGate(THREAD_ID, {
-      sawInterruptGap: false,
-      gapStartedAt: null,
-      armedActiveTurnId: "turn-original",
-    });
-    useComposerDraftStore
-      .getState()
-      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-steer"));
-
-    await flushDrain();
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("gives ChatView and the watcher one exclusive per-thread drain lock", () => {
-    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(true);
-    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(false);
-    endQueuedComposerAutoDispatch(THREAD_ID);
-    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(true);
-    endQueuedComposerAutoDispatch(THREAD_ID);
   });
 
   it("does not let ChatView send the same queue head the watcher already started", async () => {

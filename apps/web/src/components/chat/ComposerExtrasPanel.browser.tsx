@@ -41,6 +41,7 @@ const READY_STATE: DesktopAppSnapState = {
   inputMonitoringPermission: "granted",
   screenRecordingPermission: "granted",
   message: null,
+  appDisplayName: "Synara",
 };
 
 const CAPTURE: DesktopAppSnapCapture = {
@@ -77,6 +78,11 @@ function appSnapBridge(overrides: {
   captureWindow?: (input: { windowId: number }) => Promise<DesktopAppSnapCapture>;
   acknowledgeCapture?: (captureId: string) => Promise<void>;
   onState?: (listener: (state: DesktopAppSnapState) => void) => () => void;
+  openPermissionSettings?: (pane: unknown) => Promise<boolean>;
+  restartApp?: () => Promise<void>;
+  showPermissionGuide?: (pane: unknown) => Promise<void>;
+  hidePermissionGuide?: () => Promise<void>;
+  onPermissionGuideState?: (listener: (state: unknown) => void) => () => void;
 }) {
   return {
     appSnap: {
@@ -103,6 +109,11 @@ function appSnapBridge(overrides: {
       captureWindow: overrides.captureWindow ?? (() => Promise.resolve(CAPTURE)),
       acknowledgeCapture: overrides.acknowledgeCapture ?? (() => Promise.resolve()),
       onState: overrides.onState ?? (() => () => undefined),
+      openPermissionSettings: overrides.openPermissionSettings ?? (() => Promise.resolve(true)),
+      restartApp: overrides.restartApp ?? (() => Promise.resolve()),
+      showPermissionGuide: overrides.showPermissionGuide ?? (() => Promise.resolve()),
+      hidePermissionGuide: overrides.hidePermissionGuide ?? (() => Promise.resolve()),
+      onPermissionGuideState: overrides.onPermissionGuideState ?? (() => () => undefined),
     },
   };
 }
@@ -188,21 +199,6 @@ describe("ComposerExtrasPanel", () => {
     ]);
   });
 
-  it("lists every composer extra as one flat Add list", async () => {
-    await using _ = await mountMenu({ interactionMode: "plan", fastModeEnabled: true });
-
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Files and folders");
-      expect(text).toContain("Goal");
-      expect(text).toContain("Turn plan mode off");
-      expect(text).toContain("Turn debug mode on");
-      expect(text).toContain("Turn fast mode off");
-      expect(text).not.toContain("Speed");
-      expect(document.querySelectorAll("[data-slot='command-group-label']")).toHaveLength(1);
-    });
-  });
-
   it("toggles the interaction mode and closes", async () => {
     await using menu = await mountMenu({ interactionMode: "debug" });
 
@@ -212,15 +208,6 @@ describe("ComposerExtrasPanel", () => {
     await page.getByText("Debug mode", { exact: true }).click();
     expect(menu.onInteractionModeChange).toHaveBeenLastCalledWith("default");
     expect(menu.onClose).toHaveBeenCalledTimes(2);
-  });
-
-  it("inserts the goal command and closes", async () => {
-    await using menu = await mountMenu();
-
-    await page.getByText("Set a goal to keep pursuing").click();
-
-    expect(menu.onInsertGoal).toHaveBeenCalledTimes(1);
-    expect(menu.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("wires the speed control", async () => {

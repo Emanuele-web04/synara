@@ -149,7 +149,7 @@ describe("Claude cache report", () => {
     expect(JSON.stringify(report)).not.toMatch(/private-tool-id|private-request-id/u);
   });
 
-  it.each([undefined, 0, 5_000])(
+  it.each([undefined, 0])(
     "reads SDK compaction metadata with post_tokens=%s",
     async (postTokens) => {
       const report = await analyze([

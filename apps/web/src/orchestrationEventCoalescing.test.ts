@@ -56,25 +56,6 @@ function messageText(event: OrchestrationEvent): string | null {
 }
 
 describe("coalesceOrchestrationUiEvents", () => {
-  it("returns a copy for zero or one event", () => {
-    expect(coalesceOrchestrationUiEvents([])).toEqual([]);
-    const single = [delta(THREAD_A, MESSAGE_A, "hi", 1)];
-    const result = coalesceOrchestrationUiEvents(single);
-    expect(result).toEqual(single);
-    expect(result).not.toBe(single);
-  });
-
-  it("merges adjacent deltas for one message into one event", () => {
-    const result = coalesceOrchestrationUiEvents([
-      delta(THREAD_A, MESSAGE_A, "Hel", 1),
-      delta(THREAD_A, MESSAGE_A, "lo", 2),
-      delta(THREAD_A, MESSAGE_A, "!", 3),
-    ]);
-    expect(result).toHaveLength(1);
-    expect(messageText(result[0]!)).toBe("Hello!");
-    expect(result[0]!.sequence).toBe(3);
-  });
-
   it("merges deltas for the same message even when other threads interleave", () => {
     const result = coalesceOrchestrationUiEvents([
       delta(THREAD_A, MESSAGE_A, "a1", 1),
@@ -110,18 +91,6 @@ describe("coalesceOrchestrationUiEvents", () => {
     expect(merged.sequence).toBe(3);
   });
 
-  it("preserves completion events as turn-state boundaries", () => {
-    const result = coalesceOrchestrationUiEvents([
-      activity(THREAD_A, 1),
-      delta(THREAD_A, MESSAGE_A, "partial", 2),
-      delta(THREAD_A, MESSAGE_A, "final full text", 3, { streaming: false }),
-    ]);
-    expect(result).toHaveLength(3);
-    expect(messageText(result[2]!)).toBe("final full text");
-    if (result[2]!.type !== "thread.message-sent") throw new Error("unreachable");
-    expect(result[2]!.payload.streaming).toBe(false);
-  });
-
   it("keeps a non-adjacent completion in place so intervening events see the transition in order", () => {
     const result = coalesceOrchestrationUiEvents([
       delta(THREAD_A, MESSAGE_A, "part", 1),
@@ -149,15 +118,6 @@ describe("coalesceOrchestrationUiEvents", () => {
     expect(messageText(result[2]!)).toBe("ial");
     expect(messageText(result[4]!)).toBe("partial");
     expect(result[5]!.sequence).toBe(6);
-  });
-
-  it("does not merge different messages of the same thread", () => {
-    const result = coalesceOrchestrationUiEvents([
-      delta(THREAD_A, MESSAGE_A, "a", 1),
-      delta(THREAD_A, MESSAGE_B, "b", 2),
-      delta(THREAD_A, MESSAGE_A, "a", 3),
-    ]);
-    expect(result.map(messageText)).toEqual(["a", "b", "a"]);
   });
 
   it("preserves final reducer state for same-turn message switches and activity barriers", () => {

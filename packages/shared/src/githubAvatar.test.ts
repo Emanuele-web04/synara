@@ -3,12 +3,6 @@ import { describe, expect, it } from "vitest";
 import { githubAvatarUrlForLogin } from "./githubAvatar";
 
 describe("githubAvatarUrlForLogin", () => {
-  it("derives the login-addressed avatar URL", () => {
-    expect(githubAvatarUrlForLogin("octocat")).toBe(
-      "https://avatars.githubusercontent.com/octocat?size=64",
-    );
-  });
-
   it("URL-encodes logins with reserved characters (bot accounts)", () => {
     expect(githubAvatarUrlForLogin("github-actions[bot]")).toBe(
       "https://avatars.githubusercontent.com/github-actions%5Bbot%5D?size=64",

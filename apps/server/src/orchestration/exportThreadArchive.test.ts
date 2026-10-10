@@ -8,11 +8,15 @@ import zlib from "node:zlib";
 import type { OrchestrationThread } from "@synara/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import {
-  buildThreadArchiveBytes,
-  threadArchiveChunks,
-  threadArchiveFileName,
-} from "./exportThreadArchive.ts";
+import { threadArchiveChunks, threadArchiveFileName } from "./exportThreadArchive.ts";
+
+async function buildThreadArchiveBytes(thread: OrchestrationThread): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of threadArchiveChunks(thread)) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
 
 // Minimal ZIP reader: walks the central directory, inflates each raw-deflate
 // entry. Enough to prove the writer emits a valid archive without depending on
@@ -173,19 +177,6 @@ describe("exportThreadArchive", () => {
     ]);
     expect(threadJson.messages[0].skills).toEqual([{ name: "review" }]);
     expect(threadJson.messages[0].mentions).toEqual([{ path: "src/index.ts" }]);
-  });
-
-  it("streams the archive as multiple chunks that reassemble into a valid zip", async () => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of threadArchiveChunks(sampleThread())) {
-      chunks.push(chunk);
-    }
-
-    // One chunk per entry, then central directory, then end record.
-    expect(chunks.length).toBe(4);
-
-    const entries = readZip(Buffer.concat(chunks));
-    expect(entries.map((entry) => entry.name).sort()).toEqual(["thread.json", "transcript.md"]);
   });
 
   it("slugifies the title and stamps the date bucket into the filename", () => {

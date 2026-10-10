@@ -49,22 +49,26 @@ or credentials. The generated launcher is structurally equivalent to:
 /absolute/path/to/runtime /absolute/path/to/synara-server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
 ```
 
+External clients register as `synara-external`; `synara` is reserved for the managed internal
+gateway. This avoids combining the external stdio transport with the internal HTTP configuration.
+Existing client registrations are not renamed automatically.
+
 The Codex copy action generates:
 
 ```sh
-codex mcp add synara [--env ELECTRON_RUN_AS_NODE=1] -- /absolute/runtime /absolute/server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
+codex mcp add synara-external [--env ELECTRON_RUN_AS_NODE=1] -- /absolute/runtime /absolute/server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
 ```
 
 The Claude Code copy action generates a user-scoped configuration:
 
 ```sh
-claude mcp add --scope user synara [-e ELECTRON_RUN_AS_NODE=1] -- /absolute/runtime /absolute/server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
+claude mcp add --scope user synara-external [-e ELECTRON_RUN_AS_NODE=1] -- /absolute/runtime /absolute/server mcp serve --integration mcp_int_REDACTED --home-dir "$HOME/.synara"
 ```
 
 The equivalent manual Codex `config.toml` is:
 
 ```toml
-[mcp_servers.synara]
+[mcp_servers.synara-external]
 command = "/absolute/path/to/runtime"
 args = ["/absolute/path/to/synara-server", "mcp", "serve", "--integration", "mcp_int_REDACTED", "--home-dir", "/absolute/path/to/synara-data"]
 # Desktop builds also include: env = { ELECTRON_RUN_AS_NODE = "1" }
@@ -75,7 +79,7 @@ For clients that use JSON MCP configuration:
 ```json
 {
   "mcpServers": {
-    "synara": {
+    "synara-external": {
       "command": "/absolute/path/to/runtime",
       "args": [
         "/absolute/path/to/synara-server",

@@ -7,6 +7,8 @@ import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
+  useMemo,
+  useCallback,
   useState,
   useSyncExternalStore,
   type ComponentProps,
@@ -18,11 +20,11 @@ import {
   type TouchEventHandler,
   type WheelEventHandler,
 } from "react";
-import { type TimestampFormat } from "../../appSettings";
+import { type MessageTrailAudioSource, type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import { getAudioLevelSubscriber, isAudioLevelAvailable } from "~/lib/audioLevel";
 import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
@@ -33,11 +35,15 @@ import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.
 import { createThreadFindHighlightStore, type ThreadFindHighlightStore } from "./threadFind.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
+import { ThreadErrorBanner } from "./ThreadErrorBanner";
+import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
 
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
+  subagentsRunning?: boolean;
+  collapseFinishedTurns?: boolean;
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
@@ -52,9 +58,13 @@ interface ChatTranscriptPaneProps {
   hasMessages: boolean;
   isRevertingCheckpoint: boolean;
   isTemporaryThread?: boolean;
+  /** A new chat the server has not created yet. The server refuses history requests for it. */
+  isLocalDraft?: boolean;
+  isProjectImport?: boolean;
   isWorking: boolean;
   workingLabel?: ComponentProps<typeof MessagesTimeline>["workingLabel"];
   followLiveOutput: boolean;
+  animateTailAnchorSlide?: ComponentProps<typeof MessagesTimeline>["animateTailAnchorSlide"];
   listRef: RefObject<LegendListRef | null>;
   timelineControllerRef?: RefObject<MessagesTimelineController | null>;
   pinnedMessageIds?: ReadonlySet<MessageId>;
@@ -88,6 +98,8 @@ interface ChatTranscriptPaneProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
+  computerControlEnabled?: ComponentProps<typeof MessagesTimeline>["computerControlEnabled"];
+  onEnableComputerControl?: ComponentProps<typeof MessagesTimeline>["onEnableComputerControl"];
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: ComponentProps<typeof MessagesTimeline>["onUndoTurnFiles"];
   onRespondToAsyncUserInput?: ComponentProps<typeof MessagesTimeline>["onRespondToAsyncUserInput"];
@@ -101,8 +113,23 @@ interface ChatTranscriptPaneProps {
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
   messageChangeSignal?: ComponentProps<typeof MessagesTimeline>["messageChangeSignal"];
+  hubWorkItemsByMessageId?: ComponentProps<typeof MessagesTimeline>["hubWorkItemsByMessageId"];
   timestampFormat: TimestampFormat;
+  /** Sound the message trail moves with (macOS desktop setting). */
+  messageTrailAudioSource?: MessageTrailAudioSource;
+  /** Core Audio UID of the microphone the trail listens to; "" follows the Mac default. */
+  messageTrailMicrophoneId?: string;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  conversationOnly?: boolean;
+  /** Stored thread-level error, rendered in flow above the transcript. */
+  threadError?: string | null;
+  recoverableTurnId?: ComponentProps<typeof MessagesTimeline>["recoverableTurnId"];
+  turnRecoveryDisabled?: boolean;
+  onContinueFailedTurn?: ComponentProps<typeof MessagesTimeline>["onContinueFailedTurn"];
+  onChangeRecoveryModel?: () => void;
+  unblockingThread?: boolean;
+  onDismissThreadError?: () => void;
+  onUnblockThread?: () => void;
   workspaceRoot: string | undefined;
   keybindings?: ComponentProps<typeof MessagesTimeline>["keybindings"];
   availableEditors?: ComponentProps<typeof MessagesTimeline>["availableEditors"];
@@ -118,6 +145,8 @@ export function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
   activeTurnInProgress,
+  subagentsRunning,
+  collapseFinishedTurns,
   activeTurnStartedAt,
   agentActivityDetail,
   contentInsetRightPx,
@@ -130,9 +159,12 @@ export function ChatTranscriptPane({
   hasMessages,
   isRevertingCheckpoint,
   isTemporaryThread,
+  isLocalDraft,
+  isProjectImport,
   isWorking,
   workingLabel,
   followLiveOutput,
+  animateTailAnchorSlide,
   listRef,
   timelineControllerRef,
   pinnedMessageIds,
@@ -164,6 +196,8 @@ export function ChatTranscriptPane({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
+  computerControlEnabled,
+  onEnableComputerControl,
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
@@ -177,8 +211,20 @@ export function ChatTranscriptPane({
   terminalWorkspaceTerminalTabActive,
   timelineEntries,
   messageChangeSignal,
+  hubWorkItemsByMessageId,
   timestampFormat,
+  messageTrailAudioSource,
+  messageTrailMicrophoneId,
   turnDiffSummaryByAssistantMessageId,
+  conversationOnly,
+  threadError,
+  recoverableTurnId,
+  turnRecoveryDisabled,
+  onContinueFailedTurn,
+  onChangeRecoveryModel,
+  unblockingThread,
+  onDismissThreadError,
+  onUnblockThread,
   workspaceRoot,
   keybindings,
   availableEditors,
@@ -204,7 +250,6 @@ export function ChatTranscriptPane({
   // flow through a stable store (not pane state) so scroll updates re-render only
   // the trail, not the memoized timeline; reset on thread switch so stale
   // highlights can't linger.
-  const trailItems = deriveMessageTrailItems(timelineEntries);
   const [activeTrailStore] = useState(() => createActiveTrailStore());
   const [fallbackFindHighlightStore] = useState(() => createThreadFindHighlightStore());
   const findHighlightStore = findHighlightStoreProp ?? fallbackFindHighlightStore;
@@ -216,9 +261,49 @@ export function ChatTranscriptPane({
   useEffect(() => {
     activeTrailStore.set(null);
   }, [activeThreadId, activeTrailStore]);
+  const importedHistory = useImportedHistory(
+    activeThreadId,
+    isProjectImport === true && !isTemporaryThread && !isLocalDraft,
+  );
+  const olderTimelineEntries = useMemo(
+    () =>
+      importedHistory.messages.map((message) => ({
+        id: message.messageId,
+        kind: "message" as const,
+        createdAt: message.createdAt,
+        message: {
+          id: message.messageId,
+          role: message.role,
+          text: message.text,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+          turnId: null,
+          streaming: false,
+          source: "native" as const,
+        },
+      })),
+    [importedHistory.messages],
+  );
+  const visibleTimelineEntries = useMemo(
+    () =>
+      olderTimelineEntries.length ? [...olderTimelineEntries, ...timelineEntries] : timelineEntries,
+    [olderTimelineEntries, timelineEntries],
+  );
+  const olderMessageIds = useMemo(
+    () => new Set(importedHistory.messages.map((message) => message.messageId)),
+    [importedHistory.messages],
+  );
+  const canActOnMessage = useCallback(
+    (messageId: MessageId) =>
+      !olderMessageIds.has(messageId) && (canPinMessage?.(messageId) ?? true),
+    [olderMessageIds, canPinMessage],
+  );
+  const trailItems = deriveMessageTrailItems(visibleTimelineEntries);
   const handleTrailSelect = (messageId: MessageId) => {
     timelineControllerRef?.current?.scrollToMessage(messageId);
   };
+
+  const agentDetailOpen = Boolean(agentActivityDetail && onCloseAgentActivityDetail);
 
   return (
     <div
@@ -229,20 +314,39 @@ export function ChatTranscriptPane({
         terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
       )}
     >
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {agentActivityDetail && onCloseAgentActivityDetail ? (
-          <AgentActivityDetailView
-            detail={agentActivityDetail}
-            chatFontSizePx={chatFontSizePx}
-            contentInsetRightPx={contentInsetRightPx}
-            markdownCwd={markdownCwd}
-            onBack={onCloseAgentActivityDetail}
-            onImageExpand={onExpandTimelineImage}
-            timestampFormat={timestampFormat}
+      {/* The thread error renders in flow above the transcript rather than as
+          a floating overlay, so it can never cover message content. */}
+      {!agentActivityDetail &&
+      threadError &&
+      !visibleTimelineEntries.some(
+        (entry) => entry.kind === "work" && entry.entry.turnFailure?.cause === threadError,
+      ) ? (
+        <div className="flex shrink-0 justify-center px-3 pt-2">
+          <ThreadErrorBanner
+            error={threadError}
+            unblocking={unblockingThread === true}
+            {...(onDismissThreadError ? { onDismiss: onDismissThreadError } : {})}
+            {...(onUnblockThread ? { onUnblock: onUnblockThread } : {})}
           />
-        ) : (
+        </div>
+      ) : null}
+
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* The timeline stays mounted under the agent detail: unmounting it would rebuild
+            every row and lose the scroll position on Back. The wrapper has no box of its own
+            (`contents`), so the timeline's layout and measurement are the same either way. */}
+        <div
+          className={cn("contents", agentDetailOpen && "pointer-events-none invisible")}
+          aria-hidden={agentDetailOpen || undefined}
+          inert={agentDetailOpen}
+        >
           <MessagesTimeline
             key={activeThreadId}
+            historyHeader={
+              importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
+                <ImportedHistoryButton history={importedHistory} />
+              ) : undefined
+            }
             hasMessages={hasMessages}
             isWorking={isWorking}
             {...(workingLabel ? { workingLabel } : {})}
@@ -251,11 +355,13 @@ export function ChatTranscriptPane({
             {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
             activeTurnId={activeTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
+            subagentsRunning={subagentsRunning === true}
+            collapseFinishedTurns={collapseFinishedTurns !== false}
             activeTurnStartedAt={activeTurnStartedAt}
             listRef={listRef}
             {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}
             {...(pinnedMessageIds ? { pinnedMessageIds } : {})}
-            {...(canPinMessage ? { canPinMessage } : {})}
+            canPinMessage={canActOnMessage}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(onForkFromMessage ? { onForkFromMessage } : {})}
             {...(goalAchievements ? { goalAchievements } : {})}
@@ -265,12 +371,20 @@ export function ChatTranscriptPane({
             {...(crossTaskOrigin ? { crossTaskOrigin } : {})}
             {...(forkSource ? { forkSource } : {})}
             isTemporaryThread={isTemporaryThread ?? false}
-            timelineEntries={timelineEntries}
-            messageChangeSignal={messageChangeSignal}
+            timelineEntries={visibleTimelineEntries}
+            {...(recoverableTurnId !== undefined ? { recoverableTurnId } : {})}
+            {...(turnRecoveryDisabled !== undefined ? { turnRecoveryDisabled } : {})}
+            {...(onContinueFailedTurn ? { onContinueFailedTurn } : {})}
+            {...(onChangeRecoveryModel ? { onChangeRecoveryModel } : {})}
+            hubWorkItemsByMessageId={hubWorkItemsByMessageId}
+            messageChangeSignal={messageChangeSignal ?? timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            conversationOnly={conversationOnly === true}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
+            {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+            {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
             onRevertUserMessage={onRevertUserMessage}
             {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
@@ -280,6 +394,7 @@ export function ChatTranscriptPane({
             isRevertingCheckpoint={isRevertingCheckpoint}
             onImageExpand={onExpandTimelineImage}
             followLiveOutput={followLiveOutput}
+            {...(animateTailAnchorSlide !== undefined ? { animateTailAnchorSlide } : {})}
             onIsAtEndChange={onIsAtEndChange}
             {...(onNavigate ? { onNavigate } : {})}
             onTrailHighlightsChange={activeTrailStore.set}
@@ -315,7 +430,20 @@ export function ChatTranscriptPane({
             {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
             {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
           />
-        )}
+        </div>
+        {agentActivityDetail && onCloseAgentActivityDetail ? (
+          <div className="absolute inset-0">
+            <AgentActivityDetailView
+              detail={agentActivityDetail}
+              chatFontSizePx={chatFontSizePx}
+              contentInsetRightPx={contentInsetRightPx}
+              markdownCwd={markdownCwd}
+              onBack={onCloseAgentActivityDetail}
+              onImageExpand={onExpandTimelineImage}
+              timestampFormat={timestampFormat}
+            />
+          </div>
+        ) : null}
 
         {!agentActivityDetail ? (
           <div
@@ -341,7 +469,10 @@ export function ChatTranscriptPane({
               tabIndex={scrollButtonVisible ? 0 : -1}
               className={cn(
                 "flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md hover:cursor-pointer",
-                ELEVATED_HOVER_SURFACE_CLASS_NAME,
+                // The hover tint is layered over the opaque fill instead of replacing it: the
+                // shared elevated hover is a thin ink wash, which alone would let the
+                // transcript read through the button.
+                "hover:bg-[image:linear-gradient(var(--color-background-elevated-secondary),var(--color-background-elevated-secondary))]",
                 scrollButtonVisible ? "pointer-events-auto" : "pointer-events-none",
               )}
             >
@@ -353,8 +484,16 @@ export function ChatTranscriptPane({
         {!agentActivityDetail ? (
           <MessageTrail
             items={trailItems}
+            contentInsetRightPx={contentInsetRightPx}
             activeStore={activeTrailStore}
             onSelect={handleTrailSelect}
+            subscribeAudioLevel={
+              messageTrailAudioSource &&
+              messageTrailAudioSource !== "off" &&
+              isAudioLevelAvailable()
+                ? getAudioLevelSubscriber(messageTrailAudioSource, messageTrailMicrophoneId)
+                : undefined
+            }
           />
         ) : null}
       </div>
