@@ -261,6 +261,8 @@ export interface WorkLogBackgroundTaskCompletion {
 export interface WorkLogSubagentProgress {
   /** The spawning tool call id: the subagent's provider thread id. */
   toolUseId: string;
+  /** First progress activity in this invocation, stable across parent turns. */
+  invocationId?: string;
   title: string | null;
   /** The subagent's final state, once it ended. */
   outcome?: "completed" | "failed" | "stopped";
@@ -537,7 +539,7 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
   if (!entries.some((entry) => entry.subagentProgress !== undefined)) {
     return entries;
   }
-  type Invocation = { outcome?: WorkLogSubagentProgress["outcome"] };
+  type Invocation = { id?: string; outcome?: WorkLogSubagentProgress["outcome"] };
   const invocationByToolUseId = new Map<string, Invocation>();
   const invocationByProgressId = new Map<string, Invocation>();
   const currentInvocation = (toolUseId: string): Invocation => {
@@ -561,7 +563,11 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
     }
     if (activity.kind === "task.progress") {
       const toolUseId = asTrimmedString(payload?.toolUseId);
-      if (toolUseId) invocationByProgressId.set(activity.id, currentInvocation(toolUseId));
+      if (toolUseId) {
+        const invocation = currentInvocation(toolUseId);
+        invocation.id ??= activity.id;
+        invocationByProgressId.set(activity.id, invocation);
+      }
       continue;
     }
     if (activity.kind === "task.completed") {
@@ -583,11 +589,16 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
     }
   }
   return entries.map((entry) => {
-    const outcome = entry.subagentProgress
-      ? invocationByProgressId.get(entry.id)?.outcome
-      : undefined;
-    return outcome && entry.subagentProgress
-      ? { ...entry, subagentProgress: { ...entry.subagentProgress, outcome } }
+    const invocation = entry.subagentProgress ? invocationByProgressId.get(entry.id) : undefined;
+    return invocation && entry.subagentProgress
+      ? {
+          ...entry,
+          subagentProgress: {
+            ...entry.subagentProgress,
+            invocationId: invocation.id ?? entry.id,
+            ...(invocation.outcome ? { outcome: invocation.outcome } : {}),
+          },
+        }
       : entry;
   });
 }
