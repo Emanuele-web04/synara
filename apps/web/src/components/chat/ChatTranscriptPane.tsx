@@ -114,6 +114,7 @@ interface ChatTranscriptPaneProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
+  onStopBackgroundTask?: ComponentProps<typeof MessagesTimeline>["onStopBackgroundTask"];
   computerControlEnabled?: ComponentProps<typeof MessagesTimeline>["computerControlEnabled"];
   onEnableComputerControl?: ComponentProps<typeof MessagesTimeline>["onEnableComputerControl"];
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -216,6 +217,7 @@ export function ChatTranscriptPane({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
+  onStopBackgroundTask,
   computerControlEnabled,
   onEnableComputerControl,
   onRevertUserMessage,
@@ -391,6 +393,7 @@ export function ChatTranscriptPane({
           <SubagentRunContext.Provider value={subagentRunContextValue}>
             <MessagesTimeline
               key={activeThreadId}
+              {...(onStopBackgroundTask ? { onStopBackgroundTask } : {})}
               subagentThread={subagentThread ?? null}
               historyHeader={
                 importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (

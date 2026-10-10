@@ -169,6 +169,10 @@ export interface WorkLogEntry {
     outcome: "updated" | "completed" | "failed" | "stopped";
   };
   backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
+  // One background task for its whole life: the row sits where the agent
+  // launched it and its status updates in place (running, finished, failed,
+  // stopped) instead of adding a row per lifecycle event.
+  backgroundTask?: WorkLogBackgroundTask;
   // A subagent's own progress, reported to the thread that launched it. It is
   // that subagent's current step, never the launcher's reasoning.
   subagentProgress?: WorkLogSubagentProgress;
@@ -262,9 +266,24 @@ export interface WorkLogSynaraWorkerNoticeThread {
 
 export interface WorkLogBackgroundTaskCompletion {
   taskId: string;
-  outcome?: "completed" | "failed" | "stopped";
   taskType: string | null;
   description: string | null;
+  // How the task ended; absent on completions derived before outcomes existed.
+  outcome?: WorkLogBackgroundTaskOutcome;
+}
+
+export type WorkLogBackgroundTaskOutcome = "finished" | "failed" | "stopped";
+
+export interface WorkLogBackgroundTask {
+  taskId: string;
+  taskType: string | null;
+  description: string | null;
+  // The command that runs in the background, from the launching tool call.
+  command: string | null;
+  status: "running" | WorkLogBackgroundTaskOutcome;
+  startedAt: string;
+  completedAt: string | null;
+  exitCode: number | null;
 }
 
 export interface WorkLogSubagentProgress {
@@ -543,10 +562,232 @@ export function deriveWorkLogEntries(
   }
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
   return [
-    ...withSubagentProgressOutcomes(derived, ordered),
+    ...withBackgroundTaskRows(withSubagentProgressOutcomes(derived, ordered), ordered),
     ...completions,
     ...deriveTurnFailureEntries(ordered),
   ];
+}
+
+interface BackgroundTaskState extends WorkLogBackgroundTask {
+  toolUseId: string | null;
+  // The "Moved to background" notice that first announced the task.
+  noticeActivityId: string | null;
+}
+
+function backgroundTaskOutcome(status: unknown): WorkLogBackgroundTaskOutcome | null {
+  switch (typeof status === "string" ? status.trim().toLowerCase() : null) {
+    case "completed":
+      return "finished";
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "killed":
+    case "cancelled":
+    case "interrupted":
+      return "stopped";
+    default:
+      return null;
+  }
+}
+
+function parseBackgroundTaskExitCode(detail: string | null): number | null {
+  const match = detail ? /exit code (\d+)/i.exec(detail) : null;
+  return match ? Number.parseInt(match[1]!, 10) : null;
+}
+
+// Folds a thread's task lifecycle into one state per background task: the
+// "Moved to background" notice (or a user's move to background) makes a task
+// a background task, task.started links it to the call that launched it, and
+// task.updated/task.completed settle it. Subagents (`local_agent`) keep their
+// own rows, so they are left out.
+function deriveBackgroundTaskStates(ordered: ReadonlyArray<OrchestrationThreadActivity>): {
+  tasks: Map<string, BackgroundTaskState>;
+  // Notices that first announced a subagent: those keep their own row.
+  noticesAnnouncingSubagents: Set<string>;
+} {
+  const tasks = new Map<string, BackgroundTaskState>();
+  const noticesAnnouncingSubagents = new Set<string>();
+  const seenTaskIds = new Set<string>();
+  const started = new Map<
+    string,
+    { toolUseId: string | null; taskType: string | null; startedAt: string }
+  >();
+  const admit = (
+    taskId: string,
+    activity: OrchestrationThreadActivity,
+    info: { taskType: string | null; description: string | null; noticeActivityId: string | null },
+  ) => {
+    const launch = started.get(taskId);
+    const taskType = info.taskType ?? launch?.taskType ?? null;
+    if (taskType === "monitor") return;
+    if (taskType === "local_agent") {
+      // An untyped update can precede both the start and the first notice.
+      // Once identified, the subagent keeps its own row and first notice.
+      const provisional = tasks.get(taskId);
+      if (provisional) {
+        tasks.delete(taskId);
+        seenTaskIds.delete(taskId);
+      }
+      const noticeActivityId = provisional?.noticeActivityId ?? info.noticeActivityId;
+      if (noticeActivityId && !seenTaskIds.has(taskId)) {
+        noticesAnnouncingSubagents.add(noticeActivityId);
+        seenTaskIds.add(taskId);
+      }
+      return;
+    }
+    if (seenTaskIds.has(taskId)) return;
+    seenTaskIds.add(taskId);
+    tasks.set(taskId, {
+      taskId,
+      taskType,
+      description: info.description,
+      command: null,
+      status: "running",
+      startedAt: launch?.startedAt ?? activity.createdAt,
+      completedAt: null,
+      exitCode: null,
+      toolUseId: launch?.toolUseId ?? null,
+      noticeActivityId: info.noticeActivityId,
+    });
+  };
+  for (const activity of ordered) {
+    const payload = asRecord(activity.payload);
+    if (
+      activity.kind === "runtime.warning" &&
+      payload?.nativeEventType === "background_tasks_changed"
+    ) {
+      const announced = asRecord(payload.data)?.tasks;
+      if (!Array.isArray(announced)) continue;
+      for (const task of announced) {
+        const record = asRecord(task);
+        const taskId = asTrimmedString(record?.task_id);
+        if (!taskId) continue;
+        admit(taskId, activity, {
+          taskType: asTrimmedString(record?.task_type),
+          description: asTrimmedString(record?.description),
+          noticeActivityId: activity.id,
+        });
+      }
+      continue;
+    }
+    const taskId = asTrimmedString(payload?.taskId);
+    if (!taskId) continue;
+    if (activity.kind === "task.started") {
+      const launch = {
+        toolUseId: asTrimmedString(payload?.toolUseId),
+        taskType: asTrimmedString(payload?.taskType),
+        startedAt: activity.createdAt,
+      };
+      started.set(taskId, launch);
+      const task = tasks.get(taskId);
+      if (task) {
+        if (launch.taskType === "local_agent") {
+          admit(taskId, activity, {
+            taskType: launch.taskType,
+            description: null,
+            noticeActivityId: null,
+          });
+          continue;
+        }
+        task.toolUseId ??= launch.toolUseId;
+        task.description ??= asTrimmedString(payload?.detail);
+      }
+      continue;
+    }
+    if (activity.kind === "task.updated" && payload?.isBackgrounded === true) {
+      admit(taskId, activity, {
+        taskType: asTrimmedString(payload?.taskType),
+        description: asTrimmedString(payload?.detail),
+        noticeActivityId: null,
+      });
+    }
+    const task = tasks.get(taskId);
+    if (!task || task.status !== "running") continue;
+    if (activity.kind === "task.updated" || activity.kind === "task.completed") {
+      const outcome = backgroundTaskOutcome(payload?.status);
+      if (!outcome) continue;
+      const detail = asTrimmedString(payload?.detail);
+      task.status = outcome;
+      task.completedAt = activity.createdAt;
+      task.exitCode = parseBackgroundTaskExitCode(detail);
+    }
+  }
+  return { tasks, noticesAnnouncingSubagents };
+}
+
+// One row per background task, in place of the call that launched it (or of
+// its "Moved to background" notice when that call is not visible). The row's
+// status follows the task, so the transcript never stacks a launch notice,
+// a launching command and a completion line for the same work.
+function withBackgroundTaskRows<Entry extends WorkLogEntry>(
+  entries: ReadonlyArray<Entry>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<WorkLogEntry> {
+  if (
+    !ordered.some(
+      (activity) =>
+        (activity.kind === "runtime.warning" &&
+          asRecord(activity.payload)?.nativeEventType === "background_tasks_changed") ||
+        (activity.kind === "task.updated" && asRecord(activity.payload)?.isBackgrounded === true),
+    )
+  ) {
+    return entries;
+  }
+  const { tasks, noticesAnnouncingSubagents } = deriveBackgroundTaskStates(ordered);
+  if (tasks.size === 0) {
+    return entries;
+  }
+  const launchEntryByToolUseId = new Map<string, Entry>();
+  for (const entry of entries) {
+    if (entry.toolCallId) launchEntryByToolUseId.set(entry.toolCallId, entry);
+  }
+  const taskByToolUseId = new Map<string, BackgroundTaskState>();
+  const tasksByNoticeId = new Map<string, BackgroundTaskState[]>();
+  for (const task of tasks.values()) {
+    const launchEntry = task.toolUseId ? launchEntryByToolUseId.get(task.toolUseId) : undefined;
+    if (launchEntry && task.toolUseId) {
+      task.command = launchEntry.rawCommand ?? launchEntry.command ?? null;
+      taskByToolUseId.set(task.toolUseId, task);
+    } else if (task.noticeActivityId) {
+      const noticeTasks = tasksByNoticeId.get(task.noticeActivityId) ?? [];
+      noticeTasks.push(task);
+      tasksByNoticeId.set(task.noticeActivityId, noticeTasks);
+    }
+  }
+  const rowFor = (task: BackgroundTaskState, anchor: WorkLogEntry, id: string): WorkLogEntry => {
+    const { toolUseId: _toolUseId, noticeActivityId: _noticeActivityId, ...backgroundTask } = task;
+    return {
+      id,
+      createdAt: anchor.createdAt,
+      ...(anchor.sequence !== undefined ? { sequence: anchor.sequence } : {}),
+      ...(anchor.turnId ? { turnId: anchor.turnId } : {}),
+      label: "Background task",
+      tone: "tool",
+      ...(anchor.activityKind ? { activityKind: anchor.activityKind } : {}),
+      backgroundTask,
+    };
+  };
+  const rows: WorkLogEntry[] = [];
+  for (const entry of entries) {
+    const launchedTask = entry.toolCallId ? taskByToolUseId.get(entry.toolCallId) : undefined;
+    if (launchedTask) {
+      rows.push(rowFor(launchedTask, entry, entry.id));
+      continue;
+    }
+    if (entry.nativeEventType === "background_tasks_changed") {
+      for (const task of tasksByNoticeId.get(entry.id) ?? []) {
+        rows.push(rowFor(task, entry, `${entry.id}:${task.taskId}`));
+      }
+      // The notice only stays for work this model does not cover (subagents).
+      if (noticesAnnouncingSubagents.has(entry.id)) {
+        rows.push(entry);
+      }
+      continue;
+    }
+    rows.push(entry);
+  }
+  return rows;
 }
 
 function subagentOutcomeFromStatus(
@@ -836,15 +1077,7 @@ function deriveBackgroundTaskCompletionEntries(
       label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
       tone: payload.status === "failed" ? "error" : "info",
       activityKind: activity.kind,
-      backgroundTaskCompletion: {
-        taskId: payload.taskId,
-        ...task,
-        ...(payload.status === "completed" ||
-        payload.status === "failed" ||
-        payload.status === "stopped"
-          ? { outcome: payload.status }
-          : {}),
-      },
+      backgroundTaskCompletion: { taskId: payload.taskId, ...task, outcome },
     });
   }
   return completions;
@@ -933,6 +1166,10 @@ function shouldKeepActivityForWorkLog(
 }
 
 function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): boolean {
+  // Turn starts only record the model for the turn header.
+  if (activity.kind === "turn.started" || activity.kind === "turn.stop-requested") {
+    return true;
+  }
   if (activity.kind !== "turn.completed" && activity.kind !== "turn.aborted") {
     return false;
   }
@@ -3576,7 +3813,8 @@ function coalesceMonitorTerminalNotices(entries: TimelineEntry[]): TimelineEntry
         completion &&
         monitor.outcome !== "updated" &&
         monitor.taskId === completion.taskId &&
-        monitor.outcome === completion.outcome &&
+        monitor.outcome ===
+          (completion.outcome === "finished" ? "completed" : completion.outcome) &&
         (!previous.entry.turnId ||
           !current.entry.turnId ||
           previous.entry.turnId === current.entry.turnId)

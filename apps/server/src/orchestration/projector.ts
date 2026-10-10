@@ -52,6 +52,7 @@ import {
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
 import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
 import {
   canAdoptFirstTurnProvider,
@@ -1462,6 +1463,23 @@ export function projectEvent(
           };
         }),
       );
+
+    case "thread.turn-interrupt-requested": {
+      const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
+      if (!thread) return Effect.succeed(nextBase);
+      const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+      return Effect.succeed(
+        activity
+          ? {
+              ...nextBase,
+              threads: updateThread(nextBase.threads, thread.id, {
+                activities: upsertThreadActivity(thread.activities, activity),
+                updatedAt: event.occurredAt,
+              }),
+            }
+          : nextBase,
+      );
+    }
 
     case "thread.activity-appended":
       return decodeForEvent(

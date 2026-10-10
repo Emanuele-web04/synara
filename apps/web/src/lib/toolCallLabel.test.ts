@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveFriendlyCommandTarget,
+  deriveCommandReadTargets,
   deriveInlineCommandCall,
+  deriveLiteralCommand,
   deriveReadableCommandDisplay,
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
@@ -371,6 +373,37 @@ describe("deriveFriendlyCommandTarget", () => {
   });
 });
 
+describe("deriveLiteralCommand", () => {
+  it("drops the shell wrapper and cd preamble but keeps pipes and quotes", () => {
+    expect(deriveLiteralCommand(`/bin/zsh -lc 'cd /repo && rg -n "a b" src | head -5'`)).toBe(
+      `rg -n "a b" src | head -5`,
+    );
+    expect(deriveLiteralCommand(`find . -name "*.md" -not -path "./.git/*"`)).toBe(
+      `find . -name "*.md" -not -path "./.git/*"`,
+    );
+  });
+});
+
+describe("deriveCommandReadTargets", () => {
+  it("names the files of a plain read", () => {
+    expect(deriveCommandReadTargets("cat calc.py")).toEqual(["calc.py"]);
+    expect(deriveCommandReadTargets("head -n 20 README.md")).toEqual(["README.md"]);
+    expect(deriveCommandReadTargets("sed -n '1,40p' apps/web/src/app.ts")).toEqual(["src/app.ts"]);
+    expect(deriveCommandReadTargets("cat a.txt b.txt")).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("refuses anything that is not only a read", () => {
+    expect(deriveCommandReadTargets("cat a.txt | grep foo")).toBeNull();
+    expect(deriveCommandReadTargets("cat a.txt && rm b")).toBeNull();
+    expect(deriveCommandReadTargets("cat a.txt > b.txt")).toBeNull();
+    expect(deriveCommandReadTargets("sed -i 's/a/b/' a.txt")).toBeNull();
+    expect(deriveCommandReadTargets("sed 's/a/b/' a.txt")).toBeNull();
+    expect(deriveCommandReadTargets("cat")).toBeNull();
+    expect(deriveCommandReadTargets("ls")).toBeNull();
+    expect(deriveCommandReadTargets("find . -name '*.md'")).toBeNull();
+  });
+});
+
 describe("deriveInlineCommandCall", () => {
   it("shows the actual command call without the shell wrapper", () => {
     expect(deriveInlineCommandCall(`/bin/zsh -lc 'rg -n "tool call" apps/web/src'`)).toBe(
@@ -380,15 +413,21 @@ describe("deriveInlineCommandCall", () => {
 });
 
 describe("resolveCommandVisualKind", () => {
-  it("detects read-only inspection commands (read/search/find/list)", () => {
-    expect(resolveCommandVisualKind("cat package.json")).toBe("inspect");
-    expect(resolveCommandVisualKind("sed -n 1,40p src/app.ts")).toBe("inspect");
-    expect(resolveCommandVisualKind("head -n 20 README.md")).toBe("inspect");
-    expect(resolveCommandVisualKind(`rg -n "tool call" apps/web/src`)).toBe("inspect");
-    expect(resolveCommandVisualKind("grep -R foo .")).toBe("inspect");
-    expect(resolveCommandVisualKind("find . -name '*.ts'")).toBe("inspect");
-    expect(resolveCommandVisualKind("ls -la src")).toBe("inspect");
-    expect(resolveCommandVisualKind(`/bin/zsh -lc 'rg -n "x" src'`)).toBe("inspect");
+  it("separates file reads from searches", () => {
+    expect(resolveCommandVisualKind("cat package.json")).toBe("read");
+    expect(resolveCommandVisualKind("sed -n 1,40p src/app.ts")).toBe("read");
+    expect(resolveCommandVisualKind("head -n 20 README.md")).toBe("read");
+    expect(resolveCommandVisualKind(`rg -n "tool call" apps/web/src`)).toBe("search");
+    expect(resolveCommandVisualKind("grep -R foo .")).toBe("search");
+    expect(resolveCommandVisualKind("find . -name '*.ts'")).toBe("search");
+    expect(resolveCommandVisualKind(`/bin/zsh -lc 'rg -n "x" src'`)).toBe("search");
+  });
+
+  it("keeps listings, in-place edits and piped reads on the terminal glyph", () => {
+    expect(resolveCommandVisualKind("ls -la src")).toBe("terminal");
+    expect(resolveCommandVisualKind("ls")).toBe("terminal");
+    expect(resolveCommandVisualKind("sed -i 's/a/b/' src/app.ts")).toBe("terminal");
+    expect(resolveCommandVisualKind("cat a.txt && rm -rf dist")).toBe("terminal");
   });
 
   it("does not treat mutating or executing commands as inspections", () => {
