@@ -568,7 +568,6 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["moved", "agent-done"]);
     expect(completion?.label).toBe("Subagent finished: Server startup");
     expect(completion?.backgroundTaskCompletion).toEqual({
-      outcome: "completed",
       taskId: "agent-1",
       taskType: "local_agent",
       description: "Server startup",
