@@ -33,8 +33,17 @@ export function EnvironmentSubagentsSection({
 
   // Live agents lead the stack; with none running, the most recent finished ones stand in.
   const avatars = (active.length > 0 ? active : previous).slice(0, SUMMARY_AVATAR_LIMIT);
+  const runningCount = active.filter((item) => item.statusKind === "running").length;
+  const queuedCount = active.length - runningCount;
   const label =
-    active.length > 0 ? `${active.length} running` : `${total} ${pluralize(total, "subagent")}`;
+    active.length > 0
+      ? [
+          runningCount > 0 ? `${runningCount} running` : null,
+          queuedCount > 0 ? `${queuedCount} queued` : null,
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : `${total} ${pluralize(total, "subagent")}`;
   const doneLabel = active.length > 0 && previous.length > 0 ? `${previous.length} done` : null;
 
   return (

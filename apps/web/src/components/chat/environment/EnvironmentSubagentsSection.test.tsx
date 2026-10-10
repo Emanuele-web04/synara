@@ -24,6 +24,22 @@ describe("EnvironmentSubagentsSection", () => {
     expect(markup.match(/<svg/g)).toHaveLength(2);
   });
 
+  it("distinguishes queued agents from running ones", () => {
+    const markup = renderToStaticMarkup(
+      <EnvironmentSubagentsSection
+        roster={{
+          active: [
+            runningSubagentRosterItem("Running"),
+            runningSubagentRosterItem("Waiting", { statusKind: "queued", statusLabel: "Queued" }),
+          ],
+          previous: [],
+        }}
+        onOpenList={noop}
+      />,
+    );
+    expect(markup).toContain("Open subagents: 1 running, 1 queued");
+  });
+
   it("counts every subagent once none is running", () => {
     const markup = renderToStaticMarkup(
       <EnvironmentSubagentsSection

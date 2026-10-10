@@ -12,6 +12,8 @@ import type { ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { IconButton } from "~/components/ui/icon-button";
 import { stripDiffSearchParams } from "~/diffRouteSearch";
 import { useNowMs } from "~/hooks/useNowMs";
@@ -44,16 +46,16 @@ function rowTooltip(item: EnvironmentSubagentRosterItem): string {
     item.summary && item.summary.length > SUMMARY_TOOLTIP_MAX_CHARS
       ? `${item.summary.slice(0, SUMMARY_TOOLTIP_MAX_CHARS - 1)}…`
       : item.summary;
-  const stats = formatEnvironmentSubagentMeta(item);
+  const stats = formatEnvironmentSubagentMeta(item, false);
   return [[item.fullLabel, item.modelLabel].filter(Boolean).join(" · "), stats, summary]
     .filter(Boolean)
     .join("\n\n");
 }
 
-function finishedAgoLabel(item: EnvironmentSubagentRosterItem): string | null {
-  const at = item.settledAt ?? item.startedAt;
+function finishedAgoLabel(item: EnvironmentSubagentRosterItem, nowMs: number): string | null {
+  const at = item.settledAt;
   if (!at) return null;
-  const relative = formatRelativeTime(at);
+  const relative = formatRelativeTime(at, nowMs);
   return relative === "now" ? "just now" : `${relative} ago`;
 }
 
@@ -163,14 +165,17 @@ function ActiveSubagentRow({
 
 function DoneSubagentRow({
   item,
+  nowMs,
   onOpen,
 }: {
   item: EnvironmentSubagentRosterItem;
+  nowMs: number;
   onOpen: (threadId: ThreadId) => void;
 }) {
   // A finished run reads as done; only failures and stops name their outcome.
-  const outcome = item.statusKind === "completed" ? null : item.statusLabel;
-  const finishedAgo = finishedAgoLabel(item);
+  const outcome =
+    item.statusKind === "failed" || item.statusKind === "stopped" ? item.statusLabel : null;
+  const finishedAgo = finishedAgoLabel(item, nowMs);
   return (
     <EnvironmentRow
       compact
@@ -222,12 +227,9 @@ export function SubagentsList({
 }) {
   const [showAllDone, setShowAllDone] = useState(false);
   const { active, previous } = roster;
-  if (active.length === 0 && previous.length === 0) {
-    return <PanelStateMessage>No subagents in this chat yet.</PanelStateMessage>;
-  }
 
   const hiddenDoneCount = showAllDone ? 0 : Math.max(0, previous.length - DONE_VISIBLE_LIMIT);
-  const visibleDone = hiddenDoneCount > 0 ? previous.slice(0, DONE_VISIBLE_LIMIT) : previous;
+  const visibleDone = previous.slice(0, DONE_VISIBLE_LIMIT);
 
   return (
     <div
@@ -242,6 +244,9 @@ export function SubagentsList({
           className="mb-2"
           onClick={() => onOpen(parent.threadId)}
         />
+      ) : null}
+      {active.length === 0 && previous.length === 0 ? (
+        <PanelStateMessage>No subagents in this chat yet.</PanelStateMessage>
       ) : null}
       {active.length > 0 ? (
         <>
@@ -262,12 +267,17 @@ export function SubagentsList({
         <>
           <ListHeading label="Done" count={previous.length} />
           {visibleDone.map((item) => (
-            <DoneSubagentRow key={item.key} item={item} onOpen={onOpen} />
+            <DoneSubagentRow key={item.key} item={item} nowMs={nowMs} onOpen={onOpen} />
           ))}
+          <DisclosureRegion open={showAllDone}>
+            {previous.slice(DONE_VISIBLE_LIMIT).map((item) => (
+              <DoneSubagentRow key={item.key} item={item} nowMs={nowMs} onOpen={onOpen} />
+            ))}
+          </DisclosureRegion>
           {previous.length > DONE_VISIBLE_LIMIT ? (
             <EnvironmentRow
               compact
-              icon={<span aria-hidden className="size-5 shrink-0" />}
+              icon={<DisclosureChevron open={showAllDone} className="size-5 shrink-0" />}
               label={
                 <span className={SECONDARY_TEXT_CLASS_NAME}>
                   {hiddenDoneCount > 0 ? `Show ${hiddenDoneCount} more` : "Show less"}
@@ -283,17 +293,30 @@ export function SubagentsList({
   );
 }
 
-export function SubagentsDockPane({ hostThreadId }: { hostThreadId: ThreadId }) {
+export function SubagentsDockPane({
+  hostThreadId,
+  onOpenThread,
+}: {
+  hostThreadId: ThreadId;
+  onOpenThread?: (threadId: ThreadId) => void;
+}) {
   const { roster, source } = useThreadSubagentRoster(hostThreadId);
   const { backgroundSubagent, stopSubagent } = useSubagentRunControls(source.stripSourceThreadId);
   const navigate = useNavigate();
   const openRightDockPane = useRightDockStore((store) => store.openPane);
-  const nowMs = useNowMs(roster.active.length > 0);
+  const nowMs = useNowMs(
+    roster.active.length > 0 || roster.previous.some((item) => item.settledAt !== null),
+    roster.active.length > 0 ? 1_000 : 60_000,
+  );
 
   // Docks are per thread: open this list in the destination's dock too, so hopping
   // between siblings (or back to the parent) keeps it beside the transcript.
   const openThread = (threadId: ThreadId) => {
     openRightDockPane(threadId, { kind: "subagents" });
+    if (onOpenThread) {
+      onOpenThread(threadId);
+      return;
+    }
     void navigate({
       to: "/$threadId",
       params: { threadId },
