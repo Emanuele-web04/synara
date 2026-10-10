@@ -134,6 +134,8 @@ import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
 import { withClaudeArtifactOptIn } from "../claudeProcessEnv.ts";
 import { ClaudeRequestUsage } from "../claudeRequestUsage.ts";
+import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
+import { buildClaudeDesktopLaunchPlan } from "../../providerAccounts/claudeAppLaunch.ts";
 import {
   CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
   decideClaudeContextUsageWarnings,
@@ -5571,6 +5573,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           input.providerOptions?.claudeAgent?.environment,
           input.providerInstanceId,
         );
+        if (input.accountLaunch)
+          applyAccountEnvironmentOverrides(claudeSdkEnv, input.accountLaunch.environment);
         if (input.runtimeMode !== "auto") return { claudeSdkEnv, snapshotSupported: false };
         const binaryPath = input.providerOptions?.claudeAgent?.binaryPath ?? "claude";
         const installedVersion = yield* Effect.tryPromise({
@@ -7775,6 +7779,24 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       ).pipe(Effect.ignore, Effect.andThen(Queue.shutdown(runtimeEventQueue))),
     );
 
+    const launchApp: NonNullable<ClaudeAdapterShape["launchApp"]> = (input) =>
+      Effect.suspend(() => {
+        const plan = buildClaudeDesktopLaunchPlan(input);
+        if (plan === undefined) {
+          return Effect.fail(
+            new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "launchApp",
+              issue:
+                input.ordinal > 0
+                  ? "Managed Claude Desktop accounts are unsupported because profile isolation has not been verified."
+                  : "The official Claude desktop app is not available on this platform.",
+            }),
+          );
+        }
+        return Effect.succeed(plan);
+      });
+
     const composerCapabilities: ProviderComposerCapabilities = {
       provider: PROVIDER,
       supportsSkillMentions: false,
@@ -7899,6 +7921,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       listSkills,
       listModels,
       listAgents,
+      launchApp,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies ClaudeAdapterShape;
   });

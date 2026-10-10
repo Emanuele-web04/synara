@@ -1,6 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { ServerConfig } from "./config";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
@@ -34,4 +37,14 @@ describe("makeServerRuntimeServicesLayer", () => {
 
     expect(counts).toEqual({ projectCount: 0, threadCount: 0 });
   });
+});
+
+let accountHome: string;
+beforeEach(() => {
+  accountHome = mkdtempSync(join(tmpdir(), "synara-runtime-accounts-"));
+  vi.stubEnv("SYNARA_ACCOUNT_HOME", accountHome);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(accountHome, { recursive: true, force: true });
 });

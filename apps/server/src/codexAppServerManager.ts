@@ -25,6 +25,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   ThreadId,
   TurnId,
+  type ProviderAccountLaunchContext,
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
@@ -94,6 +95,7 @@ import {
 import type { ProviderAdapterForkThreadInput } from "./provider/Services/ProviderAdapter.ts";
 import { withoutProviderCredentialEnvironment } from "./providerChildEnvironment.ts";
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
+import { accountStartOptions } from "./providerAccounts/accountStartOptions.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
 import {
@@ -392,6 +394,8 @@ export interface CodexAppServerStartSessionInput {
    */
   readonly agentGatewayCapabilityInput: AgentGatewayCapabilityInput;
   readonly runtimeMode: RuntimeMode;
+  /** Server-private managed account launch context; never sent to clients. */
+  readonly accountLaunch?: ProviderAccountLaunchContext;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -1385,7 +1389,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadOpenMethod: threadOpenMethodForVersion,
       });
 
-      const codexOptions = readCodexProviderOptions(input);
+      const codexOptions =
+        accountStartOptions(
+          "codex",
+          { codex: readCodexProviderOptions(input) },
+          input.accountLaunch,
+        )?.codex ?? {};
       const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;

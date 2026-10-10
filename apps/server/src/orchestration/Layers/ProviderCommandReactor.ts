@@ -2281,6 +2281,10 @@ const make = Effect.gen(function* () {
         : {}),
       ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
       runtimeMode: desiredRuntimeMode,
+      // No explicit account ordinal: ProviderService.resolveAccountForLaunch
+      // owns the precedence (persisted thread binding first, native
+      // account 0 for legacy threads). Pinning 0 here would fail closed
+      // with binding-conflict on managed threads that restart.
     };
     const autoApproveSynaraToolsChanged = autoApproveSynaraTools !== previousAutoApproveSynaraTools;
 

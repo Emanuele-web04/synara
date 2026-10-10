@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
+import { AccountOrdinal } from "./providerAccounts";
 import {
   ApprovalRequestId,
   EventId,
@@ -78,6 +79,7 @@ export const ProviderSessionStartInput = Schema.Struct({
    */
   autoApproveSynaraTools: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
+  accountOrdinal: Schema.optional(AccountOrdinal),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 

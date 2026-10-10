@@ -16,6 +16,7 @@ export const SETTINGS_SECTION_IDS = [
   "shortcuts",
   "worktrees",
   "archived",
+  "accounts",
   "models",
   "providers",
   "skills",
@@ -138,6 +139,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     icon: "computer-use",
     eyebrow: "Desktop control",
     badge: "Beta",
+  },
+  {
+    id: "accounts",
+    group: "integrations",
+    label: "Accounts",
+    description: "Connected provider accounts and the active numbered slot per provider.",
+    icon: "user-group",
+    eyebrow: "Identities",
   },
   {
     id: "integrations",
