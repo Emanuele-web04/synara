@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { makeActivity } from "../../storeTestFixtures";
 import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
+import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./TimelineWorkEntryRow";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 const FORK_SOURCE = {
@@ -742,7 +743,7 @@ describe("MessagesTimeline", () => {
   it.each([
     {
       provider: "Codex",
-      expectedText: "Checking git status",
+      expectedText: "git status --short</code>",
       activity: makeActivity({
         id: "codex-live-tool",
         createdAt: "2026-03-17T19:12:28.100Z",
@@ -958,7 +959,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Details");
   });
 
-  it("renders command rows with a readable summary and styled hover tooltip trigger", async () => {
+  it("renders command rows with the literal command and styled hover tooltip trigger", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -983,8 +984,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Searched");
-    expect(markup).toContain("for ProjectionSnapshotQuery in server/src");
+    // The command shows verbatim (minus the shell wrapper) instead of a guessed
+    // sentence, and the search wears the magnifier.
+    expect(markup).toContain(
+      `Ran <code class="${INLINE_COMMAND_CHIP_CLASS_NAME}" data-command-literal="true">rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src</code>`,
+    );
+    expect(markup).toContain("magnifying-glass.svg");
     expect(markup).not.toContain("data-work-entry-action-word");
     expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain(

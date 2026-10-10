@@ -1,6 +1,38 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveWorkLogToolDetails } from "./toolCallDetails";
+import { deriveToolFailureSummary, deriveWorkLogToolDetails } from "./toolCallDetails";
+
+describe("deriveToolFailureSummary", () => {
+  it("reads Claude's leading exit code and skips it for the excerpt", () => {
+    expect(
+      deriveToolFailureSummary({
+        kind: "command",
+        title: "Command run",
+        output: {
+          output:
+            "Exit code 2\nugrep: warning: missing.txt: No such file or directory\n1:def add(a, b):",
+        },
+      }),
+    ).toEqual({
+      exitCode: 2,
+      excerpt: "ugrep: warning: missing.txt: No such file or directory",
+    });
+  });
+
+  it("prefers a structured exit code and stderr", () => {
+    expect(
+      deriveToolFailureSummary({
+        kind: "command",
+        title: "Command run",
+        output: { stdout: "partial", stderr: "\nzsh: command not found: rg\n", exitCode: 127 },
+      }),
+    ).toEqual({ exitCode: 127, excerpt: "zsh: command not found: rg" });
+  });
+
+  it("reports nothing when the call carried no output", () => {
+    expect(deriveToolFailureSummary(undefined)).toEqual({ exitCode: null, excerpt: null });
+  });
+});
 
 describe("tool output exit-code suffixes", () => {
   it("preserves a large whitespace run inside raw output", () => {
