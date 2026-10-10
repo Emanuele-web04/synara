@@ -174,3 +174,51 @@ it("redraws a scrolled window under a stationary pointer without React pointer f
     await screen.unmount();
   }
 });
+
+it("keeps the rail settled when a native resize notification repeats unchanged bounds", async () => {
+  await page.viewport(1_440, 900);
+  const NativeResizeObserver = window.ResizeObserver;
+  let viewportObserver: ResizeObserver | undefined;
+  let viewportNotifications = 0;
+  window.ResizeObserver = class extends NativeResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      super((entries, observer) => {
+        if (entries.some((entry) => entry.target === rail()?.firstElementChild)) {
+          viewportObserver = observer;
+          viewportNotifications++;
+        }
+        callback(entries, observer);
+      });
+    }
+  };
+  let commits = 0;
+  const screen = await render(
+    <Profiler id="rail-resize" onRender={() => commits++}>
+      <div style={{ position: "relative", width: 1_400, height: 600 }}>
+        <MessageTrail items={items} activeStore={createActiveTrailStore()} onSelect={() => {}} />
+      </div>
+    </Profiler>,
+  );
+  try {
+    await expect.poll(() => viewportNotifications).toBeGreaterThan(0);
+    await expect.poll(() => getComputedStyle(rail()).opacity).toBe("1");
+    await frame();
+    await frame();
+    const bounds = { scrollTop: viewport().scrollTop, height: viewport().clientHeight };
+    expect(bounds.height).toBeGreaterThan(0);
+    const before = commits;
+    const notificationsBefore = viewportNotifications;
+    // Re-observation produces a real browser notification for the same box;
+    // no synthetic resize callback or changed layout is supplied by the test.
+    viewportObserver!.unobserve(viewport());
+    viewportObserver!.observe(viewport());
+    await expect.poll(() => viewportNotifications).toBeGreaterThan(notificationsBefore);
+    await frame();
+    await frame();
+    expect({ scrollTop: viewport().scrollTop, height: viewport().clientHeight }).toEqual(bounds);
+    expect(commits).toBe(before);
+  } finally {
+    await screen.unmount();
+    window.ResizeObserver = NativeResizeObserver;
+  }
+});

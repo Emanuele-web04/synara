@@ -20,6 +20,7 @@ import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraft
 import { derivePendingApprovals, derivePendingUserInputs, derivePhase } from "../session-logic";
 import { useStore, type AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../threadDetailAuthority";
 import type { SessionPhase } from "../types";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
 import { deriveQueuedComposerPause } from "./queuedComposerPause";
@@ -160,6 +161,23 @@ export function holdQueuedComposerTurnsForStop(threadId: ThreadId): () => void {
     const current = useComposerDraftStore.getState().draftsByThreadId[threadId];
     if (current?.queueStoppedTurnId === stoppedTurnId) {
       useComposerDraftStore.getState().pauseQueuedTurnsAfterStop(threadId, previousStoppedTurnId);
+    }
+  };
+}
+
+/** Releases the stop acknowledged by a successful manual send, preserving newer queue controls. */
+export function prepareQueuedComposerResumeAfterSend(threadId: ThreadId): () => void {
+  const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+  const stoppedTurnId = draft?.queueStoppedTurnId ?? null;
+  const resumedTurnId = draft?.queueResumedTurnId ?? null;
+  return () => {
+    const drafts = useComposerDraftStore.getState();
+    const current = drafts.draftsByThreadId[threadId];
+    if (
+      (current?.queueStoppedTurnId ?? null) === stoppedTurnId &&
+      (current?.queueResumedTurnId ?? null) === resumedTurnId
+    ) {
+      drafts.resumeQueuedTurns(threadId, null);
     }
   };
 }
@@ -340,7 +358,7 @@ function threadDrainSignal(state: AppState, threadId: ThreadId): string {
     },
   ).length;
   return [
-    state.threadDetailSyncById?.[threadId] === "cached" ? "cached" : "live",
+    state.threadDetailSyncById?.[threadId] ?? "live",
     thread.session?.status ?? "",
     thread.session?.orchestrationStatus ?? "",
     thread.session?.activeTurnId ?? "",
@@ -409,8 +427,7 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
     hasQueueableLiveTurn: hasLiveTurn && thread?.session?.activeTurnId != null,
     phase,
     isSendBusy: autoDispatchLocks.has(threadId),
-    isConnecting:
-      phase === "connecting" || useStore.getState().threadDetailSyncById?.[threadId] === "cached",
+    isConnecting: phase === "connecting" || isThreadDetailAwaitingVerification(threadId),
     isAwaitingTurnStart: awaitingTurnStartsByThreadId.has(threadId),
     steerGate: getQueuedComposerSteerGate(threadId),
     hasPendingApproval: pendingApprovals.length > 0,

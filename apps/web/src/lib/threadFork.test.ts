@@ -98,7 +98,7 @@ describe("dispatchThreadFork", () => {
       sourceThread,
       target: "local",
       rootBranch: null,
-      modelSelection: { provider: "claudeAgent", model: "claude-haiku-4-5" },
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
       runtimeMode: "full-access",
       interactionMode: "default",
       ...(throughMessageId ? { throughMessageId: MessageId.makeUnsafe(throughMessageId) } : {}),
@@ -116,6 +116,10 @@ describe("dispatchThreadFork", () => {
       "Remember APPLE",
       "ok",
     ]);
+  });
+
+  it("rejects an unavailable selected message instead of importing later history", async () => {
+    await expect(fork("deleted-message")).rejects.toThrow("Selected message");
   });
 
   it("omits the cutoff for a whole-thread fork", async () => {

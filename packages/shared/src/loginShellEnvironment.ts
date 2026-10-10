@@ -86,7 +86,11 @@ interface LoginShellEnvironmentCacheEntry {
  * Only files that exist are fingerprinted, and the resulting list is part of the cache
  * key — so a file appearing or disappearing invalidates the entry just like an edit does.
  */
-function listShellStartupFiles(shell: string, homeDirectory: string): ReadonlyArray<string> {
+function listShellStartupFiles(
+  shell: string,
+  homeDirectory: string,
+  platform: NodeJS.Platform,
+): ReadonlyArray<string> {
   const home = (...segments: ReadonlyArray<string>): string =>
     Path.join(homeDirectory, ...segments);
   const shellName = Path.basename(shell);
@@ -122,6 +126,17 @@ function listShellStartupFiles(shell: string, homeDirectory: string): ReadonlyAr
   }
   if (shellName === "fish") {
     return ["/etc/fish/config.fish", home(".config", "fish", "config.fish")];
+  }
+  if (/^nu(?:\.exe)?$/i.test(shellName)) {
+    // Nu does not read POSIX profiles. Track its direct startup files so PATH
+    // changes (for example mise activation) do not wait for the weekly expiry.
+    const configDirectory =
+      platform === "darwin"
+        ? home("Library", "Application Support", "nushell")
+        : platform === "win32"
+          ? home("AppData", "Roaming", "nushell")
+          : home(".config", "nushell");
+    return ["env.nu", "config.nu", "login.nu"].map((name) => Path.join(configDirectory, name));
   }
   // An unrecognized shell still reads the POSIX profiles often enough to be worth
   // tracking; the age ceiling covers whatever else it sources.
@@ -169,7 +184,10 @@ function computeCacheKey(input: {
 }): LoginShellEnvironmentCacheKey {
   // The interpreter itself is fingerprinted alongside its rc files: a shell upgrade can
   // change the defaults the rc files build on without touching any of them.
-  const startupFiles = [input.shell, ...listShellStartupFiles(input.shell, input.homeDirectory)]
+  const startupFiles = [
+    input.shell,
+    ...listShellStartupFiles(input.shell, input.homeDirectory, input.platform),
+  ]
     .map(fingerprintFile)
     .filter((fingerprint): fingerprint is StartupFileFingerprint => fingerprint !== null);
 

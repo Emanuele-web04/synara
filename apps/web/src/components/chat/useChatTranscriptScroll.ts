@@ -297,6 +297,16 @@ export function useChatTranscriptScroll({
   const onMessagesTouchStartBase = useCallback(() => {
     clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
+  // Follow outlives the viewport it describes: layout can move a following
+  // reader without a gesture. A gesture that starts more than a viewport above
+  // the end is reading, so it must not snap back to the end.
+  const isFollowingFromViewport = useCallback(
+    (container: HTMLElement) =>
+      isAtEndRef.current &&
+      !isUserScrollDetachedRef.current &&
+      isScrollContainerNearBottom(container, container.clientHeight),
+    [],
+  );
   const onMessagesScrollGesture = useCallback(
     (upward: boolean) => {
       const container = legendListRef.current?.getScrollableNode();
@@ -310,8 +320,7 @@ export function useChatTranscriptScroll({
               container,
               scrollTop: container.scrollTop,
               wasFollowing:
-                isAtEndRef.current &&
-                !isUserScrollDetachedRef.current &&
+                isFollowingFromViewport(container) &&
                 (!upward || isScrollContainerNearBottom(container, 1)),
             };
       clearTranscriptAutoFollow();
@@ -337,6 +346,7 @@ export function useChatTranscriptScroll({
     [
       legendListRef,
       clearTranscriptAutoFollow,
+      isFollowingFromViewport,
       onIsAtEndChange,
       releaseTranscriptScrollGesture,
       scrollToEnd,
@@ -382,7 +392,7 @@ export function useChatTranscriptScroll({
             : {
                 container,
                 scrollTop: container.scrollTop,
-                wasFollowing: isAtEndRef.current && !isUserScrollDetachedRef.current,
+                wasFollowing: isFollowingFromViewport(container),
                 keyboard: true,
               };
         clearTranscriptAutoFollow();
@@ -431,6 +441,7 @@ export function useChatTranscriptScroll({
   }, [
     legendListRef,
     clearTranscriptAutoFollow,
+    isFollowingFromViewport,
     onIsAtEndChange,
     onMessagesScrollGesture,
     releaseTranscriptScrollGesture,

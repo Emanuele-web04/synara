@@ -12,7 +12,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
-import { makeActivity, makeState, makeThread } from "../storeTestFixtures";
+import { makeActivity, makeReadModelThread, makeState, makeThread } from "../storeTestFixtures";
 import type { Thread, ThreadSession } from "../types";
 import {
   armQueuedComposerSteerGate,
@@ -248,6 +248,23 @@ describe("deriveQueuedComposerPause", () => {
     ).toEqual({ reason: "usage-limit", turnId: LIVE_TURN_ID });
   });
 
+  it("does not pause a newer completed turn for a late rejection owned by an older turn", () => {
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        latestTurn: makeLatestTurn("completed"),
+        activities: [
+          makeActivity({
+            kind: "account.rate-limited",
+            payload: { status: "rejected" },
+            turnId: TurnId.makeUnsafe("turn-older"),
+            createdAt: "2026-03-13T12:00:20.000Z",
+          }),
+        ],
+      }),
+    ).toBeNull();
+  });
+
   it("keeps a stop pause through a turn the server promoted from its own queue", () => {
     expect(
       deriveQueuedComposerPause({
@@ -305,18 +322,45 @@ describe("queued composer drain watcher", () => {
     useStore.setState(initialState);
   });
 
-  it("holds restored queues until an empty replay confirms detail, without changing pause provenance", async () => {
-    seedThread(makeThread({ id: THREAD_ID, session: makeSession("ready") }));
-    useStore.setState({ threadDetailSyncById: { [THREAD_ID]: "cached" } });
-    useComposerDraftStore
-      .getState()
-      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("restored-queue"));
-    await flushDrain();
-    expect(dispatch).not.toHaveBeenCalled();
-    useStore.getState().confirmThreadDetailReplay(THREAD_ID);
-    await flushDrain();
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
+  it.each(["cached", "failed"] as const)(
+    "holds %s history queues until authoritative detail returns",
+    async (sync) => {
+      seedThread(makeThread({ id: THREAD_ID, session: makeSession("ready") }));
+      useStore.setState({
+        threadDetailSyncById: { [THREAD_ID]: sync === "failed" ? "synced" : "cached" },
+        threadHistoryById: { [THREAD_ID]: { totalMessageCount: 0, olderCursor: null } },
+      });
+      if (sync === "failed") useStore.getState().markThreadDetailSyncFailed(THREAD_ID);
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("restored-queue"));
+      await flushDrain();
+      expect(dispatch).not.toHaveBeenCalled();
+      if (sync === "cached") useStore.getState().confirmThreadDetailReplay(THREAD_ID);
+      else
+        useStore.getState().syncServerThreadDetailHotPath(
+          makeReadModelThread({
+            id: THREAD_ID,
+            session: {
+              threadId: THREAD_ID,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-02-13T00:00:00.000Z",
+            },
+          }),
+          1,
+          {
+            totalMessageCount: 0,
+            olderCursor: null,
+          },
+        );
+      await flushDrain();
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps a restored user-stop pause after cache verification until explicit Resume", async () => {
     seedThread(
