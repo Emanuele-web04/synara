@@ -314,7 +314,7 @@ export function SidebarGroupsSurface({
                 onOpenGroupSettings(project.id, "onboarding");
               };
               const groupThreadEntries = projectSidebarData?.visibleEntries ?? [];
-              const hasGroupThreads = groupThreadEntries.length > 0;
+              const hasGroupThreads = (projectSidebarData?.allProjectThreadCount ?? 0) > 0;
               const toggleLabel = project.expanded ? "Hide threads" : "Show threads";
               return (
                 <div key={project.id} className="group/collapsible">

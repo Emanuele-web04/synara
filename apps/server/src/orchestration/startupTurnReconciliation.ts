@@ -14,7 +14,9 @@
  * projection tables, so it restores that stale "running" state verbatim — it is
  * not its job to second-guess history. This module runs once, immediately after
  * bootstrap and before the server starts accepting client commands, and emits
- * stale pending-request failure activities plus a terminal
+ * stale pending-request failure activities, a `thread.message.assistant.complete`
+ * for every assistant message the dead runtime left streaming (keeping the text
+ * already persisted), plus a terminal
  * `thread.session.set { status: "interrupted", activeTurnId: null }` for each
  * orphaned thread. That reuses the normal event-sourced path: activity handlers
  * resolve dead approval/user-input requests, and the projection's session-set
@@ -35,6 +37,7 @@
  */
 import type {
   OrchestrationCommand,
+  OrchestrationMessage,
   OrchestrationPendingInteraction,
   OrchestrationThreadActivity,
   OrchestrationSession,
@@ -68,7 +71,14 @@ type ThreadSessionSetCommand = Extract<
   OrchestrationCommand,
   { readonly type: "thread.session.set" }
 >;
-type RestartReconciliationCommand = ThreadSessionSetCommand | ThreadActivityAppendCommand;
+type AssistantMessageCompleteCommand = Extract<
+  OrchestrationCommand,
+  { readonly type: "thread.message.assistant.complete" }
+>;
+type RestartReconciliationCommand =
+  | ThreadSessionSetCommand
+  | ThreadActivityAppendCommand
+  | AssistantMessageCompleteCommand;
 
 /** The durable interaction fields the planner needs; a full row is fine. */
 export type ReconcilablePendingInteraction = Pick<
@@ -84,6 +94,9 @@ export interface ReconcilableThread {
   readonly latestTurn: { readonly state: "running" | "interrupted" | "completed" | "error" } | null;
   readonly activities?: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+  >;
+  readonly messages?: ReadonlyArray<
+    Pick<OrchestrationMessage, "id" | "role" | "streaming" | "turnId">
   >;
   readonly pendingInteractions?:
     | ReadonlyArray<
@@ -228,6 +241,31 @@ function planStaleCheckpointRevertCommand(input: {
   };
 }
 
+/**
+ * Finalizes assistant messages a dead runtime left mid-stream. Only live
+ * ingestion ever dispatches `thread.message.assistant.complete`, so without this
+ * the orphaned turn's partial answer stays `streaming` forever: it never folds
+ * into the settled turn, cannot be copied, and is skipped by search. The decider
+ * re-reads the persisted row, so the text already streamed is kept as is.
+ */
+function planStreamingMessageFinalizeCommands(input: {
+  readonly thread: ReconcilableThread;
+  readonly now: string;
+}): ReadonlyArray<AssistantMessageCompleteCommand> {
+  return (input.thread.messages ?? [])
+    .filter((message) => message.role === "assistant" && message.streaming)
+    .map((message) => ({
+      type: "thread.message.assistant.complete",
+      commandId: CommandId.makeUnsafe(
+        `restart-reconcile-message:${input.thread.id}:${message.id}:${input.now}`,
+      ),
+      threadId: input.thread.id,
+      messageId: message.id,
+      ...(message.turnId !== null ? { turnId: message.turnId } : {}),
+      createdAt: input.now,
+    }));
+}
+
 function buildStalePendingRequestCommand(input: {
   readonly threadId: ThreadId;
   readonly now: string;
@@ -255,10 +293,10 @@ function buildStalePendingRequestCommand(input: {
 }
 
 /**
- * Pure planner: maps persisted threads to stale-request resolution commands and
- * terminal `thread.session.set` commands. Extracted from the effectful runner so
- * the reliability-critical selection logic is unit-testable without a database,
- * clock, or engine.
+ * Pure planner: maps persisted threads to stale-request resolution commands,
+ * streaming-message finalization, and terminal `thread.session.set` commands.
+ * Extracted from the effectful runner so the reliability-critical selection
+ * logic is unit-testable without a database, clock, or engine.
  *
  * `now` is threaded in (rather than read from a clock) so the same inputs always
  * produce the same commands — including a deterministic, per-startup `commandId`
@@ -293,10 +331,11 @@ export function planRestartTurnReconciliation(input: {
     if (staleCheckpointRevertCommand !== null) {
       commands.push(staleCheckpointRevertCommand);
     }
+    if (!hasInFlightTurn && !hasDanglingActiveTurn(thread)) {
+      continue;
+    }
+    commands.push(...planStreamingMessageFinalizeCommands({ thread, now: input.now }));
     if (!hasInFlightTurn) {
-      if (!hasDanglingActiveTurn(thread)) {
-        continue;
-      }
       // Preserve the terminal status (and its banner) - only the stale active
       // turn pointer is wrong here.
       commands.push({
