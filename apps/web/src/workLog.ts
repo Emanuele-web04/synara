@@ -322,6 +322,8 @@ export interface WorkLogSubagentRunMember {
   failure: string | null;
   /** When a later collab call first reported it finished (Codex "settled"). */
   settledAt: string | null;
+  /** A later launch of the same child bounds evidence for this invocation. */
+  nextLaunchedAt?: string;
 }
 
 export interface WorkLogSubagentRun {

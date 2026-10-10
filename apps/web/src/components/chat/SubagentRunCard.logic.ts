@@ -114,6 +114,11 @@ export function foldSubagentRunWorkEntries(
       if (stateOnly) {
         continue;
       }
+      const previousRun = runs.get(runKeyBySubagentKey.get(key) ?? "");
+      const previousMember = previousRun?.memberByKey.get(key);
+      if (previousMember && previousRun !== knownRun) {
+        previousMember.nextLaunchedAt = entry.createdAt;
+      }
       let run = runs.get(runKey);
       if (!run) {
         run = {
@@ -287,6 +292,55 @@ function parseTimeMs(value: string | null | undefined): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+interface InvocationWindow {
+  startedAtMs: number | null;
+  endedAtMs: number | null;
+  beforeMs: number | null;
+}
+
+function withinInvocation(value: string | null | undefined, window: InvocationWindow): boolean {
+  const time = parseTimeMs(value);
+  return (
+    time !== null &&
+    (window.startedAtMs === null || time >= window.startedAtMs) &&
+    (window.endedAtMs === null || time <= window.endedAtMs) &&
+    (window.beforeMs === null || time < window.beforeMs)
+  );
+}
+
+const invocationThreads = new WeakMap<SubagentRunThread, Map<string, SubagentRunThread>>();
+
+// Child threads are reusable; their current session/error/latest turn must not
+// overwrite an older invocation. Cache the bounded view as live clocks tick.
+function threadForInvocation(
+  thread: SubagentRunThread,
+  window: InvocationWindow,
+): SubagentRunThread {
+  const key = `${window.startedAtMs}:${window.endedAtMs}:${window.beforeMs}`;
+  let views = invocationThreads.get(thread);
+  const cached = views?.get(key);
+  if (cached) return cached;
+  const latestTurnMatches = thread.latestTurn
+    ? withinInvocation(thread.latestTurn.startedAt ?? thread.latestTurn.requestedAt, window)
+    : window.beforeMs === null;
+  const view: SubagentRunThread = {
+    ...thread,
+    messages: thread.messages.filter((message) => withinInvocation(message.createdAt, window)),
+    activities: thread.activities.filter((activity) =>
+      withinInvocation(activity.createdAt, window),
+    ),
+    latestTurn: latestTurnMatches ? thread.latestTurn : null,
+    session: latestTurnMatches ? thread.session : null,
+    error: latestTurnMatches ? thread.error : null,
+  };
+  if (!views) {
+    views = new Map();
+    invocationThreads.set(thread, views);
+  }
+  views.set(key, view);
+  return view;
+}
+
 const childActionByActivities = new WeakMap<
   SubagentRunThread["activities"],
   SubagentRunAction | null
@@ -301,7 +355,9 @@ function latestChildAction(thread: SubagentRunThread): SubagentRunAction | null 
   }
   let action: SubagentRunAction | null = null;
   if (thread.activities.length > 0) {
-    const entries = deriveWorkLogEntries(thread.activities, thread.latestTurn?.turnId);
+    // The activity array already belongs to this invocation, including tools
+    // without a provider turn ID and earlier child turns within the same run.
+    const entries = deriveWorkLogEntries(thread.activities, undefined);
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index]!;
       if (entry.tone !== "tool" || entry.subagentRun || (entry.subagents?.length ?? 0) > 0) {
@@ -489,16 +545,19 @@ function nestedRowsFor(input: {
   rootThreadId: ThreadId | null;
   visited: Set<string>;
   launchTurnLive: boolean;
+  window: InvocationWindow;
 }): SubagentRunRow[] {
   return input.threads
     .filter(
       (thread) =>
         thread.sourceThreadId === input.spawningThreadId &&
         thread.id !== input.spawningThreadId &&
+        withinInvocation(thread.createdAt, input.window) &&
         !input.visited.has(thread.id),
     )
     .toSorted((left, right) => (left.createdAt < right.createdAt ? -1 : 1))
-    .map((thread) => {
+    .map((child) => {
+      const thread = threadForInvocation(child, input.window);
       input.visited.add(thread.id);
       const statusKind = resolveSubagentThreadStatusKind(thread);
       const nested = nestedRowsFor({ ...input, spawningThreadId: thread.id });
@@ -543,13 +602,23 @@ function flattenRows(rows: ReadonlyArray<SubagentRunRow>): SubagentRunRow[] {
   return rows.flatMap((row) => [row, ...flattenRows(row.nested)]);
 }
 
-function taskEndForLaunch(end: SubagentTaskEnd | undefined, launchedAt: string | undefined) {
+function taskEndForLaunch(
+  end: SubagentTaskEnd | undefined,
+  launchedAt: string | undefined,
+  nextLaunchedAt?: string,
+) {
   const launchedAtMs = parseTimeMs(launchedAt);
+  const nextLaunchedAtMs = parseTimeMs(nextLaunchedAt);
   if (launchedAtMs === null) return end;
   let matching: SubagentTaskEnd | undefined;
   for (let candidate = end; candidate; candidate = candidate.previous) {
     const endedAtMs = parseTimeMs(candidate.endedAt);
-    if (endedAtMs !== null && endedAtMs >= launchedAtMs) matching = candidate;
+    if (
+      endedAtMs !== null &&
+      endedAtMs >= launchedAtMs &&
+      (nextLaunchedAtMs === null || endedAtMs < nextLaunchedAtMs)
+    )
+      matching = candidate;
   }
   return matching;
 }
@@ -575,11 +644,22 @@ export function deriveSubagentRunCard(input: {
   const rows = input.subagents.map((subagent): SubagentRunRow => {
     const key = subagent.threadId;
     const member = memberByKey.get(key);
-    const thread =
+    const child =
       threadById.get(subagent.resolvedThreadId ?? "") ??
       (input.parentThreadId
         ? threadById.get(`subagent:${input.parentThreadId}:${subagent.providerThreadId ?? key}`)
         : undefined);
+    const taskEnd = taskEndForLaunch(
+      input.taskEndByToolUseId?.get(subagent.providerThreadId ?? key),
+      member?.launchedAt,
+      member?.nextLaunchedAt,
+    );
+    const window: InvocationWindow = {
+      startedAtMs: parseTimeMs(member?.launchedAt),
+      endedAtMs: parseTimeMs(taskEnd?.endedAt ?? member?.settledAt),
+      beforeMs: parseTimeMs(member?.nextLaunchedAt),
+    };
+    const thread = child ? threadForInvocation(child, window) : undefined;
     const stripItem = toSubagentStripItem(key, subagent, backgrounded, null);
     // A launch that did not name a model runs on the child's own selection.
     const item =
@@ -594,12 +674,9 @@ export function deriveSubagentRunCard(input: {
           rootThreadId: input.parentThreadId,
           visited,
           launchTurnLive,
+          window,
         })
       : [];
-    const taskEnd = taskEndForLaunch(
-      input.taskEndByToolUseId?.get(subagent.providerThreadId ?? key),
-      member?.launchedAt,
-    );
     const ownPhase =
       directRowPhase({
         subagent,
