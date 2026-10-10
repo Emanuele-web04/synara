@@ -385,6 +385,25 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     });
   });
 
+  it("uses Haiku 5.5's native efforts and 1M budget, while preserving Haiku 4.5", () => {
+    const capabilities = getModelCapabilities("claudeAgent", "claude-haiku-5-5");
+    expect(values("claudeAgent", "claude-haiku-5-5")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(getDefaultEffort(capabilities)).toBe("medium");
+    expect(capabilities.contextWindowTokens).toBe(1_000_000);
+    expect(capabilities.autoCompactWindowOptions?.map((option) => option.value)).toEqual([
+      "auto",
+      "200k",
+      "1m",
+    ]);
+    expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-5-5"))).toBe("medium");
+  });
+
   it("returns no claude effort options for Haiku 4.5", () => {
     expect(values("claudeAgent", "claude-haiku-4-5")).toEqual([]);
   });
