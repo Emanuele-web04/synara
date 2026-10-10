@@ -262,6 +262,7 @@ import {
   resolveThreadArtifactWorkspaceRoot,
   resolveThreadDetailHydration,
   resolveWorkingLabel,
+  isFirstSessionConnect,
   shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
   shouldShowComposerProviderInstancePicker,
@@ -1451,6 +1452,10 @@ export default function ChatView({
 
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = phase === "connecting";
+  const isFirstConnect = isFirstSessionConnect({
+    messages: activeThread?.messages ?? [],
+    latestTurn: activeThread?.latestTurn ?? null,
+  });
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   const { workLogEntries, composerSubagentStripItems, stripSourceThreadId, workflowRunState } =
@@ -6546,6 +6551,7 @@ export default function ChatView({
                       isSendBusy,
                       turnTakenOver,
                       isConnecting,
+                      isFirstConnect,
                       providerName: providerDisplayName,
                     })}
                     worktreeSetup={activeWorktreeSetup}
