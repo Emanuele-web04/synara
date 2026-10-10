@@ -719,6 +719,52 @@ describe("CheckpointReactor", () => {
     },
   );
 
+  it("does not revert checkpoints while a committed turn start is awaiting provider activation", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("turn-start-awaiting-provider"),
+        threadId,
+        message: {
+          messageId: MessageId.makeUnsafe("turn-start-awaiting-provider-message"),
+          role: "user",
+          text: "start work",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await Effect.runPromise(harness.engine.drain);
+
+    const restore = vi.spyOn(harness.checkpointStore, "restoreCheckpoint");
+    const reverse = vi.spyOn(harness.checkpointStore, "reverseCheckpointDiff");
+    await Effect.runPromise(
+      harness.sourceEngine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.makeUnsafe("revert-during-pending-turn-start"),
+        threadId,
+        turnCount: 1,
+        scope: "thread",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await Effect.runPromise(harness.engine.drain);
+    await harness.start();
+    await settleCheckpointWork(harness.reactor.drain);
+
+    expect(restore).not.toHaveBeenCalled();
+    expect(reverse).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe("v3\n");
+    const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
+      (entry) => entry.id === threadId,
+    )!;
+    expect(thread.activities.some((entry) => entry.kind === "checkpoint.revert.failed")).toBe(true);
+  });
+
   it("schedules SQL-filtered domain pages and ACKs telemetry without decoding raw payloads", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     await harness.drain();

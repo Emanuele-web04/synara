@@ -4686,11 +4686,10 @@ const make = Effect.gen(function* () {
                   const runtime = (yield* providerService.listSessions()).find(
                     (session) => session.threadId === event.payload.threadId,
                   );
-                  if (
-                    optimisticSession?.status === "starting" &&
-                    runtime &&
-                    runtime.activeTurnId == null
-                  ) {
+                  const shouldRestoreRejectedSession =
+                    optimisticSession?.status === "starting" ||
+                    (turnStartSession === null && optimisticSession?.status === "ready");
+                  if (shouldRestoreRejectedSession && runtime && runtime.activeTurnId == null) {
                     yield* setThreadSession({
                       threadId: event.payload.threadId,
                       session: {
