@@ -621,6 +621,57 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
+  it("archives provider-native child usage when the parent has no model breakdown", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const stats = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, parent_thread_id, creation_source
+          )
+          VALUES (
+            'thread-native-uncovered', 'project-archive', 'Native child',
+            '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T12:00:00.000Z', '2026-06-13T12:00:00.000Z',
+            'thread-keep', 'provider_native'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES (
+            'native-uncovered-result', 'thread-native-uncovered', 'native-uncovered-turn',
+            'info', 'turn.completed', 'done',
+            '{"provider":"claudeAgent","tokenAccountingVersion":1,"modelUsage":{"claude-fable-5":{"inputTokens":1000,"outputTokens":500}}}',
+            1, '2026-06-13T12:01:00.000Z'
+          )
+        `;
+        yield* acknowledgeProviderCommandJournal(sql);
+
+        const before = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(before.models).toContainEqual(
+          expect.objectContaining({ provider: "claudeAgent", tokens: 1_500 }),
+        );
+        yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: ThreadId.makeUnsafe("thread-native-uncovered"),
+        });
+        expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 })).toEqual(before);
+        expect(
+          yield* sql`
+            SELECT tokens FROM profile_stats_deleted_tokens
+            WHERE thread_id = 'thread-native-uncovered' AND provider = 'claudeAgent'
+          `,
+        ).toEqual([{ tokens: 1_500 }]);
+      }),
+    );
+  });
+
   it("leaves Claude results of automation dispatches out of the archive", async () => {
     await runArchiveTest(
       Effect.gen(function* () {
