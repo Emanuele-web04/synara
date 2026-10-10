@@ -173,6 +173,47 @@ describe("DesktopBrowserManager tab switching", () => {
     }
   });
 
+  it("bounds live pages across threads without evicting the shown page or an active tool", async () => {
+    vi.useFakeTimers();
+    const pages = Array.from({ length: 14 }, (_, index) => makeView(450 + index));
+    for (const page of pages) webContentsViewConstructor.mockReturnValueOnce(page.view);
+    const { manager } = makeManager();
+    const inputs: Array<{ threadId: ThreadId; tabId: string }> = [];
+    try {
+      for (let index = 0; index < 13; index++) {
+        const threadId = ThreadId.makeUnsafe(`thread-live-budget-${index}`);
+        const state = manager.open({ threadId, initialUrl: `https://example.test/${index}` });
+        manager.setPanelBounds({ threadId, surface: "native", bounds });
+        const input = { threadId, tabId: state.activeTabId! };
+        inputs.push(input);
+        if (index === 0) await manager.getAutomationRuntime(input);
+        await vi.advanceTimersByTimeAsync(10);
+      }
+
+      // The oldest page has a live tool lease. The next oldest hidden page is
+      // evicted instead, leaving the shown page and eleven warm pages intact.
+      expect(pages[0]!.contents.close).not.toHaveBeenCalled();
+      expect(pages[1]!.contents.close).toHaveBeenCalledOnce();
+      expect(pages.slice(2, 13).every((page) => page.contents.close.mock.calls.length === 0)).toBe(
+        true,
+      );
+      expect(manager.getState(inputs[1]!).tabs[0]!.status).toBe("suspended");
+      expect(pages[12]!.view.setVisible).toHaveBeenLastCalledWith(true);
+
+      // Once the tool lease expires, reopening the evicted page restores its
+      // URL and evicts the now-oldest hidden page to retain the same bound.
+      await vi.advanceTimersByTimeAsync(31_001);
+      manager.setPanelBounds({ threadId: inputs[1]!.threadId, surface: "native", bounds });
+      expect(pages[13]!.contents.loadURL).toHaveBeenCalledWith("https://example.test/1");
+      expect(pages[0]!.contents.close).toHaveBeenCalledOnce();
+      expect(manager.getState(inputs[1]!).tabs[0]!.status).toBe("live");
+      expect(pages[13]!.view.setVisible).toHaveBeenLastCalledWith(true);
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("loads an evicted agent tab when the user reopens it without a browser tool", async () => {
     vi.useFakeTimers();
     const agentPage = makeView(421);
@@ -646,6 +687,47 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     expect(contents.loadURL).toHaveBeenCalledTimes(loads);
     expect(contents.close).not.toHaveBeenCalled();
     manager.dispose();
+  });
+
+  it("does not repaint a hidden panel's page at its old bounds", async () => {
+    const contents = new FakeWebContents(102);
+    Object.assign(contents, {
+      capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from("page") })),
+    });
+    const view = {
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+      setBackgroundColor: vi.fn(),
+    };
+    webContentsViewConstructor.mockReturnValueOnce(view);
+    const manager = new DesktopBrowserManager();
+    manager.setWindow({
+      isDestroyed: () => false,
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    } as never);
+    try {
+      const state = manager.open({ threadId: THREAD_ID, initialUrl: "https://example.test/" });
+      const input = { threadId: THREAD_ID, tabId: state.activeTabId! };
+      const panelBounds = { x: 700, y: 70, width: 560, height: 650 };
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: panelBounds });
+      expect(view.setBounds).toHaveBeenLastCalledWith(panelBounds);
+      manager.hide({ threadId: THREAD_ID });
+      view.setBounds.mockClear();
+      view.setVisible.mockClear();
+
+      // With the panel unmounted, a prompt screenshot, a reopen and a link open
+      // all reach the hidden thread. None of them may show its page again.
+      await manager.captureScreenshot(input);
+      manager.open({ threadId: THREAD_ID });
+      manager.navigate({ ...input, url: "https://example.test/next" });
+
+      expect(view.setBounds).not.toHaveBeenCalledWith(panelBounds);
+      expect(view.setVisible).not.toHaveBeenCalledWith(true);
+    } finally {
+      manager.dispose();
+    }
   });
 
   it("applies explicit page zoom to native and renderer guests, then resets it on hide", () => {

@@ -90,7 +90,7 @@ export function makeResnapshotEscalationTracker(): {
  * and only the gap is replayed. A negative gap (client cursor ahead of the
  * server head — restored backup or reset database) or an overflowing gap is
  * never trusted: both fall back to the full snapshot path. With `batchReplay`
- * the resume gap arrives as a single `replay` item (omitted when empty) so the
+ * the resume gap arrives as a single `replay` item (including an empty confirmation) so the
  * client can apply the whole catch-up at once; the snapshot path is unchanged.
  */
 export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
@@ -237,9 +237,7 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
             // client can apply the whole catch-up in a single store update.
             const replayItems: Stream.Stream<SnapshotLiveStreamItem<Snapshot>> =
               input.batchReplay === true
-                ? resumeRows.length === 0
-                  ? Stream.empty
-                  : Stream.succeed({ kind: "replay", events: [...resumeRows] })
+                ? Stream.succeed({ kind: "replay", events: [...resumeRows] })
                 : Stream.fromIterable(resumeRows).pipe(
                     Stream.map(
                       (event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event }),
