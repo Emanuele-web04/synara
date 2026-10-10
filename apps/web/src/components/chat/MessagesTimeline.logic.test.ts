@@ -18,7 +18,9 @@ import {
   deriveTerminalAssistantMessageIds,
   deriveTurnTimingByTurnId,
   findLastLiveWorkGroupId,
+  formatTurnHeaderLabel,
   normalizeCompactToolLabel,
+  summarizeTurnFailureReason,
   planWorkEntryRenderChunks,
   resolveWorkEntryChunkFold,
   resolveAssistantMessageCopyState,
@@ -902,7 +904,7 @@ describe("deriveMessagesTimelineRows", () => {
     }),
   ];
 
-  it("folds each response woken by a background task on its own and keeps the completion visible", () => {
+  it("folds each response woken by a background task on its own and names the task in its header", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: wokenResponseEntries({ lastStreaming: false }),
@@ -914,14 +916,39 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
     expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
     expect(collapsedSignature(messageRow(rows, "report-2")!)).toEqual(["work:check-2"]);
-    expect(
-      rows.flatMap((row) =>
-        row.kind === "work" ? row.groupedEntries.map((entry) => entry.label) : [],
-      ),
-    ).toEqual(["Subagent finished: First", "Subagent finished: Second"]);
-    // A woken response's "Worked for" starts when the subagent finished, not
-    // when the previous reply did.
+    // The completion line is gone: the woken turn's header says what woke it.
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+    expect(messageRow(rows, "launched")?.turnHeader?.resumedBy).toBeNull();
+    expect(messageRow(rows, "report-1")?.turnHeader?.resumedBy).toEqual([
+      { description: "First", outcome: "finished" },
+    ]);
+    expect(formatTurnHeaderLabel(messageRow(rows, "report-2")!.turnHeader!)).toBe(
+      "Resumed: “Second” finished · 3.0s",
+    );
+    // A woken response's clock starts when the subagent finished, not when the
+    // previous reply did.
     expect(messageRow(rows, "report-1")?.durationStart).toBe("2026-01-01T00:01:00Z");
+  });
+
+  it("opens a live turn woken by a background task with a Resumed header", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("turn-3"),
+      activeTurnStartedAt: "2026-01-01T00:02:00.500Z",
+      timelineEntries: wokenResponseEntries({ lastStreaming: true }),
+    });
+
+    const headerIndex = rows.findIndex((row) => row.kind === "working-header");
+    const header = rows[headerIndex];
+    expect(header?.kind === "working-header" && header.resumedBy).toEqual([
+      { description: "Second", outcome: "finished" },
+    ]);
+    // It sits right after the previous turn, where the completion line was.
+    const previous = rows[headerIndex - 1];
+    expect(previous?.kind === "message" && previous.message.id).toBe("report-1");
+    expect(rows.some((row) => row.kind === "work" && row.id === "entry-done-2")).toBe(false);
   });
 
   it("keeps earlier responses folded while a background task wakes a new one", () => {
@@ -993,7 +1020,7 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
     expect(terminal!.inlineWorkEntries).toBeUndefined();
     // Timed from the user message, not from the last intermediate narration.
-    expect(terminal!.collapsedWorkElapsed).toBe("6.0s");
+    expect(terminal!.turnHeader?.elapsed).toBe("6.0s");
     expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 
@@ -1073,7 +1100,7 @@ describe("deriveMessagesTimelineRows", () => {
       (item) => item.kind === "narration" && item.id === "seg-msg",
     );
     expect(narration?.kind === "narration" && narration.message).toBe(segmented);
-    expect(terminal!.collapsedWorkElapsed).toBe("7.0s");
+    expect(terminal!.turnHeader?.elapsed).toBe("7.0s");
   });
 
   it("resolves a folded assistant match to the terminal row that now owns it", () => {
@@ -1139,7 +1166,7 @@ describe("deriveMessagesTimelineRows", () => {
     const terminal = messageRow(rows, "a2");
     expect(terminal).toBeDefined();
     expect(collapsedSignature(terminal!)).toEqual(["work:w1", "narration:a1", "work:w2"]);
-    expect(terminal!.collapsedWorkElapsed).toBe("23m");
+    expect(terminal!.turnHeader?.elapsed).toBe("23m");
   });
 
   it("times a request-less subagent run from its turn, not from its single message", () => {
@@ -1165,8 +1192,8 @@ describe("deriveMessagesTimelineRows", () => {
       }),
     });
 
-    expect(messageRow(rows, "child-answer")?.collapsedWorkElapsed).toBe("8.5s");
-    expect(messageRow(rows, "child-answer")?.collapsedWorkInterrupted).toBeUndefined();
+    expect(messageRow(rows, "child-answer")?.turnHeader?.elapsed).toBe("8.5s");
+    expect(messageRow(rows, "child-answer")?.turnHeader?.outcome).toBe("completed");
   });
 
   it("times a stopped turn to its interruption and marks it stopped", () => {
@@ -1216,9 +1243,9 @@ describe("deriveMessagesTimelineRows", () => {
     });
 
     const stopped = messageRow(rows, "preamble");
-    expect(stopped?.collapsedWorkElapsed).toBe("16s");
-    expect(stopped?.collapsedWorkInterrupted).toBe(true);
-    expect(messageRow(rows, "next")?.collapsedWorkInterrupted).toBeUndefined();
+    expect(stopped?.turnHeader?.elapsed).toBe("16s");
+    expect(stopped?.turnHeader?.outcome).toBe("interrupted");
+    expect(messageRow(rows, "next")?.turnHeader?.outcome).toBe("completed");
   });
 
   it("marks a turn stopped before it wrote anything on its last work row", () => {
@@ -1249,7 +1276,9 @@ describe("deriveMessagesTimelineRows", () => {
 
     const work = rows.filter((row) => row.kind === "work");
     expect(work).toHaveLength(1);
-    expect(work[0]).toMatchObject({ stoppedTurnElapsed: "16s" });
+    expect(work[0]).toMatchObject({
+      turnEndMarker: { elapsed: "16s", outcome: "interrupted", reason: null },
+    });
   });
 
   it("anchors the live header to the running turn's request, above queued requests", () => {
@@ -1301,8 +1330,374 @@ describe("deriveMessagesTimelineRows", () => {
       }),
     });
 
-    expect(messageRow(rows, "launched")?.collapsedWorkElapsed).toBe("3.9s");
-    expect(messageRow(rows, "report-1")?.collapsedWorkElapsed).toBe("2.9s");
+    expect(messageRow(rows, "launched")?.turnHeader?.elapsed).toBe("3.9s");
+    expect(messageRow(rows, "report-1")?.turnHeader?.elapsed).toBe("2.9s");
+  });
+
+  it("gives a resumed response its own duration when the provider reuses the launching turn id", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("request", "2026-01-01T00:00:00Z"),
+        assistantEntry("launch", "2026-01-01T00:00:04Z", {
+          turnId: "same-turn",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+        backgroundCompletionEntry("done", "2026-01-01T00:00:21Z", "Delayed echo"),
+        assistantEntry("resumed", "2026-01-01T00:00:24Z", {
+          turnId: "same-turn",
+          completedAt: "2026-01-01T00:00:24Z",
+        }),
+      ],
+      turnTimingByTurnId: new Map([
+        [
+          TurnId.makeUnsafe("same-turn"),
+          {
+            startedAt: "2026-01-01T00:00:00Z",
+            completedAt: "2026-01-01T00:00:04Z",
+            interrupted: false,
+          },
+        ],
+      ]),
+    });
+    expect(messageRow(rows, "resumed")?.turnHeader?.elapsed).toBe("3.0s");
+    expect(messageRow(rows, "resumed")?.turnHeader?.endedAt).toBe("2026-01-01T00:00:24Z");
+  });
+
+  describe("turn headers", () => {
+    const turnActivity = (
+      id: string,
+      turnId: string,
+      kind: string,
+      payload: Record<string, unknown>,
+      createdAt: string,
+      tone: "info" | "error" = "info",
+    ) => ({
+      id: EventId.makeUnsafe(id),
+      tone,
+      kind,
+      summary: kind,
+      payload,
+      turnId: TurnId.makeUnsafe(turnId),
+      createdAt,
+    });
+    const threeTurns = [
+      userEntry("u1", "2026-01-01T00:00:00Z"),
+      assistantEntry("a1", "2026-01-01T00:00:05Z", {
+        turnId: "t1",
+        text: "One",
+        completedAt: "2026-01-01T00:00:06Z",
+      }),
+      userEntry("u2", "2026-01-01T00:01:00Z"),
+      workEntry("w2", "2026-01-01T00:01:01Z", "Ran ls"),
+      assistantEntry("a2", "2026-01-01T00:01:05Z", {
+        turnId: "t2",
+        text: "Two",
+        completedAt: "2026-01-01T00:01:06Z",
+      }),
+      userEntry("u3", "2026-01-01T00:02:00Z"),
+      assistantEntry("a3", "2026-01-01T00:02:05Z", {
+        turnId: "t3",
+        text: "Three",
+        completedAt: "2026-01-01T00:02:20Z",
+      }),
+    ];
+    const timings = (activities: ReturnType<typeof turnActivity>[]) =>
+      deriveTurnTimingByTurnId({
+        turnDiffSummaries: [
+          makeSummary({
+            turnId: "t1",
+            startedAt: "2026-01-01T00:00:00.500Z",
+            completedAt: "2026-01-01T00:00:06Z",
+          }),
+          makeSummary({
+            turnId: "t2",
+            startedAt: "2026-01-01T00:01:00.500Z",
+            completedAt: "2026-01-01T00:01:06Z",
+          }),
+        ],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("t3"),
+          state: "completed",
+          startedAt: "2026-01-01T00:02:00.500Z",
+          completedAt: "2026-01-01T00:02:20Z",
+        },
+        activities,
+      });
+
+    it("gives every settled turn a header, with or without folded work", () => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timings([]),
+      });
+
+      expect(messageRow(rows, "a1")?.collapsedTurnItems).toBeUndefined();
+      expect(messageRow(rows, "a1")?.turnHeader).toEqual({
+        elapsed: "5.5s",
+        endedAt: "2026-01-01T00:00:06Z",
+        outcome: "completed",
+        reason: null,
+        modelChange: null,
+        resumedBy: null,
+      });
+      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe("Worked 5.5s");
+      expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["work:w2"]);
+    });
+
+    it("names the model only when it differs from the previous turn", () => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timings([
+          turnActivity(
+            "m1",
+            "t1",
+            "turn.started",
+            { model: "claude-haiku-5-5", provider: "claudeAgent" },
+            "2026-01-01T00:00:00.500Z",
+          ),
+          turnActivity(
+            "m2",
+            "t2",
+            "turn.started",
+            { model: "claude-haiku-5-5", provider: "claudeAgent" },
+            "2026-01-01T00:01:00.500Z",
+          ),
+          turnActivity(
+            "m3",
+            "t3",
+            "turn.started",
+            { model: "gpt-6-luna", provider: "codex" },
+            "2026-01-01T00:02:00.500Z",
+          ),
+        ]),
+      });
+
+      expect(messageRow(rows, "a1")?.turnHeader?.modelChange).toBeNull();
+      expect(messageRow(rows, "a2")?.turnHeader?.modelChange).toBeNull();
+      expect(messageRow(rows, "a3")?.turnHeader?.modelChange).toEqual({
+        provider: "codex",
+        model: "gpt-6-luna",
+      });
+    });
+
+    it("falls back to Claude's reported model for turns recorded before turn.started", () => {
+      const timing = timings([
+        turnActivity(
+          "cw1",
+          "t1",
+          "context-window.updated",
+          { claudeCache: { model: "claude-haiku-5-5" } },
+          "2026-01-01T00:00:01Z",
+        ),
+        turnActivity(
+          "m2",
+          "t2",
+          "turn.started",
+          { model: "claude-opus-5-5", provider: "claudeAgent" },
+          "2026-01-01T00:01:00.500Z",
+        ),
+        // A later context report never overrides the authoritative model.
+        turnActivity(
+          "cw2",
+          "t2",
+          "context-window.updated",
+          { claudeCache: { model: "claude-haiku-5-5" } },
+          "2026-01-01T00:01:02Z",
+        ),
+      ]);
+      expect(timing.get(TurnId.makeUnsafe("t1"))?.model).toEqual({
+        provider: "claudeAgent",
+        model: "claude-haiku-5-5",
+      });
+      expect(timing.get(TurnId.makeUnsafe("t2"))?.model?.model).toBe("claude-opus-5-5");
+    });
+
+    it("says who ended a turn early: the user or the provider, with its reason", () => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timings([
+          turnActivity("stop-request", "t2", "turn.stop-requested", {}, "2026-01-01T00:01:04Z"),
+          turnActivity(
+            "stop",
+            "t2",
+            "turn.completed",
+            { state: "interrupted" },
+            "2026-01-01T00:01:06Z",
+          ),
+          turnActivity(
+            "fail",
+            "t3",
+            "turn.completed",
+            {
+              state: "failed",
+              errorMessage: "You've hit your usage limit. Upgrade or try again later.",
+            },
+            "2026-01-01T00:02:20Z",
+            "error",
+          ),
+        ]),
+      });
+
+      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe(
+        "Stopped by you after 5.5s",
+      );
+      expect(messageRow(rows, "a3")?.turnHeader?.outcome).toBe("interrupted");
+      expect(formatTurnHeaderLabel(messageRow(rows, "a3")!.turnHeader!)).toBe(
+        "Interrupted after 20s · usage limit reached",
+      );
+    });
+
+    it("ignores a runtime error the turn recovered from", () => {
+      const timing = timings([
+        turnActivity(
+          "err",
+          "t2",
+          "runtime.error",
+          { message: "Transient network error" },
+          "2026-01-01T00:01:02Z",
+          "error",
+        ),
+        turnActivity(
+          "done",
+          "t2",
+          "turn.completed",
+          { state: "completed" },
+          "2026-01-01T00:01:06Z",
+        ),
+      ]);
+      expect(timing.get(TurnId.makeUnsafe("t2"))?.failed).toBeUndefined();
+    });
+
+    it("attributes an interrupted turn to the user only after a Stop request for that turn", () => {
+      const timing = timings([
+        turnActivity("stop", "t2", "turn.stop-requested", {}, "2026-01-01T00:01:04Z"),
+        turnActivity(
+          "done2",
+          "t2",
+          "turn.completed",
+          { state: "interrupted" },
+          "2026-01-01T00:01:06Z",
+        ),
+        turnActivity(
+          "done3",
+          "t3",
+          "turn.completed",
+          { state: "interrupted" },
+          "2026-01-01T00:02:20Z",
+        ),
+      ]);
+      expect(timing.get(TurnId.makeUnsafe("t2"))?.stoppedByUser).toBe(true);
+      expect(timing.get(TurnId.makeUnsafe("t3"))?.stoppedByUser).not.toBe(true);
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timing,
+      });
+      expect(messageRow(rows, "a2")?.turnHeader?.outcome).toBe("stopped");
+      expect(messageRow(rows, "a3")?.turnHeader?.outcome).toBe("interrupted");
+    });
+
+    it("keeps a provider failure attributed to the provider despite a Stop request", () => {
+      const timing = timings([
+        turnActivity("stop", "t2", "turn.stop-requested", {}, "2026-01-01T00:01:04Z"),
+        turnActivity(
+          "failed",
+          "t2",
+          "turn.completed",
+          { state: "failed", errorMessage: "Usage limit reached" },
+          "2026-01-01T00:01:06Z",
+          "error",
+        ),
+      ]);
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timing,
+      });
+      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe(
+        "Interrupted after 5.5s · usage limit reached",
+      );
+    });
+
+    it("does not attribute an already interrupted turn to a later stale Stop request", () => {
+      const timing = timings([
+        turnActivity(
+          "interrupted",
+          "t2",
+          "turn.completed",
+          { state: "interrupted" },
+          "2026-01-01T00:01:06Z",
+        ),
+        turnActivity("late-stop", "t2", "turn.stop-requested", {}, "2026-01-01T00:01:07Z"),
+      ]);
+      expect(timing.get(TurnId.makeUnsafe("t2"))?.stoppedByUser).not.toBe(true);
+    });
+
+    it("times historical turns from their lifecycle even without a checkpoint", () => {
+      const timing = deriveTurnTimingByTurnId({
+        turnDiffSummaries: [],
+        latestTurn: null,
+        activities: [
+          turnActivity(
+            "start",
+            "t1",
+            "turn.started",
+            { model: "gpt-6-luna", provider: "codex" },
+            "2026-01-01T00:00:00.500Z",
+          ),
+          turnActivity(
+            "done",
+            "t1",
+            "turn.completed",
+            { state: "completed" },
+            "2026-01-01T00:00:06Z",
+          ),
+        ],
+      });
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timing,
+      });
+      expect(messageRow(rows, "a1")?.turnHeader?.elapsed).toBe("5.5s");
+    });
+
+    it("marks a provider failure without an assistant response on its last work row", () => {
+      const entry = workEntry("running", "2026-01-01T00:00:01Z", "Running command");
+      if (entry.kind !== "work") throw new Error("Expected work");
+      entry.entry.turnId = TurnId.makeUnsafe("t1");
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z"), entry],
+        turnTimingByTurnId: new Map([
+          [
+            TurnId.makeUnsafe("t1"),
+            {
+              startedAt: "2026-01-01T00:00:00Z",
+              completedAt: "2026-01-01T00:00:16Z",
+              interrupted: false,
+              failed: true,
+              failureReason: "usage limit reached",
+            },
+          ],
+        ]),
+      });
+      expect(rows.at(-1)).toMatchObject({
+        turnEndMarker: { outcome: "interrupted", elapsed: "16s", reason: "usage limit reached" },
+      });
+    });
+
+    it("clips unknown provider reasons to one short line", () => {
+      expect(summarizeTurnFailureReason({ errorCode: "server_overloaded" })).toBe(
+        "model at capacity",
+      );
+      expect(summarizeTurnFailureReason({ message: `Boom\n${"x".repeat(200)}` })).toBe("Boom");
+      expect(summarizeTurnFailureReason({ message: "y".repeat(200) })?.length).toBe(80);
+      expect(summarizeTurnFailureReason({ message: "" })).toBeNull();
+    });
   });
 
   it("keeps the live turn expanded instead of collapsing while it streams", () => {
@@ -1417,6 +1812,8 @@ describe("deriveMessagesTimelineRows", () => {
       .map((row) => String(row.message.id));
     expect(visibleMessageIds).toEqual(["u1", "a1", "a2"]);
     expect(messageRow(rows, "a2")!.collapsedTurnItems).toBeUndefined();
+    expect(messageRow(rows, "a1")?.turnHeader?.elapsed).toBe("4.0s");
+    expect(messageRow(rows, "a2")?.turnHeader).toBeUndefined();
   });
 
   it("keeps a just-settled tail assistant expanded when the active turn id is briefly unavailable", () => {
@@ -1695,7 +2092,9 @@ const chunkSignature = (items: ReadonlyArray<CollapsedTurnItem>): string[] =>
   chunkCollapsedTurnItems(items).map((chunk) =>
     chunk.kind === "tool-group"
       ? `group:${chunk.id}:${chunk.entries.map((entry) => entry.id).join("+")}`
-      : `item:${chunk.item.kind}:${String(chunk.item.id)}`,
+      : chunk.kind === "background-group"
+        ? `background:${chunk.entries.map((entry) => entry.id).join("+")}`
+        : `item:${chunk.item.kind}:${String(chunk.item.id)}`,
   );
 
 describe("chunkCollapsedTurnItems", () => {
@@ -1722,6 +2121,33 @@ describe("chunkCollapsedTurnItems", () => {
         toolItem("w4"),
       ]),
     ).toEqual(["group:w1:w1+w2", "item:work:err", "group:w3:w3+w4"]);
+  });
+
+  it("folds three or more background task rows in a row into one group", () => {
+    const background = (id: string, status: "running" | "finished" | "stopped") =>
+      toolItem(id, {
+        backgroundTask: {
+          taskId: id,
+          taskType: "local_bash",
+          description: id,
+          command: `sleep 5 && echo ${id}`,
+          status,
+          startedAt: "2026-01-01T00:00:00Z",
+          completedAt: status === "running" ? null : "2026-01-01T00:00:05Z",
+          exitCode: status === "finished" ? 0 : null,
+        },
+      });
+    expect(
+      chunkSignature([
+        background("b1", "finished"),
+        background("b2", "finished"),
+        background("b3", "finished"),
+        background("b4", "stopped"),
+        narrationItem("a1"),
+        background("b5", "running"),
+        background("b6", "running"),
+      ]),
+    ).toEqual(["background:b1+b2+b3+b4", "item:narration:a1", "item:work:b5", "item:work:b6"]);
   });
 });
 

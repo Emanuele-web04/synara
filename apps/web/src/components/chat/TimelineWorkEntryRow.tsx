@@ -59,6 +59,8 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { BackgroundTaskRow } from "./BackgroundTaskRow";
+import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import ChatMarkdown from "../ChatMarkdown";
@@ -89,7 +91,11 @@ import {
   sanitizeSynaraMcpToolPreview,
   type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
-import { formatLiveActivityMeta, useLiveActivityNow } from "../../lib/liveActivityPresentation";
+import {
+  formatLiveActivityMeta,
+  isLiveActivityInProgress,
+  useLiveActivityNow,
+} from "../../lib/liveActivityPresentation";
 import { deriveToolFailureSummary } from "../../lib/toolCallDetails";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "../../lib/disclosureMotion";
@@ -349,6 +355,7 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 // pairs that the label humanizer renders as "Synara: ...".
 function toolWorkEntryStatus(workEntry: TimelineWorkEntry): SynaraMcpToolStatus {
   if (workEntry.toolStatus) return workEntry.toolStatus;
+  if (workEntry.liveActivity && isLiveActivityInProgress(workEntry.liveActivity)) return "running";
   return workEntry.activityKind !== undefined && workEntry.activityKind !== "tool.completed"
     ? "running"
     : "completed";
@@ -456,7 +463,7 @@ function commandRowDisplay(
 ): { heading: string; object: string; literal: boolean } | null {
   const command = workEntry.rawCommand ?? workEntry.command;
   if (
-    workEntry.tone !== "tool" ||
+    (workEntry.tone !== "tool" && workEntry.toolStatus !== "failed") ||
     !command ||
     !(
       workEntry.itemType === "command_execution" ||
@@ -478,11 +485,6 @@ function commandRowDisplay(
   const literal = deriveLiteralCommand(command);
   return literal ? { heading: running ? "Running" : "Ran", object: literal, literal: true } : null;
 }
-
-// Inline mono chip for a command quoted inside a row sentence, matching inline
-// code in chat markdown.
-export const INLINE_COMMAND_CHIP_CLASS_NAME =
-  "rounded-[0.4rem] bg-[var(--app-user-message-background)] px-[0.35rem] py-[0.05rem] font-chat-code text-chat-code text-foreground/80";
 
 export interface WorkEntryDisplayParts {
   heading: string;
@@ -703,7 +705,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // A failed call says so explicitly, with its exit code and the first line
   // that explains it, instead of the generic lifecycle meta.
   const failure =
-    workEntry.tone === "tool" && toolWorkEntryStatus(workEntry) === "failed"
+    toolWorkEntryStatus(workEntry) === "failed"
       ? deriveToolFailureSummary(workEntry.toolDetails)
       : null;
   const liveActivityMetaText = failure
@@ -748,6 +750,12 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         />
       </div>
     );
+  }
+
+  // A background task keeps one row for its whole life. Kept after the hooks
+  // above so the early return never changes hook order.
+  if (workEntry.backgroundTask) {
+    return <BackgroundTaskRow task={workEntry.backgroundTask} fontSizePx={textFontSizePx} />;
   }
 
   // A created-automation row renders as its own card instead of a tool-call line.

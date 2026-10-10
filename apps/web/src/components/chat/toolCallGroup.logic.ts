@@ -73,7 +73,10 @@ export interface ToolCallGroupSummary {
 // individually visible, so they never fold into a summary group.
 export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
   return (
-    entry.tone === "tool" &&
+    (entry.tone === "tool" ||
+      (entry.tone === "error" &&
+        entry.toolStatus === "failed" &&
+        entry.activityKind?.startsWith("tool."))) &&
     !(entry.toolCallId && isReasoningUpdateWorkEntry(entry)) &&
     !entry.synaraThreadCreation &&
     !entry.automation &&

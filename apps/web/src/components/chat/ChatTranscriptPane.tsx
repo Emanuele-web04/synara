@@ -98,6 +98,7 @@ interface ChatTranscriptPaneProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
+  onStopBackgroundTask?: ComponentProps<typeof MessagesTimeline>["onStopBackgroundTask"];
   computerControlEnabled?: ComponentProps<typeof MessagesTimeline>["computerControlEnabled"];
   onEnableComputerControl?: ComponentProps<typeof MessagesTimeline>["onEnableComputerControl"];
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -197,6 +198,7 @@ export function ChatTranscriptPane({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
+  onStopBackgroundTask,
   computerControlEnabled,
   onEnableComputerControl,
   onRevertUserMessage,
@@ -386,6 +388,7 @@ export function ChatTranscriptPane({
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
+            {...(onStopBackgroundTask ? { onStopBackgroundTask } : {})}
             {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
             {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}

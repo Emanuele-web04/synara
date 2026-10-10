@@ -9,9 +9,11 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { makeActivity } from "../../storeTestFixtures";
 import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
-import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./TimelineWorkEntryRow";
+import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
+// Every settled turn opens with a header carrying its final state.
+const TURN_HEADER_MARKER = 'data-turn-header="completed"';
 const FORK_SOURCE = {
   sourceThreadId: ThreadId.makeUnsafe("source-thread"),
   sourceTitle: "ciao (2)",
@@ -153,6 +155,41 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("MessagesTimeline", () => {
+  it("shows the literal failed command, exit code and stderr even when the provider uses an error tone", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "failed-command",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "failed-command",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Bash",
+              tone: "error",
+              activityKind: "tool.completed",
+              itemType: "command_execution",
+              toolStatus: "failed",
+              command: "missing-command --check",
+              toolDetails: {
+                kind: "command",
+                title: "Bash",
+                command: "missing-command --check",
+                output: { exitCode: 127, stderr: "missing-command: command not found" },
+              },
+            },
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-command-literal="true"');
+    expect(markup).toContain("missing-command --check");
+    expect(markup).toContain("Failed · exit 127");
+    expect(markup).toContain("missing-command: command not found");
+  });
   // The first test pays the full dynamic-import cost of the MessagesTimeline
   // module graph, which can exceed 10s under CI thread contention.
   it("renders an accent deep link to the immediate fork source", async () => {
@@ -569,7 +606,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Compacting context");
     expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
-    expect(markup).toContain("Working for");
+    expect(markup).toContain(">Working <");
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
@@ -656,7 +693,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
-    expect(markup).toContain("Worked for 1.0s");
+    expect(markup).toContain("Worked 1.0s");
     expect(markup).not.toContain("data-scroll-anchor-ignore");
     expect(markup).not.toContain(
       `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
@@ -839,7 +876,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Worked for");
+    expect(markup).toContain("Worked ");
     expect(markup).toContain(">done</p>");
     // Trailing work folds into the terminal reply's collapsed disclosure rather
     // than leaving a detached work row at the end of the transcript.
@@ -1302,8 +1339,8 @@ describe("MessagesTimeline", () => {
     );
 
     // The original MCP tool call is preserved inside the settled turn's
-    // "Worked for..." disclosure; the recap is an additional final artifact.
-    expect(markup).toContain("Worked for");
+    // turn header disclosure; the recap is an additional final artifact.
+    expect(markup).toContain(TURN_HEADER_MARKER);
     expect(markup).toContain('data-synara-thread-creation-card="true"');
     expect(markup).toContain("2 threads created");
     expect(markup).toContain("2/2 requested threads created");
@@ -1369,7 +1406,7 @@ describe("MessagesTimeline", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain("Worked for");
+    expect(markup).toContain(TURN_HEADER_MARKER);
     expect(markup.match(/Computer control needs Screen Recording/g)).toHaveLength(1);
     expect(markup.indexOf("Synara needs macOS permissions first.")).toBeLessThan(
       markup.indexOf("Computer control needs Screen Recording"),
@@ -1442,7 +1479,7 @@ describe("MessagesTimeline", () => {
 
     // The tool work collapses, but the changed-files summary stays anchored at
     // the end of the turn with every file from the turn diff.
-    expect(markup).toContain("Worked for");
+    expect(markup).toContain(TURN_HEADER_MARKER);
     expect(markup).toContain("Edited 2 files");
     expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.test.tsx");
     expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.tsx");

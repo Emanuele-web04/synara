@@ -148,6 +148,22 @@ describe("summarizeToolCallGroup", () => {
     expect(summary?.failedLabel).toBe("1 failed");
   });
 
+  it("includes provider error-toned tool failures in the count and summary", () => {
+    const summary = summarizeToolCallGroup([
+      command("ok", "ls"),
+      workEntry({
+        id: "failed",
+        itemType: "command_execution",
+        command: "missing-command",
+        activityKind: "tool.completed",
+        toolStatus: "failed",
+        tone: "error",
+      }),
+    ]);
+    expect(summary?.label).toBe("Ran 2 commands");
+    expect(summary?.failedCount).toBe(1);
+  });
+
   it("names at most three kinds and folds the rest into other actions", () => {
     const summary = summarizeToolCallGroup([
       claudeRead("r1", "/repo/a.ts"),

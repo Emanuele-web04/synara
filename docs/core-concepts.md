@@ -143,6 +143,14 @@ A turn is one cycle inside that task:
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
 
+Each settled turn has a **Worked** header with its duration, completion time, and final state.
+The model appears when it changes from the previous turn. Expand the header to read the tools and
+full narration; turning off finished-turn folding keeps the same header with the work visible.
+**Stopped by you** requires a Stop request followed by an interrupted outcome. Provider failures,
+usage limits, and interruptions without a recorded Stop request say **Interrupted**, with a reason
+when known. Background commands keep one row as they run and settle; a completion that wakes the
+provider starts a separate **Resumed** response with its own duration.
+
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
 If it was not accepted, Synara records a rejection that also blocks a delayed copy, then restores
