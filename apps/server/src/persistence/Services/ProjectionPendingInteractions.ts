@@ -32,6 +32,7 @@ export type ProjectionPendingInteraction = typeof ProjectionPendingInteraction.T
 
 export const ListProjectionPendingInteractionsInput = Schema.Struct({
   threadId: ThreadId,
+  unsettledOnly: Schema.optional(Schema.Boolean),
 });
 
 export const ProjectionPendingInteractionCounts = Schema.Struct({
@@ -65,7 +66,7 @@ export interface ProjectionPendingInteractionRepositoryShape {
   readonly listByThreadId: (
     input: typeof ListProjectionPendingInteractionsInput.Type,
   ) => Effect.Effect<ReadonlyArray<ProjectionPendingInteraction>, ProjectionRepositoryError>;
-  /** Outstanding callbacks, excluding explicit invalidations; omitting threadId is for boot recovery. */
+  /** Nonterminal rows, including legacy invalidations awaiting settlement; omitting threadId is for boot recovery. */
   readonly listUnsettled: (input: {
     readonly threadId?: ThreadId;
   }) => Effect.Effect<ReadonlyArray<ProjectionPendingInteraction>, ProjectionRepositoryError>;

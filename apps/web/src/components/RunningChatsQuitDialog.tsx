@@ -1,5 +1,5 @@
 // FILE: RunningChatsQuitDialog.tsx
-// Purpose: Confirms desktop quit while chats are still running.
+// Purpose: Confirms desktop quit, including when no chats are running.
 // Layer: Root web overlay
 // Depends on: Base UI alert-dialog primitives, the ⌘P palette surface, the shared running spinner,
 // and the persisted "resume chats after quit" app setting.
@@ -48,7 +48,7 @@ const uiFont = "font-[family-name:var(--font-ui-family)]";
 const BODY_CLASS =
   "relative rounded-t-[calc(var(--radius-2xl)-1px)] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] px-4 pt-3 pb-3.5";
 const FOOTER_CLASS = "relative flex items-center gap-2 px-3 py-2";
-const KEY_HINT_CLASS = "text-[11px] font-normal tabular-nums opacity-55";
+const KEY_HINT_CLASS = "text-ui-sm font-normal tabular-nums opacity-55";
 
 export function RunningChatsQuitDialog({
   chats,
@@ -56,7 +56,7 @@ export function RunningChatsQuitDialog({
   onStay,
   onQuit,
 }: RunningChatsQuitDialogProps) {
-  const copy = chats && chats.length > 0 ? runningChatsQuitCopy(chats, APP_DISPLAY_NAME) : null;
+  const copy = chats != null ? runningChatsQuitCopy(chats, APP_DISPLAY_NAME) : null;
 
   return (
     <AlertDialog
@@ -73,7 +73,7 @@ export function RunningChatsQuitDialog({
               commandDialogPopupClassName,
               uiFont,
               // Keep the palette's hairline border but drop its inner top highlight/shadow.
-              "w-[520px] max-w-[calc(100vw-2rem)] max-h-full text-[12px] before:shadow-none dark:before:shadow-none",
+              "w-[520px] max-w-[calc(100vw-2rem)] max-h-full text-ui before:shadow-none dark:before:shadow-none",
             )}
           >
             {copy && chats ? (
@@ -110,48 +110,53 @@ function RunningChatsQuitDialogContent({
   return (
     <>
       <div className={BODY_CLASS}>
-        <AlertDialogPrimitive.Title className={cn(uiFont, "m-0 text-[14px] font-medium leading-5")}>
+        <AlertDialogPrimitive.Title className={cn(uiFont, "m-0 text-ui-lg font-medium leading-5")}>
           {copy.title}
         </AlertDialogPrimitive.Title>
         <AlertDialogPrimitive.Description
           className={cn(
             uiFont,
-            "m-0 mt-1 text-[12.5px] font-normal leading-[18px] text-muted-foreground",
+            "m-0 mt-1 text-ui-lg font-normal leading-[18px] text-muted-foreground",
           )}
         >
           {copy.description}
         </AlertDialogPrimitive.Description>
-        <ul className="m-0 mt-3 flex max-h-[40vh] list-none flex-col gap-2 overflow-y-auto p-0">
-          {chats.map((chat) => (
-            <li key={chat.id} className="flex min-w-0 items-center gap-2.5">
-              <ThreadRunningSpinner />
-              <span className={cn(uiFont, "truncate text-[12.5px] font-normal leading-[18px]")}>
-                {chat.title}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {chats.length > 0 ? (
+          <ul className="m-0 mt-3 flex max-h-[40vh] list-none flex-col gap-2 overflow-y-auto p-0">
+            {chats.map((chat) => (
+              <li key={chat.id} className="flex min-w-0 items-center gap-2.5">
+                <ThreadRunningSpinner />
+                <span className={cn(uiFont, "truncate text-ui-lg font-normal leading-[18px]")}>
+                  {chat.title}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
       <div className={FOOTER_CLASS}>
-        <label
-          htmlFor={resumeCheckboxId}
-          className={cn(
-            uiFont,
-            "flex min-w-0 cursor-pointer select-none items-center gap-2 px-1 text-[12px] font-normal leading-[18px] text-muted-foreground",
-          )}
-        >
-          <Checkbox
-            id={resumeCheckboxId}
-            checked={resume}
-            disabled={quitting}
-            onCheckedChange={(checked) => {
-              updateSettings({ resumeChatsAfterQuit: checked === true });
-            }}
-          />
-          <span className="truncate">{copy.resumeLabel}</span>
-        </label>
+        {chats.length > 0 ? (
+          <label
+            htmlFor={resumeCheckboxId}
+            className={cn(
+              uiFont,
+              "flex min-w-0 cursor-pointer select-none items-center gap-2 px-1 text-ui font-normal leading-[18px] text-muted-foreground",
+            )}
+          >
+            <Checkbox
+              id={resumeCheckboxId}
+              checked={resume}
+              disabled={quitting}
+              onCheckedChange={(checked) => {
+                updateSettings({ resumeChatsAfterQuit: checked === true });
+              }}
+            />
+            <span className="truncate">{copy.resumeLabel}</span>
+          </label>
+        ) : null}
         <div className="ml-auto flex items-center gap-2">
           <AlertDialogClose
+            autoFocus={chats.length === 0}
             disabled={quitting}
             render={<Button variant="ghost" size="sm" className={cn(uiFont, "gap-1.5")} />}
           >
@@ -159,17 +164,19 @@ function RunningChatsQuitDialogContent({
             <span className={KEY_HINT_CLASS}>Esc</span>
           </AlertDialogClose>
           <Button
-            autoFocus
+            autoFocus={chats.length > 0}
             variant="default"
             size="sm"
             className={cn(uiFont, "gap-1.5")}
             disabled={quitting}
-            onClick={() => onQuit({ resume })}
+            onClick={() => onQuit({ resume: chats.length > 0 && resume })}
           >
             {copy.quitLabel}
-            <span aria-hidden className={KEY_HINT_CLASS}>
-              ↵
-            </span>
+            {chats.length > 0 ? (
+              <span aria-hidden className={KEY_HINT_CLASS}>
+                ↵
+              </span>
+            ) : null}
           </Button>
         </div>
       </div>

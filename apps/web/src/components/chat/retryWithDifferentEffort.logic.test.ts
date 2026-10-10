@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { MessageId, TurnId, type ModelSelection } from "@synara/contracts";
+import {
+  CheckpointRef,
+  MessageId,
+  ProviderInstanceId,
+  TurnId,
+  type ModelSelection,
+  type ProviderModelDescriptor,
+} from "@synara/contracts";
 
 import {
   buildRetryConfirmCopy,
@@ -11,6 +18,7 @@ import {
   resolveRetryWithDifferentEffortAvailability,
   retryEffortDisabledReasonLabel,
   type RetryEffortVariant,
+  type VerifiedRetryEffortTarget,
 } from "./retryWithDifferentEffort.logic";
 
 const userId = MessageId.makeUnsafe("user-1");
@@ -19,9 +27,21 @@ const turnId = TurnId.makeUnsafe("turn-1");
 
 const codexSelection = {
   provider: "codex",
+  instanceId: ProviderInstanceId.makeUnsafe("codex-work"),
   model: "gpt-5.4",
   options: { reasoningEffort: "medium" },
 } as ModelSelection;
+
+// Explicit fixture evidence only. Current production snapshots intentionally
+// supply no verified target, so the draft retry action remains disabled.
+const retryTarget: VerifiedRetryEffortTarget = {
+  assistantMessageId: assistantId,
+  userMessageId: userId,
+  turnId,
+  prompt: "fix the flaky test",
+  modelSelection: codexSelection,
+  baselineCheckpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/test/turn-start/turn-1"),
+};
 
 function messages() {
   return [
@@ -51,8 +71,7 @@ describe("resolveRetryWithDifferentEffortAvailability", () => {
       showAssistantCopyButton: true,
       assistantTurnInProgress: false,
       runtimeMode: "approval-required",
-      modelSelection: codexSelection,
-      modelOptions: { reasoningEffort: "medium" },
+      retryTarget,
       turnDiffSummary: undefined,
       activeTurnId: null,
       isBusy: false,
@@ -72,11 +91,11 @@ describe("resolveRetryWithDifferentEffortAvailability", () => {
       showAssistantCopyButton: true,
       assistantTurnInProgress: false,
       runtimeMode: "full-access",
-      modelSelection: codexSelection,
-      modelOptions: { reasoningEffort: "medium" },
+      retryTarget,
       turnDiffSummary: {
         turnId,
         completedAt: "2026-09-14T00:00:00.000Z",
+        status: "ready",
         files: [],
         checkpointTurnCount: 1,
       },
@@ -96,11 +115,11 @@ describe("resolveRetryWithDifferentEffortAvailability", () => {
       showAssistantCopyButton: true,
       assistantTurnInProgress: false,
       runtimeMode: "approval-required",
-      modelSelection: codexSelection,
-      modelOptions: { reasoningEffort: "medium" },
+      retryTarget,
       turnDiffSummary: {
         turnId,
         completedAt: "2026-09-14T00:00:00.000Z",
+        status: "ready",
         files: [{ path: "src/a.ts", additions: 1, deletions: 0 }],
         checkpointTurnCount: 2,
         checkpointRef: "refs/synara/checkpoints/demo/turn/2" as never,
@@ -117,6 +136,74 @@ describe("resolveRetryWithDifferentEffortAvailability", () => {
       availability.effortOptions.some((option) => option.value === "medium" && option.isCurrent),
     ).toBe(true);
     expect(availability.effortOptions.some((option) => !option.isCurrent)).toBe(true);
+  });
+
+  it.each([null, { ...retryTarget, prompt: "an older prompt" }])(
+    "refuses missing or stale source evidence even when a post-turn checkpoint exists",
+    (target) => {
+      const availability = resolveRetryWithDifferentEffortAvailability({
+        messages: messages(),
+        assistantMessageId: assistantId,
+        assistantTurnId: turnId,
+        showAssistantCopyButton: true,
+        assistantTurnInProgress: false,
+        runtimeMode: "approval-required",
+        retryTarget: target,
+        turnDiffSummary: {
+          turnId,
+          completedAt: "2026-09-14T00:00:00.000Z",
+          status: "ready",
+          files: [],
+          checkpointTurnCount: 1,
+        },
+        activeTurnId: null,
+        isBusy: false,
+      });
+      expect(availability).toMatchObject({ enabled: false, reason: "unverified-target" });
+      if (!availability.enabled) expect(availability.detail).toContain("could not be verified");
+    },
+  );
+
+  it.each([
+    [{ provider: "codex", model: "gpt-5.4" }, "high"],
+    [{ provider: "claudeAgent", model: "claude-opus-4-8" }, "high"],
+  ] as const)("recognizes the effective native default for %o", (source, effort) => {
+    expect(resolveEffortFromModelSelection(source)).toBe(effort);
+    expect(
+      planRetryEffortChange({
+        provider: source.provider,
+        model: source.model,
+        modelOptions: undefined,
+        prompt: "fix the flaky test",
+        nextEffort: effort,
+      }),
+    ).toBeNull();
+  });
+
+  it("reads Devin effort independently of the concrete model variant", () => {
+    const runtimeModel: ProviderModelDescriptor = {
+      slug: "gpt-5-6-sol",
+      name: "GPT-5.6 Sol",
+      supportedReasoningEfforts: [
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+      ],
+      defaultReasoningEffort: "low",
+      modelVariants: [
+        { model: "gpt-5-6-sol-low", reasoningEffort: "low" },
+        { model: "gpt-5-6-sol-high", reasoningEffort: "high" },
+      ],
+    };
+    expect(
+      resolveEffortFromModelSelection(
+        {
+          provider: "devin",
+          model: "gpt-5-6-sol",
+          options: { reasoningEffort: "high", modelVariant: "gpt-5-6-sol-high" },
+        },
+        { runtimeModel },
+      ),
+    ).toBe("high");
   });
 
   it("never invents unsupported effort values when planning a retry", () => {
@@ -137,8 +224,10 @@ describe("resolveRetryWithDifferentEffortAvailability", () => {
       modelOptions: { reasoningEffort: "medium" },
       prompt: "fix the flaky test",
       nextEffort: "high",
+      instanceId: ProviderInstanceId.makeUnsafe("codex-work"),
     });
     expect(planned).not.toBeNull();
+    expect(planned?.nextModelSelection.instanceId).toBe("codex-work");
     expect(planned?.nextModelSelection.provider).toBe("codex");
     expect(planned?.nextModelSelection.model).toBe("gpt-5.4");
     expect(resolveEffortFromModelSelection(planned?.nextModelSelection)).toBe("high");
@@ -192,19 +281,23 @@ describe("retry effort variants", () => {
 });
 
 describe("buildRetryConfirmCopy", () => {
-  it("mentions the pre-retry snapshot and file restore target", () => {
-    const copy = buildRetryConfirmCopy({
-      changedFileCount: 3,
-      checkpointTurnCount: 2,
-      nextEffortLabel: "High",
-      currentEffortLabel: "Low",
-    });
-    expect(copy).toContain("High");
-    expect(copy).toContain("3 files");
-    expect(copy).toContain("checkpoint 1");
-    expect(copy).toContain("pre-retry snapshot");
-    expect(copy).toContain("variant pager");
-  });
+  it.each([0, 3])(
+    "describes the pre-turn restore and recovery limits with %i changed files",
+    (changedFileCount) => {
+      const copy = buildRetryConfirmCopy({
+        changedFileCount,
+        checkpointTurnCount: 2,
+        nextEffortLabel: "High",
+        currentEffortLabel: "Low",
+      });
+      expect(copy).toContain("High");
+      if (changedFileCount > 0) expect(copy).toContain("3 files");
+      expect(copy).toContain("checkpoint 1");
+      expect(copy).toContain("pre-retry snapshot");
+      expect(copy).toContain("variant pager");
+      expect(copy).toContain("cannot restore provider conversation history");
+    },
+  );
 });
 
 describe("resolvePrecedingUserMessage", () => {

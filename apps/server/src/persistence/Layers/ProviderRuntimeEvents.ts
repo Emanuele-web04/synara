@@ -2,12 +2,15 @@ import { NonNegativeInt, ProviderRuntimeEvent } from "@synara/contracts";
 import { Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { stripDiagnosticImages } from "../../provider/stripDiagnosticImages.ts";
 import {
   PersistenceDecodeError,
   toPersistenceDecodeError,
   toPersistenceSqlError,
 } from "../Errors.ts";
 import {
+  CHECKPOINT_RUNTIME_CONSUMER,
+  PROVIDER_RUNTIME_INGESTION_CONSUMER,
   PROVIDER_RUNTIME_EVENT_MAX_BYTES,
   PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED,
   ProviderRuntimeEventRepository,
@@ -34,6 +37,7 @@ import {
  * scan per tail-length of accepted events falling out of the diagnostic tail.
  */
 const PROVIDER_RUNTIME_EVENT_RETENTION_SCAN_INTERVAL = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED;
+const CHECKPOINT_RUNTIME_RETENTION_DELETE_LIMIT = 1024;
 
 const ProviderRuntimeEventJson = Schema.fromJsonString(ProviderRuntimeEvent);
 const encodeEvent = Schema.encodeEffect(ProviderRuntimeEventJson);
@@ -92,6 +96,7 @@ export const shrinkRuntimeEventStrings = (value: unknown): unknown => {
 
 const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
   Effect.gen(function* () {
+    event = stripDiagnosticImages(event) as ProviderRuntimeEvent;
     const eventJson = yield* encodeEvent(event).pipe(
       Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
     );
@@ -205,12 +210,21 @@ const make = Effect.gen(function* () {
 
   const readAfter: ProviderRuntimeEventRepositoryShape["readAfter"] = (input) => {
     const limit = Math.max(1, Math.min(1_000, Math.floor(input.limit)));
+    const checkpointFilter = input.checkpointRelevantOnly
+      ? sql`AND (
+          event_type IN ('turn.started', 'turn.completed')
+          OR CASE WHEN event_type = 'item.completed'
+            THEN json_extract(event_json, '$.payload.itemType') = 'file_change'
+            ELSE 0 END
+        )`
+      : sql``;
     return Effect.gen(function* () {
       const rows = yield* sql<Record<string, unknown>>`
         SELECT sequence, event_json AS "eventJson"
         FROM provider_runtime_events
         WHERE sequence > ${input.sequenceExclusive}
           AND sequence <= ${input.throughSequenceInclusive}
+          ${checkpointFilter}
         ORDER BY sequence ASC
         LIMIT ${limit}
       `.pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.readAfter")));
@@ -379,6 +393,7 @@ const make = Effect.gen(function* () {
         )
       )
     `.pipe(
+    Effect.andThen(Effect.suspend(() => pruneCheckpointAcceptedHistory)),
     Effect.asVoid,
     Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.pruneSettledOpenTurns")),
   );
@@ -483,10 +498,29 @@ const make = Effect.gen(function* () {
 
   // Pending rows are above the cursor. Accepted rows for an open turn remain
   // replayable until its terminal output is accepted; all other accepted
-  // history is bounded to a diagnostic tail.
+  // history is bounded to a diagnostic tail. The checkpoint consumer skips a
+  // file notification superseded by a newer one before turn completion, so
+  // only the newest of such a burst stays protected by its cursor.
   const sweepAcceptedHistoryThrough = (throughSequence: number) => sql`
     DELETE FROM provider_runtime_events AS event
     WHERE event.sequence <= ${throughSequence}
+      AND NOT EXISTS (
+        SELECT 1 FROM provider_runtime_event_consumers AS checkpoint
+        WHERE checkpoint.consumer_name = ${CHECKPOINT_RUNTIME_CONSUMER}
+          AND event.sequence > checkpoint.last_acked_sequence
+          AND (
+            event.event_type IN ('turn.started', 'turn.completed')
+            OR (event.event_type = 'item.completed'
+              AND json_extract(event.event_json, '$.payload.itemType') = 'file_change'
+              AND NOT EXISTS (SELECT 1 FROM provider_runtime_events AS later
+                WHERE later.thread_id = event.thread_id AND later.sequence > event.sequence
+                  AND later.event_type = 'item.completed'
+                  AND json_extract(later.event_json, '$.payload.itemType') = 'file_change'
+                  AND NOT EXISTS (SELECT 1 FROM provider_runtime_events AS terminal
+                    WHERE terminal.thread_id = event.thread_id AND terminal.event_type = 'turn.completed'
+                      AND terminal.sequence > event.sequence AND terminal.sequence < later.sequence)))
+          )
+      )
       AND NOT EXISTS (
         SELECT 1
         FROM provider_runtime_open_turns AS open_turn
@@ -518,6 +552,18 @@ const make = Effect.gen(function* () {
       }
     });
 
+  // Same process-local hint for checkpoint ACK pruning: each pass is bounded,
+  // and the ingestion sweep still honors the live checkpoint cursor, so an
+  // amortized pass only delays reclaiming rows, never retains them forever.
+  let lastCheckpointPruneSequence = 0;
+
+  const rememberCheckpointPrune = (pruneSequence: number | null) =>
+    Effect.sync(() => {
+      if (pruneSequence !== null) {
+        lastCheckpointPruneSequence = Math.max(lastCheckpointPruneSequence, pruneSequence);
+      }
+    });
+
   const readConsumerCursorForUpdate = (consumerName: string) =>
     sql<{ readonly lastAckedSequence: number }>`
       SELECT last_acked_sequence AS "lastAckedSequence"
@@ -539,10 +585,42 @@ const make = Effect.gen(function* () {
       RETURNING last_acked_sequence AS sequence
     `.pipe(Effect.map((rows) => rows.length === 1));
 
+  // Release at most one bounded batch per ACK/owned maintenance pass. The
+  // ingestion cursor remains the deletion boundary and owns open-turn state.
+  const pruneCheckpointAcceptedHistory = sql.withTransaction(
+    Effect.gen(function* () {
+      const ingestionCursor = yield* readConsumerCursorForUpdate(
+        PROVIDER_RUNTIME_INGESTION_CONSUMER,
+      );
+      const checkpointCursor = yield* readConsumerCursorForUpdate(CHECKPOINT_RUNTIME_CONSUMER);
+      if (ingestionCursor === undefined || checkpointCursor === undefined) return;
+      yield* sql`DELETE FROM provider_runtime_events WHERE sequence IN (
+      SELECT event.sequence FROM provider_runtime_events AS event
+      WHERE event.sequence <= ${ingestionCursor}
+        AND NOT (event.sequence > ${checkpointCursor} AND (
+          event.event_type IN ('turn.started', 'turn.completed')
+          OR (event.event_type = 'item.completed' AND json_extract(event.event_json, '$.payload.itemType') = 'file_change'
+            AND NOT EXISTS (SELECT 1 FROM provider_runtime_events AS later
+                WHERE later.thread_id = event.thread_id AND later.sequence > event.sequence
+                  AND later.event_type = 'item.completed'
+                  AND json_extract(later.event_json, '$.payload.itemType') = 'file_change'
+                  AND NOT EXISTS (SELECT 1 FROM provider_runtime_events AS terminal
+                    WHERE terminal.thread_id = event.thread_id AND terminal.event_type = 'turn.completed'
+                      AND terminal.sequence > event.sequence AND terminal.sequence < later.sequence)))))
+        AND NOT EXISTS (SELECT 1 FROM provider_runtime_open_turns AS open_turn
+          WHERE open_turn.thread_id = event.thread_id AND open_turn.turn_id = event.turn_id AND event.sequence >= open_turn.first_sequence)
+        AND event.sequence NOT IN (SELECT sequence FROM provider_runtime_events WHERE sequence <= ${ingestionCursor}
+          ORDER BY sequence DESC LIMIT ${PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED})
+      ORDER BY event.sequence ASC LIMIT ${CHECKPOINT_RUNTIME_RETENTION_DELETE_LIMIT}
+    )`;
+    }),
+  );
+
   const advanceConsumerCursor: ProviderRuntimeEventRepositoryShape["advanceConsumerCursor"] = (
     input,
   ) => {
     let retentionScanSequence: number | null = null;
+    let checkpointPruneSequence: number | null = null;
     return sql
       .withTransaction(
         Effect.gen(function* () {
@@ -576,6 +654,15 @@ const make = Effect.gen(function* () {
           });
           if (!advanced) return false;
 
+          if (
+            input.consumerName === CHECKPOINT_RUNTIME_CONSUMER &&
+            input.eventSequence - lastCheckpointPruneSequence >=
+              PROVIDER_RUNTIME_EVENT_RETENTION_SCAN_INTERVAL
+          ) {
+            checkpointPruneSequence = input.eventSequence;
+            yield* pruneCheckpointAcceptedHistory;
+          }
+          if (input.consumerName !== PROVIDER_RUNTIME_INGESTION_CONSUMER) return true;
           const settlesOpenTurns = yield* recordAckedOpenTurn(event, input.updatedAt);
 
           // Nothing below the cursor can become deletable while a turn only
@@ -596,25 +683,50 @@ const make = Effect.gen(function* () {
       )
       .pipe(
         Effect.tap(() => rememberRetentionScan(retentionScanSequence)),
+        Effect.tap(() => rememberCheckpointPrune(checkpointPruneSequence)),
         Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursor")),
       );
   };
 
-  // Page-level acknowledgement: one transaction moves the cursor through every
-  // stored row in (cursor, throughSequence] and applies the same per-row
-  // open-turn bookkeeping and retention policy as the single-row advance. The
-  // caller must have processed exactly those rows, in order; the rows between
-  // the cursor and the target are re-read here so the bookkeeping never depends
-  // on what the caller remembers.
+  // Batch acknowledgement validates a stored target and moves its cursor in
+  // one transaction. Only ingestion rereads metadata for every accepted row to
+  // maintain open turns. Other consumers prove just the target, leaving that
+  // bookkeeping to ingestion; checkpoint retention remains protected by its ACK.
   const advanceConsumerCursorThrough: ProviderRuntimeEventRepositoryShape["advanceConsumerCursorThrough"] =
     (input) => {
       let retentionScanSequence: number | null = null;
+      let checkpointPruneSequence: number | null = null;
       return sql
         .withTransaction(
           Effect.gen(function* () {
             const cursor = yield* readConsumerCursorForUpdate(input.consumerName);
             if (cursor === undefined) return false;
             if (cursor >= input.throughSequence) return true;
+
+            // Only ingestion owns per-row turn bookkeeping. Every other
+            // consumer proves a stored target without materializing the range.
+            if (input.consumerName !== PROVIDER_RUNTIME_INGESTION_CONSUMER) {
+              const target = yield* sql<{
+                sequence: number;
+              }>`SELECT sequence FROM provider_runtime_events WHERE sequence = ${input.throughSequence}`;
+              if (target.length !== 1) return false;
+              const advanced = yield* moveConsumerCursor({
+                consumerName: input.consumerName,
+                fromSequence: cursor,
+                toSequence: input.throughSequence,
+                updatedAt: input.updatedAt,
+              });
+              if (!advanced) return false;
+              if (
+                input.consumerName === CHECKPOINT_RUNTIME_CONSUMER &&
+                input.throughSequence - lastCheckpointPruneSequence >=
+                  PROVIDER_RUNTIME_EVENT_RETENTION_SCAN_INTERVAL
+              ) {
+                checkpointPruneSequence = input.throughSequence;
+                yield* pruneCheckpointAcceptedHistory;
+              }
+              return true;
+            }
 
             const events = yield* sql<AckedEventRow>`
               SELECT sequence, event_type AS "eventType", thread_id AS "threadId", turn_id AS "turnId"
@@ -639,6 +751,7 @@ const make = Effect.gen(function* () {
             });
             if (!advanced) return false;
 
+            if (input.consumerName !== PROVIDER_RUNTIME_INGESTION_CONSUMER) return true;
             let settlesOpenTurns = false;
             for (const event of events) {
               if (yield* recordAckedOpenTurn(event, input.updatedAt)) settlesOpenTurns = true;
@@ -658,6 +771,7 @@ const make = Effect.gen(function* () {
         )
         .pipe(
           Effect.tap(() => rememberRetentionScan(retentionScanSequence)),
+          Effect.tap(() => rememberCheckpointPrune(checkpointPruneSequence)),
           Effect.mapError(
             toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursorThrough"),
           ),

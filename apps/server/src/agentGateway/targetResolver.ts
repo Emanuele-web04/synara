@@ -4,14 +4,17 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DROID_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
+  OMP_THINKING_LEVEL_OPTIONS,
   PI_THINKING_LEVEL_OPTIONS,
   type ModelSelection,
   type ProviderKind,
   type ProviderListModelsResult,
   type ProviderModelDescriptor,
   type ServerProviderAuthStatus,
+  type SynaraProviderInstanceCatalog,
 } from "@synara/contracts";
-import { getClaudeContextWindowSuffix } from "@synara/shared/model";
+import { getClaudeContextWindowSuffix, stripClaudeContextWindowSuffix } from "@synara/shared/model";
+import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -37,6 +40,7 @@ export interface AgentGatewayProviderCatalog {
   readonly provider: ProviderKind;
   readonly defaultModel: string | null;
   readonly models: ReadonlyArray<ProviderModelDescriptor>;
+  readonly instances?: ReadonlyArray<SynaraProviderInstanceCatalog>;
   readonly enabled: boolean;
   readonly available: boolean;
   readonly authStatus?: ServerProviderAuthStatus;
@@ -50,6 +54,13 @@ export interface AgentGatewayProviderAvailability {
   readonly available?: boolean;
   readonly authStatus?: ServerProviderAuthStatus;
   readonly message?: string;
+  readonly instances?: ReadonlyArray<AgentGatewayProviderInstanceAvailability>;
+}
+
+export interface AgentGatewayProviderInstanceAvailability extends SynaraProviderInstanceCatalog {
+  /** Undefined means health has not produced a trustworthy snapshot yet. */
+  readonly available?: boolean;
+  readonly authStatus?: ServerProviderAuthStatus;
 }
 
 export const AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION =
@@ -73,6 +84,7 @@ export interface AgentGatewayTargetOptionGuidance {
   readonly optionsByModel: Readonly<Record<string, ReadonlyArray<AgentGatewayTargetOptionRule>>>;
   readonly exampleTarget: {
     readonly provider: ProviderKind;
+    readonly instanceId: string;
     readonly model: string;
     readonly options: Readonly<Record<string, AgentGatewayTargetOptionValue>>;
   } | null;
@@ -213,6 +225,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "thinkingLevel",
     options: { thinkingLevel: providerOptionRule("string", PI_THINKING_LEVEL_OPTIONS) },
   }),
+  omp: defineProviderOptionConfig<"omp">({
+    primaryOptionKey: "thinkingLevel",
+    options: { thinkingLevel: providerOptionRule("string", OMP_THINKING_LEVEL_OPTIONS) },
+  }),
   antigravity: defineProviderOptionConfig<"antigravity">({
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
@@ -258,17 +274,26 @@ function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptio
 }
 
 function providerDefaultModel(provider: ProviderKind): string | null {
-  return provider === "pi" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
+  return provider === "pi" || provider === "omp" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
 export function loadAgentGatewayProviderCatalog(input: {
   readonly provider: ProviderKind;
   readonly discovery: ProviderDiscoveryServiceShape;
   readonly availability?: AgentGatewayProviderAvailability;
+  readonly instanceId?: string;
   readonly cwd?: string;
 }): Effect.Effect<AgentGatewayProviderCatalog> {
   const defaultModel = providerDefaultModel(input.provider);
   const availability = input.availability ?? { enabled: true };
+  const catalogInstances = availability.instances?.map(
+    ({ instanceId, displayName, isDefault, enabled }) => ({
+      instanceId,
+      displayName,
+      isDefault,
+      enabled,
+    }),
+  );
   const unavailableReason =
     availability.enabled === false
       ? `Provider "${input.provider}" is disabled in Synara settings.`
@@ -282,6 +307,7 @@ export function loadAgentGatewayProviderCatalog(input: {
       provider: input.provider,
       defaultModel,
       models: [],
+      ...(catalogInstances !== undefined ? { instances: catalogInstances } : {}),
       enabled: availability.enabled,
       available: false,
       ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -289,12 +315,17 @@ export function loadAgentGatewayProviderCatalog(input: {
     });
   }
   return input.discovery
-    .listModels({ provider: input.provider, ...(input.cwd ? { cwd: input.cwd } : {}) })
+    .listModels({
+      provider: input.provider,
+      ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+    })
     .pipe(
       Effect.map((result: ProviderListModelsResult) => ({
         provider: input.provider,
         defaultModel,
         models: result.models,
+        ...(catalogInstances !== undefined ? { instances: catalogInstances } : {}),
         enabled: true,
         available: result.models.length > 0 || defaultModel !== null,
         ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -305,6 +336,7 @@ export function loadAgentGatewayProviderCatalog(input: {
           provider: input.provider,
           defaultModel,
           models: [],
+          ...(catalogInstances !== undefined ? { instances: catalogInstances } : {}),
           enabled: true,
           available: defaultModel !== null,
           ...(availability.authStatus ? { authStatus: availability.authStatus } : {}),
@@ -464,6 +496,7 @@ export function agentGatewayTargetOptionGuidance(
       catalog.available && exampleModel
         ? {
             provider: catalog.provider,
+            instanceId: defaultInstanceIdForProvider(catalog.provider),
             model: exampleModel,
             options: exampleOptionsForRules(primaryOptionKey, exampleRules),
           }
@@ -649,10 +682,45 @@ export function resolveAgentGatewayTarget(input: {
   readonly cwd?: string;
 }): Effect.Effect<ModelSelection, AgentGatewayTargetError> {
   return Effect.gen(function* () {
+    let targetAvailability = input.availability;
+    const requestedInstanceId = input.target.instanceId;
+    const instances = input.availability?.instances;
+    if (requestedInstanceId !== undefined && instances !== undefined) {
+      const selected = instances.find((instance) => instance.instanceId === requestedInstanceId);
+      if (selected === undefined) {
+        return yield* Effect.fail(
+          new AgentGatewayTargetError(
+            "provider_unavailable",
+            `Provider instance "${requestedInstanceId}" is not configured for provider "${input.target.provider}". Choose an instance from synara_capabilities providers[].instances[].`,
+            {
+              provider: input.target.provider,
+              instanceId: requestedInstanceId,
+              availableInstanceIds: instances.map((instance) => instance.instanceId),
+            },
+          ),
+        );
+      }
+      if (!selected.enabled) {
+        return yield* Effect.fail(
+          new AgentGatewayTargetError(
+            "provider_unavailable",
+            `Provider instance "${requestedInstanceId}" is disabled in Synara settings.`,
+            { provider: input.target.provider, instanceId: requestedInstanceId },
+          ),
+        );
+      }
+      targetAvailability = {
+        enabled: selected.enabled,
+        ...(selected.available !== undefined ? { available: selected.available } : {}),
+        ...(selected.authStatus !== undefined ? { authStatus: selected.authStatus } : {}),
+        instances,
+      } satisfies AgentGatewayProviderAvailability;
+    }
     const catalog = yield* loadAgentGatewayProviderCatalog({
       provider: input.target.provider,
       discovery: input.discovery,
-      ...(input.availability ? { availability: input.availability } : {}),
+      ...(targetAvailability ? { availability: targetAvailability } : {}),
+      ...(input.target.instanceId !== undefined ? { instanceId: input.target.instanceId } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
     });
     if (!catalog.available) {
@@ -668,13 +736,38 @@ export function resolveAgentGatewayTarget(input: {
         ),
       );
     }
-    const descriptor = catalog.models.find((model) => model.slug === input.target.model);
+    const exactDescriptor = catalog.models.find((model) => model.slug === input.target.model);
+    // The Claude picker can show a concrete resolved id for a newly discovered
+    // alias. Discovery still advertises the alias as its slug, so validate that
+    // id against a single non-default descriptor carrying it. Prefer an exact
+    // resolved id before ignoring its context qualifier.
+    const resolvedClaudeDescriptors =
+      !exactDescriptor && input.target.provider === "claudeAgent"
+        ? catalog.models.filter((model) => model.slug !== "default" && model.resolvedModel)
+        : [];
+    const exactResolved = resolvedClaudeDescriptors.filter(
+      (model) => model.resolvedModel === input.target.model,
+    );
+    const unqualifiedResolved =
+      getClaudeContextWindowSuffix(input.target.model) === null
+        ? resolvedClaudeDescriptors.filter(
+            (model) =>
+              model.resolvedModel &&
+              stripClaudeContextWindowSuffix(model.resolvedModel) === input.target.model,
+          )
+        : [];
+    const resolvedMatches = exactResolved.length > 0 ? exactResolved : unqualifiedResolved;
+    const descriptor =
+      exactDescriptor ?? (resolvedMatches.length === 1 ? resolvedMatches[0] : undefined);
     // Capability claims come from discovery, never the agent's target input. Keep
     // unknown distinct from false so Auto-mode validation can still fail closed.
     const target: ModelSelection =
       input.target.provider === "claudeAgent"
         ? {
             provider: input.target.provider,
+            ...(input.target.instanceId !== undefined
+              ? { instanceId: input.target.instanceId }
+              : {}),
             model: input.target.model,
             ...(input.target.options !== undefined ? { options: input.target.options } : {}),
             ...(descriptor?.supportsAutoMode !== undefined
@@ -737,7 +830,8 @@ export function resolveAgentGatewayTarget(input: {
       input.target.provider === "claudeAgent" &&
       (input.target.options?.autoCompactWindow !== undefined ||
         input.target.options?.contextWindow !== undefined) &&
-      descriptor?.resolvedModel
+      descriptor?.resolvedModel &&
+      stripClaudeContextWindowSuffix(descriptor.resolvedModel) !== input.target.model
     ) {
       const suffix =
         getClaudeContextWindowSuffix(input.target.model) === "1m" &&

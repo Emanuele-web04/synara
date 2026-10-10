@@ -119,6 +119,131 @@ afterEach(() => {
 });
 
 describe("claudeUsageFetcher", () => {
+  it("does not show stored-account usage for an account using an environment token", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "different-account-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    const fetchMock = vi.fn(async () => jsonResponse({ five_hour: { utilization: 80 } }));
+    stubOutboundFetch(fetchMock);
+    const context = {
+      homeDir,
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "setup-token" },
+      platform: "linux" as const,
+      nowMs: NOW_MS,
+    };
+    const snapshot = await claudeUsageFetcher.fetch(context);
+    expect(snapshot.status).toBe("unsupported");
+    expect(snapshot.detail).toContain("environment-token");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readKeychainPasswordMock).not.toHaveBeenCalled();
+    expect(await claudeUsageFetcher.cacheKey!(context)).not.toBe(
+      await claudeUsageFetcher.cacheKey!({ ...context, env: {} }),
+    );
+  });
+
+  it("explains why inference-only credentials cannot report usage", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "inference-token",
+      scopes: ["user:inference"],
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    const fetchMock = vi.fn();
+    stubOutboundFetch(fetchMock);
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("unsupported");
+    expect(snapshot.detail).toContain("user:profile");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("honors an inherited secure-storage directory before default file credentials", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "personal-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    const { configDir: secureStorageDir } = makeClaudeConfigDir({
+      accessToken: "secure-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    stubOutboundFetch(async (_url, init) =>
+      jsonResponse({
+        five_hour: {
+          utilization:
+            new Headers(init?.headers).get("Authorization") === "Bearer secure-token" ? 31 : 9,
+        },
+      }),
+    );
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir },
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.limits).toMatchObject([{ usedPercent: 31 }]);
+  });
+
+  it("reads the selected macOS account's hashed Keychain service", async () => {
+    const homeDir = mkdtempSync(nodePath.join(os.tmpdir(), "synara-claude-keychain-"));
+    tempDirs.push(homeDir);
+    readKeychainPasswordMock.mockImplementation(async (input) =>
+      input.service === "Claude Code-credentials-c3c34646"
+        ? JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "work-token",
+              expiresAt: NOW_MS + 60 * 60 * 1000,
+            },
+          })
+        : null,
+    );
+    const fetchMock = vi.fn(async (_url, init) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer work-token");
+      return jsonResponse({ five_hour: { utilization: 31 } });
+    });
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: { CLAUDE_CONFIG_DIR: "/accounts/claude-work", USER: "current-user" },
+      platform: "darwin",
+      nowMs: NOW_MS,
+      isolateCredentials: true,
+    });
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.limits).toMatchObject([{ usedPercent: 31 }]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replace a rejected selected credential with the default account", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "personal-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    const { configDir } = makeClaudeConfigDir({
+      accessToken: "work-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    stubAuthNudge();
+    stubOutboundFetch(async (_url, init) =>
+      new Headers(init?.headers).get("Authorization") === "Bearer work-token"
+        ? jsonResponse({}, 401)
+        : jsonResponse({ five_hour: { utilization: 9 } }),
+    );
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: { CLAUDE_CONFIG_DIR: configDir },
+      platform: "linux",
+      nowMs: NOW_MS,
+      isolateCredentials: true,
+    });
+    expect(snapshot.status).toBe("needs-auth");
+  });
+
   it("prefers the current macOS account before the service-only keychain fallback", async () => {
     const homeDir = mkdtempSync(nodePath.join(os.tmpdir(), "synara-claude-keychain-"));
     tempDirs.push(homeDir);

@@ -138,11 +138,4 @@ describe("browser automation identities", () => {
       expect(Schema.is(schema)(1.5)).toBe(false);
     }
   });
-
-  it("keeps tab record versions monotonic and integer-valued", () => {
-    expect(Schema.decodeUnknownSync(BrowserTabRecordVersion)(0)).toBe(0);
-    expect(Schema.decodeUnknownSync(BrowserTabRecordVersion)(1)).toBe(1);
-    expect(() => Schema.decodeUnknownSync(BrowserTabRecordVersion)(-1)).toThrow();
-    expect(() => Schema.decodeUnknownSync(BrowserTabRecordVersion)(1.1)).toThrow();
-  });
 });

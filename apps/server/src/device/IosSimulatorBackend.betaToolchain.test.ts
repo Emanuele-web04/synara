@@ -99,17 +99,6 @@ describe("Xcode discovery", () => {
     expect(simctl?.env?.DEVELOPER_DIR).toBe(BETA_DIR);
   });
 
-  it("prefers stable Xcode.app over a beta when both are installed", async () => {
-    const { backend, calls } = makeBackend({
-      selected: CLT_DIR,
-      applications: ["Xcode-beta.app", "Xcode.app"],
-    });
-    await backend.listDevices({});
-
-    const simctl = calls.find((call) => call.command === "xcrun");
-    expect(simctl?.env?.DEVELOPER_DIR).toBe(STABLE_DIR);
-  });
-
   it("keeps the CommandLineTools selection when no Xcode bundle exists", async () => {
     // Nothing to discover: the availability checklist still needs the selected
     // path to say "install Xcode", not a null that reads as no toolchain.

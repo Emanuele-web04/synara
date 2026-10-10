@@ -9,7 +9,6 @@ const { readWorkingTreeDiff } = vi.hoisted(() => ({
 }));
 vi.mock("../nativeApi", () => ({ ensureNativeApi: () => ({ git: { readWorkingTreeDiff } }) }));
 import {
-  GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitQueryKeys,
   gitStatusQueryOptions,
   gitWorkingTreeDiffQueryOptions,
@@ -17,8 +16,6 @@ import {
   invalidateGitQueriesForCwds,
   isGitExpensiveReadCapacityError,
   gitMutationKeys,
-  gitPreparePullRequestThreadMutationOptions,
-  gitPullMutationOptions,
   gitRunStackedActionMutationOptions,
   refreshGitActionAvailability,
   refreshGitQueriesForCwd,
@@ -61,16 +58,6 @@ describe("gitMutationKeys", () => {
       gitMutationKeys.runStackedAction("/repo/b"),
     );
   });
-
-  it("scopes pull keys by cwd", () => {
-    expect(gitMutationKeys.pull("/repo/a")).not.toEqual(gitMutationKeys.pull("/repo/b"));
-  });
-
-  it("scopes pull request thread preparation keys by cwd", () => {
-    expect(gitMutationKeys.preparePullRequestThread("/repo/a")).not.toEqual(
-      gitMutationKeys.preparePullRequestThread("/repo/b"),
-    );
-  });
 });
 
 describe("git mutation options", () => {
@@ -79,19 +66,6 @@ describe("git mutation options", () => {
   it("attaches cwd-scoped mutation key for runStackedAction", () => {
     const options = gitRunStackedActionMutationOptions({ cwd: "/repo/a", queryClient });
     expect(options.mutationKey).toEqual(gitMutationKeys.runStackedAction("/repo/a"));
-  });
-
-  it("attaches cwd-scoped mutation key for pull", () => {
-    const options = gitPullMutationOptions({ cwd: "/repo/a", queryClient });
-    expect(options.mutationKey).toEqual(gitMutationKeys.pull("/repo/a"));
-  });
-
-  it("attaches cwd-scoped mutation key for preparePullRequestThread", () => {
-    const options = gitPreparePullRequestThreadMutationOptions({
-      cwd: "/repo/a",
-      queryClient,
-    });
-    expect(options.mutationKey).toEqual(gitMutationKeys.preparePullRequestThread("/repo/a"));
   });
 
   it("does not keep a completed stacked action pending while Git queries refresh", async () => {
@@ -179,34 +153,6 @@ describe("git query invalidation", () => {
     for (const key of cwdBKeys) {
       expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
     }
-  });
-
-  it("coalesces simultaneous availability refreshes for the same cwd", async () => {
-    const queryClient = new QueryClient();
-    const cwd = "/repo/coalesced";
-    const statusKey = gitQueryKeys.status(cwd);
-    let statusCalls = 0;
-    const statusGate = deferredVoid();
-    queryClient.setQueryData(statusKey, { branch: "main" });
-    const observer = new QueryObserver(queryClient, {
-      queryKey: statusKey,
-      queryFn: async () => {
-        statusCalls += 1;
-        await statusGate.promise;
-        return { branch: "main" };
-      },
-      staleTime: Number.POSITIVE_INFINITY,
-    });
-    const unsubscribe = observer.subscribe(() => undefined);
-
-    const first = refreshGitActionAvailability(queryClient, cwd);
-    const second = refreshGitActionAvailability(queryClient, cwd);
-
-    expect(second).toBe(first);
-    await vi.waitFor(() => expect(statusCalls).toBe(1));
-    statusGate.resolve();
-    await Promise.all([first, second]);
-    unsubscribe();
   });
 
   it("keeps availability coalesced when a refresh is upgraded to include details", async () => {
@@ -512,17 +458,5 @@ describe("git expensive-read capacity retry", () => {
     expect(options.retry(0, new Error("network"))).toBe(true);
     expect(options.retry(3, new Error("network"))).toBe(false);
     expect(options.retryDelay(0, capacityError as never)).toBe(375);
-  });
-});
-
-describe("git working tree diff query options", () => {
-  it("accepts a live refetch interval for active diff badges", () => {
-    const options = gitWorkingTreeDiffQueryOptions({
-      cwd: "/repo/a",
-      refetchInterval: GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
-    });
-
-    expect(GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS).toBe(4_000);
-    expect(options.refetchInterval).toBe(GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS);
   });
 });

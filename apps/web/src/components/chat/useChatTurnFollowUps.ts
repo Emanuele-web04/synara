@@ -1,13 +1,4 @@
-import {
-  MessageId,
-  ProviderInteractionMode,
-  RuntimeMode,
-  ThreadId,
-  type ModelSelection,
-  type ProviderKind,
-  type ProviderModelDescriptor,
-  type ProviderStartOptions,
-} from "@synara/contracts";
+import { MessageId, ThreadId, type ProviderKind, type TurnId } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
@@ -16,17 +7,13 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { newCommandId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import {
-  useComposerDraftStore,
-  type DraftThreadEnvMode,
-  type QueuedComposerPlanFollowUp,
-} from "../../composerDraftStore";
+import { useComposerDraftStore, type QueuedComposerPlanFollowUp } from "../../composerDraftStore";
 import { formatOutgoingComposerPrompt } from "../../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../../lib/deletedThreadClientReconciliation";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { appendOriginalComposerPromptBlocks } from "../../lib/terminalContext";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../../pendingTurnDispatch";
-import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
+import { buildNextProviderOptions } from "../../providerModelOptions";
 import {
   buildPlanImplementationPrompt,
   buildPlanImplementationThreadTitle,
@@ -34,20 +21,29 @@ import {
 import type { LatestProposedPlanState } from "../../session-logic";
 import { buildSourceProposedPlanReference } from "../../session-logic";
 import { useStore } from "../../store";
+import { getThreadFromState } from "../../threadDerivation";
 import { truncateTitle } from "../../truncateTitle";
 import type { Project } from "../../types";
 import { type Thread } from "../../types";
-import { type QueuedSteerGate } from "../ChatView.logic";
+import {
+  editAndResendDispatchFields,
+  queuedChatTurnDispatchFields,
+  planImplementationDispatchSettings,
+  resolveQueuedTurnDispatchSettings,
+  threadSettingsDispatchFields,
+  turnStartDispatchFields,
+  type QueuedSteerGate,
+  type TurnDispatchSettings,
+} from "../ChatView.logic";
 import { buildWorkflowResumePrompt } from "./WorkflowRunCard.logic";
 import { useRetryEffortVariantStore } from "./retryEffortVariantStore";
 import {
   buildRetryConfirmCopy,
   planRetryEffortChange,
-  resolveEffortFromModelSelection,
-  resolvePrecedingUserMessage,
   resolveRetryWithDifferentEffortAvailability,
+  retryEffortDisabledReasonLabel,
+  type VerifiedRetryEffortTarget,
 } from "./retryWithDifferentEffort.logic";
-import { getComposerTraitSelection } from "./composerTraits";
 import { useChatComposerDraft } from "./useChatComposerDraft";
 import { useChatLocalDispatch } from "./useChatLocalDispatch";
 import { useChatProviderModels } from "./useChatProviderModels";
@@ -67,15 +63,13 @@ interface ChatTurnFollowUpsInput {
   sendInFlightRef: RefObject<boolean>;
   setThreadError: (targetThreadId: ThreadId | null, error: string | null) => void;
   setTailAnchor: Dispatch<SetStateAction<{ threadId: ThreadId; messageId: MessageId } | null>>;
-  runtimeMode: RuntimeMode;
+  anchorSentMessagesToTop: boolean;
   activeProposedPlan: LatestProposedPlanState | null;
-  assistantDeliveryMode: "streaming" | "buffered";
   setQueuedSteerGate: Dispatch<SetStateAction<QueuedSteerGate | null>>;
   planSidebarDismissedForTurnRef: RefObject<string | null>;
   setPlanSidebarOpen: Dispatch<SetStateAction<boolean>>;
   isRevertingCheckpoint: boolean;
   setIsRevertingCheckpoint: Dispatch<SetStateAction<boolean>>;
-  interactionMode: ProviderInteractionMode;
   isSendBusy: ReturnType<typeof useChatLocalDispatch>["isSendBusy"];
   beginLocalDispatch: ReturnType<typeof useChatLocalDispatch>["beginLocalDispatch"];
   armLocalDispatchAckFallback: ReturnType<
@@ -85,10 +79,12 @@ interface ChatTurnFollowUpsInput {
   selectedProvider: ProviderKind;
   selectedModel: string;
   selectedPromptEffort: ReturnType<typeof useChatProviderModels>["selectedPromptEffort"];
-  selectedModelSelection: ModelSelection;
-  selectedModelOptions: ProviderOptions | null | undefined;
-  selectedRuntimeModel?: ProviderModelDescriptor | undefined;
-  providerOptionsForDispatch: ProviderStartOptions | undefined;
+  turnDispatchSettings: TurnDispatchSettings;
+  computerControlChangeSequence: RefObject<number>;
+  setComposerDraftComputerControlMode: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControlMode"];
+  retryTarget: VerifiedRetryEffortTarget | null;
   setOptimisticUserMessages: ReturnType<
     typeof useChatTimelineMessages
   >["setOptimisticUserMessages"];
@@ -107,7 +103,6 @@ interface ChatTurnFollowUpsInput {
   >["rememberCustomBinaryPathForDispatch"];
   workflowRunState: ReturnType<typeof useChatWorkLog>["workflowRunState"];
   lateComposerSendHandlersRef: RefObject<LateComposerSendHandlers | null>;
-  envMode: DraftThreadEnvMode;
   activeThreadId: ThreadId | null;
   markWorkflowRunDismissed: (threadId: ThreadId, workflowTaskId: string) => void;
   activeProject: Project | undefined;
@@ -125,15 +120,13 @@ export function useChatTurnFollowUps({
   sendInFlightRef,
   setThreadError,
   setTailAnchor,
-  runtimeMode,
+  anchorSentMessagesToTop,
   activeProposedPlan,
-  assistantDeliveryMode,
   setQueuedSteerGate,
   planSidebarDismissedForTurnRef,
   setPlanSidebarOpen,
   isRevertingCheckpoint,
   setIsRevertingCheckpoint,
-  interactionMode,
   isSendBusy,
   beginLocalDispatch,
   armLocalDispatchAckFallback,
@@ -141,10 +134,10 @@ export function useChatTurnFollowUps({
   selectedProvider,
   selectedModel,
   selectedPromptEffort,
-  selectedModelSelection,
-  selectedModelOptions,
-  selectedRuntimeModel,
-  providerOptionsForDispatch,
+  turnDispatchSettings,
+  computerControlChangeSequence,
+  setComposerDraftComputerControlMode,
+  retryTarget,
   setOptimisticUserMessages,
   armTranscriptAutoFollow,
   tailAnchorScrollInFlightRef,
@@ -153,7 +146,6 @@ export function useChatTurnFollowUps({
   rememberCustomBinaryPathForDispatch,
   workflowRunState,
   lateComposerSendHandlersRef,
-  envMode,
   activeThreadId,
   markWorkflowRunDismissed,
   activeProject,
@@ -216,27 +208,31 @@ export function useChatTurnFollowUps({
       },
     ]);
     armTranscriptAutoFollow(threadIdForSend, true);
-    tailAnchorScrollInFlightRef.current = true;
-    setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
+    tailAnchorScrollInFlightRef.current = anchorSentMessagesToTop;
+    setTailAnchor(
+      anchorSentMessagesToTop ? { threadId: threadIdForSend, messageId: messageIdForSend } : null,
+    );
 
     // Nested function so the `try` body holds no value blocks — see the comment on
     // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
+    const planDispatchSettings = {
+      ...resolveQueuedTurnDispatchSettings(turnDispatchSettings, queuedTurn),
+      interactionMode: nextInteractionMode,
+    };
+    const modelSelectionForPlanDispatch = planDispatchSettings.modelSelection;
+    const computerControlSequenceForSend = computerControlChangeSequence.current;
+
     const dispatchPlanFollowUpTurn = async () => {
       await persistThreadSettingsForNextTurn({
+        ...threadSettingsDispatchFields(planDispatchSettings),
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
-        modelSelection: queuedTurn?.modelSelection ?? selectedModelSelection,
-        runtimeMode: queuedTurn?.runtimeMode ?? runtimeMode,
-        interactionMode: nextInteractionMode,
       });
 
       // Keep the mode toggle and plan-follow-up banner in sync immediately
       // while the same-thread implementation turn is starting.
       setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
 
-      const providerOptionsForPlanDispatch =
-        queuedTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
-      const modelSelectionForPlanDispatch = queuedTurn?.modelSelection ?? selectedModelSelection;
       const sourceProposedPlan =
         nextInteractionMode === "default"
           ? buildSourceProposedPlanReference({
@@ -246,8 +242,11 @@ export function useChatTurnFollowUps({
           : undefined;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
-        provider: modelSelectionForPlanDispatch.provider,
-        providerOptions: providerOptionsForPlanDispatch,
+        provider: planDispatchSettings.modelSelection.provider,
+        providerInstanceId:
+          planDispatchSettings.modelSelection.instanceId ??
+          planDispatchSettings.modelSelection.provider,
+        providerOptions: planDispatchSettings.providerOptions,
       });
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
@@ -259,19 +258,18 @@ export function useChatTurnFollowUps({
           text: outgoingMessageText,
           attachments: [],
         },
-        modelSelection: modelSelectionForPlanDispatch,
-        ...(providerOptionsForPlanDispatch
-          ? {
-              providerOptions: providerOptionsForPlanDispatch,
-            }
-          : {}),
-        assistantDeliveryMode,
-        dispatchMode,
-        runtimeMode: queuedTurn?.runtimeMode ?? runtimeMode,
-        interactionMode: nextInteractionMode,
+        ...turnStartDispatchFields(planDispatchSettings, dispatchMode),
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt: messageCreatedAt,
       });
+      if (!queuedTurn && planDispatchSettings.computerControlMode === "request") {
+        const draft = useComposerDraftStore.getState().draftsByThreadId[threadIdForSend];
+        if (
+          draft?.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForSend
+        )
+          setComposerDraftComputerControlMode(threadIdForSend, "off");
+      }
       // Steers on providers without native mid-turn steering interrupt the live
       // turn before re-dispatching; hold queued auto-dispatch through that gap
       // so it can't race the steer. The live session provider decides the
@@ -322,6 +320,7 @@ export function useChatTurnFollowUps({
     }
   }
 
+  const clearRetryVariants = useRetryEffortVariantStore((store) => store.clearGroup);
   const onEditUserMessage = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
       const api = readNativeApi();
@@ -353,6 +352,7 @@ export function useChatTurnFollowUps({
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
       const messageCreatedAt = new Date().toISOString();
+      const computerControlSequenceForEdit = computerControlChangeSequence.current;
       const editedTextWithOriginalContext = appendOriginalComposerPromptBlocks({
         editedPrompt: text,
         originalPrompt: originalMessage.text,
@@ -366,11 +366,9 @@ export function useChatTurnFollowUps({
       });
       return await (async () => {
         await persistThreadSettingsForNextTurn({
+          ...threadSettingsDispatchFields(turnDispatchSettings),
           threadId: activeThread.id,
           createdAt: messageCreatedAt,
-          modelSelection: selectedModelSelection,
-          runtimeMode,
-          interactionMode,
         });
         await api.orchestration.dispatchCommand({
           type: "thread.message.edit-and-resend",
@@ -378,13 +376,16 @@ export function useChatTurnFollowUps({
           threadId: activeThread.id,
           messageId,
           text: outgoingMessageText,
-          modelSelection: selectedModelSelection,
-          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-          assistantDeliveryMode,
-          runtimeMode,
-          interactionMode,
+          ...editAndResendDispatchFields(turnDispatchSettings),
           createdAt: messageCreatedAt,
         });
+        clearRetryVariants({ threadId: activeThread.id, userMessageId: messageId });
+        if (
+          turnDispatchSettings.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForEdit
+        ) {
+          setComposerDraftComputerControlMode(activeThread.id, "off");
+        }
         return true;
       })()
         .catch((err: unknown) => {
@@ -406,22 +407,71 @@ export function useChatTurnFollowUps({
       isRevertingCheckpoint,
       isSendBusy,
       isServerThread,
-      interactionMode,
       persistThreadSettingsForNextTurn,
-      providerOptionsForDispatch,
-      runtimeMode,
       selectedModel,
-      selectedModelSelection,
       selectedPromptEffort,
       selectedProvider,
       setThreadError,
-      assistantDeliveryMode,
+      turnDispatchSettings,
+      computerControlChangeSequence,
+      setComposerDraftComputerControlMode,
+      clearRetryVariants,
     ],
   );
   // Resuming a workflow is a normal composer turn instructing the agent to
   // re-invoke the Workflow tool against the persisted script; completed agent()
   // calls replay from cache, so a paused run picks up where it stopped. Sent as
   // a pre-built chat turn so it takes the exact send path a queued turn does.
+
+  const onContinueFailedTurn = useCallback(
+    async (turnId: TurnId): Promise<boolean> => {
+      const current = getThreadFromState(useStore.getState(), threadId);
+      const handlers = lateComposerSendHandlersRef.current;
+      if (
+        !handlers ||
+        !isServerThread ||
+        !current ||
+        current.latestTurn?.turnId !== turnId ||
+        current.latestTurn.state !== "error" ||
+        current.session?.status === "running" ||
+        current.hasPendingApprovals ||
+        current.hasPendingUserInput
+      )
+        return false;
+      const prompt =
+        "Continue the interrupted task from the existing conversation and working state. First verify which operations have already completed; avoid repeating them and resume the remaining work.";
+      return handlers.send(undefined, "queue", {
+        id: randomUUID(),
+        kind: "chat",
+        createdAt: new Date().toISOString(),
+        previewText: prompt,
+        prompt,
+        images: [],
+        files: [],
+        assistantSelections: [],
+        browserAnnotations: [],
+        terminalContexts: [],
+        fileComments: [],
+        pastedTexts: [],
+        pullRequestContexts: [],
+        skills: [],
+        mentions: [],
+        selectedProvider,
+        selectedModel,
+        selectedPromptEffort,
+        ...queuedChatTurnDispatchFields(turnDispatchSettings, undefined),
+      });
+    },
+    [
+      threadId,
+      isServerThread,
+      lateComposerSendHandlersRef,
+      selectedProvider,
+      selectedModel,
+      selectedPromptEffort,
+      turnDispatchSettings,
+    ],
+  );
 
   const onResumeWorkflowRun = useCallback(async () => {
     if (!workflowRunState?.scriptPath || !workflowRunState.runId) return;
@@ -448,11 +498,7 @@ export function useChatTurnFollowUps({
       selectedProvider,
       selectedModel,
       selectedPromptEffort,
-      modelSelection: selectedModelSelection,
-      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
-      runtimeMode,
-      interactionMode,
-      envMode,
+      ...queuedChatTurnDispatchFields(turnDispatchSettings, undefined),
     });
     if (sent && activeThreadId) {
       markWorkflowRunDismissed(activeThreadId, workflowTaskId);
@@ -460,16 +506,12 @@ export function useChatTurnFollowUps({
   }, [
     lateComposerSendHandlersRef,
     activeThreadId,
-    envMode,
-    interactionMode,
     markWorkflowRunDismissed,
-    providerOptionsForDispatch,
-    runtimeMode,
     selectedModel,
-    selectedModelSelection,
     selectedPromptEffort,
     selectedProvider,
     workflowRunState,
+    turnDispatchSettings,
   ]);
 
   const onImplementPlanInNewThread = useCallback(async () => {
@@ -498,7 +540,8 @@ export function useChatTurnFollowUps({
       text: implementationPrompt,
     });
     const nextThreadTitle = truncateTitle(buildPlanImplementationThreadTitle(planMarkdown));
-    const nextThreadModelSelection: ModelSelection = selectedModelSelection;
+    const computerControlSequenceForImplementation = computerControlChangeSequence.current;
+    const implementationDispatchSettings = planImplementationDispatchSettings(turnDispatchSettings);
     const sourceProposedPlan = buildSourceProposedPlanReference({
       threadId: activeThread.id,
       proposedPlan: activeProposedPlan,
@@ -518,9 +561,9 @@ export function useChatTurnFollowUps({
         threadId: nextThreadId,
         projectId: activeProject.id,
         title: nextThreadTitle,
-        modelSelection: nextThreadModelSelection,
-        runtimeMode,
-        interactionMode: "default",
+        modelSelection: implementationDispatchSettings.modelSelection,
+        runtimeMode: implementationDispatchSettings.runtimeMode,
+        interactionMode: implementationDispatchSettings.interactionMode,
         envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
@@ -534,8 +577,11 @@ export function useChatTurnFollowUps({
       .then(() => {
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
-          provider: selectedModelSelection.provider,
-          providerOptions: providerOptionsForDispatch,
+          provider: implementationDispatchSettings.modelSelection.provider,
+          providerInstanceId:
+            implementationDispatchSettings.modelSelection.instanceId ??
+            implementationDispatchSettings.modelSelection.provider,
+          providerOptions: implementationDispatchSettings.providerOptions,
         });
         return api.orchestration.dispatchCommand({
           type: "thread.turn.start",
@@ -547,17 +593,22 @@ export function useChatTurnFollowUps({
             text: outgoingImplementationPrompt,
             attachments: [],
           },
-          modelSelection: selectedModelSelection,
-          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-          assistantDeliveryMode,
-          dispatchMode: "queue",
-          runtimeMode,
-          interactionMode: "default",
+          ...turnStartDispatchFields(implementationDispatchSettings, "queue"),
           ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
           createdAt,
         });
       })
       .then(() => {
+        if (implementationDispatchSettings.computerControlMode === "chat") {
+          setComposerDraftComputerControlMode(nextThreadId, "chat", {
+            generation: implementationDispatchSettings.computerControlGeneration ?? 0,
+          });
+        } else if (
+          implementationDispatchSettings.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForImplementation
+        ) {
+          setComposerDraftComputerControlMode(activeThread.id, "off");
+        }
         // The turn RPC resolved for a thread this view never made active, so
         // arm the watchdog marker with that exact thread id before navigation.
         markPendingTurnDispatch(nextThreadId);
@@ -610,15 +661,14 @@ export function useChatTurnFollowUps({
     isServerThread,
     navigate,
     resetLocalDispatch,
-    runtimeMode,
+    computerControlChangeSequence,
     selectedPromptEffort,
-    selectedModelSelection,
-    providerOptionsForDispatch,
-    rememberCustomBinaryPathForDispatch,
-    selectedProvider,
-    assistantDeliveryMode,
-    syncServerShellSnapshot,
     selectedModel,
+    selectedProvider,
+    rememberCustomBinaryPathForDispatch,
+    setComposerDraftComputerControlMode,
+    syncServerShellSnapshot,
+    turnDispatchSettings,
   ]);
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   const archiveRetryVariant = useRetryEffortVariantStore((store) => store.archiveVariant);
@@ -626,43 +676,36 @@ export function useChatTurnFollowUps({
   const onRetryAssistantWithDifferentEffort = useCallback(
     async (assistantMessageId: MessageId, nextEffort: string): Promise<boolean> => {
       const api = readNativeApi();
-      if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) {
+      if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) return false;
+      // A current composer/thread selection is not evidence of the original
+      // turn's identity, and a post-turn diff is not a reserved restore target.
+      if (!retryTarget) {
+        setThreadError(activeThread.id, retryEffortDisabledReasonLabel("unverified-target"));
         return false;
       }
       if (isSendBusy || isConnecting || sendInFlightRef.current) {
         setThreadError(activeThread.id, "Wait for the current send to finish before retrying.");
         return false;
       }
-
       const assistantMessage = activeThread.messages.find(
         (message) => message.id === assistantMessageId && message.role === "assistant",
       );
-      if (!assistantMessage) {
-        setThreadError(activeThread.id, "Assistant turn not found for effort retry.");
-        return false;
-      }
-
-      const turnDiffSummary =
-        activeThread.turnDiffSummaries.find(
-          (summary) =>
-            summary.assistantMessageId === assistantMessageId ||
-            (assistantMessage.turnId !== null && summary.turnId === assistantMessage.turnId),
-        ) ?? undefined;
-
+      if (!assistantMessage) return false;
+      const turnDiffSummary = activeThread.turnDiffSummaries.find(
+        (summary) => summary.turnId === assistantMessage.turnId,
+      );
       const availability = resolveRetryWithDifferentEffortAvailability({
         messages: activeThread.messages,
         assistantMessageId,
         assistantTurnId: assistantMessage.turnId,
         showAssistantCopyButton: true,
         assistantTurnInProgress: false,
-        runtimeMode,
-        modelSelection: selectedModelSelection,
-        modelOptions: selectedModelOptions,
-        ...(selectedRuntimeModel ? { runtimeModel: selectedRuntimeModel } : {}),
+        runtimeMode: turnDispatchSettings.runtimeMode,
+        retryTarget,
         turnDiffSummary,
         activeTurnId:
           activeThread.session?.orchestrationStatus === "running"
-            ? (activeThread.session.activeTurnId ?? null)
+            ? activeThread.session.activeTurnId
             : null,
         isBusy: false,
       });
@@ -670,33 +713,29 @@ export function useChatTurnFollowUps({
         setThreadError(activeThread.id, availability.detail);
         return false;
       }
-
+      const sourceSelection = retryTarget.modelSelection;
       const planned = planRetryEffortChange({
-        provider: selectedModelSelection.provider,
-        model: selectedModelSelection.model,
-        modelOptions: selectedModelOptions,
+        provider: sourceSelection.provider,
+        model: sourceSelection.model,
+        instanceId: sourceSelection.instanceId,
+        ...(sourceSelection.provider === "claudeAgent"
+          ? { supportsAutoMode: sourceSelection.supportsAutoMode }
+          : {}),
+        modelOptions: sourceSelection.options,
         prompt: availability.userMessageText,
-        ...(selectedRuntimeModel ? { runtimeModel: selectedRuntimeModel } : {}),
+        runtimeModel: retryTarget.runtimeModel,
         nextEffort,
       });
       if (!planned) {
-        setThreadError(activeThread.id, "That effort level is not supported for the active model.");
+        setThreadError(
+          activeThread.id,
+          "Choose a different supported effort for this turn's model.",
+        );
         return false;
       }
-
-      const currentEffort = resolveEffortFromModelSelection(selectedModelSelection);
-      const currentTrait = getComposerTraitSelection(
-        selectedModelSelection.provider,
-        selectedModelSelection.model,
-        availability.userMessageText,
-        selectedModelOptions,
-        selectedRuntimeModel,
-      );
-      const currentEffortLabel = currentEffort
-        ? (currentTrait.effortLevels.find((level) => level.value === currentEffort)?.label ??
-          currentEffort)
-        : null;
-
+      const currentEffort = availability.currentEffort;
+      const currentEffortLabel =
+        availability.effortOptions.find((option) => option.isCurrent)?.label ?? currentEffort;
       const confirmed = await api.dialogs.confirm(
         buildRetryConfirmCopy({
           changedFileCount: availability.changedFileCount,
@@ -705,67 +744,60 @@ export function useChatTurnFollowUps({
           currentEffortLabel,
         }),
       );
-      if (!confirmed) {
-        return false;
-      }
+      if (!confirmed) return false;
 
-      const precedingUser = resolvePrecedingUserMessage({
-        messages: activeThread.messages,
-        assistantMessageId,
-      });
-      if (!precedingUser) {
-        setThreadError(activeThread.id, "Could not find the user prompt for this turn.");
-        return false;
-      }
-
-      archiveRetryVariant({
-        threadId: activeThread.id,
-        userMessageId: precedingUser.messageId,
-        variant: {
-          id: `${assistantMessageId}:${assistantMessage.createdAt}`,
-          assistantMessageId,
-          turnId: assistantMessage.turnId ?? null,
-          text: assistantMessage.text,
-          effort: currentEffort,
-          effortLabel: currentEffortLabel,
-          provider: selectedModelSelection.provider,
-          model: selectedModelSelection.model,
-          createdAt: assistantMessage.createdAt,
-          checkpointTurnCount: availability.checkpointTurnCount,
-          changedFileCount: availability.changedFileCount,
-        },
-      });
-
-      if (planned.effortPlan.kind === "options") {
-        setProviderModelOptions(
+      const currentThread = getThreadFromState(useStore.getState(), activeThread.id);
+      const currentAssistant = currentThread?.messages.find(
+        (message) => message.id === assistantMessageId,
+      );
+      const currentAvailability = currentThread
+        ? resolveRetryWithDifferentEffortAvailability({
+            messages: currentThread.messages,
+            assistantMessageId,
+            assistantTurnId: currentAssistant?.turnId,
+            showAssistantCopyButton: true,
+            assistantTurnInProgress: false,
+            runtimeMode: currentThread.runtimeMode,
+            retryTarget,
+            turnDiffSummary: currentThread.turnDiffSummaries.find(
+              (summary) => summary.turnId === retryTarget.turnId,
+            ),
+            activeTurnId:
+              currentThread.session?.orchestrationStatus === "running"
+                ? currentThread.session.activeTurnId
+                : null,
+            isBusy: sendInFlightRef.current,
+          })
+        : null;
+      if (!currentAvailability?.enabled || currentAssistant?.text !== assistantMessage.text) {
+        setThreadError(
           activeThread.id,
-          selectedModelSelection.provider,
-          buildNextProviderOptions(
-            selectedModelSelection.provider,
-            selectedModelOptions,
-            planned.effortPlan.patch,
-          ),
-          { model: selectedModelSelection.model, persistSticky: true },
+          "The turn changed while confirming. Review it before retrying.",
         );
+        return false;
       }
 
-      setIsRevertingCheckpoint(true);
-      setThreadError(activeThread.id, null);
+      const retryDispatchSettings: TurnDispatchSettings = {
+        ...turnDispatchSettings,
+        modelSelection: planned.nextModelSelection,
+        providerOptions: retryTarget.providerOptions,
+      };
       const messageCreatedAt = new Date().toISOString();
+      const computerControlSequenceForRetry = computerControlChangeSequence.current;
       const outgoingMessageText = formatOutgoingComposerPrompt({
-        provider: selectedProvider,
-        model: selectedModel,
+        provider: sourceSelection.provider,
+        model: sourceSelection.model,
         effort: nextEffort,
         text: planned.nextPrompt,
       });
-
-      try {
+      sendInFlightRef.current = true;
+      setIsRevertingCheckpoint(true);
+      setThreadError(activeThread.id, null);
+      return await (async () => {
         await persistThreadSettingsForNextTurn({
+          ...threadSettingsDispatchFields(retryDispatchSettings),
           threadId: activeThread.id,
           createdAt: messageCreatedAt,
-          modelSelection: planned.nextModelSelection,
-          runtimeMode,
-          interactionMode,
         });
         await api.orchestration.dispatchCommand({
           type: "thread.message.edit-and-resend",
@@ -773,50 +805,86 @@ export function useChatTurnFollowUps({
           threadId: activeThread.id,
           messageId: availability.userMessageId,
           text: outgoingMessageText,
-          modelSelection: planned.nextModelSelection,
-          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-          assistantDeliveryMode,
-          runtimeMode,
-          interactionMode,
+          ...editAndResendDispatchFields(retryDispatchSettings),
           createdAt: messageCreatedAt,
         });
+        archiveRetryVariant({
+          threadId: activeThread.id,
+          userMessageId: availability.userMessageId,
+          variant: {
+            id: `${assistantMessageId}:${assistantMessage.createdAt}`,
+            assistantMessageId,
+            turnId: assistantMessage.turnId ?? null,
+            text: assistantMessage.text,
+            effort: currentEffort,
+            effortLabel: currentEffortLabel,
+            provider: sourceSelection.provider,
+            model: sourceSelection.model,
+            createdAt: assistantMessage.createdAt,
+            checkpointTurnCount: availability.checkpointTurnCount,
+            changedFileCount: availability.changedFileCount,
+          },
+        });
+        if (planned.effortPlan.kind === "options") {
+          setProviderModelOptions(
+            activeThread.id,
+            sourceSelection.provider,
+            buildNextProviderOptions(
+              sourceSelection.provider,
+              sourceSelection.options,
+              planned.effortPlan.patch,
+            ),
+            {
+              ...(sourceSelection.instanceId !== undefined
+                ? { instanceId: sourceSelection.instanceId }
+                : {}),
+              model: sourceSelection.model,
+              persistSticky: true,
+            },
+          );
+        }
+        if (
+          retryDispatchSettings.computerControlMode === "request" &&
+          computerControlChangeSequence.current === computerControlSequenceForRetry
+        ) {
+          setComposerDraftComputerControlMode(activeThread.id, "off");
+        }
         return true;
-      } catch (err: unknown) {
-        setThreadError(
-          activeThread.id,
-          err instanceof Error ? err.message : "Failed to retry with a different effort.",
-        );
-        return false;
-      } finally {
-        setIsRevertingCheckpoint(false);
-      }
+      })()
+        .catch((err: unknown) => {
+          setThreadError(
+            activeThread.id,
+            err instanceof Error ? err.message : "Failed to retry with a different effort.",
+          );
+          return false;
+        })
+        .finally(() => {
+          sendInFlightRef.current = false;
+          setIsRevertingCheckpoint(false);
+        });
     },
     [
       activeThread,
       archiveRetryVariant,
-      assistantDeliveryMode,
-      interactionMode,
+      computerControlChangeSequence,
       isConnecting,
       isRevertingCheckpoint,
       isSendBusy,
       isServerThread,
       persistThreadSettingsForNextTurn,
-      providerOptionsForDispatch,
-      runtimeMode,
-      selectedModel,
-      selectedModelOptions,
-      selectedModelSelection,
-      selectedProvider,
-      selectedRuntimeModel,
+      retryTarget,
       sendInFlightRef,
+      setComposerDraftComputerControlMode,
       setIsRevertingCheckpoint,
       setProviderModelOptions,
       setThreadError,
+      turnDispatchSettings,
     ],
   );
 
   return {
     onSubmitPlanFollowUp,
+    onContinueFailedTurn,
     onEditUserMessage,
     onRetryAssistantWithDifferentEffort,
     onResumeWorkflowRun,

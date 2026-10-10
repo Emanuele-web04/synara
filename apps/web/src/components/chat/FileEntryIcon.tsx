@@ -6,7 +6,7 @@
 import { getAttachmentIconName, getFileIconName } from "../../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
-import { FolderClosed, FolderOpen } from "../FolderClosed";
+import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
 
 const FILE_ICON_COLOR_CLASS_BY_ICON_NAME: Record<string, string> = {
   audio: "text-[#38bdf8]",
@@ -63,11 +63,11 @@ export const FileEntryIcon = function FileEntryIcon(props: {
   expanded?: boolean | undefined;
 }) {
   // Match the look of the local filepath picker: directories always render the
-  // outlined Central folder glyph.
+  // shared closed/open folder glyph.
   if (props.kind === "directory") {
-    const FolderIcon = props.expanded ? FolderOpen : FolderClosed;
+    const FolderGlyph = props.expanded ? FolderOpenIcon : FolderIcon;
     return (
-      <FolderIcon
+      <FolderGlyph
         className={cn("size-4 shrink-0", props.className, FOLDER_ICON_COLOR_CLASS_NAME)}
       />
     );

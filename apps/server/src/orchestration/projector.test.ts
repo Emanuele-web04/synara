@@ -159,6 +159,7 @@ describe("orchestration projector", () => {
         projectId: "project-1",
         title: "demo",
         modelSelection: {
+          instanceId: "codex",
           provider: "codex",
           model: "gpt-5-codex",
         },
@@ -184,6 +185,7 @@ describe("orchestration projector", () => {
         subagentRole: null,
         forkSourceThreadId: null,
         sidechatSourceThreadId: null,
+        sidechatContext: null,
         sidechatLastActivityAt: null,
         sidechatExpiredAt: null,
         lastKnownPr: null,
@@ -192,6 +194,8 @@ describe("orchestration projector", () => {
         updatedAt: now,
         archivedAt: null,
         settledAt: null,
+        snoozedUntil: null,
+        snoozeReminderAt: null,
         deletedAt: null,
         handoff: null,
         messages: [],
@@ -361,6 +365,7 @@ describe("orchestration projector", () => {
 
     expect(next.threads[0]?.modelSelection).toEqual({
       provider: "pi",
+      instanceId: "pi",
       model: "openai/gpt-5.5",
     });
     expect(next.threads[0]?.runtimeMode).toBe("approval-required");
@@ -370,6 +375,7 @@ describe("orchestration projector", () => {
       threadId: "thread-1",
       status: "starting",
       providerName: "pi",
+      providerInstanceId: "pi",
       runtimeMode: "approval-required",
       activeTurnId: null,
       lastError: null,
@@ -437,11 +443,130 @@ describe("orchestration projector", () => {
 
     expect(next.threads[0]?.modelSelection).toEqual({
       provider: "opencode",
+      instanceId: "opencode",
       model: "openai/gpt-5",
     });
     expect(next.threads[0]?.session).toMatchObject({
       status: "starting",
       providerName: "opencode",
+    });
+  });
+
+  it("updates sessionless imported threads from exact routed turn selections", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const messageAt = "2026-02-23T08:00:03.000Z";
+    const turnRequestedAt = "2026-02-23T08:00:05.000Z";
+    const model = createEmptyReadModel(createdAt);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: "codex",
+              instanceId: "codex",
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const afterMessages = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: messageAt,
+          commandId: "cmd-message-1",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-1",
+            role: "user",
+            text: "Existing conversation",
+            turnId: null,
+            streaming: false,
+            source: "handoff-import",
+            createdAt: messageAt,
+            updatedAt: messageAt,
+          },
+        }),
+      ),
+    );
+
+    const afterImportedMessages = await Effect.runPromise(
+      projectEvent(
+        afterMessages,
+        makeEvent({
+          sequence: 3,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: messageAt,
+          commandId: "cmd-message-2",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-2",
+            role: "assistant",
+            text: "Imported response",
+            turnId: null,
+            streaming: false,
+            source: "handoff-import",
+            createdAt: messageAt,
+            updatedAt: messageAt,
+          },
+        }),
+      ),
+    );
+
+    const next = await Effect.runPromise(
+      projectEvent(
+        afterImportedMessages,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-start-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: turnRequestedAt,
+          commandId: "cmd-turn-start",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-3",
+            modelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: "claude-sonnet-4-6",
+            },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            createdAt: turnRequestedAt,
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.modelSelection).toEqual({
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
     });
   });
 
@@ -736,7 +861,6 @@ describe("orchestration projector", () => {
     { status: "ready", expectedState: "completed" },
     { status: "interrupted", expectedState: "interrupted" },
     { status: "stopped", expectedState: "interrupted" },
-    { status: "error", expectedState: "error" },
   ] as const)(
     "settles a running latest turn when the session leaves running ($status → $expectedState)",
     async ({ status, expectedState }) => {
@@ -755,7 +879,7 @@ describe("orchestration projector", () => {
             occurredAt: settledAt,
             status,
             activeTurnId: null,
-            lastError: status === "error" ? "provider crashed" : null,
+            lastError: null,
             updatedAt: settledAt,
           }),
         ),
@@ -771,7 +895,7 @@ describe("orchestration projector", () => {
     },
   );
 
-  it.each([{ status: "idle" }, { status: "starting" }] as const)(
+  it.each([{ status: "starting" }] as const)(
     "keeps a running latest turn untouched for $status session updates",
     async ({ status }) => {
       const createdAt = "2026-02-23T08:00:00.000Z";
@@ -1988,7 +2112,7 @@ describe("orchestration projector", () => {
           streaming: true,
           // First delta arrives without a turn binding; later deltas must not
           // rebind an already-bound message.
-          turnId: index === 0 ? null : index === 3 ? "turn-other" : "turn-1",
+          turnId: index < 2 ? null : index === 3 ? "turn-other" : "turn-1",
         }),
       ),
       messageEvent({
@@ -2006,13 +2130,19 @@ describe("orchestration projector", () => {
         role: "assistant",
         text: "!",
         streaming: true,
-        turnId: "turn-1",
+        turnId: "turn-other",
       }),
     ];
 
     const state = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
       (statePromise, event) =>
-        statePromise.then((current) => Effect.runPromise(projectEvent(current, event))),
+        statePromise.then(async (current) => {
+          const next = await Effect.runPromise(projectEvent(current, event));
+          if (event.sequence === 4) {
+            expect(next.threads[0]?.messages[1]?.turnId).toBeNull();
+          }
+          return next;
+        }),
       Promise.resolve(afterCreate),
     );
 

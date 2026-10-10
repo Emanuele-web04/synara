@@ -14,18 +14,27 @@ import {
   pendingRequestInstanceKey,
 } from "@synara/shared/threadSummary";
 
-import { orderedActivities } from "./workLog";
+import { orderedActivities, parseUserInputQuestions } from "./workLog";
 
 export interface PendingApproval {
   requestId: ApprovalRequestId;
   lifecycleGeneration?: string;
   /** Changes only when the durable retryable response attempt changes. */
   responseAttemptKey?: string;
-  requestKind: "command" | "file-read" | "file-change" | "permissions";
+  requestKind: "command" | "file-read" | "file-change" | "permissions" | "tool";
   createdAt: string;
   detail?: string;
   permissionProfile?: Record<string, unknown>;
   sessionApprovalAvailable?: boolean;
+  approvalScope?: "computer-task" | "computer-foreground" | "device-task";
+  toolName?: string;
+  toolParamsDisplay?: ReadonlyArray<PendingToolParamDisplay>;
+}
+
+export interface PendingToolParamDisplay {
+  name: string;
+  value: unknown;
+  displayName?: string;
 }
 
 export interface PendingUserInput {
@@ -242,53 +251,6 @@ function replayPendingInteractions<
   );
 }
 
-function parseUserInputQuestions(
-  payload: Record<string, unknown> | null,
-): ReadonlyArray<UserInputQuestion> | null {
-  const questions = payload?.questions;
-  if (!Array.isArray(questions)) {
-    return null;
-  }
-  const parsed = questions
-    .map<UserInputQuestion | null>((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const question = entry as Record<string, unknown>;
-      if (
-        typeof question.id !== "string" ||
-        typeof question.header !== "string" ||
-        typeof question.question !== "string" ||
-        !Array.isArray(question.options)
-      ) {
-        return null;
-      }
-      const options = question.options
-        .map<UserInputQuestion["options"][number] | null>((option) => {
-          if (!option || typeof option !== "object") return null;
-          const optionRecord = option as Record<string, unknown>;
-          if (
-            typeof optionRecord.label !== "string" ||
-            typeof optionRecord.description !== "string"
-          ) {
-            return null;
-          }
-          return {
-            label: optionRecord.label,
-            description: optionRecord.description,
-          };
-        })
-        .filter((option): option is UserInputQuestion["options"][number] => option !== null);
-      return {
-        id: question.id,
-        header: question.header,
-        question: question.question,
-        options,
-        ...(question.multiSelect === true ? { multiSelect: true } : {}),
-      };
-    })
-    .filter((question): question is UserInputQuestion => question !== null);
-  return parsed.length > 0 ? parsed : null;
-}
-
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   settlements?: ReadonlyArray<OrchestrationPendingInteraction>,
@@ -306,7 +268,8 @@ export function derivePendingApprovals(
           payload?.requestKind === "command" ||
           payload?.requestKind === "file-read" ||
           payload?.requestKind === "file-change" ||
-          payload?.requestKind === "permissions"
+          payload?.requestKind === "permissions" ||
+          payload?.requestKind === "tool"
             ? payload.requestKind
             : approvalRequestKindFromRequestType(payload?.requestType);
         if (!requestKind) {
@@ -323,6 +286,8 @@ export function derivePendingApprovals(
           typeof payload?.sessionApprovalAvailable === "boolean"
             ? payload.sessionApprovalAvailable
             : undefined;
+        const toolName = typeof payload?.toolName === "string" ? payload.toolName : undefined;
+        const toolParamsDisplay = parseToolParamsDisplay(payload?.toolParamsDisplay);
         return {
           requestId,
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
@@ -331,6 +296,13 @@ export function derivePendingApprovals(
           ...(detail ? { detail } : {}),
           ...(permissionProfile ? { permissionProfile } : {}),
           ...(sessionApprovalAvailable !== undefined ? { sessionApprovalAvailable } : {}),
+          ...(payload?.approvalScope === "computer-task" || payload?.approvalScope === "device-task"
+            ? { approvalScope: payload.approvalScope as "computer-task" | "device-task" }
+            : payload?.approvalScope === "computer-foreground"
+              ? { approvalScope: "computer-foreground" as const }
+              : {}),
+          ...(toolName ? { toolName } : {}),
+          ...(toolParamsDisplay ? { toolParamsDisplay } : {}),
         };
       },
     },
@@ -357,6 +329,37 @@ export function derivePendingApprovals(
     );
     return responseAttemptKey === undefined ? approval : { ...approval, responseAttemptKey };
   });
+}
+
+function parseToolParamsDisplay(
+  value: unknown,
+): ReadonlyArray<PendingToolParamDisplay> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = value.flatMap<PendingToolParamDisplay>((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.name !== "string" || !Object.hasOwn(record, "value")) {
+      return [];
+    }
+    const displayName =
+      typeof record.displayName === "string"
+        ? record.displayName
+        : typeof record.display_name === "string"
+          ? record.display_name
+          : undefined;
+    return [
+      {
+        name: record.name,
+        value: record.value,
+        ...(displayName ? { displayName } : {}),
+      },
+    ];
+  });
+  return entries.length > 0 ? entries : undefined;
 }
 
 export function derivePendingUserInputs(

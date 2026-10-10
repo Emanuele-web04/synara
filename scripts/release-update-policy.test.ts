@@ -37,7 +37,57 @@ describe("release update policy", () => {
       isPrerelease: true,
       makeLatest: false,
       mirrorToStableChannel: false,
+      channel: "beta",
+      desktopFlavor: "beta",
     });
+  });
+
+  it("routes only the beta prerelease identifier onto the beta channel and flavor", () => {
+    expect(resolveReleaseUpdatePolicy("0.6.0", cleanConfig)).toMatchObject({
+      channel: "synara",
+      desktopFlavor: "production",
+    });
+    expect(resolveReleaseUpdatePolicy("0.6.0-beta.4", cleanConfig)).toMatchObject({
+      channel: "beta",
+      desktopFlavor: "beta",
+      isPrerelease: true,
+    });
+    expect(resolveReleaseUpdatePolicy("0.6.0-alpha.1", cleanConfig)).toMatchObject({
+      channel: "synara",
+      desktopFlavor: "production",
+      isPrerelease: true,
+    });
+    expect(resolveReleaseUpdatePolicy("0.6.0-rc.2", cleanConfig)).toMatchObject({
+      channel: "synara",
+      desktopFlavor: "production",
+      isPrerelease: true,
+    });
+  });
+
+  it("copies manifests under the resolved beta channel name", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-release-policy-"));
+    try {
+      for (const name of defaultManifestNames) {
+        writeFileSync(resolve(root, name), name);
+      }
+
+      expect(prepareReleaseUpdateManifests(root, cleanConfig, "beta")).toEqual([
+        ...defaultManifestNames,
+        ...channelManifestNames("beta"),
+      ]);
+      for (const channelName of channelManifestNames("synara")) {
+        expect(existsSync(resolve(root, channelName))).toBe(false);
+      }
+      for (const [index, channelName] of channelManifestNames("beta").entries()) {
+        const defaultName = defaultManifestNames[index];
+        if (!defaultName) throw new Error(`Missing default manifest mapping for ${channelName}`);
+        expect(readFileSync(resolve(root, channelName), "utf8")).toBe(
+          readFileSync(resolve(root, defaultName), "utf8"),
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects releases that could bypass or replace the compatibility hop", () => {

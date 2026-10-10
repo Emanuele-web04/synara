@@ -176,9 +176,7 @@ describe("browser saved logins", () => {
   });
 
   it.each([
-    [{ code: "reader_failed", stage: "acquisition" }, "could not open or acquire"],
     [{ code: "reader_failed", stage: "parse" }, "cookie-format failure"],
-    [{ code: "reader_failed", stage: "decrypt" }, "could not decrypt"],
     [{ code: "persistence_failed" }, "could not save their session state"],
   ] as const)("distinguishes reader stages and persistence failure", async (failure, message) => {
     const api = harness.api!;

@@ -5,15 +5,16 @@
 // Depends on: composer trait resolution and provider option patch helpers.
 
 import {
+  type CheckpointRef,
   type MessageId,
   type ModelSelection,
   type ProviderKind,
   type ProviderModelDescriptor,
+  type ProviderStartOptions,
   type RuntimeMode,
   type TurnId,
 } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
-import { getModelSelectionStringOptionValue } from "@synara/shared/model";
 
 import {
   buildModelSelection,
@@ -43,7 +44,20 @@ export type RetryWithDifferentEffortDisabledReason =
   | "no-alternate-effort"
   | "no-checkpoint"
   | "busy"
-  | "missing-user-message";
+  | "missing-user-message"
+  | "unverified-target";
+
+/** Supplied only by a server-authoritative preparation, never composer defaults. */
+export type VerifiedRetryEffortTarget = {
+  readonly assistantMessageId: MessageId;
+  readonly userMessageId: MessageId;
+  readonly turnId: TurnId;
+  readonly prompt: string;
+  readonly modelSelection: ModelSelection;
+  readonly providerOptions?: ProviderStartOptions | undefined;
+  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly baselineCheckpointRef: CheckpointRef;
+};
 
 export type RetryWithDifferentEffortAvailability =
   | {
@@ -71,8 +85,8 @@ export type RetryEffortVariant = {
   readonly text: string;
   readonly effort: string | null;
   readonly effortLabel: string | null;
-  readonly provider: ProviderKind;
-  readonly model: string;
+  readonly provider: ProviderKind | null;
+  readonly model: string | null;
   readonly createdAt: string;
   readonly checkpointTurnCount: number | null;
   readonly changedFileCount: number;
@@ -98,23 +112,28 @@ export function retryEffortDisabledReasonLabel(
       return "Wait for the current send or checkpoint restore to finish.";
     case "missing-user-message":
       return "Could not find the user prompt that produced this turn.";
+    case "unverified-target":
+      return "The original model and recovery checkpoint could not be verified for this turn.";
   }
-}
-
-function effortOptionIdForProvider(provider: ProviderKind): string {
-  if (provider === "opencode") return "variant";
-  if (provider === "pi") return "thinkingLevel";
-  if (provider === "claudeAgent") return "effort";
-  if (provider === "devin") return "modelVariant";
-  return "reasoningEffort";
 }
 
 export function resolveEffortFromModelSelection(
   modelSelection: ModelSelection | null | undefined,
+  context?: {
+    readonly prompt?: string;
+    readonly runtimeModel?: ProviderModelDescriptor | undefined;
+    readonly modelOptions?: ProviderOptions | null | undefined;
+  },
 ): string | null {
   if (!modelSelection) return null;
-  const optionId = effortOptionIdForProvider(modelSelection.provider);
-  return getModelSelectionStringOptionValue(modelSelection, optionId) ?? null;
+  const selection = getComposerTraitSelection(
+    modelSelection.provider,
+    modelSelection.model,
+    context?.prompt ?? "",
+    context?.modelOptions ?? modelSelection.options,
+    context?.runtimeModel,
+  );
+  return selection.ultrathinkPromptControlled ? "ultrathink" : selection.effort;
 }
 
 export function resolvePrecedingUserMessage(input: {
@@ -176,27 +195,30 @@ export function resolveRetryWithDifferentEffortAvailability(input: {
   readonly showAssistantCopyButton: boolean;
   readonly assistantTurnInProgress: boolean | undefined;
   readonly runtimeMode: RuntimeMode;
-  readonly modelSelection: ModelSelection;
-  readonly modelOptions: ProviderOptions | null | undefined;
-  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly retryTarget: VerifiedRetryEffortTarget | null;
   readonly turnDiffSummary: TurnDiffSummary | undefined;
   readonly activeTurnId: TurnId | null | undefined;
   readonly isBusy: boolean;
 }): RetryWithDifferentEffortAvailability {
-  const currentEffort = resolveEffortFromModelSelection(input.modelSelection);
   const precedingUser = resolvePrecedingUserMessage({
     messages: input.messages,
     assistantMessageId: input.assistantMessageId,
   });
-  const effortOptions = buildEffortOptions({
-    provider: input.modelSelection.provider,
-    model: input.modelSelection.model,
-    modelOptions:
-      input.modelOptions ?? (input.modelSelection.options as ProviderOptions | undefined),
+  const sourceSelection = input.retryTarget?.modelSelection;
+  const currentEffort = resolveEffortFromModelSelection(sourceSelection, {
     prompt: precedingUser?.text ?? "",
-    runtimeModel: input.runtimeModel,
-    currentEffort,
+    runtimeModel: input.retryTarget?.runtimeModel,
   });
+  const effortOptions = sourceSelection
+    ? buildEffortOptions({
+        provider: sourceSelection.provider,
+        model: sourceSelection.model,
+        modelOptions: sourceSelection.options,
+        prompt: precedingUser?.text ?? "",
+        runtimeModel: input.retryTarget?.runtimeModel,
+        currentEffort,
+      })
+    : [];
 
   const disabled = (
     reason: RetryWithDifferentEffortDisabledReason,
@@ -243,6 +265,17 @@ export function resolveRetryWithDifferentEffortAvailability(input: {
     return disabled("not-tail");
   }
 
+  if (
+    !input.retryTarget ||
+    input.retryTarget.assistantMessageId !== input.assistantMessageId ||
+    input.retryTarget.turnId !== input.assistantTurnId ||
+    input.retryTarget.userMessageId !== precedingUser.messageId ||
+    input.retryTarget.prompt !== precedingUser.text ||
+    input.retryTarget.baselineCheckpointRef.trim().length === 0
+  ) {
+    return disabled("unverified-target");
+  }
+
   if (effortOptions.length === 0) {
     return disabled("no-effort-levels");
   }
@@ -251,7 +284,12 @@ export function resolveRetryWithDifferentEffortAvailability(input: {
   }
 
   const checkpointTurnCount = input.turnDiffSummary?.checkpointTurnCount;
-  if (typeof checkpointTurnCount !== "number") {
+  if (
+    typeof checkpointTurnCount !== "number" ||
+    !Number.isSafeInteger(checkpointTurnCount) ||
+    checkpointTurnCount <= 0 ||
+    input.turnDiffSummary?.status !== "ready"
+  ) {
     return disabled("no-checkpoint");
   }
 
@@ -275,6 +313,8 @@ export function resolveRetryWithDifferentEffortAvailability(input: {
 export function planRetryEffortChange(input: {
   readonly provider: ProviderKind;
   readonly model: string;
+  readonly instanceId?: ModelSelection["instanceId"];
+  readonly supportsAutoMode?: boolean | undefined;
   readonly modelOptions: ProviderOptions | null | undefined;
   readonly prompt: string;
   readonly runtimeModel?: ProviderModelDescriptor | undefined;
@@ -292,6 +332,8 @@ export function planRetryEffortChange(input: {
     input.modelOptions,
     input.runtimeModel,
   );
+  const currentEffort = selection.ultrathinkPromptControlled ? "ultrathink" : selection.effort;
+  if (input.nextEffort === currentEffort) return null;
   const effortPlan = planComposerEffortChange({
     provider: input.provider,
     selection,
@@ -311,6 +353,8 @@ export function planRetryEffortChange(input: {
         input.provider,
         input.model,
         input.modelOptions ?? undefined,
+        input.supportsAutoMode,
+        { instanceId: input.instanceId },
       ),
       nextPrompt: effortPlan.prompt,
       effortLabel,
@@ -324,7 +368,13 @@ export function planRetryEffortChange(input: {
   );
   return {
     effortPlan,
-    nextModelSelection: buildModelSelection(input.provider, input.model, nextOptions),
+    nextModelSelection: buildModelSelection(
+      input.provider,
+      input.model,
+      nextOptions,
+      input.supportsAutoMode,
+      { instanceId: input.instanceId },
+    ),
     nextPrompt: input.prompt,
     effortLabel,
   };
@@ -352,8 +402,9 @@ export function buildRetryConfirmCopy(input: {
     return [
       effortLine,
       "The previous answer stays available in the variant pager.",
-      `Workspace checkpoint ${input.checkpointTurnCount} will be restored before the new attempt.`,
+      `Workspace checkpoint ${Math.max(0, input.checkpointTurnCount - 1)} will be restored before the new attempt.`,
       "A pre-retry snapshot is captured so current files are not discarded silently.",
+      "This snapshot cannot restore provider conversation history.",
     ].join("\n");
   }
   return [
@@ -361,6 +412,7 @@ export function buildRetryConfirmCopy(input: {
     `${input.changedFileCount} file${input.changedFileCount === 1 ? "" : "s"} changed in this turn.`,
     `Workspace will restore to checkpoint ${Math.max(0, input.checkpointTurnCount - 1)} before retrying.`,
     "A pre-retry snapshot is captured so those file changes are not discarded silently.",
+    "This snapshot cannot restore provider conversation history.",
     "The previous answer stays available in the variant pager.",
   ].join("\n");
 }

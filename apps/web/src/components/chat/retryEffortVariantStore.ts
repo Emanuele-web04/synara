@@ -44,7 +44,8 @@ function normalizeVariant(value: unknown): RetryEffortVariant | null {
   if (!isRecord(value)) return null;
   if (typeof value.id !== "string" || typeof value.assistantMessageId !== "string") return null;
   if (typeof value.text !== "string" || typeof value.createdAt !== "string") return null;
-  if (typeof value.provider !== "string" || typeof value.model !== "string") return null;
+  if (value.provider !== null && typeof value.provider !== "string") return null;
+  if (value.model !== null && typeof value.model !== "string") return null;
   return {
     id: value.id,
     assistantMessageId: value.assistantMessageId as MessageId,
@@ -52,7 +53,7 @@ function normalizeVariant(value: unknown): RetryEffortVariant | null {
     text: value.text,
     effort: typeof value.effort === "string" ? value.effort : null,
     effortLabel: typeof value.effortLabel === "string" ? value.effortLabel : null,
-    provider: value.provider as ProviderKind,
+    provider: value.provider as ProviderKind | null,
     model: value.model,
     createdAt: value.createdAt,
     checkpointTurnCount:

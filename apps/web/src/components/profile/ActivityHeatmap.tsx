@@ -194,7 +194,7 @@ export function ActivityHeatmap({
         <div
           key={column.key}
           className={cn(
-            "overflow-visible whitespace-nowrap text-[10px] font-medium leading-none text-muted-foreground",
+            "overflow-visible whitespace-nowrap text-ui-xs font-medium leading-none text-muted-foreground",
             monthLabelClass,
             monthLabelClassName,
           )}

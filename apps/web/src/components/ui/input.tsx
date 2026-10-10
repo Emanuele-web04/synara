@@ -4,13 +4,16 @@ import { Input as InputPrimitive } from "@base-ui/react/input";
 import { forwardRef, type ComponentPropsWithoutRef } from "react";
 
 import { cn } from "~/lib/utils";
-import { SOFT_SURFACE_FILL_CLASS_NAME } from "~/surfaceStyles";
+import { SOFT_SURFACE_FILL_CLASS_NAME, GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+import { BUTTON_GROUP_SURFACE_CLASS_NAME } from "./button-group";
 
 type InputProps = Omit<ComponentPropsWithoutRef<typeof InputPrimitive>, "size"> & {
   size?: "sm" | "default" | "lg" | number;
   // "soft" gives the field a faint filled background instead of the default
   // surface-matching fill, so it reads as an input even on a flush card.
   variant?: "default" | "soft";
+  // "capsule" rounds the field into a pill, to sit beside capsule button groups.
+  shape?: "default" | "capsule";
   unstyled?: boolean;
   nativeInput?: boolean;
 };
@@ -21,6 +24,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     className,
     size: sizeProp,
     variant: variantProp,
+    shape: shapeProp,
     unstyled: unstyledProp,
     nativeInput: nativeInputProp,
     style,
@@ -30,28 +34,35 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 ) {
   const size = sizeProp ?? "default";
   const variant = variantProp ?? "default";
+  const shape = shapeProp ?? "default";
   const unstyled = unstyledProp ?? false;
   const nativeInput = nativeInputProp ?? false;
   const inputClassName = cn(
-    "font-system-ui h-full w-full min-w-0 rounded-[inherit] border-0 bg-transparent px-3 py-1.5 text-[length:var(--app-font-size-ui,12px)] leading-normal outline-none placeholder:text-muted-foreground/72 [transition:background-color_5000000s_ease-in-out_0s] sm:text-[length:var(--app-font-size-ui,12px)]",
-    size === "sm" &&
-      "px-2.5 py-1 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)]",
+    "font-system-ui h-full w-full min-w-0 rounded-[inherit] border-0 bg-transparent px-3 py-1.5 text-ui leading-normal outline-none placeholder:text-muted-foreground/72 [transition:background-color_5000000s_ease-in-out_0s] sm:text-ui",
+    size === "sm" && "px-2.5 py-1 text-ui-sm sm:text-ui-sm",
     size === "lg" && "px-3.5 py-2",
+    shape === "capsule" && "px-4",
     props.type === "search" &&
       "[&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none [&::-webkit-search-results-button]:appearance-none [&::-webkit-search-results-decoration]:appearance-none",
     props.type === "file" &&
-      "text-muted-foreground file:me-3 file:bg-transparent file:font-medium file:text-[length:var(--app-font-size-ui-sm,11px)] file:text-foreground",
+      "text-muted-foreground file:me-3 file:bg-transparent file:font-medium file:text-ui-sm file:text-foreground",
   );
 
   // `cn` always returns a string; an empty one must become `undefined` so the
   // wrapper renders without a `class` attribute at all (unstyled callers).
+  const capsule = shape === "capsule";
   const controlClassName = cn(
     !unstyled &&
-      "relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-[length:var(--app-font-size-ui,12px)] text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32 dark:has-autofill:bg-foreground/8",
+      `${capsule ? "" : GLASS_RAISED_SURFACE_CLASS_NAME} relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-ui text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-ui dark:bg-input/32 dark:has-autofill:bg-foreground/8`,
     size === "sm" && "min-h-8 sm:min-h-7",
     size === "lg" && "min-h-10 sm:min-h-9",
     variant === "soft" && SOFT_SURFACE_FILL_CLASS_NAME,
     className,
+    // Last, so a caller's own radius or fill (the browser chrome's rounded-lg) cannot square the
+    // capsule off or tint it differently from the button groups beside it. It skips the raised
+    // glass tint for the same reason: on a translucent window it keeps the groups' faint material.
+    capsule &&
+      cn(BUTTON_GROUP_SURFACE_CLASS_NAME, "dark:bg-[var(--color-background-button-secondary)]"),
   );
 
   return (

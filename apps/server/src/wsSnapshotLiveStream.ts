@@ -1,11 +1,27 @@
 import { WsRpcError, type OrchestrationEvent } from "@synara/contracts";
-import { Cause, Effect, Queue, Scope, Stream } from "effect";
+import { Deferred, Effect, Exit, Scope, Stream } from "effect";
+
+import { makeFailingLiveUiStream, type BufferLiveUiStreamOptions } from "./wsStreamBackpressure";
 
 export const ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT = 4_096;
+const ORCHESTRATION_RESUME_REPLAY_LIMIT = 128;
+const ORCHESTRATION_RESUME_REPLAY_MAX_BYTES = 1024 * 1024;
+// Subscribers share immutable journal objects; cache wire size, never payload copies.
+const eventSizes = new WeakMap<OrchestrationEvent, number>();
+const eventBytes = (event: OrchestrationEvent) => {
+  const cached = eventSizes.get(event);
+  if (cached !== undefined) return cached;
+  const bytes = Buffer.byteLength(JSON.stringify({ kind: "event", event }));
+  eventSizes.set(event, bytes);
+  return bytes;
+};
+class ResumeReplayLimitExceeded extends Error {}
+const resumeReplayLimitExceeded = new ResumeReplayLimitExceeded();
 
 export type SnapshotLiveStreamItem<Snapshot> =
   | { readonly kind: "snapshot"; readonly snapshot: Snapshot }
-  | { readonly kind: "event"; readonly event: OrchestrationEvent };
+  | { readonly kind: "event"; readonly event: OrchestrationEvent }
+  | { readonly kind: "replay"; readonly events: ReadonlyArray<OrchestrationEvent> };
 
 export interface ResnapshotReport {
   readonly snapshotSequence: number;
@@ -70,13 +86,19 @@ export function makeResnapshotEscalationTracker(): {
  * replay the exact gap, then continue with strictly newer live events.
  *
  * When `resumeFromSequence` is provided and the gap to the durable head is
- * non-negative and within the replay limit, the snapshot is skipped entirely
+ * non-negative and fits 128 events and one MiB, the snapshot is skipped entirely
  * and only the gap is replayed. A negative gap (client cursor ahead of the
  * server head — restored backup or reset database) or an overflowing gap is
- * never trusted: both fall back to the full snapshot path.
+ * never trusted: both fall back to the full snapshot path. With `batchReplay`
+ * the resume gap arrives as a single `replay` item (omitted when empty) so the
+ * client can apply the whole catch-up at once; the snapshot path is unchanged.
  */
 export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
   readonly subscribeLive: Effect.Effect<Stream.Stream<OrchestrationEvent, E>, never, Scope.Scope>;
+  readonly liveBufferOptions?: Omit<
+    BufferLiveUiStreamOptions<WsRpcError, never, OrchestrationEvent>,
+    "overflowStrategy" | "serializedBytes" | "sharedBudget" | "retentionKey"
+  >;
   readonly snapshot: Effect.Effect<Snapshot, E>;
   readonly snapshotSequence: (snapshot: Snapshot) => number;
   readonly getHighWaterSequence: Effect.Effect<number, E>;
@@ -85,6 +107,7 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
     throughSequenceInclusive: number,
   ) => Stream.Stream<OrchestrationEvent, E>;
   readonly resumeFromSequence?: number | undefined;
+  readonly batchReplay?: boolean | undefined;
   /**
    * Guards the resume shortcut against a subject that no longer exists. A hard
    * purge removes a thread's rows while unrelated events keep the journal head
@@ -106,18 +129,55 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
   return Stream.unwrap(
     Effect.gen(function* () {
       // The scoped subscription is registered synchronously before snapshot IO.
-      // A one-item handoff queue keeps the bridge bounded; the caller's live
-      // stream owns its slow-consumer/drop policy ahead of this queue.
-      const live = yield* input.subscribeLive;
-      const liveQueue = yield* Queue.bounded<OrchestrationEvent, E | Cause.Done>(1);
-      yield* Stream.runIntoQueue(live, liveQueue).pipe(Effect.forkScoped);
+      // A bounded live tail drains while snapshot IO or RPC delivery waits.
+      // Its subscription has a separate scope so overflow closes it at once.
+      const subscriptionScope = yield* Scope.fork(yield* Effect.scope);
+      const live = yield* input.subscribeLive.pipe(Scope.provide(subscriptionScope));
+      const liveFailure = yield* Deferred.make<never, E | WsRpcError>();
+      const bufferedLive = yield* makeFailingLiveUiStream(
+        live,
+        {
+          ...input.liveBufferOptions,
+          serializedBytes: eventBytes,
+        },
+        true,
+      );
+      yield* bufferedLive.failureExit.pipe(
+        Effect.flatMap((exit) =>
+          Exit.isFailure(exit)
+            ? Scope.close(subscriptionScope, exit).pipe(
+                Effect.andThen(Deferred.failCause(liveFailure, exit.cause)),
+                Effect.uninterruptible,
+              )
+            : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+      const deliveryScope = yield* Effect.scope;
+      const duringLive = <A, E2>(effect: Effect.Effect<A, E2>) =>
+        bufferedLive.check.pipe(
+          Effect.andThen(Effect.raceFirst(effect, Deferred.await(liveFailure))),
+          Effect.tap(() => bufferedLive.check),
+        );
+      // Only finite bootstrap/SQL pulls need this race. The live queue itself
+      // fails on overflow, avoiding two extra fibers for each live batch.
+      const finite = <A>(stream: Stream.Stream<A, E | WsRpcError>) =>
+        Stream.fromPull(
+          Stream.toPull(stream).pipe(
+            Scope.provide(deliveryScope),
+            Effect.map((pull) => duringLive(pull)),
+          ),
+        );
+      const liveAfterFence = bufferedLive.stream.pipe(
+        Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
+      );
       if (input.resumeFromSequence !== undefined) {
         // The head is read after the live attach, so replay through the head
         // plus live-after-fence covers every event exactly once — the same
         // fence discipline as the snapshot path, with the cursor standing in
         // for the snapshot sequence.
         const resumeFromSequence = input.resumeFromSequence;
-        const highWaterSequence = yield* input.getHighWaterSequence;
+        const highWaterSequence = yield* duringLive(input.getHighWaterSequence);
         const resumeGap = highWaterSequence - resumeFromSequence;
         // The `resumeGap >= 0` guard is load-bearing, not defensive: hard
         // deletes remove rows from `orchestration_events` (see the thread purge
@@ -128,27 +188,72 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         // (`sequence INTEGER PRIMARY KEY AUTOINCREMENT`), so a non-negative
         // gap cannot silently alias deleted history onto new events.
         const subjectExists =
-          input.resumeSubjectExists === undefined ? true : yield* input.resumeSubjectExists;
-        if (subjectExists && resumeGap >= 0 && resumeGap <= ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
-          input.resnapshotEscalation?.tracker.recordHealthyStart(
-            input.resnapshotEscalation.streamKey,
-          );
-          const replay = input.replay(resumeFromSequence, highWaterSequence).pipe(
-            Stream.filter(
-              (event) => event.sequence > resumeFromSequence && event.sequence <= highWaterSequence,
+          input.resumeSubjectExists === undefined
+            ? true
+            : yield* duringLive(input.resumeSubjectExists);
+        if (subjectExists && resumeGap >= 0 && resumeGap <= ORCHESTRATION_RESUME_REPLAY_LIMIT) {
+          yield* bufferedLive.retainAfter((event) => event.sequence > highWaterSequence, false);
+          const resumeRows: Array<OrchestrationEvent> = [];
+          const releaseResumeRows = () => {
+            resumeRows.length = 0;
+          };
+          yield* Effect.addFinalizer(() => Effect.sync(releaseResumeRows));
+          let resumeBytes = 0;
+          // Preflight prevents retrying the same oversized cursor gap forever.
+          // Finite rows are bounded separately and never charged as live events.
+          const canResume = yield* duringLive(
+            input.replay(resumeFromSequence, highWaterSequence).pipe(
+              Stream.filter(
+                (event) =>
+                  event.sequence > resumeFromSequence && event.sequence <= highWaterSequence,
+              ),
+              Stream.runForEach((event) =>
+                Effect.gen(function* () {
+                  const bytes = eventBytes(event);
+                  if (
+                    resumeRows.length >= ORCHESTRATION_RESUME_REPLAY_LIMIT ||
+                    resumeBytes + bytes > ORCHESTRATION_RESUME_REPLAY_MAX_BYTES
+                  ) {
+                    return yield* Effect.fail(resumeReplayLimitExceeded);
+                  }
+                  resumeRows.push(event);
+                  resumeBytes += bytes;
+                }),
+              ),
+              Effect.as(true),
+              Effect.onError(() => Effect.sync(releaseResumeRows)),
+              Effect.catchIf(
+                (error): error is ResumeReplayLimitExceeded => error === resumeReplayLimitExceeded,
+                () => Effect.succeed(false),
+              ),
             ),
-            Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
           );
-          const liveAfterFence = Stream.fromQueue(liveQueue).pipe(
-            Stream.filter((event) => event.sequence > highWaterSequence),
-            Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
-          );
-          return Stream.concat(replay, liveAfterFence);
+          if (canResume) {
+            yield* bufferedLive.retainAfter((event) => event.sequence > highWaterSequence);
+            input.resnapshotEscalation?.tracker.recordHealthyStart(
+              input.resnapshotEscalation.streamKey,
+            );
+            // With `batchReplay` the bounded gap goes out as one item so the
+            // client can apply the whole catch-up in a single store update.
+            const replayItems: Stream.Stream<SnapshotLiveStreamItem<Snapshot>> =
+              input.batchReplay === true
+                ? resumeRows.length === 0
+                  ? Stream.empty
+                  : Stream.succeed({ kind: "replay", events: [...resumeRows] })
+                : Stream.fromIterable(resumeRows).pipe(
+                    Stream.map(
+                      (event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event }),
+                    ),
+                  );
+            const replay = replayItems.pipe(Stream.ensuring(Effect.sync(releaseResumeRows)));
+            return Stream.concat(finite(replay), liveAfterFence);
+          }
         }
       }
-      const snapshot = yield* input.snapshot;
+      const snapshot = yield* duringLive(input.snapshot);
       const snapshotSequence = input.snapshotSequence(snapshot);
-      const highWaterSequence = yield* input.getHighWaterSequence;
+      const highWaterSequence = yield* duringLive(input.getHighWaterSequence);
+      yield* bufferedLive.retainAfter((event) => event.sequence > highWaterSequence);
       const replayCount = Math.max(0, highWaterSequence - snapshotSequence);
       if (replayCount > ORCHESTRATION_SNAPSHOT_REPLAY_LIMIT) {
         const report: ResnapshotReport = {
@@ -189,14 +294,14 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         ),
         Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
       );
-      const liveAfterFence = Stream.fromQueue(liveQueue).pipe(
-        Stream.filter((event) => event.sequence > highWaterSequence),
-        Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
-      );
-
       return Stream.concat(
-        Stream.succeed<SnapshotLiveStreamItem<Snapshot>>({ kind: "snapshot", snapshot }),
-        Stream.concat(replay, liveAfterFence),
+        finite(
+          Stream.concat(
+            Stream.succeed<SnapshotLiveStreamItem<Snapshot>>({ kind: "snapshot", snapshot }),
+            replay,
+          ),
+        ),
+        liveAfterFence,
       );
     }),
   );

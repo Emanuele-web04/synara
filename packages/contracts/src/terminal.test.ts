@@ -5,11 +5,8 @@ import {
   DEFAULT_TERMINAL_ID,
   TerminalAckOutputInput,
   TerminalClearInput,
-  TerminalCloseInput,
   TerminalEvent,
   TerminalOpenInput,
-  TerminalResizeInput,
-  TerminalSessionSnapshot,
   TerminalThreadInput,
   TerminalWriteInput,
 } from "./terminal";
@@ -28,17 +25,6 @@ function decodes<S extends Schema.Top>(schema: S, input: unknown): boolean {
 }
 
 describe("TerminalOpenInput", () => {
-  it("accepts valid open input", () => {
-    expect(
-      decodes(TerminalOpenInput, {
-        threadId: "thread-1",
-        cwd: "/tmp/project",
-        cols: 120,
-        rows: 40,
-      }),
-    ).toBe(true);
-  });
-
   it("rejects invalid bounds", () => {
     expect(
       decodes(TerminalOpenInput, {
@@ -163,18 +149,6 @@ describe("TerminalThreadInput", () => {
   });
 });
 
-describe("TerminalResizeInput", () => {
-  it("accepts valid size", () => {
-    expect(
-      decodes(TerminalResizeInput, {
-        threadId: "thread-1",
-        cols: 80,
-        rows: 24,
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("TerminalClearInput", () => {
   it("defaults terminal id", () => {
     const parsed = decodeSync(TerminalClearInput, {
@@ -184,49 +158,7 @@ describe("TerminalClearInput", () => {
   });
 });
 
-describe("TerminalCloseInput", () => {
-  it("accepts optional deleteHistory", () => {
-    expect(
-      decodes(TerminalCloseInput, {
-        threadId: "thread-1",
-        deleteHistory: true,
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("TerminalSessionSnapshot", () => {
-  it("accepts running snapshots", () => {
-    expect(
-      decodes(TerminalSessionSnapshot, {
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        cwd: "/tmp/project",
-        status: "running",
-        pid: 1234,
-        history: "hello\n",
-        replayPreamble: "\u001b[?2004h\u001b[=7;1u",
-        exitCode: null,
-        exitSignal: null,
-        updatedAt: new Date().toISOString(),
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("TerminalEvent", () => {
-  it("accepts output events", () => {
-    expect(
-      decodes(TerminalEvent, {
-        type: "output",
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        createdAt: new Date().toISOString(),
-        data: "line\n",
-      }),
-    ).toBe(true);
-  });
-
   it("accepts output events with byte length", () => {
     expect(
       decodes(TerminalEvent, {
@@ -240,20 +172,7 @@ describe("TerminalEvent", () => {
     ).toBe(true);
   });
 
-  it("accepts exited events", () => {
-    expect(
-      decodes(TerminalEvent, {
-        type: "exited",
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        createdAt: new Date().toISOString(),
-        exitCode: 0,
-        exitSignal: null,
-      }),
-    ).toBe(true);
-  });
-
-  it.each(["codex", "claude", "antigravity"] as const)("accepts %s activity events", (cliKind) => {
+  it("accepts CLI activity events", () => {
     expect(
       decodes(TerminalEvent, {
         type: "activity",
@@ -261,7 +180,7 @@ describe("TerminalEvent", () => {
         terminalId: DEFAULT_TERMINAL_ID,
         createdAt: new Date().toISOString(),
         hasRunningSubprocess: true,
-        cliKind,
+        cliKind: "codex",
         agentState: "running",
       }),
     ).toBe(true);

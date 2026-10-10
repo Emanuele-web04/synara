@@ -54,6 +54,7 @@ function renderWithQueryClient(queryClient: QueryClient, node: ReactNode) {
 
 function readProviderUsageSummary(input: {
   queryClient: QueryClient;
+  instanceId?: string;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   providerSnapshot?: ServerProviderUsageSnapshot | undefined;
   fetchOpenUsageData?: boolean;
@@ -67,6 +68,7 @@ function readProviderUsageSummary(input: {
   function Probe() {
     captured.current = useProviderUsageSummary({
       provider: "claudeAgent",
+      instanceId: input.instanceId,
       threads: [],
       threadRateLimits: input.threadRateLimits,
       providerSnapshot: input.providerSnapshot,
@@ -94,6 +96,105 @@ function createQueryClient() {
 }
 
 describe("useProviderUsageSummary", () => {
+  it("scopes a snapshot's account identity even when the caller supplies no separate id", () => {
+    const queryClient = createQueryClient();
+    const summary = readProviderUsageSummary({
+      queryClient,
+      providerSnapshot: snapshot({
+        instanceId: "claude_work",
+        limits: [{ window: "Weekly", usedPercent: 20, windowDurationMins: 10080 }],
+      }),
+      threadRateLimits: [
+        {
+          provider: "claudeAgent",
+          updatedAt: "2099-06-09T12:00:00.000Z",
+          limits: [{ window: "Weekly", usedPercent: 90, windowDurationMins: 10080 }],
+        },
+      ],
+    });
+
+    expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(20);
+  });
+
+  it("scopes the default live account without mixing newer provider-wide telemetry", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot({
+        instanceId: "claudeAgent",
+        limits: [{ window: "Weekly", usedPercent: 20, windowDurationMins: 10080 }],
+      }),
+    ]);
+    const summary = readProviderUsageSummary({
+      queryClient,
+      threadRateLimits: [
+        {
+          provider: "claudeAgent",
+          updatedAt: "2099-06-09T12:00:00.000Z",
+          limits: [{ window: "Weekly", usedPercent: 90, windowDurationMins: 10080 }],
+        },
+      ],
+    });
+
+    expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(20);
+  });
+
+  it("uses the selected account snapshot rather than another account in the batch", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot({ instanceId: "claudeAgent", ...fallbackSnapshot() }),
+      snapshot({
+        instanceId: "claude_work",
+        limits: [{ window: "Weekly", usedPercent: 20, windowDurationMins: 10080 }],
+      }),
+    ]);
+
+    const summary = readProviderUsageSummary({ queryClient, instanceId: "claude_work" });
+
+    expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(20);
+    expect(summary.usageLines).toEqual([]);
+  });
+
+  it("keeps an explicit account snapshot authoritative over the shared batch", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [fallbackSnapshot()]);
+
+    const summary = readProviderUsageSummary({
+      queryClient,
+      instanceId: "claude_work",
+      providerSnapshot: snapshot({ instanceId: "claude_work", status: "needs-auth" }),
+    });
+
+    expect(summary.rateLimits).toEqual([]);
+    expect(summary.usageLines).toEqual([]);
+  });
+
+  it.each(["claudeAgent", "claude_work"])(
+    "does not mix provider-wide fallback data into the %s account",
+    (instanceId) => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+      queryClient.setQueryData(
+        serverQueryKeys.providerUsage("claudeAgent", null),
+        fallbackSnapshot(),
+      );
+
+      const summary = readProviderUsageSummary({
+        queryClient,
+        instanceId,
+        threadRateLimits: [
+          {
+            provider: "claudeAgent",
+            updatedAt: "2026-06-09T12:00:00.000Z",
+            limits: [{ window: "5h", usedPercent: 12, windowDurationMins: 300 }],
+          },
+        ],
+      });
+
+      expect(summary.rateLimits).toEqual([]);
+      expect(summary.usageLines).toEqual([]);
+    },
+  );
+
   it("can keep OpenUsage polling disabled while using the server batch query", () => {
     const queryClient = createQueryClient();
 

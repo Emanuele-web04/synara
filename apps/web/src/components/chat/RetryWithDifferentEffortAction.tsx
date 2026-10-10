@@ -9,6 +9,7 @@ import { type MessageId, type ThreadId } from "@synara/contracts";
 import { ChevronLeftIcon, ChevronRightIcon, RefreshCwIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuTrigger } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { getRetryEffortVariantGroup, useRetryEffortVariantStore } from "./retryEffortVariantStore";
@@ -158,7 +159,7 @@ function EffortMenuItems(props: {
               {option.isCurrent ? " (current)" : ""}
             </span>
             {option.description ? (
-              <span className="truncate text-[length:var(--app-font-size-ui-2xs,10px)] text-muted-foreground">
+              <span className="truncate text-ui-xs text-muted-foreground">
                 {option.description}
               </span>
             ) : null}
@@ -175,16 +176,31 @@ export function RetryWithDifferentEffortAction(props: RetryWithDifferentEffortAc
   const hasMenu = supportedOptions.length > 0;
 
   if (!availability.enabled) {
-    if (!hasMenu) return null;
+    if (!hasMenu && availability.reason !== "unverified-target") return null;
     return (
-      <MessageActionButton
-        label="Retry with different effort"
-        tooltip={availability.detail}
-        disabled
-        className={cn(props.className, "disabled:text-muted-foreground/35")}
-      >
-        <RefreshCwIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-      </MessageActionButton>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              className="inline-flex cursor-default"
+              tabIndex={0}
+              aria-label="Retry with different effort unavailable"
+              aria-description={availability.detail}
+            />
+          }
+        >
+          <MessageActionButton
+            label="Retry with different effort"
+            tooltip={null}
+            aria-description={availability.detail}
+            disabled
+            className={cn(props.className, "disabled:text-muted-foreground/35")}
+          >
+            <RefreshCwIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+          </MessageActionButton>
+        </TooltipTrigger>
+        <TooltipPopup side="top">{availability.detail}</TooltipPopup>
+      </Tooltip>
     );
   }
 

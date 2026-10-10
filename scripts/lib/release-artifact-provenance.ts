@@ -3,16 +3,8 @@
 // Layer: Release/build helper
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  createReadStream,
-  lstatSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { hashFile } from "./file-digest.ts";
+import { lstatSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -142,16 +134,6 @@ function requireSingleArtifact(
     throw new Error(`Expected exactly one ${suffix} artifact, found ${matches.length}.`);
   }
   return matches[0]!;
-}
-
-function hashFile(filePath: string): Promise<string> {
-  return new Promise((resolveHash, reject) => {
-    const hash = createHash("sha256");
-    const stream = createReadStream(filePath);
-    stream.on("error", reject);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", () => resolveHash(hash.digest("hex")));
-  });
 }
 
 export async function collectReleaseArtifactDigests(

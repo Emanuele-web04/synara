@@ -2,8 +2,9 @@
 // Purpose: Shared create/edit dialog for a Space name and curated Central icon.
 
 import { SPACE_NAME_MAX_LENGTH } from "@synara/contracts";
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
+import { handleRadioGridKeyDown } from "~/lib/radioGridKeyboard";
 import { DEFAULT_SPACE_ICON, DEFAULT_VOID_SPACE_ICON } from "~/lib/spaceGrouping";
 import { suggestSpaceIcon } from "~/lib/spaceIconSuggestion";
 
@@ -119,35 +120,6 @@ export function SpaceEditorDialog(props: {
     }
   };
 
-  // The grid reflows between 10 and 5 columns, so the icons are driven as one linear
-  // radio group: either axis steps to the neighbouring icon and selects it.
-  const handleIconKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    const stepByKey: Record<string, number | "first" | "last"> = {
-      ArrowLeft: -1,
-      ArrowUp: -1,
-      ArrowRight: 1,
-      ArrowDown: 1,
-      Home: "first",
-      End: "last",
-    };
-    const step = stepByKey[event.key];
-    if (step === undefined) return;
-    const cells = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>("[data-space-icon]"),
-    );
-    if (cells.length === 0) return;
-    const currentIndex = cells.indexOf(document.activeElement as HTMLButtonElement);
-    const nextIndex =
-      step === "first"
-        ? 0
-        : step === "last"
-          ? cells.length - 1
-          : (Math.max(currentIndex, 0) + step + cells.length) % cells.length;
-    event.preventDefault();
-    cells[nextIndex]?.focus();
-    cells[nextIndex]?.click();
-  }, []);
-
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogPopup className="max-w-sm">
@@ -193,11 +165,7 @@ export function SpaceEditorDialog(props: {
               placeholder={isVoid ? "Unfiled" : "Work"}
             />
             {visibleNameError ? (
-              <p
-                id={nameErrorId}
-                role="alert"
-                className="text-[length:var(--app-font-size-ui-xs,10px)] text-destructive"
-              >
+              <p id={nameErrorId} role="alert" className="text-ui-xs text-destructive">
                 {visibleNameError}
               </p>
             ) : null}
@@ -210,7 +178,9 @@ export function SpaceEditorDialog(props: {
             <div
               role="radiogroup"
               aria-labelledby={iconLegendId}
-              onKeyDown={handleIconKeyDown}
+              // The grid reflows between 10 and 5 columns, so the icons are driven as one
+              // linear radio group: either axis steps to the neighbouring icon and selects it.
+              onKeyDown={(event) => handleRadioGridKeyDown(event, "[data-space-icon]")}
               className="grid grid-cols-10 gap-1.5 max-sm:grid-cols-5"
             >
               {iconOptions.map((option) => {
@@ -243,10 +213,7 @@ export function SpaceEditorDialog(props: {
             </div>
           </fieldset>
           {submitError ? (
-            <p
-              role="alert"
-              className="text-[length:var(--app-font-size-ui-xs,10px)] text-destructive"
-            >
+            <p role="alert" className="text-ui-xs text-destructive">
               {submitError}
             </p>
           ) : null}

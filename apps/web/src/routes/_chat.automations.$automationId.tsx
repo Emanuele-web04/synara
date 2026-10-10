@@ -48,8 +48,8 @@ import {
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "~/components/chat/chatHeaderControls";
 import { CHAT_BACKGROUND_CLASS_NAME } from "~/components/chat/composerPickerStyles";
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
+import { StatusDot } from "~/components/ui/status-chip";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { automationApprovalGaps, buildAutomationDraftWarnings } from "~/lib/automationDraft";
 import {
@@ -63,10 +63,8 @@ import {
   stopWhenFromCompletionPolicy,
 } from "@synara/shared/automationCompletionPolicy";
 import { automationLifecycleState, canPauseAutomation } from "~/lib/automationStatus";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
+import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import {
@@ -77,7 +75,7 @@ import {
 } from "~/providerModelOptions";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
+import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
 import {
   AutomationApprovalBanner,
   AutomationModelPicker,
@@ -109,7 +107,10 @@ export const Route = createFileRoute("/_chat/automations/$automationId")({
   component: AutomationDetailView,
 });
 
-const selectAllThreads = createAllThreadsSelector();
+// Sidebar summaries carry every field these surfaces read (id, projectId, title,
+// sidechatSourceThreadId) and do not rebuild on streamed message/activity deltas
+// the way the fully derived thread list does.
+const selectAllThreads = createSidebarThreadSummariesSelector();
 
 // Commit the trimmed text: the validators trim before checking, so committing the raw
 // draft would persist stray whitespace the validation never saw.
@@ -189,7 +190,6 @@ function AutomationDetailView() {
   const { automationId } = Route.useParams();
   const navigate = useNavigate();
   const { settings } = useAppSettings();
-  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
@@ -232,7 +232,12 @@ function AutomationDetailView() {
   const streamedMemory =
     (data.memories ?? []).find((candidate) => candidate.automationId === automationId) ?? null;
   const memory = streamedMemory ?? memoryQuery.data ?? null;
-  const providerOptionsForDispatch = getProviderStartOptions(settings);
+  const providerOptionsForDispatch = getProviderStartOptions(
+    settings,
+    definition
+      ? (definition.modelSelection.instanceId ?? definition.modelSelection.provider)
+      : undefined,
+  );
 
   if (!definition) {
     return (
@@ -243,23 +248,10 @@ function AutomationDetailView() {
             CHAT_BACKGROUND_CLASS_NAME,
           )}
         >
-          <header
-            className={cn(
-              CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-              "drag-region",
-              desktopTopBarTrafficLightGutterClassName,
-              desktopTopBarWindowControlsGutterClassName,
-            )}
-          >
-            <div
-              className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
-            >
-              <SidebarHeaderNavigationControls />
-              <h1 className="truncate font-heading text-sm font-medium">Automations</h1>
-            </div>
-          </header>
-          <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+          <RouteSurfaceHeader>
+            <h1 className="truncate font-heading text-ui-lg font-medium">Automations</h1>
+          </RouteSurfaceHeader>
+          <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-ui leading-snug text-muted-foreground">
             Automation not found.
             <Button
               type="button"
@@ -339,7 +331,10 @@ function AutomationDetailView() {
     const providerOptions = providerOptionsForAutomationModelSelection(
       definition,
       nextModelSelection,
-      providerOptionsForDispatch,
+      getProviderStartOptions(
+        settings,
+        nextModelSelection.instanceId ?? nextModelSelection.provider,
+      ),
     );
     patch({
       modelSelection: nextModelSelection,
@@ -434,36 +429,24 @@ function AutomationDetailView() {
       >
         {/* Left column: breadcrumb header + the prompt. */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <header
-            className={cn(
-              CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-              "drag-region",
-              desktopTopBarTrafficLightGutterClassName,
-            )}
-          >
-            <div
-              className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
-            >
-              <SidebarHeaderNavigationControls />
-              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm [-webkit-app-region:no-drag]">
-                <button
-                  type="button"
-                  onClick={() => void navigate({ to: "/automations" })}
-                  className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  Automations
-                </button>
-                <CentralIcon
-                  name="chevron-right-small"
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                <span className="truncate font-heading font-medium">{definition.name}</span>
-              </div>
+          <RouteSurfaceHeader windowControlsGutter={false}>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-lg [-webkit-app-region:no-drag]">
+              <button
+                type="button"
+                onClick={() => void navigate({ to: "/automations" })}
+                className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Automations
+              </button>
+              <CentralIcon
+                name="chevron-right-small"
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+              <span className="truncate font-heading font-medium">{definition.name}</span>
             </div>
-          </header>
+          </RouteSurfaceHeader>
 
-          <main className="min-h-0 flex-1 overflow-y-auto px-6 py-8 sm:px-8">
+          <main className="min-h-0 flex-1 overflow-y-auto px-6 pt-12 pb-8 sm:px-8">
             <div className="max-w-3xl space-y-4">
               <AutomationNameField
                 value={definition.name}
@@ -484,8 +467,8 @@ function AutomationDetailView() {
               {pendingProposal ? (
                 <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-[var(--color-background-elevated-primary)] p-4">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground">Suggested automation</p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-ui-lg font-medium text-foreground">Suggested automation</p>
+                    <p className="text-ui leading-snug text-muted-foreground">
                       Accept it before it can run, or dismiss it to archive the suggestion.
                     </p>
                   </div>
@@ -590,7 +573,7 @@ function AutomationDetailView() {
               <DetailGroup title="Status">
                 <DetailRow label="Status">
                   <StatusValue>
-                    <span className={cn("size-1.5 rounded-full", status.dotClassName)} />
+                    <StatusDot className={status.dotClassName} />
                     {status.label}
                   </StatusValue>
                 </DetailRow>
@@ -615,9 +598,9 @@ function AutomationDetailView() {
                 {stoppedExplanation ? (
                   <div className="mx-1.5 mt-1.5 flex flex-col gap-2 rounded-md border border-border bg-foreground/[0.03] p-2.5">
                     <div className="space-y-0.5">
-                      <p className="text-xs text-foreground">{stoppedExplanation}</p>
+                      <p className="text-ui leading-snug text-foreground">{stoppedExplanation}</p>
                       {definition.disabledAt ? (
-                        <p className="text-[0.6875rem] text-muted-foreground">
+                        <p className="text-ui-sm text-muted-foreground">
                           {formatRunTimestamp(definition.disabledAt)}
                         </p>
                       ) : null}
@@ -959,7 +942,7 @@ function AutomationDetailView() {
                           type="button"
                           variant="ghost"
                           size="xs"
-                          className="h-5 shrink-0 px-1.5 text-[10px] text-muted-foreground/70"
+                          className="h-5 shrink-0 px-1.5 text-ui-xs text-muted-foreground/70"
                           onClick={() =>
                             void navigate({
                               to: "/$threadId",
@@ -1005,14 +988,16 @@ function AutomationDetailView() {
               </DetailGroup>
 
               <DetailGroup title="Memory">
-                <div className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-foreground/[0.035] px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-muted-foreground">
+                <div className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-foreground/[0.035] px-2.5 py-2 font-mono text-ui-sm leading-relaxed text-muted-foreground">
                   {memory?.content || "No persistent memory yet."}
                 </div>
               </DetailGroup>
 
               <DetailGroup title="Previous runs">
                 {runs.length === 0 ? (
-                  <div className="px-1.5 py-1 text-xs text-muted-foreground">No runs yet.</div>
+                  <div className="px-1.5 py-1 text-ui leading-snug text-muted-foreground">
+                    No runs yet.
+                  </div>
                 ) : (
                   <div className="flex flex-col gap-0.5">
                     {runs.map((run) => (
@@ -1084,7 +1069,7 @@ function AutomationDetailView() {
               onChange={(event) =>
                 setPendingModeChange({ mode: "heartbeat", targetThreadId: event.target.value })
               }
-              className="w-full appearance-none rounded-md border border-border bg-transparent px-2 py-1.5 pr-6 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="w-full appearance-none rounded-md border border-border bg-transparent px-2 py-1.5 pr-6 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               {pendingModeChange.targetThreadId === "" ? (
                 <option value="">Pick a thread…</option>
@@ -1232,7 +1217,7 @@ function RunRow({
           : undefined
       }
       className={cn(
-        "group flex items-center gap-2 rounded-md px-1.5 py-1.5 text-xs transition-colors",
+        "group flex items-center gap-2 rounded-md px-1.5 py-1.5 text-ui leading-snug transition-colors",
         openable ? "cursor-pointer hover:bg-foreground/[0.03]" : undefined,
       )}
     >

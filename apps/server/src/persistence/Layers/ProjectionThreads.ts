@@ -15,9 +15,11 @@ import {
 import {
   ModelSelection,
   OrchestrationThreadPullRequest,
+  PendingClaudeCacheReview,
   ThreadPinnedMessages,
   ThreadHandoff,
   ThreadGoalAchievements,
+  ThreadSidechatContext,
 } from "@synara/contracts";
 
 const SqliteBoolean = Schema.Number.pipe(
@@ -32,7 +34,11 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     createBranchFlowCompleted: SqliteBoolean,
     isPinned: SqliteBoolean,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
+    claudeCacheReview: Schema.optional(
+      Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
+    ),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
+    sidechatContext: Schema.optional(Schema.NullOr(Schema.fromJsonString(ThreadSidechatContext))),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     goalAchievements: Schema.optional(
       Schema.NullOr(Schema.fromJsonString(ThreadGoalAchievements)),
@@ -76,11 +82,13 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           subagent_role,
           fork_source_thread_id,
           sidechat_source_thread_id,
+          sidechat_context_json,
           sidechat_last_activity_at,
           sidechat_expired_at,
           last_known_pr_json,
           latest_turn_id,
           handoff_json,
+          claude_cache_review_json,
           pinned_messages_json,
           notes,
           goal,
@@ -88,6 +96,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           goal_paused_at,
           goal_achievements_json,
           latest_user_message_at,
+          latest_human_message_at,
           pending_approval_count,
           pending_user_input_count,
           has_actionable_proposed_plan,
@@ -95,6 +104,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at,
           archived_at,
           settled_at,
+          snoozed_until,
+          snooze_reminder_at,
           deleted_at
         )
         VALUES (
@@ -124,11 +135,13 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.subagentRole ?? null},
           ${row.forkSourceThreadId ?? null},
           ${row.sidechatSourceThreadId ?? null},
+          ${row.sidechatContext == null ? null : JSON.stringify(row.sidechatContext)},
           ${row.sidechatLastActivityAt ?? null},
           ${row.sidechatExpiredAt ?? null},
           ${row.lastKnownPr === null ? null : JSON.stringify(row.lastKnownPr)},
           ${row.latestTurnId},
           ${row.handoff === null ? null : JSON.stringify(row.handoff)},
+          ${row.claudeCacheReview == null ? null : JSON.stringify(row.claudeCacheReview)},
           ${row.pinnedMessages === null ? null : JSON.stringify(row.pinnedMessages)},
           ${row.notes},
           ${row.goal},
@@ -136,6 +149,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.goalPausedAt ?? null},
           ${row.goalAchievements == null ? null : JSON.stringify(row.goalAchievements)},
           ${row.latestUserMessageAt},
+          ${row.latestHumanMessageAt ?? null},
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
@@ -143,6 +157,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.updatedAt},
           ${row.archivedAt ?? null},
           ${row.settledAt ?? null},
+          ${row.snoozedUntil ?? null},
+          ${row.snoozeReminderAt ?? null},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -172,11 +188,17 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           subagent_role = excluded.subagent_role,
           fork_source_thread_id = excluded.fork_source_thread_id,
           sidechat_source_thread_id = excluded.sidechat_source_thread_id,
+          sidechat_context_json = excluded.sidechat_context_json,
           sidechat_last_activity_at = excluded.sidechat_last_activity_at,
           sidechat_expired_at = excluded.sidechat_expired_at,
           last_known_pr_json = excluded.last_known_pr_json,
           latest_turn_id = excluded.latest_turn_id,
           handoff_json = excluded.handoff_json,
+          claude_cache_review_json = CASE
+            WHEN ${row.claudeCacheReview === undefined ? 1 : 0} = 1
+              THEN projection_threads.claude_cache_review_json
+            ELSE excluded.claude_cache_review_json
+          END,
           pinned_messages_json = excluded.pinned_messages_json,
           notes = excluded.notes,
           goal = excluded.goal,
@@ -184,6 +206,10 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           goal_paused_at = excluded.goal_paused_at,
           goal_achievements_json = excluded.goal_achievements_json,
           latest_user_message_at = excluded.latest_user_message_at,
+          latest_human_message_at = CASE
+            WHEN ${row.latestHumanMessageAt === undefined ? 1 : 0} = 1 THEN projection_threads.latest_human_message_at
+            ELSE excluded.latest_human_message_at
+          END,
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
@@ -191,6 +217,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at,
           settled_at = excluded.settled_at,
+          snoozed_until = excluded.snoozed_until,
+          snooze_reminder_at = excluded.snooze_reminder_at,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -227,11 +255,13 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           subagent_role AS "subagentRole",
           fork_source_thread_id AS "forkSourceThreadId",
           sidechat_source_thread_id AS "sidechatSourceThreadId",
+          sidechat_context_json AS "sidechatContext",
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          claude_cache_review_json AS "claudeCacheReview",
           pinned_messages_json AS "pinnedMessages",
           notes,
           goal,
@@ -239,6 +269,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           goal_paused_at AS "goalPausedAt",
           goal_achievements_json AS "goalAchievements",
           latest_user_message_at AS "latestUserMessageAt",
+          latest_human_message_at AS "latestHumanMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
@@ -246,6 +277,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -284,11 +317,13 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           subagent_role AS "subagentRole",
           fork_source_thread_id AS "forkSourceThreadId",
           sidechat_source_thread_id AS "sidechatSourceThreadId",
+          sidechat_context_json AS "sidechatContext",
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          claude_cache_review_json AS "claudeCacheReview",
           pinned_messages_json AS "pinnedMessages",
           notes,
           goal,
@@ -296,6 +331,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           goal_paused_at AS "goalPausedAt",
           goal_achievements_json AS "goalAchievements",
           latest_user_message_at AS "latestUserMessageAt",
+          latest_human_message_at AS "latestHumanMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
@@ -303,6 +339,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

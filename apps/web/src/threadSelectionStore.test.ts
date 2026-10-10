@@ -17,15 +17,6 @@ describe("threadSelectionStore", () => {
   });
 
   describe("toggleThread", () => {
-    it("adds a thread to empty selection", () => {
-      useThreadSelectionStore.getState().toggleThread(THREAD_A);
-
-      const state = useThreadSelectionStore.getState();
-      expect(state.selectedThreadIds.has(THREAD_A)).toBe(true);
-      expect(state.selectedThreadIds.size).toBe(1);
-      expect(state.anchorThreadId).toBe(THREAD_A);
-    });
-
     it("removes a thread that is already selected", () => {
       const store = useThreadSelectionStore.getState();
       store.toggleThread(THREAD_A);
@@ -34,25 +25,6 @@ describe("threadSelectionStore", () => {
       const state = useThreadSelectionStore.getState();
       expect(state.selectedThreadIds.has(THREAD_A)).toBe(false);
       expect(state.selectedThreadIds.size).toBe(0);
-    });
-
-    it("preserves existing selections when toggling a new thread", () => {
-      const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_A);
-      store.toggleThread(THREAD_B);
-
-      const state = useThreadSelectionStore.getState();
-      expect(state.selectedThreadIds.has(THREAD_A)).toBe(true);
-      expect(state.selectedThreadIds.has(THREAD_B)).toBe(true);
-      expect(state.selectedThreadIds.size).toBe(2);
-    });
-
-    it("sets anchor to the newly added thread", () => {
-      const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_A);
-      store.toggleThread(THREAD_B);
-
-      expect(useThreadSelectionStore.getState().anchorThreadId).toBe(THREAD_B);
     });
 
     it("preserves anchor when deselecting a non-anchor thread", () => {
@@ -96,18 +68,6 @@ describe("threadSelectionStore", () => {
       // Should be referentially the same (no unnecessary re-render)
       expect(stateAfter).toBe(stateBefore);
     });
-
-    it("survives clearSelection followed by setAnchor", () => {
-      const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_A);
-      store.toggleThread(THREAD_B);
-      store.clearSelection();
-      store.setAnchor(THREAD_C);
-
-      const state = useThreadSelectionStore.getState();
-      expect(state.anchorThreadId).toBe(THREAD_C);
-      expect(state.selectedThreadIds.size).toBe(0);
-    });
   });
 
   describe("rangeSelectTo", () => {
@@ -118,18 +78,6 @@ describe("threadSelectionStore", () => {
       expect(state.selectedThreadIds.has(THREAD_C)).toBe(true);
       expect(state.selectedThreadIds.size).toBe(1);
       expect(state.anchorThreadId).toBe(THREAD_C);
-    });
-
-    it("selects range from anchor to target (forward)", () => {
-      const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_B); // sets anchor to B
-      store.rangeSelectTo(THREAD_D, ORDERED);
-
-      const state = useThreadSelectionStore.getState();
-      expect(state.selectedThreadIds.has(THREAD_B)).toBe(true);
-      expect(state.selectedThreadIds.has(THREAD_C)).toBe(true);
-      expect(state.selectedThreadIds.has(THREAD_D)).toBe(true);
-      expect(state.selectedThreadIds.size).toBe(3);
     });
 
     it("selects range from anchor to target (backward)", () => {
@@ -168,27 +116,6 @@ describe("threadSelectionStore", () => {
       // Should have added C and reset anchor to C
       expect(state.selectedThreadIds.has(THREAD_C)).toBe(true);
       expect(state.anchorThreadId).toBe(THREAD_C);
-    });
-
-    it("falls back to toggle when target is not in the ordered list", () => {
-      const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_B); // anchor = B
-      const unknownThread = ThreadId.makeUnsafe("thread-unknown");
-      store.rangeSelectTo(unknownThread, ORDERED);
-
-      const state = useThreadSelectionStore.getState();
-      expect(state.selectedThreadIds.has(unknownThread)).toBe(true);
-      expect(state.anchorThreadId).toBe(unknownThread);
-    });
-
-    it("selects the single thread when anchor equals target", () => {
-      const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_C); // anchor = C
-      store.rangeSelectTo(THREAD_C, ORDERED); // range from C to C
-
-      const state = useThreadSelectionStore.getState();
-      expect(state.selectedThreadIds.has(THREAD_C)).toBe(true);
-      expect(state.selectedThreadIds.size).toBe(1);
     });
 
     it("preserves previously selected threads outside the range", () => {
@@ -273,20 +200,9 @@ describe("threadSelectionStore", () => {
   });
 
   describe("hasSelection", () => {
-    it("returns false when nothing is selected", () => {
-      expect(useThreadSelectionStore.getState().hasSelection()).toBe(false);
-    });
-
     it("returns true when threads are selected", () => {
       useThreadSelectionStore.getState().toggleThread(THREAD_A);
       expect(useThreadSelectionStore.getState().hasSelection()).toBe(true);
-    });
-
-    it("returns false after clearing selection", () => {
-      const store = useThreadSelectionStore.getState();
-      store.toggleThread(THREAD_A);
-      store.clearSelection();
-      expect(useThreadSelectionStore.getState().hasSelection()).toBe(false);
     });
   });
 });

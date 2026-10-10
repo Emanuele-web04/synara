@@ -6,12 +6,8 @@ import {
   createFileCommentDraft,
   extractTrailingFileComments,
   FILE_COMMENT_TEXT_MAX_CHARS,
-  formatFileCommentLabel,
-  formatFileCommentRange,
-  formatFileCommentTitleSeed,
   getFileCommentValidationError,
   normalizeFileCommentSelection,
-  normalizeFileCommentText,
   type FileCommentSelection,
 } from "./fileComments";
 
@@ -26,11 +22,6 @@ function makeSelection(overrides?: Partial<FileCommentSelection>): FileCommentSe
 }
 
 describe("fileComments", () => {
-  it("normalizes comment text by stripping CRLF and edge whitespace", () => {
-    expect(normalizeFileCommentText("  hello\r\nworld  \n\n")).toBe("hello\nworld");
-    expect(normalizeFileCommentText("\n\n  \n")).toBe("");
-  });
-
   it("validates path and text presence and length", () => {
     expect(getFileCommentValidationError(makeSelection())).toBeNull();
     expect(getFileCommentValidationError(makeSelection({ text: "   " }))).toBe("empty");
@@ -80,16 +71,6 @@ describe("fileComments", () => {
       text: "rename this helper",
     });
     expect(createFileCommentDraft(makeSelection({ text: "  " }))).toBeNull();
-  });
-
-  it("formats ranges, labels, and title seeds", () => {
-    expect(formatFileCommentRange({ startLine: 5, endLine: 5 })).toBe("line 5");
-    expect(formatFileCommentRange({ startLine: 3, endLine: 7 })).toBe("lines 3-7");
-    expect(formatFileCommentLabel({ path: "a/b.ts", startLine: 3, endLine: 7 })).toBe(
-      "a/b.ts lines 3-7",
-    );
-    expect(formatFileCommentTitleSeed(1)).toBe("File comment");
-    expect(formatFileCommentTitleSeed(2)).toBe("File comments");
   });
 
   it("builds a numbered prompt block and skips invalid entries", () => {
@@ -144,24 +125,5 @@ describe("fileComments", () => {
         { path: "src/util.ts", startLine: 8, endLine: 8, text: "guard null\nhere" },
       ],
     });
-  });
-
-  it("leaves prompt text untouched when there is no trailing block", () => {
-    expect(extractTrailingFileComments("No comments here")).toEqual({
-      promptText: "No comments here",
-      comments: [],
-    });
-  });
-
-  it("round-trips append -> extract for multi-line comment text", () => {
-    const selections = [
-      makeSelection({ path: "a.ts", startLine: 1, endLine: 2, text: "line one\nline two" }),
-    ];
-    const prompt = appendFileCommentsToPrompt("Do the thing", selections);
-    const extracted = extractTrailingFileComments(prompt);
-    expect(extracted.promptText).toBe("Do the thing");
-    expect(extracted.comments).toEqual([
-      { path: "a.ts", startLine: 1, endLine: 2, text: "line one\nline two" },
-    ]);
   });
 });

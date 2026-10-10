@@ -4,6 +4,7 @@
 // Layer: UI component (pure)
 // Exports: ThreadStatusPillChip
 
+import { StatusChip } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 
@@ -15,17 +16,13 @@ export function ThreadStatusPillChip({
   className?: string;
 }) {
   return (
-    <span
-      className={cn("flex min-w-0 items-center gap-1.5 text-[11px]", pill.colorClass, className)}
+    <StatusChip
+      variant="inline"
+      dotClassName={pill.dotClass}
+      pulse={pill.pulse}
+      className={cn(pill.colorClass, className)}
     >
-      <span
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          pill.dotClass,
-          pill.pulse ? "animate-pulse" : "",
-        )}
-      />
       <span className="truncate">{pill.label}</span>
-    </span>
+    </StatusChip>
   );
 }

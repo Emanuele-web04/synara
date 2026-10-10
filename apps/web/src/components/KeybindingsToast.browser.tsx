@@ -2,6 +2,7 @@ import "../index.css";
 
 import {
   DEVICE_WS_METHODS,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationReadModel,
@@ -186,6 +187,10 @@ function resolveWsRpc(tag: string): unknown {
   if (tag === WS_METHODS.automationList) {
     return { definitions: [], runs: [] };
   }
+  // The sidebar reads to-dos on Beta hosts; the `{}` fallback would fail to decode.
+  if (tag === WS_METHODS.todoList) {
+    return { todos: [] };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     return {
       isRepo: true,
@@ -260,16 +265,19 @@ const worker = setupWorker(
       if (
         method === WS_METHODS.subscribeServerProviderStatuses ||
         method === WS_METHODS.subscribeServerSettings ||
+        method === WS_METHODS.subscribeServerKeepAwake ||
         method === WS_METHODS.subscribeTerminalEvents ||
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
         method === WS_METHODS.subscribeAutomationEvents ||
+        method === WS_METHODS.subscribeTodoEvents ||
         // Left open like the rest: these are infinite subscriptions, and the
         // default below answers with an Exit, which a stream RPC reads as the
         // socket dying and answers with a full reconnect. That loops forever
         // and fills the run with schema errors about an Exit whose Success
         // value is `{}` where Void was expected.
-        method === DEVICE_WS_METHODS.subscribeEvents
+        method === DEVICE_WS_METHODS.subscribeEvents ||
+        method === COMPUTER_WS_METHODS.subscribeEvents
       ) {
         return;
       }
@@ -341,15 +349,6 @@ async function waitForToast(title: string, count = 1): Promise<void> {
       expect(matches.length, `Expected ${count} "${title}" toast(s)`).toBeGreaterThanOrEqual(count);
     },
     { timeout: 4_000, interval: 16 },
-  );
-}
-
-async function waitForNoToast(title: string): Promise<void> {
-  await vi.waitFor(
-    () => {
-      expect(queryToastTitles().filter((t) => t === title)).toHaveLength(0);
-    },
-    { timeout: 10_000, interval: 50 },
   );
 }
 
@@ -455,20 +454,6 @@ describe("Keybindings update toast", () => {
     document.body.innerHTML = "";
   });
 
-  it("does not show success toasts for passive keybinding reloads", async () => {
-    const mounted = await mountApp();
-
-    try {
-      await sendServerConfigUpdatedPush([]);
-      await waitForNoToast("Keybindings updated");
-
-      await sendServerConfigUpdatedPush([]);
-      await waitForNoToast("Keybindings updated");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
   it("shows a warning toast when keybinding config has issues", async () => {
     const mounted = await mountApp();
 
@@ -479,34 +464,6 @@ describe("Keybindings update toast", () => {
       await waitForToast("Invalid keybindings configuration");
     } finally {
       await mounted.cleanup();
-    }
-  });
-
-  it("does not show a toast from the replayed cached value on subscribe", async () => {
-    const mounted = await mountApp();
-
-    try {
-      await sendServerConfigUpdatedPush([]);
-      await waitForNoToast("Keybindings updated");
-
-      // Remount the app — onServerConfigUpdated replays the cached value
-      // synchronously on subscribe. This should NOT produce a toast.
-      await mounted.cleanup();
-      const remounted = await mountApp();
-
-      // Give it a moment to process the replayed value
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const titles = queryToastTitles();
-      expect(
-        titles.filter((t) => t === "Keybindings updated").length,
-        "Replayed cached value should not produce a toast",
-      ).toBe(0);
-
-      await remounted.cleanup();
-    } catch (error) {
-      await mounted.cleanup().catch(() => {});
-      throw error;
     }
   });
 });

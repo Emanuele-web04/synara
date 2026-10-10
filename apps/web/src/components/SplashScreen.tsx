@@ -2,6 +2,7 @@
 // Purpose: Render the branded startup face while the app is still booting a route or session.
 // Layer: Shared app loading presentation
 
+import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { SynaraLogo } from "~/components/SynaraLogo";
 
 export function SplashScreen({
@@ -14,25 +15,29 @@ export function SplashScreen({
   const showRetry = Boolean(errorMessage && onRetry);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background">
-      <div className="flex flex-col items-center gap-5 select-none">
-        <SynaraLogo aria-label="Synara" className="size-24" />
+    // The shared route surface, so the splash sits in the same block as every other route
+    // (under the rail layout's top band) and goes clear with whole-window glass.
+    <RouteInsetSurface>
+      <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center">
+        <div className="flex flex-col items-center gap-5 select-none">
+          <SynaraLogo aria-label="Synara" className="size-24" />
 
-        {errorMessage ? (
-          <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">
-            <span className="text-sm text-muted-foreground/75">{errorMessage}</span>
-            {showRetry ? (
-              <button
-                type="button"
-                className="rounded-md border border-border/70 px-3 py-1.5 text-sm text-foreground/85 transition-colors hover:bg-[var(--sidebar-accent)]"
-                onClick={onRetry ?? undefined}
-              >
-                Retry
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+          {errorMessage ? (
+            <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">
+              <span className="text-sm text-muted-foreground/75">{errorMessage}</span>
+              {showRetry ? (
+                <button
+                  type="button"
+                  className="rounded-md border border-border/70 px-3 py-1.5 text-sm text-foreground/85 transition-colors hover:bg-[var(--sidebar-accent)]"
+                  onClick={onRetry ?? undefined}
+                >
+                  Retry
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
-    </div>
+    </RouteInsetSurface>
   );
 }

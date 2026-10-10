@@ -68,6 +68,56 @@ export function collectLeaves(root: Pane): LeafPane[] {
   return [...collectLeaves(root.first), ...collectLeaves(root.second)];
 }
 
+// --- flat layout ---
+
+/** A pane's box as fractions (0..1) of the whole split surface. */
+export interface PaneRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface SplitPaneLayout {
+  leaves: { leaf: LeafPane; rect: PaneRect }[];
+  splits: { node: SplitNode; rect: PaneRect }[];
+}
+
+// Resolves the tree into absolute boxes so the surface can render every leaf as a sibling
+// keyed by its id. Rendering the tree as nested elements instead changes a leaf's parent
+// whenever a pane is added, moved, or closed, which remounts the chat inside it. Leaves come
+// back in tree order (the same as collectLeaves), so DOM and tab order follow the panes on
+// screen and the first leaf is the leading one.
+export function layoutSplitPanes(root: Pane): SplitPaneLayout {
+  const layout: SplitPaneLayout = { leaves: [], splits: [] };
+  const visit = (pane: Pane, rect: PaneRect) => {
+    if (pane.kind === "leaf") {
+      layout.leaves.push({ leaf: pane, rect });
+      return;
+    }
+    layout.splits.push({ node: pane, rect });
+    if (pane.direction === "horizontal") {
+      const firstWidth = rect.width * pane.ratio;
+      visit(pane.first, { ...rect, width: firstWidth });
+      visit(pane.second, {
+        ...rect,
+        left: rect.left + firstWidth,
+        width: rect.width - firstWidth,
+      });
+      return;
+    }
+    const firstHeight = rect.height * pane.ratio;
+    visit(pane.first, { ...rect, height: firstHeight });
+    visit(pane.second, {
+      ...rect,
+      top: rect.top + firstHeight,
+      height: rect.height - firstHeight,
+    });
+  };
+  visit(root, { left: 0, top: 0, width: 1, height: 1 });
+  return layout;
+}
+
 // --- pane mutation (immutable) ---
 
 // Returns a new tree where the pane with paneId is replaced. Preserves identity when nothing changes.
