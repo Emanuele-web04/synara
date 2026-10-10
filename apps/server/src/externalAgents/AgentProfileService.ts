@@ -279,6 +279,13 @@ export const makeAgentProfileService = Effect.gen(function* () {
 
   const createProfile: AgentProfileServiceShape["createProfile"] = (input) =>
     Effect.gen(function* () {
+      if (!validateCliConnectorMapping(input)) {
+        return yield* new ExternalAgentProfileError({
+          code: "invalid-connector-mapping",
+          message: CLI_CONNECTOR_MAPPING_ERROR_MESSAGE,
+          status: 400,
+        });
+      }
       const now = new Date().toISOString();
       const profileId = AgentProfileId.makeUnsafe(`agentprofile_${randomUUID()}`);
       const provenance = input.provenance ?? { source: "manual" };

@@ -11,6 +11,7 @@ import { AcpRegistryClient, type AcpRegistrySnapshot } from "./AcpRegistryClient
 import { decodeAcpRegistryDocument } from "./acpRegistry.ts";
 import {
   DiscoveryService,
+  DISCOVERY_MEMO_TTL_MS,
   makeDiscoveryService,
   type DiscoveryServiceOptions,
 } from "./DiscoveryService.ts";
@@ -382,5 +383,46 @@ describe("DiscoveryService — deterministic candidate orchestration", () => {
     // memo (no additional resolveRecipe/registry work).
     expect(observed.recipeProbeCalls).toBe(AGENT_RECIPES.length);
     expect(observed.registryCalls).toBe(1);
+  });
+  it("refreshes cached absence and registry outages without restarting the service", async () => {
+    let now = 0;
+    let available = false;
+    let registryCalls = 0;
+    const resolver = Layer.succeed(BinaryRecipeResolver, {
+      resolveRecipe: () =>
+        Effect.sync(() => ({ candidates: available ? [recipeCandidate()] : [] })),
+    } satisfies BinaryRecipeResolver["Service"]);
+    const registry = Layer.succeed(AcpRegistryClient, {
+      getSnapshot: Effect.sync(() => {
+        registryCalls++;
+        return available
+          ? { status: "available" as const, snapshot: registrySnapshot(), fromCache: true }
+          : { status: "unavailable" as const, error: "offline" };
+      }),
+    } satisfies AcpRegistryClient["Service"]);
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* makeDiscoveryService({ now: () => now });
+        const before = yield* service.listCandidates();
+        available = true;
+        const cached = yield* service.listCandidates();
+        now += DISCOVERY_MEMO_TTL_MS;
+        const refreshed = yield* service.listCandidates();
+        return { before, cached, refreshed };
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            resolver,
+            registry,
+            ServerConfig.layerTest(process.cwd(), { prefix: "discovery-refresh" }),
+          ).pipe(Layer.provideMerge(NodeServices.layer)),
+        ),
+      ),
+    );
+    expect(result.before.candidates).toEqual([]);
+    expect(result.cached.registryStatus.available).toBe(false);
+    expect(result.refreshed.registryStatus.available).toBe(true);
+    expect(result.refreshed.candidates.some((entry) => entry.source === "recipe")).toBe(true);
+    expect(registryCalls).toBe(2);
   });
 });
