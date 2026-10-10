@@ -40,6 +40,37 @@ afterEach(() => {
   useStore.setState(initialState);
   api.getThreadDetailSnapshot.mockReset();
 });
+it("restarts Find loading when a new window owner arrives during the older request", async () => {
+  seed();
+  adoptVerifiedThreadCacheIdentity("history-owner");
+  let finish!: (value: OrchestrationThreadDetailSnapshot) => void;
+  api.getThreadDetailSnapshot
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    )
+    .mockResolvedValue(page());
+  let cancelled = false;
+  const previousFind = ensureThreadHistoryLoaded(thread.id, undefined, () => cancelled);
+  await Promise.resolve();
+  useStore
+    .getState()
+    .syncServerThreadDetailHotPath(
+      makeReadModelThread({
+        messages: [{ ...older, id: cursor.messageId, text: "authoritative latest" }],
+      }),
+      21,
+      { totalMessageCount: 2, olderCursor: cursor },
+    );
+  cancelled = true;
+  const nextFind = ensureThreadHistoryLoaded(thread.id);
+  finish(page());
+  await Promise.all([previousFind, nextFind]);
+  expect(api.getThreadDetailSnapshot).toHaveBeenCalledTimes(2);
+  expect(useStore.getState().threadHistoryById?.[thread.id]?.olderCursor).toBeNull();
+});
 it.each(["identity", "eviction", "resnapshot", "deletion"])(
   "rejects a late page after %s invalidates its owner",
   async (change) => {

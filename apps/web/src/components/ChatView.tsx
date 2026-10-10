@@ -3822,11 +3822,13 @@ export default function ChatView({
       const api = readNativeApi();
       if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
         return;
+      const childThreadId = localSubagentThreadId(stripSourceThreadId, item.providerThreadId);
+      if (isThreadDetailAwaitingVerification(childThreadId)) return;
       await api.orchestration.dispatchCommand({
         type: "thread.turn.interrupt",
         requestedBy: "user",
         commandId: newCommandId(),
-        threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
+        threadId: childThreadId,
         createdAt: new Date().toISOString(),
       });
     },
