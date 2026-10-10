@@ -410,6 +410,17 @@ jobs:
         # runtime/build dependencies but do not install the unrelated marketing site.
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
 
+      - name: Install Linux packaging tools
+        if: matrix.platform == 'linux' && needs.preflight.outputs.package_artifacts == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # electron-builder's fpm target shells out to rpmbuild for .rpm and
+          # its bundled ruby links libcrypt.so.1. Declare both instead of
+          # trusting the runner image to keep providing them.
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rpm libcrypt1
+
       - name: Download macOS icon catalog
         if: matrix.platform == 'mac' && needs.preflight.outputs.package_artifacts == 'true'
         uses: actions/download-artifact@v8
@@ -558,6 +569,8 @@ jobs:
             "release/*.dmg" \
             "release/*.zip" \
             "release/*.AppImage" \
+            "release/*.deb" \
+            "release/*.rpm" \
             "release/*.exe" \
             "release/*.blockmap" \
             "release/latest*.yml"; do
@@ -853,6 +866,8 @@ jobs:
             release-assets/*.dmg
             release-assets/*.zip
             release-assets/*.AppImage
+            release-assets/*.deb
+            release-assets/*.rpm
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
