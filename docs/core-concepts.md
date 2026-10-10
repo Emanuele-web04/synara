@@ -155,6 +155,14 @@ or **Copy error** to copy every line. **Unblock thread** is available for provid
 quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
 not offer a generic Retry because an error message alone cannot prove that resending is safe.
 
+Messages queued above the composer while a turn runs are sent one by one after it completes.
+If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it
+stays visible with **Queue paused** and the reason. **Resume** sends the queue in order;
+**Edit** moves the next queued message back into the composer. Sending a new message
+yourself goes first, and the queue resumes once that turn completes. The pause is per
+thread and survives a reload. A message already shown in the conversation was accepted by
+the server rather than queued here, and the server still sends it after a Stop.
+
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
 

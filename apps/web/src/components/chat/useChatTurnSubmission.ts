@@ -911,7 +911,7 @@ export function useChatTurnSubmission({
         scheduleComposerFocus();
       }
 
-      return executePreparedTurn({
+      const sent = await executePreparedTurn({
         nextThreadEnvMode,
         nextThreadBranch,
         nextThreadWorktreePath,
@@ -962,6 +962,12 @@ export function useChatTurnSubmission({
         composerSkillsSnapshot,
         composerMentionsSnapshot,
       });
+      // A message the user sends by hand (or steers from the queue) resumes a queue
+      // paused by Stop; it goes first and the queue follows once its turn ends.
+      if (sent && (queuedChatTurn === null || dispatchMode === "steer")) {
+        useComposerDraftStore.getState().resumeQueuedTurns(threadIdForSend, null);
+      }
+      return sent;
     },
     [
       threadId,
