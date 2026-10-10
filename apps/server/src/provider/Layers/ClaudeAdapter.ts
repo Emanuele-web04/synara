@@ -8015,11 +8015,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        if (turnId !== undefined && turnId !== context.turnState?.turnId) {
+        // Only a different live turn makes a Stop stale: an old Stop must not
+        // abort a newer prompt. With no live turn the requested one already
+        // settled here (its terminal event can still be in flight, so the
+        // binding still names it), yet the CLI may keep emitting output the
+        // adapter holds no turn for. Interrupting is then still the user's
+        // intent, and an idle CLI acknowledges it immediately.
+        if (
+          turnId !== undefined &&
+          context.turnState !== undefined &&
+          turnId !== context.turnState.turnId
+        ) {
           yield* Effect.logWarning("claude.stale_interrupt_ignored", {
             threadId,
             requestedTurnId: turnId,
-            activeTurnId: context.turnState?.turnId,
+            activeTurnId: context.turnState.turnId,
           });
           return;
         }
