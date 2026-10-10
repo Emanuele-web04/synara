@@ -21,6 +21,7 @@ export function useThreadFastModeNotice(
     if (!activityIds || !activityById) return null;
     for (let index = activityIds.length - 1; index >= 0; index -= 1) {
       const candidate = activityById[activityIds[index]!];
+      if (candidate?.kind === "provider.handoff") return null;
       if (candidate?.kind === FAST_MODE_STATE_ACTIVITY_KIND) return candidate;
     }
     return null;

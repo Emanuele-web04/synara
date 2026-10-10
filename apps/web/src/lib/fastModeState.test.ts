@@ -44,6 +44,18 @@ describe("deriveFastModeNotice", () => {
     }
   });
 
+  it("forgets the prior account state after a completed handoff but retains it after a failed one", () => {
+    const blocked = fastModeActivity({ state: "off", disabledReason: "free" });
+    const handoff = { ...blocked, id: "handoff", kind: "provider.handoff", payload: {} };
+    expect(deriveFastModeNotice([blocked, handoff])).toBeNull();
+    expect(
+      deriveFastModeNotice([blocked, { ...handoff, kind: "provider.handoff.failed" }])?.kind,
+    ).toBe("blocked");
+    expect(
+      deriveFastModeNotice([blocked, handoff, fastModeActivity({ state: "cooldown" })])?.kind,
+    ).toBe("cooldown");
+  });
+
   it("reports a cooldown and follows the latest report", () => {
     const blocked = fastModeActivity({ state: "off", disabledReason: "free" });
     expect(deriveFastModeNotice([blocked, fastModeActivity({ state: "cooldown" })])?.kind).toBe(

@@ -29,9 +29,15 @@ export const FAST_MODE_STATE_ACTIVITY_KIND = "fast-mode.state";
 export function deriveFastModeNotice(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): FastModeNotice | null {
-  return fastModeNoticeFromActivity(
-    activities.findLast((item) => item.kind === FAST_MODE_STATE_ACTIVITY_KIND),
-  );
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index]!;
+    // A successful handoff starts a different session/account. An older SDK
+    // may never report its state, so the previous account is no longer evidence.
+    if (activity.kind === "provider.handoff") return null;
+    if (activity.kind === FAST_MODE_STATE_ACTIVITY_KIND)
+      return fastModeNoticeFromActivity(activity);
+  }
+  return null;
 }
 
 export function fastModeNoticeFromActivity(
