@@ -2,11 +2,16 @@ import { createInterface } from "node:readline";
 const mode = process.argv[2];
 const basic = mode.startsWith("basic");
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
-const workspace = () => JSON.stringify({ cwd: process.cwd(), pwd: process.env.PWD });
+const workspace = () =>
+  `external-cli-fixture-workspace:${JSON.stringify({ cwd: process.cwd(), pwd: process.env.PWD })}`;
 if (basic) process.stdout.write("ready\n");
 else send({ type: "session.hello", protocolVersion: 1, capabilityIds: [] });
+let basicReplied = false;
 createInterface({ input: process.stdin }).on("line", (line) => {
   if (basic) {
+    // This one-shot fixture receives a potentially multiline harness prompt.
+    if (basicReplied) return;
+    basicReplied = true;
     process.stdout.write(`${workspace()}\n`, () => process.exit(mode === "basic-success" ? 0 : 3));
     return;
   }

@@ -4482,7 +4482,7 @@ describe("ChatView transcript geometry (full app)", () => {
     );
 
     it("continues in the same thread by rebinding its provider", async () => {
-      const mounted = await mountWithCapturedCommands();
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
       try {
         await openHandoffMenu();
         const sameThreadItem = document.querySelector<HTMLElement>(
@@ -4497,6 +4497,11 @@ describe("ChatView transcript geometry (full app)", () => {
           providerHandoff: true,
           modelSelection: { provider: "claudeAgent" },
         });
+        // The handoff waits for its durable outcome, not just command admission.
+        // Settle it before unmounting so its timeout cannot toast over a later test.
+        await vi.waitFor(() =>
+          expect(fixture.snapshot.threads[0]?.modelSelection.provider).toBe("claudeAgent"),
+        );
         // Same thread: no new thread, and the route stays put.
         expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
           false,
