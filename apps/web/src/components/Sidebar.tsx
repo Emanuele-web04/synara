@@ -1632,7 +1632,13 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "sidebar.addProject") ??
     (isMacNavigatorPlatform() ? "⇧⌘O" : "Ctrl+Shift+O");
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
-  const { activeProjectId: focusedProjectId, focusedThreadId } = useFocusedChatContext();
+  const {
+    activeProjectId: focusedProjectId,
+    focusedThreadId,
+    activeThread: focusedThread,
+    activeDraftThread: focusedDraftThread,
+  } = useFocusedChatContext();
+  const focusedWorkspaceThread = focusedThread ?? focusedDraftThread;
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [createProjectSpaceId, setCreateProjectSpaceId] = useState<SpaceId | null | undefined>();
@@ -8078,7 +8084,14 @@ export default function Sidebar() {
           onAddProjectPath={addProjectFromPath}
           homeDir={homeDir}
           activeProjectCwd={
-            focusedProjectId ? (projectCwdById.get(focusedProjectId) ?? null) : null
+            focusedProjectId
+              ? resolveThreadWorkspaceCwd({
+                  projectCwd: projectCwdById.get(focusedProjectId) ?? null,
+                  envMode: focusedWorkspaceThread?.envMode,
+                  worktreePath: focusedWorkspaceThread?.worktreePath,
+                  workingDirectory: focusedWorkspaceThread?.workingDirectory,
+                })
+              : null
           }
           activeThreadId={focusedThreadId}
           onOpenFile={(relativePath) => {
