@@ -49,6 +49,7 @@ import remarkMath from "remark-math";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
+import { MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS } from "../lib/syntaxHighlightingLimits";
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
@@ -140,6 +141,12 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   wikiLinkRoot?: string | undefined;
+  /**
+   * Assigns native bidi ownership to transcript markdown blocks. The default
+   * keeps the shared renderer's existing direction behavior for previews,
+   * plans, and other non-transcript consumers.
+   */
+  directionMode?: "off" | "auto-blocks";
   isStreaming?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
@@ -304,6 +311,63 @@ const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
 ];
+
+type BidiHastNode = {
+  type?: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: BidiHastNode[];
+};
+
+const TOP_LEVEL_BIDI_OWNER_TAGS = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6"]);
+const NESTED_BIDI_OWNER_TAGS = new Set(["li", "blockquote", "th", "td"]);
+
+function setBidiDirection(node: BidiHastNode, direction: "auto" | "ltr"): void {
+  node.properties = { ...node.properties, dir: direction };
+}
+
+function applyNestedBidiOwners(node: BidiHastNode): void {
+  if (node.type === "element" && node.tagName) {
+    if (NESTED_BIDI_OWNER_TAGS.has(node.tagName)) {
+      setBidiDirection(node, "auto");
+    } else if (
+      node.tagName === "pre" ||
+      node.tagName === "table" ||
+      (Array.isArray(node.properties?.className) && node.properties.className.includes("katex")) ||
+      node.properties?.className === "katex"
+    ) {
+      // Code, tables, and rendered math retain source/LTR ordering and must
+      // not contribute their Latin text to an enclosing prose block's scan.
+      setBidiDirection(node, "ltr");
+    }
+  }
+
+  for (const child of node.children ?? []) {
+    applyNestedBidiOwners(child);
+  }
+}
+
+/**
+ * Let the browser's Unicode bidi algorithm choose each prose block's first
+ * strong direction. Regular anchors intentionally remain direction-neutral:
+ * a link label is part of its paragraph's content, so setting dir=auto on the
+ * anchor would isolate it and make a link-only Arabic paragraph resolve LTR.
+ */
+function rehypeBidiBlockDirection() {
+  return (tree: BidiHastNode) => {
+    for (const child of tree.children ?? []) {
+      if (
+        child.type === "element" &&
+        child.tagName &&
+        TOP_LEVEL_BIDI_OWNER_TAGS.has(child.tagName)
+      ) {
+        setBidiDirection(child, "auto");
+      }
+      applyNestedBidiOwners(child);
+    }
+  };
+}
+
 type MarkdownTextNode = {
   type: "text";
   value: string;
@@ -895,10 +959,12 @@ function MarkdownCodeBlock({
   code,
   fence,
   children,
+  direction,
 }: {
   code: string;
   fence: CodeFenceInfo;
   children: ReactNode;
+  direction?: "ltr" | undefined;
 }) {
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
@@ -930,7 +996,7 @@ function MarkdownCodeBlock({
   );
 
   return (
-    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"}>
+    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"} dir={direction}>
       <div className="chat-markdown-codeblock__header">
         <CodeBlockHeaderTitle fence={fence} />
         <div className="chat-markdown-codeblock__actions">
@@ -1101,6 +1167,7 @@ interface MarkdownRenderContextValue {
   diffThemeName: DiffThemeName;
   isStreaming: boolean;
   isUserVariant: boolean;
+  usesAutomaticBlockDirection: boolean;
   mentionReferences: ChatMarkdownProps["mentionReferences"];
   onImageExpand: ChatMarkdownProps["onImageExpand"];
   onOpenThread: ChatMarkdownProps["onOpenThread"];
@@ -1121,6 +1188,17 @@ const GITHUB_ALERTS: Record<GithubAlertKind, { title: string; icon: LucideIcon }
   caution: { title: "Caution", icon: OctagonAlertIcon },
 };
 
+function TechnicalBidiIsolate(props: { active: boolean; children: ReactNode }) {
+  if (!props.active) {
+    return <>{props.children}</>;
+  }
+  return (
+    <bdi className="chat-markdown-technical-isolate" dir="ltr">
+      {props.children}
+    </bdi>
+  );
+}
+
 const MARKDOWN_COMPONENTS: Components = {
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
     const kind = (props as { "data-github-alert"?: GithubAlertKind })["data-github-alert"];
@@ -1139,7 +1217,14 @@ const MARKDOWN_COMPONENTS: Components = {
   },
   a: function MarkdownLink({ node: _node, href, children, ...props }) {
     const context = useContext(MarkdownRenderContext)!;
-    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme, onOpenThread } = context;
+    const {
+      isUserVariant,
+      usesAutomaticBlockDirection,
+      cwd,
+      knownAbsoluteFilePaths,
+      resolvedTheme,
+      onOpenThread,
+    } = context;
     const linkedContext = useMemo(
       () => ({ ...context, onImageExpand: undefined, isInsideLink: true }),
       [context],
@@ -1180,7 +1265,11 @@ const MARKDOWN_COMPONENTS: Components = {
         restoredHref === `http://${plainText}` ||
         restoredHref === `https://${plainText}`
       ) {
-        return <InlineLinkChip url={restoredHref} interactive />;
+        return (
+          <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+            <InlineLinkChip url={restoredHref} interactive />
+          </TechnicalBidiIsolate>
+        );
       }
     }
     const targetPath = isExternalHttp
@@ -1226,16 +1315,21 @@ const MARKDOWN_COMPONENTS: Components = {
     }
 
     return (
-      <OpenableFileChip
-        targetPath={targetPath}
-        theme={resolvedTheme}
-        label={linkedChildren}
-        {...(restoredHref ? { href: restoredHref } : {})}
-      />
+      <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+        <OpenableFileChip
+          targetPath={targetPath}
+          theme={resolvedTheme}
+          label={
+            usesAutomaticBlockDirection ? <bdi dir="auto">{linkedChildren}</bdi> : linkedChildren
+          }
+          {...(restoredHref ? { href: restoredHref } : {})}
+        />
+      </TechnicalBidiIsolate>
     );
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { sourceText, diffThemeName, isStreaming } = useContext(MarkdownRenderContext)!;
+    const { sourceText, diffThemeName, isStreaming, usesAutomaticBlockDirection } =
+      useContext(MarkdownRenderContext)!;
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -1255,23 +1349,31 @@ const MARKDOWN_COMPONENTS: Components = {
     );
 
     return (
-      <MarkdownCodeBlock code={code} fence={fence}>
-        <CodeHighlightErrorBoundary fallback={highlightedFallback}>
-          <Suspense fallback={highlightedFallback}>
-            <SuspenseShikiCodeBlock
-              language={fence.language}
-              code={code}
-              themeName={diffThemeName}
-              isStreaming={isStreaming}
-              sourceOffset={sourceOffset}
-            />
-          </Suspense>
-        </CodeHighlightErrorBoundary>
+      <MarkdownCodeBlock
+        code={code}
+        fence={fence}
+        direction={usesAutomaticBlockDirection ? "ltr" : undefined}
+      >
+        {code.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS ? (
+          highlightedFallback
+        ) : (
+          <CodeHighlightErrorBoundary fallback={highlightedFallback}>
+            <Suspense fallback={highlightedFallback}>
+              <SuspenseShikiCodeBlock
+                language={fence.language}
+                code={code}
+                themeName={diffThemeName}
+                isStreaming={isStreaming}
+                sourceOffset={sourceOffset}
+              />
+            </Suspense>
+          </CodeHighlightErrorBoundary>
+        )}
       </MarkdownCodeBlock>
     );
   },
   code: function MarkdownInlineCode({ node, className, children, ...props }) {
-    const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme } =
+    const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme, usesAutomaticBlockDirection } =
       useContext(MarkdownRenderContext)!;
     // Fenced blocks carry a `language-*` class and are rendered by `pre`;
     // only inline code (no class) that names a file becomes an openable
@@ -1289,23 +1391,31 @@ const MARKDOWN_COMPONENTS: Components = {
         const knownTarget = resolveChatFileChipTarget(filePath, undefined, knownAbsoluteFilePaths);
         if (knownTarget) {
           return (
-            <OpenableFileChip targetPath={knownTarget} theme={resolvedTheme} {...findLabelProps} />
+            <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+              <OpenableFileChip
+                targetPath={knownTarget}
+                theme={resolvedTheme}
+                {...findLabelProps}
+              />
+            </TechnicalBidiIsolate>
           );
         }
         if (resolveMarkdownFileLinkTarget(filePath, cwd) && cwd) {
           return (
-            <VerifiedWorkspaceFileChip
-              rawReference={filePath}
-              cwd={cwd}
-              theme={resolvedTheme}
-              {...findLabelProps}
-            />
+            <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+              <VerifiedWorkspaceFileChip
+                rawReference={filePath}
+                cwd={cwd}
+                theme={resolvedTheme}
+                {...findLabelProps}
+              />
+            </TechnicalBidiIsolate>
           );
         }
       }
     }
     return (
-      <code className={className} {...props}>
+      <code className={className} {...props} dir={usesAutomaticBlockDirection ? "ltr" : undefined}>
         {children}
       </code>
     );
@@ -1383,19 +1493,22 @@ const MARKDOWN_COMPONENTS: Components = {
       className?: string | undefined;
       [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
     }) {
-      const { resolvedTheme, mentionReferences } = useContext(MarkdownRenderContext)!;
+      const { resolvedTheme, mentionReferences, usesAutomaticBlockDirection } =
+        useContext(MarkdownRenderContext)!;
       return (
-        <ComposerChipElement
-          serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
-          theme={resolvedTheme}
-          mentionReferences={mentionReferences ?? []}
-        />
+        <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+          <ComposerChipElement
+            serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
+            theme={resolvedTheme}
+            mentionReferences={mentionReferences ?? []}
+          />
+        </TechnicalBidiIsolate>
       );
     },
     [TERMINAL_CONTEXT_CHIP_TAG_NAME]: function MarkdownTerminalChip(props: {
       [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
     }) {
-      const { terminalContexts } = useContext(MarkdownRenderContext)!;
+      const { terminalContexts, usesAutomaticBlockDirection } = useContext(MarkdownRenderContext)!;
       const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
       const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
       const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
@@ -1404,7 +1517,11 @@ const MARKDOWN_COMPONENTS: Components = {
       }
       const tooltipText =
         context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
-      return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+      return (
+        <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+          <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />
+        </TechnicalBidiIsolate>
+      );
     },
     [CHAT_FIND_TEXT_TAG_NAME]: function MarkdownFindText(props: {
       children?: ReactNode;
@@ -1425,6 +1542,7 @@ const MARKDOWN_COMPONENTS: Components = {
 function ChatMarkdown({
   text,
   cwd,
+  directionMode: directionModeProp,
   wikiLinkRoot,
   isStreaming: isStreamingProp,
   className: classNameProp,
@@ -1446,6 +1564,8 @@ function ChatMarkdown({
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-chat leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const directionMode = directionModeProp ?? "off";
+  const usesAutomaticBlockDirection = directionMode === "auto-blocks";
   const parseHtml = parseHtmlProp ?? false;
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;
@@ -1511,17 +1631,16 @@ function ChatMarkdown({
     ];
   }, [composerChipsRemarkPlugin, wikiLinkRoot, cwd]);
   const rehypePlugins = useMemo<MarkdownRehypePlugins>(() => {
-    if (isUserVariant) {
-      return USER_MARKDOWN_REHYPE_PLUGINS;
-    }
-    if (parseHtml) {
-      // Raw HTML is only enabled for authored local-file previews. Sanitize
-      // immediately after parsing so scripts, event handlers, and unsafe URL
-      // schemes never reach React's renderer.
-      return [rehypeRaw, [rehypeSanitize, AUTHORED_HTML_SCHEMA], ...MARKDOWN_REHYPE_PLUGINS];
-    }
-    return MARKDOWN_REHYPE_PLUGINS;
-  }, [isUserVariant, parseHtml]);
+    // Raw HTML is only enabled for authored local-file previews. Sanitize
+    // immediately after parsing so scripts, event handlers, and unsafe URL
+    // schemes never reach React's renderer.
+    const basePlugins: MarkdownRehypePlugins = isUserVariant
+      ? USER_MARKDOWN_REHYPE_PLUGINS
+      : parseHtml
+        ? [rehypeRaw, [rehypeSanitize, AUTHORED_HTML_SCHEMA], ...MARKDOWN_REHYPE_PLUGINS]
+        : MARKDOWN_REHYPE_PLUGINS;
+    return usesAutomaticBlockDirection ? [...basePlugins, rehypeBidiBlockDirection] : basePlugins;
+  }, [isUserVariant, parseHtml, usesAutomaticBlockDirection]);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     applyActiveChatFindMatch(rootRef.current, findActiveRange);
@@ -1534,6 +1653,7 @@ function ChatMarkdown({
       diffThemeName,
       isStreaming,
       isUserVariant,
+      usesAutomaticBlockDirection,
       mentionReferences,
       onImageExpand,
       onOpenThread,
@@ -1548,6 +1668,7 @@ function ChatMarkdown({
       diffThemeName,
       isStreaming,
       isUserVariant,
+      usesAutomaticBlockDirection,
       mentionReferences,
       onImageExpand,
       onOpenThread,
@@ -1562,6 +1683,7 @@ function ChatMarkdown({
     <div
       ref={rootRef}
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
+      {...(usesAutomaticBlockDirection ? { "data-direction-mode": "auto-blocks" } : {})}
       style={style}
     >
       <ChatFindRenderProvider

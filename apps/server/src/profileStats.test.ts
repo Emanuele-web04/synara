@@ -64,18 +64,22 @@ describe("ProfileStatsQuery", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const stats = yield* ProfileStatsQuery;
-        for (const [threadId, parentThreadId, creationSource] of [
-          ["root", null, null],
-          ["mirrored-child", "root", "provider_native"],
-          ["independent-child", "root", "synara_mcp"],
+        for (const [threadId, parentThreadId, creationSource, sourceTurnId] of [
+          ["root", null, null, null],
+          ["mirrored-child", "root", "provider_native", "first"],
+          ["independent-child", "root", "synara_mcp", null],
+          ["uncovered-parent", null, null, null],
+          ["uncovered-child", "uncovered-parent", "provider_native", "uncovered-parent-turn"],
+          ["unknown-source-child", "uncovered-parent", "provider_native", null],
+          ["scalar-parent-child", "root", "provider_native", "fallback"],
         ] as const) {
           yield* sql`
           INSERT INTO projection_threads
             (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
-             env_mode, created_at, updated_at, parent_thread_id, creation_source)
+             env_mode, created_at, updated_at, parent_thread_id, creation_source, source_turn_id)
           VALUES (${threadId}, 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
             'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
-            ${parentThreadId}, ${creationSource})
+            ${parentThreadId}, ${creationSource}, ${sourceTurnId})
         `;
         }
         const addActivity = (id: string, threadId: string, turnId: string, payload: object) => sql`
@@ -137,6 +141,89 @@ describe("ProfileStatsQuery", () => {
           modelUsage: { "claude-fable-5": "unusable" },
         });
         yield* addActivity("8", "independent-child", "independent", versioned);
+        // A previous parent turn with a complete breakdown must not suppress a
+        // later provider-native child whose own parent turn was interrupted.
+        yield* addActivity("9-parent", "uncovered-parent", "previous-parent-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 2_000,
+              outputTokens: 1_000,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        });
+        // Malformed historical payloads are ignored by the fallback probe
+        // instead of making the entire Profile query fail.
+        yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (
+            '9-invalid-parent', 'uncovered-parent', 'uncovered-parent-turn',
+            'error', 'turn.completed', 'interrupted', '{not-json', 10, '2026-09-10T12:00:00Z'
+          )
+        `;
+        // If a provider-native child is the only row with a usable breakdown,
+        // retain its verified usage even though the parent has no result row.
+        yield* addActivity("9", "uncovered-child", "uncovered", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 1_000,
+              outputTokens: 500,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        });
+        // Missing source-turn provenance is not evidence that an older parent
+        // result includes this child's work. Background events can omit turnId.
+        yield* addActivity("9-unknown-source", "unknown-source-child", "unknown-source-turn", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 700,
+        });
+        // A scalar model entry in the matching parent is unusable, and must not
+        // fail the SQLite query or suppress this child's valid fallback.
+        yield* addActivity("9-scalar-parent-child", "scalar-parent-child", "scalar-child-turn", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 400,
+        });
+        // A malformed numeric field must not make a parent look usable and
+        // suppress the child's valid usage.
+        yield* sql`
+          INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+             env_mode, created_at, updated_at, parent_thread_id, creation_source, source_turn_id)
+          VALUES (
+            'malformed-parent', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            NULL, NULL, NULL
+          ),
+          (
+            'malformed-child', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            'malformed-parent', 'provider_native', 'malformed-parent-turn'
+          )
+        `;
+        yield* addActivity("10-parent", "malformed-parent", "malformed-parent-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: "not-a-number",
+              outputTokens: "also-not-a-number",
+            },
+          },
+        });
+        yield* addActivity("10-child", "malformed-child", "malformed-child-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 300,
+              outputTokens: 200,
+            },
+          },
+        });
         // Successful main-loop usage survives even though old compact model totals
         // cannot be classified as per-turn or cumulative without process evidence.
         yield* sql`
@@ -172,9 +259,9 @@ describe("ProfileStatsQuery", () => {
         // The verified fallback must outlive ordinary runtime-event retention.
         yield* sql`DELETE FROM provider_runtime_events`;
         const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
-        expect(result.lifetimeTotalTokens).toBe(85_228);
+        expect(result.lifetimeTotalTokens).toBe(91_328);
         expect(result.models.map(({ model, tokens }) => ({ model, tokens }))).toEqual([
-          { model: "claude-fable-5", tokens: 83_228 },
+          { model: "claude-fable-5", tokens: 89_328 },
           { model: "claude-opus-4-8", tokens: 2_000 },
         ]);
       }),
@@ -2218,6 +2305,63 @@ describe("ProfileStatsQuery", () => {
             model: "sonnet",
             tokens: 5_000,
             percent: 4.3,
+          },
+        ]);
+      }),
+    );
+  });
+
+  it("starts a fresh cumulative baseline for each native usage session", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-native-session', 'project-profile', 'Native session thread',
+            '{"provider":"antigravity","model":"Gemini 3.5 Flash"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T12:00:00.000Z', '2026-06-13T12:00:00.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('native-session-1', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-a:one","totalProcessedTokens":1000}',
+              1, '2026-06-13T12:00:00.000Z'),
+            ('native-session-2', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-a:one","totalProcessedTokens":1500}',
+              2, '2026-06-13T12:01:00.000Z'),
+            ('native-session-3', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-b:two","totalProcessedTokens":1500}',
+              3, '2026-06-13T12:02:00.000Z'),
+            ('native-session-4', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-b:two","totalProcessedTokens":2000}',
+              4, '2026-06-13T12:03:00.000Z')
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.lifetimeTotalTokens).toBe(3_500);
+        expect(tokenStats.models).toEqual([
+          {
+            provider: "antigravity",
+            instanceId: "antigravity",
+            model: "Gemini 3.5 Flash",
+            tokens: 3_500,
+            percent: 100,
           },
         ]);
       }),
