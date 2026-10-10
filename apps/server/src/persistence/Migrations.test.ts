@@ -630,11 +630,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
-        [132, "ExternalAgentProfiles"],
-        [133, "CapabilityEvidence"],
-        [134, "ExternalAgentLifecycle"],
-        [135, "CapabilityEvidenceWithdrawal"],
-        [136, "ExternalAgentRevisionMembership"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ExternalAgentProfiles"],
+        [134, "CapabilityEvidence"],
+        [135, "ExternalAgentLifecycle"],
+        [136, "CapabilityEvidenceWithdrawal"],
+        [137, "ExternalAgentRevisionMembership"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -718,11 +719,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 129, name: "ProjectionThreadsSnooze" },
           { migration_id: 130, name: "PullRequestAutoFix" },
           { migration_id: 131, name: "ProjectSourceFolders" },
-          { migration_id: 132, name: "ExternalAgentProfiles" },
-          { migration_id: 133, name: "CapabilityEvidence" },
-          { migration_id: 134, name: "ExternalAgentLifecycle" },
-          { migration_id: 135, name: "CapabilityEvidenceWithdrawal" },
-          { migration_id: 136, name: "ExternalAgentRevisionMembership" },
+          { migration_id: 132, name: "ExternalMcpTurnCapacityRecovery" },
+          { migration_id: 133, name: "ExternalAgentProfiles" },
+          { migration_id: 134, name: "CapabilityEvidence" },
+          { migration_id: 135, name: "ExternalAgentLifecycle" },
+          { migration_id: 136, name: "CapabilityEvidenceWithdrawal" },
+          { migration_id: 137, name: "ExternalAgentRevisionMembership" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -886,11 +888,12 @@ agentGatewayRetentionLegacyLayer(
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
-          [132, "ExternalAgentProfiles"],
-          [133, "CapabilityEvidence"],
-          [134, "ExternalAgentLifecycle"],
-          [135, "CapabilityEvidenceWithdrawal"],
-          [136, "ExternalAgentRevisionMembership"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ExternalAgentProfiles"],
+          [134, "CapabilityEvidence"],
+          [135, "ExternalAgentLifecycle"],
+          [136, "CapabilityEvidenceWithdrawal"],
+          [137, "ExternalAgentRevisionMembership"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1017,11 +1020,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
-        [132, "ExternalAgentProfiles"],
-        [133, "CapabilityEvidence"],
-        [134, "ExternalAgentLifecycle"],
-        [135, "CapabilityEvidenceWithdrawal"],
-        [136, "ExternalAgentRevisionMembership"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ExternalAgentProfiles"],
+        [134, "CapabilityEvidence"],
+        [135, "ExternalAgentLifecycle"],
+        [136, "CapabilityEvidenceWithdrawal"],
+        [137, "ExternalAgentRevisionMembership"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1089,11 +1093,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
-          [132, "ExternalAgentProfiles"],
-          [133, "CapabilityEvidence"],
-          [134, "ExternalAgentLifecycle"],
-          [135, "CapabilityEvidenceWithdrawal"],
-          [136, "ExternalAgentRevisionMembership"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ExternalAgentProfiles"],
+          [134, "CapabilityEvidence"],
+          [135, "ExternalAgentLifecycle"],
+          [136, "CapabilityEvidenceWithdrawal"],
+          [137, "ExternalAgentRevisionMembership"],
         ],
       );
 
@@ -1215,11 +1220,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
-        [132, "ExternalAgentProfiles"],
-        [133, "CapabilityEvidence"],
-        [134, "ExternalAgentLifecycle"],
-        [135, "CapabilityEvidenceWithdrawal"],
-        [136, "ExternalAgentRevisionMembership"],
+        [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ExternalAgentProfiles"],
+        [134, "CapabilityEvidence"],
+        [135, "ExternalAgentLifecycle"],
+        [136, "CapabilityEvidenceWithdrawal"],
+        [137, "ExternalAgentRevisionMembership"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1283,11 +1289,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
-          [132, "ExternalAgentProfiles"],
-          [133, "CapabilityEvidence"],
-          [134, "ExternalAgentLifecycle"],
-          [135, "CapabilityEvidenceWithdrawal"],
-          [136, "ExternalAgentRevisionMembership"],
+          [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ExternalAgentProfiles"],
+          [134, "CapabilityEvidence"],
+          [135, "ExternalAgentLifecycle"],
+          [136, "CapabilityEvidenceWithdrawal"],
+          [137, "ExternalAgentRevisionMembership"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

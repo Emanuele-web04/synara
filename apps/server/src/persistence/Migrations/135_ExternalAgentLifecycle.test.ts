@@ -1,5 +1,5 @@
-// FILE: 134_ExternalAgentLifecycle.test.ts
-// Purpose: Proves migration 134 adds the lifecycle/trust/attribution columns and
+// FILE: 135_ExternalAgentLifecycle.test.ts
+// Purpose: Proves migration 135 adds the lifecycle/trust/attribution columns and
 // normalizes legacy `tombstoned` rows (KAR-522) to `retired` so the tight
 // AgentProfileStatus contract keeps decoding after the migration.
 // Layer: SQLite migration test
@@ -13,14 +13,14 @@ import { AgentProfile as AgentProfileSchema } from "@synara/contracts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("134_ExternalAgentLifecycle", () => {
+describe("135_ExternalAgentLifecycle", () => {
   it.effect("adds the lifecycle, trust, and turn-attribution columns", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 133 });
+      yield* runMigrations({ toMigrationInclusive: 134 });
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 134 }), [
-        [134, "ExternalAgentLifecycle"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 135 }), [
+        [135, "ExternalAgentLifecycle"],
       ]);
 
       const profileColumns = yield* sql<{ readonly name: string }>`
@@ -57,7 +57,7 @@ describe("134_ExternalAgentLifecycle", () => {
   it.effect("normalizes legacy tombstoned rows to retired", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 133 });
+      yield* runMigrations({ toMigrationInclusive: 134 });
 
       // KAR-522 wrote `status = 'tombstoned'`, which no longer decodes after
       // the AgentProfileStatus contract narrowed to active/quarantined/retired.
@@ -70,7 +70,7 @@ describe("134_ExternalAgentLifecycle", () => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 134 });
+      yield* runMigrations({ toMigrationInclusive: 135 });
 
       const rows = yield* sql<{ readonly status: string }>`
         SELECT status
@@ -80,7 +80,7 @@ describe("134_ExternalAgentLifecycle", () => {
       assert.deepStrictEqual(rows, [{ status: "retired" }]);
 
       // Idempotent: a replay over the normalized state changes nothing.
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 134 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 135 }), []);
       const replayRows = yield* sql<{ readonly status: string }>`
         SELECT status
         FROM external_agent_profiles
@@ -110,7 +110,7 @@ describe("134_ExternalAgentLifecycle", () => {
   it.effect("leaves non-tombstoned rows untouched", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 133 });
+      yield* runMigrations({ toMigrationInclusive: 134 });
 
       yield* sql`
         INSERT INTO external_agent_profiles (
@@ -121,7 +121,7 @@ describe("134_ExternalAgentLifecycle", () => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 134 });
+      yield* runMigrations({ toMigrationInclusive: 135 });
 
       const rows = yield* sql<{ readonly status: string }>`
         SELECT status

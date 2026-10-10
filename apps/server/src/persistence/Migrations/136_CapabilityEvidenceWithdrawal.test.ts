@@ -1,5 +1,5 @@
-// FILE: 135_CapabilityEvidenceWithdrawal.test.ts
-// Purpose: Proves migration 135 adds the `withdrawn_at` marker column to the
+// FILE: 136_CapabilityEvidenceWithdrawal.test.ts
+// Purpose: Proves migration 136 adds the `withdrawn_at` marker column to the
 // append-only capability observations store (KAR-530). Observations are never
 // rewritten: unsafe-outcome demotion marks prior rows withdrawn so policy
 // derivation excludes them while the raw history stays intact for audit.
@@ -13,14 +13,14 @@ import { describe } from "vitest";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("135_CapabilityEvidenceWithdrawal", () => {
+describe("136_CapabilityEvidenceWithdrawal", () => {
   it.effect("adds the withdrawn_at marker column for evidence withdrawal", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 134 });
+      yield* runMigrations({ toMigrationInclusive: 135 });
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 135 }), [
-        [135, "CapabilityEvidenceWithdrawal"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 136 }), [
+        [136, "CapabilityEvidenceWithdrawal"],
       ]);
 
       const columns = yield* sql<{ readonly name: string }>`
@@ -36,9 +36,9 @@ describe("135_CapabilityEvidenceWithdrawal", () => {
   it.effect("is idempotent when re-run over its own post-state", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 135 });
+      yield* runMigrations({ toMigrationInclusive: 136 });
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 135 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 136 }), []);
 
       const columns = yield* sql<{ readonly name: string }>`
         SELECT name FROM pragma_table_info('capability_observations') ORDER BY name
