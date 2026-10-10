@@ -43,8 +43,8 @@ jobs:
       - name: Focused regression tests
         if: "!cancelled()"
         run: |
-          bun run --cwd scripts test lib/desktop-package-files.test.ts build-desktop-artifact-mac-config.test.ts
-          bun run --cwd apps/web test build/public-assets.test.ts
+          bun run --cwd scripts test desktop-bundle-files.test.ts build-desktop-artifact-mac-config.test.ts
+          bun run --cwd apps/web test scripts/production-assets.test.ts
 
   measure:
     needs: prepare
