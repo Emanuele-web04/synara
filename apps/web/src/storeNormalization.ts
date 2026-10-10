@@ -120,6 +120,7 @@ export function threadSessionsEqual(
     left.provider === right.provider &&
     left.status === right.status &&
     left.orchestrationStatus === right.orchestrationStatus &&
+    left.runtimeMode === right.runtimeMode &&
     left.activeTurnId === right.activeTurnId &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
@@ -923,7 +924,11 @@ function readModelSessionFromThreadSession(
     ...(previousSession.providerInstanceId !== undefined
       ? { providerInstanceId: previousSession.providerInstanceId }
       : {}),
-    runtimeMode: previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? "full-access",
+    runtimeMode:
+      previousSession.runtimeMode ??
+      previousThread?.runtimeMode ??
+      incomingSession?.runtimeMode ??
+      "full-access",
     activeTurnId: previousSession.activeTurnId ?? null,
     lastError: previousSession.lastError ?? null,
     updatedAt: previousSession.updatedAt,
@@ -1663,6 +1668,7 @@ export function normalizeThreadSession(
       : {}),
     status: toLegacySessionStatus(incoming.status),
     orchestrationStatus: incoming.status,
+    runtimeMode: incoming.runtimeMode,
     activeTurnId: incoming.activeTurnId ?? undefined,
     createdAt: incoming.updatedAt,
     updatedAt: incoming.updatedAt,
@@ -1674,6 +1680,7 @@ export function normalizeThreadSession(
     previous.providerInstanceId === nextSession.providerInstanceId &&
     previous.status === nextSession.status &&
     previous.orchestrationStatus === nextSession.orchestrationStatus &&
+    previous.runtimeMode === nextSession.runtimeMode &&
     previous.activeTurnId === nextSession.activeTurnId &&
     previous.createdAt === nextSession.createdAt &&
     previous.updatedAt === nextSession.updatedAt &&
