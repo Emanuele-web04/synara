@@ -1,9 +1,11 @@
 import "../index.css";
 
+import { ThreadId, TurnId } from "@synara/contracts";
 import { page, userEvent } from "vitest/browser";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { showContextMenuFallback } from "../contextMenuFallback";
+import { getStopAgentProcessMenuItem, stopIdleRuntimeSessionFromClient } from "./threadRuntimeStop";
 
 const ITEMS = [
   { id: "rename", label: "Rename thread" },
@@ -29,6 +31,74 @@ describe("showContextMenuFallback submenus", () => {
   afterEach(() => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     document.body.innerHTML = "";
+  });
+
+  it("manual idle agent action waits for cleanup after the menu is dismissed", async () => {
+    const thread = { id: ThreadId.makeUnsafe("idle-owner"), session: { status: "ready" } };
+    const stopItem = getStopAgentProcessMenuItem(thread);
+    expect(stopItem).not.toBeNull();
+    const before = showContextMenuFallback(ITEMS, { x: 24, y: 24 });
+    await expect.element(page.getByText("Rename thread", { exact: true })).toBeVisible();
+    await page
+      .elementLocator(document.querySelector('[data-slot="context-menu-popup"]')!)
+      .screenshot({ path: "../../../../output/playwright/idle-agent-stop-before.png" });
+    await userEvent.keyboard("{Escape}");
+    await before;
+
+    let finishCleanup!: () => void;
+    const stopIdleRuntimeSession = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCleanup = resolve;
+        }),
+    );
+    let completed = false;
+    const selected = showContextMenuFallback([ITEMS[0], stopItem!, ...ITEMS.slice(1)], {
+      x: 24,
+      y: 24,
+    });
+    const action = selected.then(async (itemId) => {
+      if (itemId === "stop-agent-process") {
+        await stopIdleRuntimeSessionFromClient({ stopIdleRuntimeSession }, thread);
+        completed = true;
+      }
+    });
+    await expect.element(page.getByText("Stop agent process", { exact: true })).toBeVisible();
+    await page
+      .elementLocator(document.querySelector('[data-slot="context-menu-popup"]')!)
+      .screenshot({ path: "../../../../output/playwright/idle-agent-stop-after.png" });
+    await page.getByText("Stop agent process", { exact: true }).click();
+    await expect.poll(() => stopIdleRuntimeSession.mock.calls).toEqual([[{ threadId: thread.id }]]);
+    expect(document.querySelector('[data-slot="context-menu-popup"]')).toBeNull();
+    expect(completed).toBe(false);
+    finishCleanup();
+    await action;
+    expect(completed).toBe(true);
+  });
+
+  it("manual idle agent action rejects a newly busy owner and hides shared child sessions", async () => {
+    const thread = { id: ThreadId.makeUnsafe("idle-owner"), session: { status: "ready" } };
+    const stopIdleRuntimeSession = vi.fn(async () => undefined);
+    const menu = showContextMenuFallback([getStopAgentProcessMenuItem(thread)!], { x: 24, y: 24 });
+    const currentThread = {
+      ...thread,
+      session: { status: "running", activeTurnId: TurnId.makeUnsafe("newly-started-turn") },
+    };
+    await page.getByText("Stop agent process", { exact: true }).click();
+    expect(await menu).toBe("stop-agent-process");
+    await expect(
+      stopIdleRuntimeSessionFromClient({ stopIdleRuntimeSession }, currentThread),
+    ).rejects.toThrow("Interrupt the current turn");
+    const child = {
+      ...thread,
+      id: ThreadId.makeUnsafe("subagent:idle-owner:child"),
+      parentThreadId: thread.id,
+    };
+    expect(getStopAgentProcessMenuItem(child)).toBeNull();
+    await expect(
+      stopIdleRuntimeSessionFromClient({ stopIdleRuntimeSession }, child),
+    ).rejects.toThrow("Subagents share their parent");
+    expect(stopIdleRuntimeSession).not.toHaveBeenCalled();
   });
 
   it("opens a submenu on hover and resolves the picked child", async () => {

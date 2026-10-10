@@ -6354,6 +6354,288 @@ piInteractionRouting.layer("ProviderServiceLive Pi interaction generation", (it)
   );
 });
 
+const manualIdleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 0 });
+manualIdleCleanup.layer("ProviderServiceLive manual idle cleanup", (it) => {
+  it.effect(
+    "stops an idle runtime with automatic cleanup disabled and preserves its identity",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("manual-idle-preserve");
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+        const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+        manualIdleCleanup.codex.updateSession(threadId, withoutResumeCursor);
+        manualIdleCleanup.codex.stopSession.mockClear();
+
+        assert.ok(provider.stopIdleRuntimeSession);
+        yield* provider.stopIdleRuntimeSession({ threadId });
+
+        assert.deepEqual(manualIdleCleanup.codex.stopSession.mock.calls, [[threadId]]);
+        assert.isFalse(yield* manualIdleCleanup.codex.hasSession(threadId));
+        const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(after.status, "stopped");
+        assert.deepEqual(after.resumeCursor, before.resumeCursor);
+        assert.equal(after.provider, before.provider);
+        assert.equal(after.providerInstanceId, before.providerInstanceId);
+        assert.equal(after.adapterKey, before.adapterKey);
+        assert.equal(after.runtimeMode, before.runtimeMode);
+        assert.equal(asRuntimePayloadRecord(after.runtimePayload).activeTurnId, null);
+      }),
+  );
+
+  it.effect(
+    "refuses active turns, live tasks and missing resume state without changing bindings",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        assert.ok(provider.stopIdleRuntimeSession);
+        yield* manualIdleCleanup.codex.waitForRuntimeSubscribers();
+        for (const reason of ["turn", "task", "cursor"] as const) {
+          const threadId = asThreadId(`manual-idle-refuse-${reason}`);
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          if (reason === "turn") {
+            manualIdleCleanup.codex.updateSession(threadId, (session) => ({
+              ...session,
+              status: "running",
+              activeTurnId: asTurnId("manual-idle-active-turn"),
+            }));
+          } else if (reason === "task") {
+            manualIdleCleanup.codex.emit({
+              type: "task.started",
+              eventId: asEventId("manual-idle-active-task"),
+              provider: "codex",
+              threadId,
+              createdAt: new Date().toISOString(),
+              payload: { taskId: "background-task" },
+            });
+            yield* waitUntilEffect(() => provider.hasLiveRuntimeTasks!({ threadId }));
+          } else {
+            manualIdleCleanup.codex.updateSession(threadId, withoutResumeCursor);
+            yield* directory.upsert({ threadId, provider: "codex", resumeCursor: null });
+          }
+          const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+          manualIdleCleanup.codex.stopSession.mockClear();
+
+          const result = yield* Effect.result(provider.stopIdleRuntimeSession({ threadId }));
+
+          assert.equal(result._tag, "Failure");
+          assert.equal(manualIdleCleanup.codex.stopSession.mock.calls.length, 0);
+          assert.isTrue(yield* manualIdleCleanup.codex.hasSession(threadId));
+          assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)), before);
+          yield* provider.stopSession({ threadId });
+        }
+      }),
+  );
+
+  it.effect("abandons manual admission when current-generation background work arrives", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("manual-idle-admission-race");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const listSessions = manualIdleCleanup.codex.listSessions.getMockImplementation()!;
+      manualIdleCleanup.codex.listSessions.mockImplementationOnce(() =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(listSessions()),
+        ),
+      );
+      manualIdleCleanup.codex.stopSession.mockClear();
+      yield* manualIdleCleanup.codex.waitForRuntimeSubscribers();
+      assert.ok(provider.stopIdleRuntimeSession);
+      const stopping = yield* provider
+        .stopIdleRuntimeSession({ threadId })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      manualIdleCleanup.codex.emit({
+        type: "task.started",
+        eventId: asEventId("manual-idle-racing-task"),
+        provider: "codex",
+        threadId,
+        lifecycleGeneration: before.lifecycleGeneration,
+        createdAt: new Date().toISOString(),
+        payload: { taskId: "racing-background-task" },
+      });
+      yield* waitUntilEffect(() => provider.hasLiveRuntimeTasks!({ threadId }));
+      yield* Deferred.succeed(release, undefined);
+
+      assert.equal((yield* Fiber.join(stopping))._tag, "Failure");
+      assert.equal(manualIdleCleanup.codex.stopSession.mock.calls.length, 0);
+      assert.equal(
+        Option.getOrThrow(yield* directory.getBinding(threadId)).lifecycleGeneration,
+        before.lifecycleGeneration,
+      );
+      const turnId = asTurnId("manual-idle-still-routed");
+      manualIdleCleanup.codex.emit({
+        type: "turn.started",
+        eventId: asEventId("manual-idle-routed-turn"),
+        provider: "codex",
+        threadId,
+        turnId,
+        lifecycleGeneration: before.lifecycleGeneration,
+        createdAt: new Date().toISOString(),
+        payload: { state: "running" },
+      });
+      yield* waitUntilEffect(() =>
+        directory
+          .getBinding(threadId)
+          .pipe(
+            Effect.map(
+              (binding) =>
+                asRuntimePayloadRecord(Option.getOrThrow(binding).runtimePayload).activeTurnId ===
+                turnId,
+            ),
+          ),
+      );
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect(
+    "holds manual cleanup across caller cancellation before a subsequent turn resumes",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("manual-idle-cleanup-barrier");
+        const session = yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const stopSession = manualIdleCleanup.codex.stopSession.getMockImplementation()!;
+        manualIdleCleanup.codex.stopSession.mockImplementationOnce((id) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(stopSession(id)),
+          ),
+        );
+        manualIdleCleanup.codex.sendTurn.mockClear();
+        manualIdleCleanup.codex.startSession.mockClear();
+        assert.ok(provider.stopIdleRuntimeSession);
+        const stopping = yield* provider
+          .stopIdleRuntimeSession({ threadId })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(stopping);
+        const sending = yield* provider
+          .sendTurn({ threadId, input: "Resume after manual cleanup" })
+          .pipe(Effect.forkChild);
+        yield* sleep(20);
+        assert.equal(manualIdleCleanup.codex.sendTurn.mock.calls.length, 0);
+        assert.equal(manualIdleCleanup.codex.startSession.mock.calls.length, 0);
+        assert.isTrue(yield* manualIdleCleanup.codex.hasSession(threadId));
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(sending);
+
+        assert.equal(manualIdleCleanup.codex.startSession.mock.calls.length, 1);
+        assert.deepEqual(
+          manualIdleCleanup.codex.startSession.mock.calls[0]?.[0].resumeCursor,
+          session.resumeCursor,
+        );
+        assert.equal(manualIdleCleanup.codex.sendTurn.mock.calls.length, 1);
+        const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(after.status, "running");
+        assert.equal(
+          asRuntimePayloadRecord(after.runtimePayload).activeTurnId,
+          `turn-${String(threadId)}`,
+        );
+        yield* provider.stopSession({ threadId });
+      }),
+  );
+
+  it.effect("refuses manual cleanup while a send is preparing without an active turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("manual-idle-pending-send");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const sendTurn = manualIdleCleanup.codex.sendTurn.getMockImplementation()!;
+      manualIdleCleanup.codex.sendTurn.mockImplementationOnce((input) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(sendTurn(input)),
+        ),
+      );
+      manualIdleCleanup.codex.stopSession.mockClear();
+      const sending = yield* provider
+        .sendTurn({ threadId, input: "Preparing" })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      assert.ok(provider.stopIdleRuntimeSession);
+      const result = yield* Effect.result(provider.stopIdleRuntimeSession({ threadId }));
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.stopIdleRuntimeSession",
+          issue: "Wait for the current provider operation before stopping the agent process.",
+        }),
+      );
+      assert.equal(manualIdleCleanup.codex.stopSession.mock.calls.length, 0);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(sending);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("does not block a force stop behind queued manual admission", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("manual-idle-force-stop-race");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const stopSession = manualIdleCleanup.codex.stopSession.getMockImplementation()!;
+      manualIdleCleanup.codex.stopSession.mockImplementationOnce((id) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(stopSession(id)),
+        ),
+      );
+      const forced = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      assert.ok(provider.stopIdleRuntimeSession);
+      const manual = yield* provider
+        .stopIdleRuntimeSession({ threadId })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* sleep(20);
+      yield* Deferred.succeed(release, undefined);
+
+      yield* Fiber.join(forced);
+      assert.equal((yield* Fiber.join(manual))._tag, "Failure");
+      assert.isFalse(yield* manualIdleCleanup.codex.hasSession(threadId));
+    }),
+  );
+});
+
 const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
 idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
   it.effect("retries failed idle teardown after a delayed session exit notification", () =>
