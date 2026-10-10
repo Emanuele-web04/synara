@@ -6,13 +6,14 @@
  *
  * @module Open
  */
-import { resolveExecutable } from "@synara/shared/executable";
+import { createBatchExecutableResolver, resolveExecutable } from "@synara/shared/executable";
 import { spawnProcess } from "@synara/shared/processRuntime";
 import { statSync } from "node:fs";
 import { dirname, extname } from "node:path";
 import pathWin32 from "node:path/win32";
 
 import { EDITORS, type EditorId } from "@synara/contracts";
+import { isMacAppBundlePath } from "@synara/shared/filesystemPlatform";
 import { resolveWindowsSystemRoot } from "@synara/shared/platformEnvironment";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
 import {
@@ -125,10 +126,10 @@ function resolveMacOpenArgs(
 
 function resolveAvailableCommand(
   commands: ReadonlyArray<string>,
-  options: CommandAvailabilityOptions = {},
+  resolve: (command: string) => string | null,
 ): string | null {
   for (const command of commands) {
-    if (isCommandAvailable(command, options)) {
+    if (resolve(command) !== null) {
       return command;
     }
   }
@@ -147,9 +148,11 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
   }
 }
 
+// `open` launches an app bundle like a double-click, so reveal those as well as files.
 function shouldRevealInFinder(target: string): boolean {
   try {
-    return statSync(target, { throwIfNoEntry: false })?.isDirectory() === false;
+    const stat = statSync(target, { throwIfNoEntry: false });
+    return stat !== undefined && (!stat.isDirectory() || isMacAppBundlePath(target, "darwin"));
   } catch {
     return false;
   }
@@ -265,7 +268,7 @@ function resolveWindowsEditorUri(scheme: string, target: string): string {
   return `${scheme}://file${filePathSeparator}${encodedPath}${directorySuffix}${positionSuffix}`;
 }
 
-export function resolveWindowsEditorUriLaunch(
+function resolveWindowsEditorUriLaunch(
   editor: EditorDefinition,
   target: string,
   platform: NodeJS.Platform = process.platform,
@@ -280,10 +283,7 @@ export function resolveWindowsEditorUriLaunch(
   };
 }
 
-export function isCommandAvailable(
-  command: string,
-  options: CommandAvailabilityOptions = {},
-): boolean {
+function isCommandAvailable(command: string, options: CommandAvailabilityOptions = {}): boolean {
   return resolveExecutable(command, options) !== null;
 }
 
@@ -292,10 +292,12 @@ export function resolveAvailableEditors(
   env: NodeJS.ProcessEnv = process.env,
 ): ReadonlyArray<EditorId> {
   const available: EditorId[] = [];
+  // One PATH scan for every editor: per-command probing is seconds of sync IO on Windows.
+  const resolve = createBatchExecutableResolver({ platform, env });
 
   for (const editor of EDITORS) {
     if (editor.commands !== null) {
-      if (resolveAvailableCommand(editor.commands, { platform, env }) !== null) {
+      if (resolveAvailableCommand(editor.commands, resolve) !== null) {
         available.push(editor.id);
         continue;
       }
@@ -319,7 +321,7 @@ export function resolveAvailableEditors(
 
     if (editor.id === "file-manager") {
       const command = fileManagerCommandForPlatform(platform);
-      if (isCommandAvailable(command, { platform, env })) {
+      if (resolve(command) !== null) {
         available.push(editor.id);
       }
     }
@@ -378,7 +380,9 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
   }
 
   if (editorDef.commands) {
-    const command = resolveAvailableCommand(editorDef.commands, { platform, env });
+    const command = resolveAvailableCommand(editorDef.commands, (candidate) =>
+      resolveExecutable(candidate, { platform, env }),
+    );
     if (command) {
       return {
         command,

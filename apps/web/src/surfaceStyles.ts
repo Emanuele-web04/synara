@@ -4,7 +4,8 @@
 // Layer: UI styling
 // Exports: SOFT_SURFACE_FILL_CLASS_NAME, ELEVATED_HOVER_SURFACE_CLASS_NAME,
 //          ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_CLASS_NAME,
-//          MUTED_LABEL_TEXT_COLOR
+//          MUTED_LABEL_TEXT_COLOR, GLASS_RAISED_SURFACE_CLASS_NAME,
+//          FLOATING_OVERLAY_SURFACE_CLASS_NAME
 
 /**
  * Faint filled surface — the fill behind `soft` inputs (search fields) and the
@@ -54,3 +55,17 @@ export const MUTED_LABEL_TEXT_CLASS_NAME = "text-muted-foreground";
  * a tool row) instead of a class.
  */
 export const MUTED_LABEL_TEXT_COLOR = "var(--muted-foreground)";
+
+/**
+ * Opts a surface that paints an opaque fill of its own (a card, a filled control) into the
+ * raised glass tint on a whole-window glass shell, so it does not read as a solid block on a
+ * translucent window. Inert everywhere else; the rule lives in index.css.
+ */
+export const GLASS_RAISED_SURFACE_CLASS_NAME = "app-glass-raised";
+
+/**
+ * Marks a floating overlay (menu, picker, popover, tooltip, toast). It takes the shared
+ * overlay fill from index.css, and on a translucent window the page is cut out from under it
+ * (see lib/glassOverlayCutout.ts), which finds overlays by this class.
+ */
+export const FLOATING_OVERLAY_SURFACE_CLASS_NAME = "app-popup-surface";

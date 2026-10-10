@@ -123,18 +123,6 @@ afterEach(() => {
 });
 
 describe("EditedFileRow", () => {
-  it("opens the file in the preferred editor from the always-visible primary action", async () => {
-    const openInEditor = mockOpenInEditor();
-    await render(editedFileRow({ openFile: () => true, workspaceRoot: WORKSPACE_ROOT }));
-
-    await page.getByRole("button", { name: "Open", exact: true }).click();
-    // With no stored preference the first catalog editor available wins (Cursor).
-    expect(openInEditor).toHaveBeenCalledWith(
-      "/workspace/synara/apps/web/src/components/chat/EditedFileRow.tsx",
-      "cursor",
-    );
-  });
-
   it("keeps row review, Open, and menu trigger as keyboard-reachable sibling buttons", async () => {
     const onReview = vi.fn();
     const openFile = vi.fn(() => true);
@@ -156,7 +144,11 @@ describe("EditedFileRow", () => {
 
     await openButton.click();
     // The primary action opens the preferred editor, never the in-app viewer.
-    expect(openInEditor).toHaveBeenCalledOnce();
+    // With no stored preference the first catalog editor available wins (Cursor).
+    expect(openInEditor).toHaveBeenCalledExactlyOnceWith(
+      "/workspace/synara/apps/web/src/components/chat/EditedFileRow.tsx",
+      "cursor",
+    );
     expect(openFile).not.toHaveBeenCalled();
     expect(onReview).toHaveBeenCalledTimes(1);
 

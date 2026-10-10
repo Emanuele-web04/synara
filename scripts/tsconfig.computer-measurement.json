@@ -1,0 +1,27 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node", "bun"]
+  },
+  "include": [
+    "computer-use-fixtures/measurement.ts",
+    "computer-use-fixtures/collect-measurement.ts",
+    "computer-use-fixtures/measurement.test.ts",
+    "computer-use-fixtures/packaged-client.ts",
+    "computer-use-fixtures/packaged-artifact.ts",
+    "computer-use-fixtures/packaged-evidence.ts",
+    "computer-use-fixtures/packaged-evidence.test.ts",
+    "computer-use-fixtures/packaged-fixture.ts",
+    "computer-use-fixtures/packaged-e2e.ts",
+    "computer-use-fixtures/browser-benchmark-evidence.ts",
+    "computer-use-fixtures/browser-benchmark-evidence.test.ts",
+    "computer-use-fixtures/browser-benchmark-observer.ts",
+    "computer-use-fixtures/packaged-browser-benchmark.ts",
+    "computer-use-fixtures/resource-sampling.ts",
+    "computer-use-fixtures/resource-sampling.test.ts",
+    "computer-use-fixtures/sample-packaged-resources.ts"
+  ]
+}

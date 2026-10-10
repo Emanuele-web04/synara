@@ -66,7 +66,7 @@ function BlameActionButton(props: { label: string; icon: ReactNode; onClick: () 
     <button
       type="button"
       className={cn(
-        "inline-flex h-6 items-center gap-1 rounded-sm px-1.5 text-[11px] text-muted-foreground",
+        "inline-flex h-6 items-center gap-1 rounded-sm px-1.5 text-ui-sm text-muted-foreground",
         ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
       )}
       onClick={props.onClick}
@@ -142,21 +142,21 @@ export function DiffLineBlamePopover(props: {
       style={{ left: props.target.left, top: props.target.top, width: BLAME_POPOVER_WIDTH_PX }}
     >
       {isLoadingBlame ? (
-        <p className="text-[11px] text-muted-foreground">Loading blame...</p>
+        <p className="text-ui-sm text-muted-foreground">Loading blame...</p>
       ) : !blame ? (
-        <p className="text-[11px] text-muted-foreground">Blame unavailable</p>
+        <p className="text-ui-sm text-muted-foreground">Blame unavailable</p>
       ) : blame.uncommitted ? (
-        <p className="text-[12px] text-foreground">Not committed yet</p>
+        <p className="text-ui text-foreground">Not committed yet</p>
       ) : (
         <>
-          <p className="line-clamp-2 text-[12px] leading-snug text-foreground">{blame.summary}</p>
-          <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <p className="line-clamp-2 text-ui leading-snug text-foreground">{blame.summary}</p>
+          <p className="flex items-center gap-1.5 text-ui-sm text-muted-foreground">
             <span className="truncate">{blame.author}</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono">{blame.shortSha}</span>
           </p>
           {blame.authorTime.length > 0 ? (
-            <p className="text-[11px] text-muted-foreground/75">
+            <p className="text-ui-sm text-muted-foreground/75">
               {formatShortDateTimestamp(blame.authorTime, props.timestampFormat)}
             </p>
           ) : null}

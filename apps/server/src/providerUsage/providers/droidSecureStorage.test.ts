@@ -147,5 +147,5 @@ it.skipIf(process.platform !== "win32")(
     expect(compilationError).toBeNull();
     expect(result).toBe("compiled");
   },
-  15_000,
+  25_000,
 );

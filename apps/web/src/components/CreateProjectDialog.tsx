@@ -1,11 +1,13 @@
 // FILE: CreateProjectDialog.tsx
-// Purpose: Single entry point for adding a project — typed path, source folder
-//          (drag/drop or native browse), and destination Space.
+// Purpose: Single entry point for adding a project — typed path, source folders
+//          (drag/drop or native browse; extra folders make a multi-folder project),
+//          and destination Space.
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
 import { type GitHubProjectProvisionProgressEvent, type SpaceId } from "@synara/contracts";
 import { parseGitHubRepositoryInput } from "@synara/shared/githubRepository";
+import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
@@ -20,11 +22,12 @@ import type { Space } from "../types";
 import { useVoidSpace } from "../voidSpaceStore";
 import { cn } from "~/lib/utils";
 
-import { FolderClosed } from "./FolderClosed";
+import { FolderAddIcon, FolderIcon } from "~/lib/icons";
 import {
   CreateGitHubProjectFields,
   PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME,
 } from "./CreateGitHubProjectFields";
+import { ProjectFolderList } from "./ProjectFolderList";
 import { ProjectSourceSegmentedPicker } from "./ProjectSourceSegmentedPicker";
 import { describeAddProjectError } from "./Sidebar.logic";
 import { SpaceEditorDialog, type SpaceEditorValue } from "./SpaceEditorDialog";
@@ -47,6 +50,8 @@ import { CentralIcon } from "~/lib/central-icons";
 interface CreateLocalProjectSubmitValue {
   readonly source: "local";
   readonly workspaceRoot: string;
+  /** Extra source folders of a multi-folder project; `workspaceRoot` is the primary one. */
+  readonly additionalFolders: ReadonlyArray<string>;
   /** Destination Space; `null` is Void (unassigned). */
   readonly spaceId: SpaceId | null;
   /** True when the path was typed/edited by hand, so a missing folder may be created. */
@@ -81,6 +86,10 @@ export function CreateProjectDialog(props: {
 }) {
   const [source, setSource] = useState<"local" | "github">("local");
   const [path, setPath] = useState("");
+  /** Extra folders after the primary `path`, in display order. */
+  const [additionalFolders, setAdditionalFolders] = useState<ReadonlyArray<string>>([]);
+  /** Browser builds have no native picker, so another folder is typed here. */
+  const [additionalFolderInput, setAdditionalFolderInput] = useState("");
   const [repositoryInput, setRepositoryInput] = useState("");
   const [destinationParent, setDestinationParent] = useState("");
   const [directoryName, setDirectoryName] = useState("");
@@ -108,6 +117,7 @@ export function CreateProjectDialog(props: {
   const activeOperationIdRef = useRef<string | null>(null);
   const fieldId = useId();
   const pathInputId = `${fieldId}-path`;
+  const additionalFolderInputId = `${fieldId}-additional-folder`;
   const repositoryInputId = `${fieldId}-repository`;
   const destinationParentInputId = `${fieldId}-destination-parent`;
   const directoryNameInputId = `${fieldId}-directory-name`;
@@ -123,6 +133,8 @@ export function CreateProjectDialog(props: {
     if (!props.open) return;
     setSource("local");
     setPath("");
+    setAdditionalFolders([]);
+    setAdditionalFolderInput("");
     setRepositoryInput("");
     setDestinationParent(props.defaultCloneParent);
     setDirectoryName("");
@@ -195,6 +207,59 @@ export function CreateProjectDialog(props: {
     [directoryNameInputId],
   );
 
+  // Adds a folder after the primary one, refusing duplicates and nested folders up front.
+  const addAdditionalFolder = (folder: string): boolean => {
+    const candidate = folder.trim();
+    if (!candidate) return false;
+    const problem = findProjectFolderProblem([trimmedPath, ...additionalFolders, candidate]);
+    if (problem) {
+      setFormError(problem);
+      return false;
+    }
+    setAdditionalFolders((current) => [...current, candidate]);
+    setFormError(null);
+    return true;
+  };
+
+  // Replaces the primary folder (`path`); the rest keep their order.
+  const setFolders = (folders: ReadonlyArray<string>) => {
+    const [primary = "", ...rest] = folders;
+    setPath(primary);
+    // Extra folders must already exist, so one promoted to primary never opts into
+    // create-if-missing; only a primary typed into the path field does.
+    setPickedPath(primary || null);
+    setAdditionalFolders(rest);
+    setFormError(null);
+  };
+  const folders = trimmedPath ? [trimmedPath, ...additionalFolders] : [];
+  const makeFolderPrimary = (index: number) =>
+    setFolders([folders[index]!, ...folders.filter((_, candidate) => candidate !== index)]);
+  const removeFolder = (index: number) => {
+    if (index === 0) {
+      setFolders(additionalFolders);
+      return;
+    }
+    setAdditionalFolders((current) => current.filter((_, candidate) => candidate !== index - 1));
+    setFormError(null);
+  };
+
+  const handleAddFolder = async () => {
+    if (isPickingFolder || submitting) return;
+    const api = readNativeApi();
+    if (!api) {
+      setFormError("The app server is unavailable.");
+      return;
+    }
+    setIsPickingFolder(true);
+    try {
+      const picked = await api.dialogs.pickFolder();
+      if (picked) addAdditionalFolder(picked);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Unable to open the folder picker.");
+    }
+    setIsPickingFolder(false);
+  };
+
   const handleBrowse = async () => {
     if (isPickingFolder || submitting) return;
     const api = readNativeApi();
@@ -220,7 +285,11 @@ export function CreateProjectDialog(props: {
   // anywhere in the window counts (see useWindowFolderDrop).
   const isDropTarget = useWindowFolderDrop({
     enabled: props.open && isElectron && source === "local",
-    onFolder: applyPickedFolder,
+    // With a primary folder in place, another dropped folder joins the project.
+    onFolder: (dropped) => {
+      if (trimmedPath) addAdditionalFolder(dropped);
+      else applyPickedFolder(dropped);
+    },
     onError: setFormError,
   });
 
@@ -230,6 +299,14 @@ export function CreateProjectDialog(props: {
     // an empty submit explains what is missing instead of being unclickable.
     if (source === "local" && trimmedPath.length === 0) {
       setFormError("Type a folder path, or drop a folder above.");
+      return;
+    }
+    const folderProblem =
+      source === "local" && additionalFolders.length > 0
+        ? findProjectFolderProblem([trimmedPath, ...additionalFolders])
+        : null;
+    if (folderProblem) {
+      setFormError(folderProblem);
       return;
     }
     if (source === "github" && !parsedRepository) {
@@ -276,6 +353,7 @@ export function CreateProjectDialog(props: {
           {
             source: "local",
             workspaceRoot: trimmedPath,
+            additionalFolders,
             spaceId,
             createIfMissing: trimmedPath !== pickedPath,
           },
@@ -339,6 +417,12 @@ export function CreateProjectDialog(props: {
       ? (pickedPath.split(/[/\\]/).filter(Boolean).at(-1) ?? pickedPath)
       : null;
   const finalClonePath = joinProjectPath(trimmedDestinationParent, trimmedDirectoryName);
+  // Electron keeps the drop/browse box until a primary folder is picked; a typed primary
+  // switches to the list once another folder joins it. Browser builds list folders as soon
+  // as a path is typed, since there is no picker to fall back on.
+  const showFolderList =
+    folders.length > 0 &&
+    (!isElectron || pickedPath === trimmedPath || additionalFolders.length > 0);
 
   return (
     <Dialog open={props.open} onOpenChange={handleOpenChange}>
@@ -368,7 +452,7 @@ export function CreateProjectDialog(props: {
             <>
               <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
                 <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
-                  <FolderClosed className="size-4 text-muted-foreground/70" aria-hidden="true" />
+                  <FolderIcon className="size-4 text-muted-foreground/70" aria-hidden="true" />
                 </InputGroupAddon>
                 <InputGroupInput
                   id={pathInputId}
@@ -388,15 +472,87 @@ export function CreateProjectDialog(props: {
                 />
               </InputGroup>
 
-              {isElectron ? (
+              {showFolderList ? (
                 <div className="space-y-2">
                   <span
                     id={sourceFolderLabelId}
-                    className={cn(
-                      "block",
-                      dialogFieldLabelClassName,
-                      "text-[length:var(--app-font-size-ui,12px)] text-foreground",
-                    )}
+                    className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
+                  >
+                    Source folders
+                  </span>
+                  <ProjectFolderList
+                    folders={folders}
+                    disabled={submitting || isPickingFolder}
+                    labelledBy={sourceFolderLabelId}
+                    onMakePrimary={makeFolderPrimary}
+                    onRemove={removeFolder}
+                    addRow={
+                      isElectron ? (
+                        <button
+                          type="button"
+                          disabled={isPickingFolder || submitting}
+                          className={cn(
+                            "flex min-h-12 w-full cursor-pointer items-center gap-2.5 px-3.5 text-start text-ui text-[var(--color-text-foreground)] transition-colors outline-none hover:bg-foreground/4 focus-visible:bg-foreground/6 disabled:opacity-50",
+                            isDropTarget && "bg-foreground/6",
+                          )}
+                          onClick={() => void handleAddFolder()}
+                        >
+                          <FolderAddIcon className="size-4.5" aria-hidden="true" />
+                          {isPickingFolder ? "Opening the folder picker…" : "Add folder"}
+                        </button>
+                      ) : (
+                        <div className="flex min-h-12 items-center gap-2.5 px-3.5">
+                          <FolderAddIcon className="size-4.5 shrink-0" aria-hidden="true" />
+                          <input
+                            id={additionalFolderInputId}
+                            value={additionalFolderInput}
+                            aria-label="Additional folder path"
+                            placeholder="/path/to/another/folder"
+                            spellCheck={false}
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            disabled={submitting}
+                            className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground/70"
+                            onChange={(event) => {
+                              setAdditionalFolderInput(event.target.value);
+                              setFormError(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter") return;
+                              event.preventDefault();
+                              if (addAdditionalFolder(additionalFolderInput)) {
+                                setAdditionalFolderInput("");
+                              }
+                            }}
+                          />
+                          <Button
+                            variant="ghost"
+                            size="chip"
+                            disabled={submitting || additionalFolderInput.trim().length === 0}
+                            onClick={() => {
+                              if (addAdditionalFolder(additionalFolderInput)) {
+                                setAdditionalFolderInput("");
+                              }
+                            }}
+                          >
+                            Add folder
+                          </Button>
+                        </div>
+                      )
+                    }
+                  />
+                  {additionalFolders.length > 0 ? (
+                    <p className="text-ui-xs text-muted-foreground/70">
+                      Chats in a multi-folder project run in Local mode with Codex or Claude. Git
+                      actions and file undo cover only the primary folder.
+                    </p>
+                  ) : null}
+                </div>
+              ) : isElectron ? (
+                <div className="space-y-2">
+                  <span
+                    id={sourceFolderLabelId}
+                    className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
                   >
                     Source folder
                   </span>
@@ -405,19 +561,19 @@ export function CreateProjectDialog(props: {
                     aria-labelledby={sourceFolderLabelId}
                     disabled={isPickingFolder || submitting}
                     className={cn(
-                      "flex min-h-12 w-full cursor-pointer items-center gap-2.5 rounded-xl border border-foreground/12 px-3.5 text-start text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] transition-colors outline-none hover:bg-foreground/4 focus-visible:border-foreground/30 disabled:opacity-50",
+                      "flex min-h-12 w-full cursor-pointer items-center gap-2.5 rounded-xl border border-foreground/12 px-3.5 text-start text-ui text-[var(--color-text-foreground)] transition-colors outline-none hover:bg-foreground/4 focus-visible:border-foreground/30 disabled:opacity-50",
                       isDropTarget &&
                         "border-[color:var(--color-border-focus)] bg-foreground/6 text-[var(--color-text-foreground)]",
                     )}
                     onClick={() => void handleBrowse()}
                   >
-                    <CentralIcon name="folder-add-left" className="size-4.5" aria-hidden="true" />
+                    <FolderAddIcon className="size-4.5" aria-hidden="true" />
                     {isPickingFolder ? (
                       "Opening the folder picker…"
                     ) : pickedFolderName ? (
                       <span className="flex min-w-0 flex-col">
                         <span className="truncate">{pickedFolderName}</span>
-                        <span className="truncate text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
+                        <span className="truncate text-ui-xs text-muted-foreground/70">
                           {pickedPath}
                         </span>
                       </span>
@@ -468,11 +624,7 @@ export function CreateProjectDialog(props: {
           <div className="space-y-2">
             <span
               id={spaceLabelId}
-              className={cn(
-                "block",
-                dialogFieldLabelClassName,
-                "text-[length:var(--app-font-size-ui,12px)] text-foreground",
-              )}
+              className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
             >
               Space
             </span>
@@ -529,13 +681,9 @@ export function CreateProjectDialog(props: {
 
           {formError ? (
             <div id={errorId} role="alert" className="space-y-1">
-              <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-destructive">
-                {formError}
-              </p>
+              <p className="text-ui-xs text-destructive">{formError}</p>
               {formErrorMeaning ? (
-                <p className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
-                  {formErrorMeaning}
-                </p>
+                <p className="text-ui-xs text-muted-foreground/70">{formErrorMeaning}</p>
               ) : null}
             </div>
           ) : null}
@@ -544,7 +692,7 @@ export function CreateProjectDialog(props: {
           <Button
             variant="ghost"
             shape="capsule"
-            className="px-4 text-[length:var(--app-font-size-ui-lg,13px)] sm:text-[length:var(--app-font-size-ui-lg,13px)]"
+            className="px-4 text-ui-lg sm:text-ui-lg"
             onClick={() => handleOpenChange(false)}
             disabled={submitting && source === "local"}
           >
@@ -553,7 +701,7 @@ export function CreateProjectDialog(props: {
           <Button
             id={submitButtonId}
             variant="prominent"
-            className="px-4 text-[length:var(--app-font-size-ui-lg,13px)] transition-opacity hover:scale-100 sm:text-[length:var(--app-font-size-ui-lg,13px)]"
+            className="px-4 text-ui-lg transition-opacity hover:scale-100 sm:text-ui-lg"
             onClick={() => void submit()}
             disabled={submitting}
           >

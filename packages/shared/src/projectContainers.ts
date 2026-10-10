@@ -67,9 +67,15 @@ export interface OrdinaryProjectRowInput extends LegacyHomeChatContainerRowInput
   readonly projectKind: ProjectKind | undefined;
 }
 
+/** Group and legacy Studio rows are containers, not ordinary projects. */
+export function isGroupContainerKind(kind: ProjectKind | undefined): boolean {
+  return kind === "group" || kind === "studio";
+}
+
 /**
  * Ordinary projects are the user-visible ones: everything that is neither a managed
- * chat/Studio container (their kind says so) nor the legacy Home chat container.
+ * chat/Studio/group container (their kind says so) nor the legacy Home chat container.
+ * Group and Studio kinds are containers, so the `=== "project"` check already excludes them.
  */
 export function isOrdinaryProjectRow(input: OrdinaryProjectRowInput): boolean {
   return (input.projectKind ?? "project") === "project" && !isLegacyHomeChatContainerRow(input);

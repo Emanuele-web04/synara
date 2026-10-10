@@ -74,6 +74,13 @@ const PROVIDERS = [
     authMarker: "FACTORY_API_KEY",
     officialDomain: "docs.factory.ai",
   },
+  {
+    slug: "omp",
+    title: "Oh My Pi",
+    executable: "omp",
+    authMarker: "omp models --json",
+    officialDomain: "omp.sh",
+  },
 ];
 
 const REQUIRED_SECTIONS = [

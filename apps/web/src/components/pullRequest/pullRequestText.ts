@@ -13,13 +13,13 @@ export const PR_SECTION_TITLE_TEXT_CLASS_NAME =
   "text-[length:calc(var(--app-font-size-ui-lg,13px)*1.16)]";
 
 /** Emphasized copy one step above the UI base: row titles, markdown bodies, timeline entries. */
-export const PR_BODY_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui-lg,13px)]";
+export const PR_BODY_TEXT_CLASS_NAME = "text-ui-lg";
 
 /** Standard UI text: meta rows, section labels, descriptions, empty states. */
-export const PR_META_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui,12px)]";
+export const PR_META_TEXT_CLASS_NAME = "text-ui";
 
 /** Fine print: timestamps, branch names, counters, file paths, group headers. */
-export const PR_FINE_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui-sm,11px)]";
+export const PR_FINE_TEXT_CLASS_NAME = "text-ui-sm";
 
 /** The ink for ambient metadata that frames a pull request without competing with it: author,
  *  repository, branch, relative time, diff counts, list group headers. `--muted-foreground` is

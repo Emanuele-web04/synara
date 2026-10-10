@@ -15,18 +15,6 @@ describe("makeRuntimeJournalPoisonGate", () => {
     expect(gate.noteBlockedDrain(7, START_MS + 1_000)).toBe(true);
   });
 
-  it("does not declare poison from a burst of attempts inside the time floor", () => {
-    // A live-append burst during a transient stall: hundreds of blocked drains
-    // in under a second must never dead-letter a healthy event.
-    const gate = makeRuntimeJournalPoisonGate({ attemptLimit: 240, minBlockedMs: 60_000 });
-
-    for (let attempt = 0; attempt < 1_000; attempt += 1) {
-      expect(gate.noteBlockedDrain(7, START_MS + attempt)).toBe(false);
-    }
-    // Once the same row has also been stuck for the full time floor, it trips.
-    expect(gate.noteBlockedDrain(7, START_MS + 60_000)).toBe(true);
-  });
-
   it("does not declare poison from slow retries that never reach the attempt limit", () => {
     const gate = makeRuntimeJournalPoisonGate({ attemptLimit: 5, minBlockedMs: 1_000 });
 

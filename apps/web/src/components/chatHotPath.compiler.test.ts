@@ -33,6 +33,10 @@ interface HotPathModule {
   // Exact multiset of bailout reasons that are deliberate and reviewed. Anything
   // else — including a second copy of an allowed reason — fails the test.
   readonly allowedBailoutReasons: readonly string[];
+  // Pure logic modules contain no component or hook for the compiler to emit a
+  // CompileSuccess for; they stay listed so a future hook/component that bails
+  // is caught. Defaults to true.
+  readonly requiresCompileSuccess?: boolean;
 }
 
 const HOT_PATH_MODULES: readonly HotPathModule[] = [
@@ -157,7 +161,53 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
     requiredFunction: "useChatTurnExecution",
     allowedBailoutReasons: [],
   },
+  {
+    relativePath: "chat/group/LibraryPanel.tsx",
+    requiredFunction: "LibraryPanel",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/chatHeaderControls.tsx",
+    requiredFunction: "SurfacePanelToggle",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/group/useGroupLibrary.ts",
+    requiredFunction: "useGroupLibrary",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/group/libraryPanel.logic.ts",
+    allowedBailoutReasons: [],
+    requiresCompileSuccess: false,
+  },
+  // The Overview body renders one row per group thread/PR/automation whenever the
+  // Group panel is open — same per-row hot-path budget as the sidebar surfaces.
+  {
+    relativePath: "chat/project/GroupOverview.tsx",
+    requiredFunction: "GroupThreadsSection",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/project/groupOverview.logic.ts",
+    allowedBailoutReasons: [],
+    requiresCompileSuccess: false,
+  },
+  // Onboarding/cancel/discard runs on every group open; a value expression
+  // inside the probe try/catch once bailed the whole dialog.
+  {
+    relativePath: "chat/group/GroupSettingsDialog.tsx",
+    requiredFunction: "GroupSettingsDialog",
+    allowedBailoutReasons: [],
+  },
   { relativePath: "Sidebar.tsx", allowedBailoutReasons: [] },
+  // Renders every group/coordinator/chat row on the Groups surface — keep it at a
+  // zero-bailout budget like the sidebar itself.
+  {
+    relativePath: "SidebarGroupsSurface.tsx",
+    requiredFunction: "SidebarGroupsSurface",
+    allowedBailoutReasons: [],
+  },
   {
     relativePath: "chat/MessagesTimeline.tsx",
     // `useStableRows` deliberately reads and rewrites a previous-state ref inside
@@ -218,7 +268,9 @@ describe("chat hot-path React Compiler coverage", () => {
             ),
           ).toBe(true);
         }
-        expect(events.some((event) => event.kind === "CompileSuccess")).toBe(true);
+        if (module.requiresCompileSuccess !== false) {
+          expect(events.some((event) => event.kind === "CompileSuccess")).toBe(true);
+        }
       },
       COMPILE_TIMEOUT_MS,
     );

@@ -3,17 +3,9 @@
 // Layer: Chat transcript presentation
 // Depends on: retry effort logic/action components and composer trait resolution.
 
-import {
-  type MessageId,
-  type ModelSelection,
-  type ProviderModelDescriptor,
-  type RuntimeMode,
-  type ThreadId,
-  type TurnId,
-} from "@synara/contracts";
+import { type MessageId, type RuntimeMode, type ThreadId, type TurnId } from "@synara/contracts";
 import type { ComponentProps, ReactNode } from "react";
 
-import type { ProviderOptions } from "../../providerModelOptions";
 import type { ChatMessage, TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import {
@@ -26,8 +18,10 @@ import {
   resolvePrecedingUserMessage,
   resolveRetryWithDifferentEffortAvailability,
   type RetryEffortVariant,
+  type VerifiedRetryEffortTarget,
 } from "./retryWithDifferentEffort.logic";
 import { getComposerTraitSelection } from "./composerTraits";
+import { rewriteThreadIdsAsMarkdownLinks } from "./project/projectPanel.logic";
 
 export type AssistantRetryEffortContext = {
   readonly threadId: ThreadId;
@@ -35,9 +29,7 @@ export type AssistantRetryEffortContext = {
     Pick<ChatMessage, "id" | "role" | "text" | "turnId" | "streaming">
   >;
   readonly runtimeMode: RuntimeMode;
-  readonly modelSelection: ModelSelection;
-  readonly modelOptions: ProviderOptions | null | undefined;
-  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly retryTarget: VerifiedRetryEffortTarget | null;
   readonly activeTurnId: TurnId | null | undefined;
   readonly isBusy: boolean;
   readonly onRetryWithEffort: (assistantMessageId: MessageId, effort: string) => void;
@@ -45,22 +37,31 @@ export type AssistantRetryEffortContext = {
 
 function buildLiveVariant(input: {
   readonly message: Pick<ChatMessage, "id" | "text" | "turnId" | "createdAt">;
-  readonly modelSelection: ModelSelection;
-  readonly modelOptions: ProviderOptions | null | undefined;
-  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly retryTarget: VerifiedRetryEffortTarget | null;
   readonly prompt: string;
   readonly turnDiffSummary: TurnDiffSummary | undefined;
 }): RetryEffortVariant {
-  const effort = resolveEffortFromModelSelection(input.modelSelection);
-  const trait = getComposerTraitSelection(
-    input.modelSelection.provider,
-    input.modelSelection.model,
-    input.prompt,
-    input.modelOptions,
-    input.runtimeModel,
-  );
+  const target =
+    input.retryTarget?.assistantMessageId === input.message.id &&
+    input.retryTarget.turnId === input.message.turnId
+      ? input.retryTarget
+      : null;
+  const modelSelection = target?.modelSelection;
+  const effort = resolveEffortFromModelSelection(modelSelection, {
+    prompt: input.prompt,
+    runtimeModel: target?.runtimeModel,
+  });
+  const trait = modelSelection
+    ? getComposerTraitSelection(
+        modelSelection.provider,
+        modelSelection.model,
+        input.prompt,
+        modelSelection.options,
+        target?.runtimeModel,
+      )
+    : null;
   const effortLabel = effort
-    ? (trait.effortLevels.find((level) => level.value === effort)?.label ?? effort)
+    ? (trait?.effortLevels.find((level) => level.value === effort)?.label ?? effort)
     : null;
   return {
     id: `live:${input.message.id}`,
@@ -69,8 +70,8 @@ function buildLiveVariant(input: {
     text: input.message.text,
     effort,
     effortLabel,
-    provider: input.modelSelection.provider,
-    model: input.modelSelection.model,
+    provider: modelSelection?.provider ?? null,
+    model: modelSelection?.model ?? null,
     createdAt: input.message.createdAt,
     checkpointTurnCount: input.turnDiffSummary?.checkpointTurnCount ?? null,
     changedFileCount: input.turnDiffSummary?.files.length ?? 0,
@@ -83,6 +84,7 @@ export function AssistantRetryEffortMessageText(props: {
   readonly liveText: string;
   readonly turnDiffSummary: TurnDiffSummary | undefined;
   readonly markdownProps: ComponentProps<typeof ChatMarkdown>;
+  readonly threadLinks?: Parameters<typeof rewriteThreadIdsAsMarkdownLinks>[1] | undefined;
 }): ReactNode {
   const precedingUser = resolvePrecedingUserMessage({
     messages: props.context.messages,
@@ -90,9 +92,7 @@ export function AssistantRetryEffortMessageText(props: {
   });
   const live = buildLiveVariant({
     message: props.message,
-    modelSelection: props.context.modelSelection,
-    modelOptions: props.context.modelOptions,
-    runtimeModel: props.context.runtimeModel,
+    retryTarget: props.context.retryTarget,
     prompt: precedingUser?.text ?? "",
     turnDiffSummary: props.turnDiffSummary,
   });
@@ -102,7 +102,10 @@ export function AssistantRetryEffortMessageText(props: {
     live,
     liveText: props.liveText,
   });
-  return <ChatMarkdown {...props.markdownProps} text={displayedText} />;
+  const markdownText = props.threadLinks
+    ? rewriteThreadIdsAsMarkdownLinks(displayedText, props.threadLinks)
+    : displayedText;
+  return <ChatMarkdown {...props.markdownProps} text={markdownText} />;
 }
 
 export function AssistantRetryEffortFooterActions(props: {
@@ -119,9 +122,7 @@ export function AssistantRetryEffortFooterActions(props: {
     showAssistantCopyButton: props.showAssistantCopyButton,
     assistantTurnInProgress: props.assistantTurnInProgress,
     runtimeMode: props.context.runtimeMode,
-    modelSelection: props.context.modelSelection,
-    modelOptions: props.context.modelOptions,
-    ...(props.context.runtimeModel ? { runtimeModel: props.context.runtimeModel } : {}),
+    retryTarget: props.context.retryTarget,
     turnDiffSummary: props.turnDiffSummary,
     activeTurnId: props.context.activeTurnId,
     isBusy: props.context.isBusy,
@@ -133,17 +134,10 @@ export function AssistantRetryEffortFooterActions(props: {
   });
   const live = buildLiveVariant({
     message: props.message,
-    modelSelection: props.context.modelSelection,
-    modelOptions: props.context.modelOptions,
-    runtimeModel: props.context.runtimeModel,
+    retryTarget: props.context.retryTarget,
     prompt: precedingUser?.text ?? "",
     turnDiffSummary: props.turnDiffSummary,
   });
-
-  // Hide entirely when the model has no effort ladder at all.
-  if (availability.effortOptions.length === 0) {
-    return null;
-  }
 
   return (
     <>

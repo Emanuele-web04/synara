@@ -1,0 +1,47 @@
+{
+  "run": "livecert-mu6mb82v",
+  "date": "2026-09-18T07:09:17.848Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-9BtlK8/host.sock",
+  "elapsedMs": 5359,
+  "rows": [
+    {
+      "name": "hidden-launch-default",
+      "verdict": "pass",
+      "detail": "manager.launchApp(no opts) → pid 18824 on_screen=false front 17571→17571",
+      "evidence": {
+        "launch": "{\"computerId\":\"desktop\",\"app\":\"Calculator\",\"window\":null}",
+        "launchPid": 18824,
+        "winNum": 350,
+        "listed": {
+          "app_name": "Calculator",
+          "bounds": {
+            "height": 408,
+            "width": 230,
+            "x": 350,
+            "y": 559
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 18824,
+          "space_ids": null,
+          "title": "Calculator",
+          "window_id": 350,
+          "z_index": 78
+        },
+        "frontBefore": 17571,
+        "frontAfter": 17571
+      },
+      "elapsedMs": 3025
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 1,
+    "fail": 0,
+    "skipped": 0,
+    "verdict": "pass"
+  }
+}

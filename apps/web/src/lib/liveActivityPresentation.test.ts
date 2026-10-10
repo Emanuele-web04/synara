@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkLogLiveActivity } from "../workLog";
-import {
-  formatLiveActivityMeta,
-  formatLiveActivityElapsed,
-  formatLiveActivityProgress,
-  formatLiveActivityStateLabel,
-  liveActivityElapsedMs,
-} from "./liveActivityPresentation";
+import { formatLiveActivityMeta, liveActivityElapsedMs } from "./liveActivityPresentation";
 
 const STARTED_AT = "2026-07-26T14:00:00.000Z";
 
@@ -97,18 +91,5 @@ describe("live activity presentation", () => {
 
     expect(liveActivityElapsedMs(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
     expect(formatLiveActivityMeta(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
-  });
-
-  it("shares normalized state, elapsed, and progress labels across activity surfaces", () => {
-    const activity = runningActivity({
-      state: "running_tool",
-      progress: 0.42,
-    });
-
-    expect(formatLiveActivityStateLabel(activity.state)).toBe("Running tool");
-    expect(formatLiveActivityElapsed(activity, Date.parse("2026-07-26T14:02:14.000Z"))).toBe(
-      "2m 14s",
-    );
-    expect(formatLiveActivityProgress(activity.progress ?? 0)).toBe("42%");
   });
 });

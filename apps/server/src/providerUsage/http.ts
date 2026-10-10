@@ -41,6 +41,9 @@ export async function fetchJson(input: {
       maxConcurrent: 4,
       maxQueued: 8,
       requirePublicAddress: true,
+      // Fake-ip DNS proxies resolve the hard-coded provider origins these calls
+      // are pinned to into the RFC 2544 benchmark range.
+      allowBenchmarkAddressRange: true,
       ...(input.allowLoopbackHttp === true ? { allowLoopbackHttp: true } : {}),
     },
     url: input.url,

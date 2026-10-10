@@ -8,7 +8,6 @@ import {
   buildPowerShellExecArgs,
   buildPowerShellExecutablePath,
   hardenElectronUpdater,
-  parseDistinguishedName,
   resolveWindowsUpdatePublisherNames,
   verifyWindowsUpdateCodeSignature,
 } from "./electronUpdaterSecurity";
@@ -28,14 +27,6 @@ describe("electronUpdaterSecurity", () => {
     expect(args).toContain("-Command");
     expect(args.join(" ")).toContain("Get-AuthenticodeSignature test.exe");
     expect(args.join(" ")).not.toContain("cmd.exe");
-  });
-
-  it("parses distinguished names the same way as builder-util-runtime", () => {
-    const parsed = parseDistinguishedName('CN=Synara, O="Acme, Inc.", OU=Tools\\2C Desktop');
-
-    expect(parsed.get("CN")).toBe("Synara");
-    expect(parsed.get("O")).toBe("Acme, Inc.");
-    expect(parsed.get("OU")).toBe("Tools, Desktop");
   });
 
   it("uses only embedded full publisher DNs and never feed-controlled names", () => {

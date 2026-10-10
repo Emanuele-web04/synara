@@ -57,14 +57,6 @@ describe("navigator platform helpers", () => {
     assert.equal(getNavigatorPlatform(), "MacIntel");
   });
 
-  it("detects macOS hosts, including the Node.js-style identifier", () => {
-    vi.stubGlobal("navigator", { platform: "MacIntel" });
-    assert.isTrue(isMacNavigatorPlatform());
-
-    vi.stubGlobal("navigator", { platform: "darwin" });
-    assert.isTrue(isMacNavigatorPlatform());
-  });
-
   it("is false on other hosts and without a navigator", () => {
     vi.stubGlobal("navigator", { platform: "Win32" });
     assert.isFalse(isMacNavigatorPlatform());

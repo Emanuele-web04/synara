@@ -38,7 +38,9 @@ export class GitCheckoutDirtyWorktreeError extends Schema.TaggedErrorClass<GitCh
 export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("GitHubCliError", {
   operation: Schema.String,
   detail: Schema.String,
-  reason: Schema.optional(Schema.Literals(["not-installed", "not-authenticated", "other"])),
+  reason: Schema.optional(
+    Schema.Literals(["not-installed", "not-authenticated", "rate-limited", "other"]),
+  ),
   cause: Schema.optional(Schema.Defect),
 }) {
   override get message(): string {

@@ -3,14 +3,6 @@ import type { BrowserCaptureScreenshotResult, NativeApi, ThreadId } from "@synar
 import type { ComposerImageAttachment } from "../composerDraftStore";
 import { prepareComposerImageAttachmentsFromFiles } from "./composerSend";
 
-const EXPLICIT_COMPUTER_USE_PATTERNS = [
-  "computer use",
-  "computer-use",
-  "@computer-use",
-  "@computer use",
-  "mcp__computer_use__",
-];
-
 const INTERNAL_BROWSER_SCOPE_PATTERNS = [
   "browser interno",
   "internal browser",
@@ -47,11 +39,6 @@ const INTERNAL_BROWSER_ACTION_PATTERNS = [
 
 function normalizePromptForMatching(prompt: string): string {
   return prompt.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-export function promptRequestsExplicitComputerUse(prompt: string): boolean {
-  const normalized = normalizePromptForMatching(prompt);
-  return EXPLICIT_COMPUTER_USE_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
 
 export function promptLooksLikeInternalBrowserTask(prompt: string): boolean {
@@ -105,10 +92,7 @@ export async function maybeResolveBrowserPromptAttachment(input: {
   threadId: ThreadId;
   prompt: string;
 }): Promise<BrowserPromptAttachmentResolution> {
-  if (
-    promptRequestsExplicitComputerUse(input.prompt) ||
-    !promptLooksLikeInternalBrowserTask(input.prompt)
-  ) {
+  if (!promptLooksLikeInternalBrowserTask(input.prompt)) {
     return { requested: false, image: null };
   }
 

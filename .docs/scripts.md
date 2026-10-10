@@ -16,6 +16,25 @@
 - `bun run dist:desktop:linux` — Builds a Linux AppImage into `./release`.
 - `bun run dist:desktop:win` — Builds a Windows NSIS installer into `./release`.
 
+## Development compilation
+
+The Vite development server skips React Compiler by default so cold page loads
+and edits to large chat components do not wait for compiler optimization. JSX,
+TypeScript and React Fast Refresh still run through Vite's normal React plugin.
+Production builds and browser tests (`test` mode) always use React Compiler.
+
+To investigate compiler-specific behavior or compare rendering performance with
+compiler memoization enabled, opt in before starting the dev server:
+
+```bash
+SYNARA_DEV_REACT_COMPILER=1 bun run dev:desktop
+# Also applies to bun run dev and bun run dev:web.
+```
+
+Restart the dev command after changing this flag. Default development rendering
+does not have compiler-generated memoization, so use a production build or the
+opt-in when measuring rendering performance.
+
 ## Desktop `.dmg` packaging notes
 
 - Default local builds are unsigned/not notarized unless `--signed` is supplied with the required platform credentials.
