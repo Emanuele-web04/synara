@@ -371,7 +371,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
   const startDragFromClient = (
     startClientX: number,
     startClientY: number,
-    options: { reopenMenuOnRelease: boolean },
+    options: { reopenMenuOnRelease: boolean; expandOnClick?: boolean },
   ) => {
     const host = hostRef.current;
     if (!host) return;
