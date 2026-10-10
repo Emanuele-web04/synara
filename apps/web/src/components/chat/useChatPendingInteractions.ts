@@ -37,6 +37,7 @@ import {
   type PendingUserInput,
 } from "../../session-logic";
 import { useStore } from "../../store";
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
@@ -306,6 +307,7 @@ export function useChatPendingInteractions({
       );
       await Promise.resolve()
         .then(async () => {
+          if (isThreadDetailAwaitingVerification(activeThreadId)) return;
           await api.orchestration.dispatchCommand({
             type: "thread.user-input.respond",
             commandId: newCommandId(),

@@ -2139,10 +2139,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     WHERE later.thread_id = activity.thread_id
                       AND later.kind IN ('task.updated', 'task.progress', 'task.completed')
                       AND json_extract(later.payload_json, '$.taskId') = json_extract(activity.payload_json, '$.taskId')
-                      AND (later.kind = 'task.completed' OR EXISTS (
+                      AND EXISTS (
                         SELECT 1 FROM json_each(later.payload_json) newer_patch
                         WHERE newer_patch.key = patch.key
-                      ))
+                      )
                       AND (later.created_at > activity.created_at OR (later.created_at = activity.created_at AND later.activity_id > activity.activity_id))
                   )
                 ))

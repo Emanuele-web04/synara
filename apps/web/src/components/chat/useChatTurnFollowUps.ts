@@ -316,7 +316,13 @@ export function useChatTurnFollowUps({
   const onEditUserMessage = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
       const api = readNativeApi();
-      if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) {
+      if (
+        !api ||
+        !activeThread ||
+        !isServerThread ||
+        isRevertingCheckpoint ||
+        isThreadDetailAwaitingVerification(activeThread.id)
+      ) {
         return false;
       }
       const editTarget = resolveTailUserMessageEditTarget({
@@ -362,6 +368,7 @@ export function useChatTurnFollowUps({
           threadId: activeThread.id,
           createdAt: messageCreatedAt,
         });
+        if (isThreadDetailAwaitingVerification(activeThread.id)) return false;
         await api.orchestration.dispatchCommand({
           type: "thread.message.edit-and-resend",
           commandId: newCommandId(),

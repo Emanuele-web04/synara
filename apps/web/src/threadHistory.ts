@@ -17,7 +17,14 @@ interface LoadState {
 }
 const EMPTY: LoadState = Object.freeze({ loading: false, error: null });
 const states = new Map<ThreadId, LoadState>();
-const requests = new Map<ThreadId, Promise<boolean>>();
+const requests = new Map<
+  ThreadId,
+  {
+    owner: ReturnType<typeof getThreadHistoryOwner>;
+    identity: ReturnType<typeof getVerifiedThreadCacheIdentity>;
+    promise: Promise<boolean>;
+  }
+>();
 const listeners = new Set<() => void>();
 const notify = (id: ThreadId, state: LoadState) => {
   states.set(id, state);
@@ -35,14 +42,14 @@ const subscribe = (listener: () => void) => {
 };
 
 export function loadThreadHistoryPage(id: ThreadId): Promise<boolean> {
-  const pending = requests.get(id);
-  if (pending) return pending;
   const state = useStore.getState();
   const cursor = state.threadHistoryById?.[id]?.olderCursor;
   const activityCursor = state.threadHistoryById?.[id]?.olderActivityCursor;
   const originalHistory = state.threadHistoryById?.[id];
   const owner = getThreadHistoryOwner(originalHistory);
   const identity = getVerifiedThreadCacheIdentity();
+  const pending = requests.get(id);
+  if (pending?.owner === owner && pending.identity === identity) return pending.promise;
   if ((!cursor && !activityCursor) || state.threadDetailSyncById?.[id] !== "synced")
     return Promise.resolve(false);
   notify(id, { loading: true, error: null });
@@ -73,21 +80,25 @@ export function loadThreadHistoryPage(id: ThreadId): Promise<boolean> {
       useStore.getState().mergeThreadHistoryPage(page, cursor ?? null, activityCursor);
       return useStore.getState().threadHistoryById?.[id] !== originalHistory;
     } catch (error) {
-      notify(id, {
-        loading: false,
-        error: error instanceof Error ? error.message : "Could not load earlier messages.",
-      });
+      if (requests.get(id)?.promise === request) {
+        notify(id, {
+          loading: false,
+          error: error instanceof Error ? error.message : "Could not load earlier messages.",
+        });
+      }
       return false;
     } finally {
-      requests.delete(id);
-      const current = states.get(id);
-      if (current?.loading) notify(id, { loading: false, error: null });
-      // Only visible/failing load state needs retention. Requests are bounded by
-      // thread leases, and completed entries must not accumulate with navigation.
-      if (!states.get(id)?.error) states.delete(id);
+      if (requests.get(id)?.promise === request) {
+        requests.delete(id);
+        const current = states.get(id);
+        if (current?.loading) notify(id, { loading: false, error: null });
+        // Only visible/failing load state needs retention. Requests are bounded by
+        // thread leases, and completed entries must not accumulate with navigation.
+        if (!states.get(id)?.error) states.delete(id);
+      }
     }
   });
-  requests.set(id, request);
+  requests.set(id, { owner, identity, promise: request });
   return request;
 }
 

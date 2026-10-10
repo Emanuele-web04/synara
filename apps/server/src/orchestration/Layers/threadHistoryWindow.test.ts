@@ -14,6 +14,10 @@ import {
 // files to the server's composite TypeScript project.
 const rendererSessionLogicPath = new URL("../../../../web/src/session-logic.ts", import.meta.url)
   .pathname;
+const rendererWorkflowLogicPath = new URL(
+  "../../../../web/src/components/chat/WorkflowRunCard.logic.ts",
+  import.meta.url,
+).pathname;
 
 const layer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(
@@ -319,6 +323,41 @@ layer("thread message history windows", (it) => {
       );
       assert.deepEqual(deriveOutstandingBackgroundTaskIds(windowed.thread.activities), ["task-1"]);
     }),
+  );
+  it.effect(
+    "retains launch identity after completion so a settled workflow remains resumable",
+    () =>
+      Effect.gen(function* () {
+        const { deriveWorkflowRunState } = yield* Effect.promise(
+          () => import(rendererWorkflowLogicPath),
+        );
+        const sql = yield* SqlClient.SqlClient;
+        const query = yield* ProjectionSnapshotQuery;
+        const id = ThreadId.makeUnsafe("settled-workflow");
+        const now = "2026-10-10T10:00:00.000Z";
+        yield* sql`INSERT INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES (${id},'History','/tmp/probe-workflow','[]',${now},${now})`;
+        yield* sql`INSERT INTO projection_threads (thread_id,project_id,title,model_selection_json,created_at,updated_at) VALUES (${id},${id},'History','{"provider":"codex","model":"gpt-5"}',${now},${now})`;
+        yield* sql`INSERT INTO projection_thread_activities (activity_id,thread_id,tone,kind,summary,payload_json,sequence,created_at) VALUES
+        ('wf-start',${id},'info','task.started','Workflow','{"taskId":"wf-1","taskType":"local_workflow"}',1,${now}),
+        ('wf-launch',${id},'info','task.updated','Launched','{"taskId":"wf-1","workflowRunId":"wf_run","workflowScriptPath":"/tmp/workflow.ts"}',2,${new Date(Date.parse(now) + 1000).toISOString()}),
+        ('wf-complete',${id},'info','task.completed','Completed','{"taskId":"wf-1","status":"completed"}',3,${new Date(Date.parse(now) + 2000).toISOString()})`;
+        for (let index = 0; index < 205; index++) {
+          const time = new Date(Date.parse(now) + (index + 3) * 1000).toISOString();
+          yield* sql`INSERT INTO projection_thread_activities (activity_id,thread_id,tone,kind,summary,payload_json,sequence,created_at) VALUES (${`wf-fill-${index}`},${id},'tool','tool.completed','Work','{}',${index + 4},${time})`;
+        }
+        const legacy = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(id));
+        const legacyState = deriveWorkflowRunState({ activities: legacy.thread.activities });
+        assert(legacyState !== null);
+        assert.equal(legacyState.runId, "wf_run");
+        assert.equal(legacyState.scriptPath, "/tmp/workflow.ts");
+        const windowed = Option.getOrThrow(
+          yield* query.getThreadDetailSnapshotById(id, { limit: 100 }),
+        );
+        assert.deepEqual(
+          deriveWorkflowRunState({ activities: windowed.thread.activities }),
+          legacyState,
+        );
+      }),
   );
   it.effect("retains the last unfinished prior-turn task list", () =>
     Effect.gen(function* () {
