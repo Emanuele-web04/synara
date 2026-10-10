@@ -172,6 +172,18 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
+  it("preserves a silent but live matching turn past the old 45-minute limit", () => {
+    const plans = planProviderRuntimeReconciliation({
+      threads: [threadShell()],
+      bindings: [binding()],
+      liveSessions: [liveSession({ status: "running", activeTurnId: OLD_TURN_ID })],
+      pumpHealth: [],
+      nowMs: NOW + 60 * 60_000,
+      staleAfterMs: 10_000,
+    });
+    expect(plans).toEqual([]);
+  });
+
   it("does not second-guess matching, fresh, or shared child runtime state", () => {
     const matching = planProviderRuntimeReconciliation({
       threads: [threadShell()],

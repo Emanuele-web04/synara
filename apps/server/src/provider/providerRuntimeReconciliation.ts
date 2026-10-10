@@ -29,7 +29,9 @@ export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
  * every appended message, so a legitimately long-running turn keeps resetting
  * this clock and is never affected.
  */
-export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
+// A silent tool can legitimately run for hours. Specific providers have their
+// own process/transport wedge detection; do not infer death after 45 minutes.
+export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 6 * 60 * 60_000;
 
 export type ProviderRuntimeReconciliationPlan =
   | {

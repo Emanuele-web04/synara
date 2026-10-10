@@ -63,8 +63,25 @@ export function deriveTurnStartSession(input: {
    */
   readonly sessionProviderEstablished?: boolean;
 }): OrchestrationSession | null {
-  if (input.currentSession?.status === "starting" || input.currentSession?.status === "running") {
+  // Starting is only a provisional pre-bind projection. Never regress a live,
+  // established session on a follow-up or a queued steer: the provider's real
+  // start/bind result will publish authoritative state if a restart is needed.
+  if (
+    input.currentSession?.status === "starting" ||
+    input.currentSession?.status === "running" ||
+    input.currentSession?.status === "ready"
+  ) {
     return null;
+  }
+
+  // A queued intent can be delivered after a newer state change (or replayed
+  // during recovery). Its timestamp is not permission to roll the session back.
+  if (input.currentSession !== null) {
+    const previousAt = Date.parse(input.currentSession.updatedAt);
+    const requestedAt = Date.parse(input.requestedAt);
+    if (Number.isFinite(previousAt) && Number.isFinite(requestedAt) && previousAt > requestedAt) {
+      return null;
+    }
   }
 
   const sessionProviderName =
