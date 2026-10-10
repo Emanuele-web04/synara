@@ -73,6 +73,15 @@ function sidebarGlass() {
 }
 
 describe("chat composer on sidebar-only macOS glass", () => {
+  it("keeps stacked plan/task rows aligned with the composer input", async () => {
+    await render(<ComposerFixture />, { container: appRoot });
+
+    expect(surface("stacked").getBoundingClientRect().width).toBeCloseTo(
+      surface("composer").getBoundingClientRect().width,
+      1,
+    );
+  });
+
   it.each(["light", "dark"])(
     "avoids a second backdrop layer and keeps dense fills in %s mode",
     async (theme) => {
