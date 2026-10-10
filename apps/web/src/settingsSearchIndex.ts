@@ -372,6 +372,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Expire a side chat after it sits idle for this long. sidechat inactivity timeout 1 hour 24 hours never disable",
   },
   {
+    id: "behavior:thread-auto-archive",
+    section: "behavior",
+    title: "Archive idle threads",
+    keywords:
+      "Automatically archive inactive threads after 7 14 30 days or never. auto-archive retention disable off",
+  },
+  {
     id: "behavior:follow-up-behavior",
     section: "behavior",
     title: "Follow-up behavior",
@@ -450,6 +457,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "behavior",
     title: "Archive confirmation",
     keywords: "Ask before archiving a thread. safety confirm",
+  },
+  {
+    id: "behavior:claude-cache-confirmation",
+    section: "behavior",
+    title: "Expired Claude cache confirmation",
+    keywords:
+      "Confirm expired Claude prompt cache resume before sending large context. hold review don't ask again disable off",
   },
   {
     id: "behavior:terminal-close-confirmation",

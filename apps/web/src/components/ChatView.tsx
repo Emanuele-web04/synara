@@ -610,7 +610,7 @@ export default function ChatView({
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
-  const { settings, updateSettings } = useAppSettings();
+  const { settings, updateSettings, updateSettingsAndWait } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
@@ -2198,8 +2198,8 @@ export default function ChatView({
     [threadId],
   );
   const onStopAskingClaudeCacheReview = useCallback(
-    () => updateSettings({ confirmClaudeCacheResume: false }),
-    [updateSettings],
+    () => updateSettingsAndWait({ confirmClaudeCacheResume: false }, { throwOnError: true }),
+    [updateSettingsAndWait],
   );
   const activeRootBranch = useMemo(
     () =>

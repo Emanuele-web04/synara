@@ -3160,14 +3160,21 @@ const make = Effect.gen(function* () {
         )
           return;
       } else if (pendingReview) return;
-      const nativeObservation = providerService.getClaudeCacheObservation
-        ? yield* awaitClaudeCompactionPreparation(
-            providerService
-              .getClaudeCacheObservation(input.threadId)
-              .pipe(Effect.catch(() => Effect.succeed(undefined))),
-            input.claudeCompactionCancellation,
-          )
-        : undefined;
+      // Keep accepted-review ownership checks above even when future reviews are off.
+      // The native observation can block on a control-request timeout, so skip it too.
+      const confirmCacheResume = yield* serverSettings.getSettings.pipe(
+        Effect.map((settings) => settings.confirmClaudeCacheResume),
+        Effect.catch(() => Effect.succeed(true)),
+      );
+      const nativeObservation =
+        confirmCacheResume && providerService.getClaudeCacheObservation
+          ? yield* awaitClaudeCompactionPreparation(
+              providerService
+                .getClaudeCacheObservation(input.threadId)
+                .pipe(Effect.catch(() => Effect.succeed(undefined))),
+              input.claudeCompactionCancellation,
+            )
+          : undefined;
       // In-session model controls run inside sendTurn, after this preflight.
       // Assess the requested model now without changing the native session.
       const requestedSelection = input.modelSelection ?? thread.modelSelection;
@@ -3182,12 +3189,7 @@ const make = Effect.gen(function* () {
         observation &&
         assessment.requiresConfirmation &&
         (!input.acceptedCacheReview ||
-          !claudeCacheReviewCoversObservation(input.acceptedCacheReview, observation)) &&
-        // Users can opt out of the review. If the setting cannot be read, keep asking.
-        (yield* serverSettings.getSettings.pipe(
-          Effect.map((settings) => settings.confirmClaudeCacheResume),
-          Effect.catch(() => Effect.succeed(true)),
-        ))
+          !claudeCacheReviewCoversObservation(input.acceptedCacheReview, observation))
       ) {
         const createdAt = new Date().toISOString();
         const hold = {

@@ -2790,7 +2790,10 @@ export function useAppSettings() {
     await invalidateProviderUsageQueries(queryClient).catch(() => undefined);
   };
 
-  const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
+  const updateSettingsAndWait = async (
+    patch: Partial<AppSettings>,
+    options?: { readonly throwOnError?: boolean },
+  ): Promise<void> => {
     const providerInstancesBeforePatch =
       patch.providerInstances !== undefined ? localSettings.providerInstances : undefined;
     // The pending migration ref retains the one plaintext snapshot that still
@@ -2822,7 +2825,7 @@ export function useAppSettings() {
             .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
             .catch(() => undefined);
         }
-      } catch {
+      } catch (error) {
         if (providerInstancesBeforePatch !== undefined) {
           setSettings((prev) => {
             const restored = normalizeAppSettings({
@@ -2840,6 +2843,9 @@ export function useAppSettings() {
             .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
             .catch(() => undefined);
         }
+        // Existing onboarding callers use best-effort writes. A combined action
+        // can opt in to persistence errors when it must report partial success.
+        if (options?.throwOnError) throw error;
       }
     });
   };

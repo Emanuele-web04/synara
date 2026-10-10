@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { ComposerClaudeCacheReviewPanel } from "./ComposerClaudeCacheReviewPanel";
 
+const toast = vi.hoisted(() => vi.fn());
+vi.mock("../ui/toast", () => ({ toastManager: { add: toast } }));
+
 function makeReview(overrides: Partial<PendingClaudeCacheReview> = {}): PendingClaudeCacheReview {
   return {
     reviewId: "review-1",
@@ -97,6 +100,53 @@ describe("ComposerClaudeCacheReviewPanel", () => {
       await screen.unmount();
     }
   });
+
+  it.each([false, true])(
+    "reports an unsaved preference without retrying an accepted choice (unmounted=%s)",
+    async (unmountBeforeFailure) => {
+      toast.mockClear();
+      const onRespond = vi.fn(async () => undefined);
+      let rejectSave!: (error: Error) => void;
+      const onStopAsking = vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectSave = reject;
+          }),
+      );
+      const screen = await render(
+        <ComposerClaudeCacheReviewPanel
+          review={makeReview()}
+          compactDisabledReason={null}
+          onRespond={onRespond}
+          onStopAsking={onStopAsking}
+        />,
+      );
+      try {
+        await page.getByRole("button", { name: /^Don't ask again/ }).click();
+        await expect.poll(() => onStopAsking.mock.calls.length).toBe(1);
+        if (unmountBeforeFailure) await screen.unmount();
+        rejectSave(new Error("Settings RPC failed"));
+        await expect
+          .poll(() => toast.mock.calls[0]?.[0])
+          .toMatchObject({
+            title: "Cache preference not saved",
+            description: expect.stringContaining("Your current choice was accepted."),
+          });
+        if (!unmountBeforeFailure) {
+          await expect
+            .element(page.getByRole("button", { name: /^Don't ask again/ }))
+            .toBeDisabled();
+          await expect
+            .element(page.getByRole("button", { name: /^Continue with full context/ }))
+            .toBeDisabled();
+          await expect.element(page.getByRole("alert")).not.toBeInTheDocument();
+        }
+        expect(onRespond).toHaveBeenCalledTimes(1);
+      } finally {
+        if (!unmountBeforeFailure) await screen.unmount();
+      }
+    },
+  );
 
   it("preserves the held message and makes a rejected choice retryable", async () => {
     const review = makeReview();

@@ -1680,9 +1680,10 @@ describe("ProviderCommandReactor", () => {
     }
 
     it("sends without a review when expired-cache confirmation is turned off", async () => {
+      const getClaudeCacheObservation = vi.fn(() => Effect.sync(expiredCacheObservation));
       const harness = await createHarness({
         threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
-        getClaudeCacheObservation: () => Effect.sync(expiredCacheObservation),
+        getClaudeCacheObservation,
         serverSettings: { confirmClaudeCacheResume: false },
       });
       await dispatchHarnessUserTurn(harness, {
@@ -1693,6 +1694,7 @@ describe("ProviderCommandReactor", () => {
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       await harness.drain();
       expect((await readHarnessThread(harness))?.claudeCacheReview).toBeFalsy();
+      expect(getClaudeCacheObservation).not.toHaveBeenCalled();
     });
 
     it("recovers a retryable cache response ahead of the source cursor before source admission", async () => {

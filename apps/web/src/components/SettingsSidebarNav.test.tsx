@@ -56,6 +56,8 @@ describe("rankSettingsSearchEntries", () => {
     expect(titles("dictating")).toContain("Enter while dictating");
     expect(titles("diff colors")).toContain("Pull request diff colors");
     expect(titles("enabled providers")).toContain("Enabled providers");
+    expect(titles("auto-archive")).toContain("Archive idle threads");
+    expect(titles("don't ask again")).toContain("Expired Claude cache confirmation");
   });
 
   it("finds the Fold finished turns and Wait for subagents rows", () => {
