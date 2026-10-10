@@ -226,6 +226,62 @@ describe("stopPosixBackendAndWait", () => {
     expect(child.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
+  it.each([false, true])(
+    "keeps the absolute deadline after delayed TERM, with exit proof %s",
+    async (exitsAtDeadline) => {
+      const child = makeTestBackendShutdownProcess();
+      const signalChild = child.kill.bind(child);
+      vi.spyOn(child, "kill").mockImplementation((signal) => {
+        const result = signalChild(signal);
+        if (signal === "SIGKILL" && exitsAtDeadline) child.exit(null, "SIGKILL");
+        return result;
+      });
+      const pendingRequest = makePendingRequest();
+      const scheduleTimer = globalThis.setTimeout;
+      // Delay TERM past its nominal time while leaving the absolute deadline
+      // unchanged, so the remaining grace would extend beyond that deadline.
+      const delayedTerm = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementationOnce((callback) => scheduleTimer(callback, 9_500));
+      const shutdown = stopPosixBackendAndWait({
+        child,
+        backendHttpUrl: "http://127.0.0.1:3773",
+        shutdownToken: "desktop-only-token",
+        terminateDelayMs: 6_000,
+        forceKillDelayMs: 8_000,
+        timeoutMs: 10_000,
+        startRequest: () => pendingRequest,
+      });
+      delayedTerm.mockRestore();
+      const outcome = shutdown.then(
+        () => ({ type: "exited" as const }),
+        (error: unknown) => ({ type: "failed" as const, error }),
+      );
+
+      await vi.advanceTimersByTimeAsync(9_499);
+      expect(child.killSignals).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.killSignals).toEqual(["SIGTERM"]);
+      await vi.advanceTimersByTimeAsync(499);
+      await expectPromisePending(shutdown);
+      await vi.advanceTimersByTimeAsync(1);
+
+      if (exitsAtDeadline) {
+        await expect(outcome).resolves.toEqual({ type: "exited" });
+      } else {
+        await expect(outcome).resolves.toMatchObject({
+          type: "failed",
+          error: { name: "PosixBackendShutdownTimeoutError", forced: true },
+        });
+        expect(child.exitCode).toBeNull();
+        expect(child.signalCode).toBeNull();
+      }
+      expect(child.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(pendingRequest.cancel).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("shares duplicate shutdown calls for the same process", async () => {
     const child = makeTestBackendShutdownProcess();
     const input = {

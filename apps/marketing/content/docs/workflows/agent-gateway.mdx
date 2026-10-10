@@ -231,3 +231,7 @@ Gateway model metadata includes Claude context windows so agents can inspect mod
 ## Returned task results in 0.9.0
 
 Eligible delegated runs created through the gateway can return their completed result to the originating task automatically. Delivery waits for durable output settlement and follows the initial delegated request, rather than accidentally returning a later turn. Failure and interruption remain distinct outcomes. This scoped handoff is not a promise of automatic completion delivery for every persistent-goal workflow; inspect task status and use the returned read-task reference when more detail is needed.
+
+## Maintain the Tasks list
+
+From 1.0.2-beta.1, `synara_create_todo`, `synara_list_todos` and `synara_update_todo` maintain [Tasks to-dos](/docs/features/tasks-and-inbox#maintain-to-dos-from-a-chat). They do not dispatch work or delete records. Writes require an active caller turn and write capability; repeated creates with the same caller and request ID reuse the stored item.
