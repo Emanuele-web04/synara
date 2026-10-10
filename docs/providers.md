@@ -266,6 +266,15 @@ Codex multi-agent v2 encrypts spawn briefs, so its children are named after thei
 open without a brief. Synara shows up to 20 provider-native subagents per turn and notes on the
 parent thread when more ran.
 
+The parent transcript keeps each turn's subagents in a card at their launch position, with
+status, elapsed time, the current step and a short result. Settled turns keep the card in their
+work disclosure, whose header retains the subagent count. A running card outside the viewport
+gets a floating chip that brings it back into view. Stop remains visible; Message appears on
+hover or keyboard focus. The header counts direct children and labels additional nested
+subagents separately; their rows start collapsed. The sidebar shows the same source-thread
+tree under the open parent, with neutral names and status dots. Child threads link back to
+their launcher, show agent-sent briefs as cards and mark the completed answer delivered to it.
+
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
 Once native background work settles, it keeps the app-server process alive, unsubscribes the
 native conversation, verifies that Codex unloaded it, and resumes the same conversation with

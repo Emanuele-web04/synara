@@ -2,6 +2,7 @@ import { MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/con
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveSubagentTaskEnds,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
@@ -11,6 +12,34 @@ import {
 import type { ChatMessage } from "./types";
 import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
+
+describe("deriveSubagentTaskEnds", () => {
+  it("preserves settled invocations while a resumed task waits for its own completion", () => {
+    const firstEnd = makeActivity({
+      id: "done",
+      kind: "task.completed",
+      createdAt: "2026-10-10T00:00:08Z",
+      payload: { toolUseId: "a", status: "completed" },
+    });
+    const restart = makeActivity({
+      id: "resume",
+      kind: "task.started",
+      createdAt: "2026-10-10T00:01:00Z",
+      payload: { toolUseId: "a" },
+    });
+    const latestEnd = makeActivity({
+      id: "failed",
+      kind: "task.completed",
+      createdAt: "2026-10-10T00:01:03Z",
+      payload: { toolUseId: "a", status: "failed" },
+    });
+    expect(deriveSubagentTaskEnds([firstEnd, restart, latestEnd]).get("a")).toEqual({
+      outcome: "failed",
+      endedAt: latestEnd.createdAt,
+      previous: { outcome: "completed", endedAt: firstEnd.createdAt },
+    });
+  });
+});
 
 describe("deriveWorkLogEntries", () => {
   it("pairs an answered question with its answers in one exchange row", () => {

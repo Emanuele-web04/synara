@@ -920,15 +920,41 @@ export interface SidebarThreadTreeRow<
   rootThreadId: T["id"];
 }
 
-function collectActiveThreadAncestorIds<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(threadById: Map<T["id"], T>, forceVisibleThreadId: T["id"] | undefined): Set<T["id"]> {
+type SidebarTreeThread = Pick<SidebarThreadSummary, "id" | "parentThreadId"> &
+  Partial<Pick<SidebarThreadSummary, "sourceThreadId">>;
+
+// A nested subagent hangs off the main thread but was launched by another
+// subagent (its sourceThreadId); the tree shows it under that subagent when
+// the launcher is in the list.
+function treeParentThreadId<T extends SidebarTreeThread>(
+  thread: T,
+  threadById: Map<T["id"], T>,
+): T["id"] | null {
+  const parentThreadId = thread.parentThreadId ?? null;
+  const sourceThreadId = thread.sourceThreadId ?? null;
+  if (
+    parentThreadId &&
+    sourceThreadId &&
+    sourceThreadId !== parentThreadId &&
+    sourceThreadId !== thread.id &&
+    threadById.get(sourceThreadId)?.parentThreadId === parentThreadId
+  ) {
+    return sourceThreadId;
+  }
+  return parentThreadId;
+}
+
+function collectActiveThreadAncestorIds<T extends SidebarTreeThread>(
+  threadById: Map<T["id"], T>,
+  forceVisibleThreadId: T["id"] | undefined,
+): Set<T["id"]> {
   const ancestorIds = new Set<T["id"]>();
   let currentThreadId = forceVisibleThreadId;
 
   while (currentThreadId) {
-    const parentThreadId = threadById.get(currentThreadId)?.parentThreadId ?? undefined;
-    if (!parentThreadId) {
+    const current = threadById.get(currentThreadId);
+    const parentThreadId = current ? treeParentThreadId(current, threadById) : null;
+    if (!parentThreadId || ancestorIds.has(parentThreadId)) {
       break;
     }
     ancestorIds.add(parentThreadId);
@@ -939,9 +965,8 @@ function collectActiveThreadAncestorIds<
 }
 
 // Build the project-local parent/child thread tree while preserving sort order from the input list.
-export function buildProjectThreadTree<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(input: {
+// Subagent rows show under the open thread and its ancestors, finished or not.
+export function buildProjectThreadTree<T extends SidebarTreeThread>(input: {
   threads: readonly T[];
   forceVisibleThreadId?: T["id"] | undefined;
 }): SidebarThreadTreeRow<T>[] {
@@ -951,7 +976,7 @@ export function buildProjectThreadTree<
   const roots: T[] = [];
 
   for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
+    const parentThreadId = treeParentThreadId(thread, threadById);
     if (!parentThreadId) {
       roots.push(thread);
       continue;
@@ -970,10 +995,13 @@ export function buildProjectThreadTree<
   const activeThreadAncestorIds = collectActiveThreadAncestorIds(threadById, forceVisibleThreadId);
   const orderedRows: SidebarThreadTreeRow<T>[] = [];
 
-  const visit = (thread: T, depth: number, rootThreadId: T["id"]) => {
+  // The open thread's ancestors reveal the path down to it; the open thread
+  // reveals its whole subtree (its subagents and the ones they launched).
+  const visit = (thread: T, depth: number, rootThreadId: T["id"], inOpenSubtree: boolean) => {
     const childThreads = childrenByParentId.get(thread.id) ?? [];
-    const revealsActiveDescendant =
-      childThreads.length > 0 && activeThreadAncestorIds.has(thread.id);
+    const opensSubtree = inOpenSubtree || thread.id === forceVisibleThreadId;
+    const revealsChildren =
+      childThreads.length > 0 && (opensSubtree || activeThreadAncestorIds.has(thread.id));
 
     orderedRows.push({
       thread,
@@ -981,17 +1009,17 @@ export function buildProjectThreadTree<
       rootThreadId,
     });
 
-    if (!revealsActiveDescendant) {
+    if (!revealsChildren) {
       return;
     }
 
     for (const child of childThreads) {
-      visit(child, depth + 1, rootThreadId);
+      visit(child, depth + 1, rootThreadId, opensSubtree);
     }
   };
 
   for (const root of roots) {
-    visit(root, 0, root.id);
+    visit(root, 0, root.id, false);
   }
 
   return orderedRows;

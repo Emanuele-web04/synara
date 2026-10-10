@@ -1,5 +1,5 @@
 // FILE: subagentPresentation.ts
-// Purpose: Normalizes subagent identity, nickname colors, and status labels for sidebar/chat UI.
+// Purpose: Normalizes subagent identity and status (labels, tones, dots) for sidebar/chat UI.
 // Exports: Shared presentation helpers consumed by sidebar rows, chat cards, and thread hydration.
 
 import {
@@ -9,17 +9,6 @@ import {
   resolveSubagentIdentityFromDirectory,
 } from "@synara/shared/subagents";
 import { formatModelDisplayName } from "@synara/shared/model";
-
-const SUBAGENT_ACCENT_PALETTE = [
-  "#b84e44",
-  "#2f7a5d",
-  "#345fa8",
-  "#a86834",
-  "#7352a8",
-  "#2f7480",
-  "#a84d71",
-  "#6a8531",
-] as const;
 
 const GENERIC_SUBAGENT_TITLES = new Set([
   "",
@@ -42,7 +31,6 @@ export interface SubagentPresentation {
   role: string | null;
   title: string | null;
   fullLabel: string;
-  accentColor: string;
 }
 
 type SubagentThreadActivityLike = {
@@ -81,27 +69,6 @@ const siblingThreadIdsByThreads = new WeakMap<
   ReadonlyArray<SubagentThreadLike>,
   Map<string, ReadonlyArray<string>>
 >();
-
-function basename(value: string): string {
-  const slashIndex = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
-  return slashIndex >= 0 ? value.slice(slashIndex + 1) : value;
-}
-
-// Seeds the accent color only. Provider ids (tool_use ids, conversation uuids,
-// the `subagent:<parent>:<id>` tail) are never shown as a label.
-function fallbackAccentSeed(value: string | null): string | null {
-  const normalized = normalizeWhitespace(value);
-  if (!normalized) {
-    return null;
-  }
-
-  if (normalized.startsWith("subagent:")) {
-    const segments = normalized.split(":").filter((segment) => segment.length > 0);
-    return segments.at(-1) ?? normalized;
-  }
-
-  return basename(normalized);
-}
 
 // Mirrors the server's prompt-derived child title: first non-empty line,
 // whitespace-collapsed, clipped to 60 characters.
@@ -310,27 +277,12 @@ function resolveSubagentSiblingLabel(input: {
   return index >= 0 ? `${DEFAULT_SUBAGENT_LABEL} ${index + 1}` : null;
 }
 
-function hashLabelSeed(seed: string): number {
-  let hash = 0;
-  for (const character of seed) {
-    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  }
-  return hash;
-}
-
-function subagentAccentColor(seed: string | null | undefined): string {
-  const normalized = normalizeWhitespace(seed)?.toLowerCase() ?? "subagent";
-  const index = hashLabelSeed(normalized) % SUBAGENT_ACCENT_PALETTE.length;
-  return SUBAGENT_ACCENT_PALETTE[index] ?? SUBAGENT_ACCENT_PALETTE[0];
-}
-
 export function resolveSubagentPresentation(input: {
   nickname?: string | null | undefined;
   role?: string | null | undefined;
   title?: string | null | undefined;
-  fallbackId?: string | null | undefined;
   // Shown when no nickname, role, or usable title is known (defaults to
-  // "Subagent"); fallbackId only seeds the accent color, never the label.
+  // "Subagent"). Provider ids are never shown as a label.
   placeholderLabel?: string | null | undefined;
 }): SubagentPresentation {
   const explicitNickname = normalizeWhitespace(input.nickname);
@@ -352,10 +304,6 @@ export function resolveSubagentPresentation(input: {
   const primaryLabel =
     identityLabel ?? normalizeWhitespace(input.placeholderLabel) ?? DEFAULT_SUBAGENT_LABEL;
   const fullLabel = role && nickname ? `${nickname} [${role}]` : primaryLabel;
-  // Anonymous rows keep the color their provider id always seeded, so siblings
-  // sharing a placeholder label stay distinguishable.
-  const accentSeed =
-    identityLabel ?? fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ?? primaryLabel;
 
   return {
     primaryLabel,
@@ -363,7 +311,6 @@ export function resolveSubagentPresentation(input: {
     role,
     title: resolvedTitle,
     fullLabel,
-    accentColor: subagentAccentColor(accentSeed),
   };
 }
 
@@ -387,7 +334,6 @@ export function resolveSubagentPresentationForThread(input: {
     nickname: input.thread.subagentNickname ?? derivedIdentity?.nickname,
     role: input.thread.subagentRole ?? derivedIdentity?.role,
     title: input.thread.title,
-    fallbackId: input.thread.id,
     placeholderLabel:
       derivedIdentity?.promptLabel ??
       (threads ? resolveSubagentSiblingLabel({ thread: input.thread, threads }) : null),
@@ -492,18 +438,77 @@ export function formatSubagentModelLabel(model: string | null | undefined): stri
 
 // Status is the only hue in the agent panels: the dot always carries it, the
 // text echoes it only while live (running) or when something went wrong
-// (failed); terminal/neutral states read as plain muted text.
+// (failed); terminal/neutral states read as plain muted text. Light themes take
+// the darker shade so the text stays readable on a white surface.
 export function subagentStatusTextToneClassName(
   statusKind: SubagentStatusKind | null | undefined,
 ): string {
   switch (statusKind) {
     case "running":
-      return "text-sky-300/85";
+      return "text-sky-600 dark:text-sky-300/85";
     case "failed":
-      return "text-rose-300/85";
+      return "text-rose-600 dark:text-rose-300/85";
     default:
       return "text-muted-foreground/55";
   }
+}
+
+// The past-tense outcome word on a finished subagent row ("Done", "Stopped by
+// you") also names its state, so it takes the dot's hue in a readable shade.
+export function subagentOutcomeTextToneClassName(
+  statusKind: SubagentStatusKind | null | undefined,
+): string {
+  switch (statusKind) {
+    case "completed":
+      return "text-emerald-700 dark:text-emerald-300/85";
+    case "stopped":
+      return "text-amber-700 dark:text-amber-300/85";
+    default:
+      return subagentStatusTextToneClassName(statusKind);
+  }
+}
+
+interface SubagentThreadStatusSource {
+  error?: string | null | undefined;
+  session?: { status: string } | null | undefined;
+  latestTurn?: { state: string; completedAt?: string | null } | null | undefined;
+  hasLiveTailWork?: boolean | undefined;
+}
+
+// A child thread's own state, for places that know only the thread (sidebar
+// rows, nested subagents): live work wins, then the latest turn's outcome. An
+// interrupted turn is a stopped subagent; a thread that never ran has none. A
+// "running" turn only counts while the child has a session: Codex children
+// have none and their turns never close, so it would read as running forever.
+export function resolveSubagentThreadStatusKind(
+  thread: SubagentThreadStatusSource,
+): SubagentStatusKind | null {
+  const sessionStatus = thread.session?.status;
+  const latestTurn = thread.latestTurn ?? null;
+  if (
+    thread.hasLiveTailWork === true ||
+    sessionStatus === "running" ||
+    (latestTurn?.state === "running" &&
+      !latestTurn.completedAt &&
+      sessionStatus !== undefined &&
+      sessionStatus !== "ready" &&
+      sessionStatus !== "closed")
+  ) {
+    return "running";
+  }
+  if (sessionStatus === "connecting") {
+    return "queued";
+  }
+  if (thread.error || sessionStatus === "error" || latestTurn?.state === "error") {
+    return "failed";
+  }
+  if (latestTurn?.state === "interrupted") {
+    return "stopped";
+  }
+  if (latestTurn?.state === "completed") {
+    return "completed";
+  }
+  return null;
 }
 
 export function subagentStatusDotClassName(

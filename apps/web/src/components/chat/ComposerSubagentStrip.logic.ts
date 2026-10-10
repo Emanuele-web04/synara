@@ -1,9 +1,12 @@
 // FILE: ComposerSubagentStrip.logic.ts
-// Purpose: Derives the subagent rows shown in the composer strip from enriched work
-// log entries, mirroring the active-task-list scoping (live turn wins; a prior set
-// stays visible only while some subagent is still working).
-// Layer: Chat composer logic
-// Exports: deriveComposerSubagentStripItems and the strip row types
+// Purpose: Derives subagent rows (identity, status, task-control handle) from
+// enriched work log entries. The thread-level set mirrors the active-task-list
+// scoping (live turn wins; a prior set stays only while some subagent still
+// works) and drives Stop all, Ctrl+B and the "N running" chip; the transcript
+// card builds its rows from the same row items.
+// Layer: Chat logic
+// Exports: deriveComposerSubagentStripItems, toSubagentStripItem,
+// mergeSubagentSnapshots, and the row types
 
 import { ThreadId, type TurnId } from "@synara/contracts";
 
@@ -33,7 +36,6 @@ export interface ComposerSubagentStripItem {
   // sibling from inside a subagent thread).
   isViewed: boolean;
   isBackground: boolean;
-  accentColor: string;
 }
 
 // Leading "back to the main thread" row shown while a subagent thread is open.
@@ -54,7 +56,10 @@ function subagentKey(subagent: WorkLogSubagent): string {
 
 // Later snapshots carry the freshest status, but may omit identity fields the spawn
 // snapshot had; keep identity via fallback while taking the status fields verbatim.
-function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent): WorkLogSubagent {
+export function mergeSubagentSnapshots(
+  previous: WorkLogSubagent,
+  next: WorkLogSubagent,
+): WorkLogSubagent {
   return {
     threadId: next.threadId ?? previous.threadId,
     providerThreadId: next.providerThreadId ?? previous.providerThreadId,
@@ -88,7 +93,7 @@ function anonymousSubagentLabel(statusKind: SubagentStatusKind | null): string {
   }
 }
 
-function toStripItem(
+export function toSubagentStripItem(
   key: string,
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
@@ -104,7 +109,6 @@ function toStripItem(
     nickname: subagent.nickname,
     role: subagent.role,
     title: subagent.title,
-    fallbackId: subagent.threadId,
     placeholderLabel: anonymousSubagentLabel(statusKind),
   });
   const modelLabel = formatSubagentModelLabel(subagent.model);
@@ -131,7 +135,6 @@ function toStripItem(
     isBackground:
       subagent.background === true ||
       backgroundedThreadIds.has(subagent.providerThreadId ?? subagent.threadId),
-    accentColor: presentation.accentColor,
   };
 }
 
@@ -149,7 +152,7 @@ function collectStripItems(
     }
   }
   return [...subagentByKey.entries()].map(([key, subagent]) =>
-    toStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
+    toSubagentStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
   );
 }
 
