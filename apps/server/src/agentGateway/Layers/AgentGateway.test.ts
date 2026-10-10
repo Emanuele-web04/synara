@@ -38,6 +38,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { TodoService } from "../../todo/Services/TodoService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -872,6 +873,11 @@ function makeHarnessLayer(
     backfillSummaries: () => Effect.fail(new Error("not configured")),
   } as unknown as (typeof ProjectAgentService)["Service"]);
 
+  // To-do tool behavior is covered in todoTools.test.ts; the gateway only needs the service.
+  const todoLayer = Layer.succeed(TodoService, {
+    list: () => Effect.succeed({ todos: [] }),
+  } as unknown as (typeof TodoService)["Service"]);
+
   const gitLayer = Layer.succeed(GitCore, {
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
     execute: (input: { operation: string; cwd: string; args: ReadonlyArray<string> }) =>
@@ -1339,7 +1345,7 @@ function makeHarnessLayer(
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
-    Layer.provide(projectAgentLayer),
+    Layer.provide(Layer.mergeAll(projectAgentLayer, todoLayer)),
     Layer.provide(gitLayer),
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
@@ -2250,6 +2256,9 @@ describe("AgentGateway", () => {
         "synara_set_kanban_goal",
         "synara_delete_kanban_card",
         "synara_move_kanban_card",
+        "synara_create_todo",
+        "synara_list_todos",
+        "synara_update_todo",
         // Group tools the coordinator delegates through — the playbook names
         // these, so a capability regression would silently gut delegation.
         "synara_project_get_overview",
