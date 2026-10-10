@@ -113,6 +113,23 @@ function fixture(rememberSessionImport = vi.fn(async (_domains: readonly string[
 }
 
 describe("human-only cookie import", () => {
+  it("offers Helium and uses the same human-only scoped transfer policy", async () => {
+    mocks.sources.mockResolvedValue([
+      { id: "helium", name: "Helium" },
+      { id: "firefox", name: "Firefox" },
+    ]);
+    const { importer } = fixture();
+    expect(await importer.sources()).toEqual([{ id: "helium", name: "Helium" }]);
+    expect((await importer.import({ ...input, browser: "helium" })).ok).toBe(true);
+    expect(mocks.sync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: { browser: "helium", profile: "Default" },
+        domains: ["example.test"],
+        windowsAppBound: "disabled",
+      }),
+    );
+  });
+
   it("imports only the selected visible site with app-bound injection disabled and returns counts", async () => {
     const { importer, contents } = fixture();
     expect(await importer.sources()).toEqual([{ id: "chrome", name: "Chrome" }]);
