@@ -2213,7 +2213,13 @@ export function enrichSubagentWorkEntries(
       if (terminalStatusLabel ?? status.label ?? fallbackStatusLabel) {
         nextSubagent.statusLabel = terminalStatusLabel ?? status.label ?? fallbackStatusLabel;
       }
-      if (status.isActive || fallbackStatusLabel === "Running") {
+      if (
+        status.isActive ||
+        (fallbackStatusLabel === "Running" &&
+          status.label !== "Closed" &&
+          status.label !== "Error" &&
+          !matchedThread?.latestTurn?.completedAt)
+      ) {
         nextSubagent.isActive = true;
       }
       return nextSubagent;

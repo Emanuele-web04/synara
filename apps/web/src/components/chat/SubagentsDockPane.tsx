@@ -138,7 +138,7 @@ function ActiveSubagentRow({
         onClick={() => onOpen(item.threadId)}
       />
       {actionCount > 0 ? (
-        <div className="absolute top-0.5 right-2 flex items-center opacity-0 transition-opacity group-focus-within/subagent:opacity-100 group-hover/subagent:opacity-100">
+        <div className="pointer-events-none invisible absolute top-0.5 right-2 flex items-center opacity-0 transition-opacity group-focus-within/subagent:pointer-events-auto group-focus-within/subagent:visible group-focus-within/subagent:opacity-100 group-hover/subagent:pointer-events-auto group-hover/subagent:visible group-hover/subagent:opacity-100">
           {showBackground ? (
             <IconButton
               label={`Run ${item.primaryLabel} in background`}
