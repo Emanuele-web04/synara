@@ -624,6 +624,46 @@ export function useChatTranscriptScroll({
     };
   }, [activeThreadId, hasStreamingAssistantText, legendListRef]);
 
+  // Temporary, synthetic-test-only trace for the thread re-entry CI failure.
+  // Removed once the native/list geometry divergence has been diagnosed.
+  useEffect(() => {
+    const trace = (
+      window as Window & {
+        __synaraFollowTrace?: (sample: Record<string, number | boolean>) => void;
+      }
+    ).__synaraFollowTrace;
+    if (!trace) return;
+    let frame = 0;
+    let nextSampleAt = 0;
+    const sample = () => {
+      frame = window.requestAnimationFrame(sample);
+      if (performance.now() < nextSampleAt) return;
+      nextSampleAt = performance.now() + 50;
+      const target = legendListRef.current;
+      const node = target?.getScrollableNode();
+      if (!target || !(node instanceof HTMLElement)) return;
+      const state = target.getState();
+      trace({
+        streaming: hasStreamingAssistantText,
+        detached: isUserScrollDetachedRef.current,
+        following: isAtEndRef.current,
+        anchor: tailAnchorScrollInFlightRef.current,
+        settling: settledScrollInFlightRef.current,
+        guardMs: Math.max(0, Math.round(programmaticScrollUntilRef.current - performance.now())),
+        listEnd: state.isAtEnd,
+        listNearEnd: state.isWithinMaintainScrollAtEndThreshold,
+        listTop: Math.round(state.scroll),
+        listHeight: Math.round(state.contentLength),
+        listViewport: Math.round(state.scrollLength),
+        nativeTop: Math.round(node.scrollTop),
+        nativeHeight: node.scrollHeight,
+        nativeViewport: node.clientHeight,
+      });
+    };
+    frame = window.requestAnimationFrame(sample);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeThreadId, hasStreamingAssistantText, legendListRef]);
+
   return {
     showScrollToBottom,
     isUserScrollDetached,
