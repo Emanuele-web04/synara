@@ -3,8 +3,9 @@
 //          under the Studio root (attributed server-side from checkpoints, file-change
 //          activities, or per-turn output capture). Click opens the file in the in-app
 //          side panel viewer; meta/ctrl-click (or an unviewable file) reveals it in the
-//          Finder instead. The section renders nothing until the chat has actually
-//          produced output, so non-producing chats keep a clean panel.
+//          platform file manager instead (labels/errors come from fileManagerNaming).
+//          The section renders nothing until the chat has actually produced output,
+//          so non-producing chats keep a clean panel.
 // Layer: Environment panel section
 // Depends on: studio.listThreadOutputs WS method + shell.showInFolder.
 
@@ -12,6 +13,7 @@ import type { StudioOutputEntry, ThreadId } from "@synara/contracts";
 import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
 import { useQuery } from "@tanstack/react-query";
 
+import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { studioThreadOutputsQueryOptions } from "~/lib/serverReactQuery";
 import { humanizeStudioOutputName } from "~/lib/studioOutputDisplay";
@@ -21,9 +23,11 @@ import { readNativeApi } from "~/nativeApi";
 import { FileEntryIcon } from "../FileEntryIcon";
 import { EnvironmentLabeledSection, EnvironmentRow } from "./EnvironmentRow";
 
-function revealEntryInFinder(entry: StudioOutputEntry) {
+function revealEntryInFileManager(entry: StudioOutputEntry) {
   const api = readNativeApi();
-  void api?.shell.showInFolder(entry.fullPath).catch(() => {});
+  void api?.shell.showInFolder(entry.fullPath).catch((error: unknown) => {
+    showFileManagerErrorToast({ kind: "file", error });
+  });
 }
 
 export function EnvironmentStudioOutputsSection({
@@ -37,10 +41,10 @@ export function EnvironmentStudioOutputsSection({
   const fileOpener = useWorkspaceFileOpener();
 
   // Plain click opens the output in the in-app side panel; meta/ctrl-click — or a
-  // file the panel can't view — reveals it in the Finder instead.
-  const openEntry = (entry: StudioOutputEntry, forceFinderReveal: boolean) => {
-    if (forceFinderReveal || !fileOpener?.openFile(entry.fullPath)) {
-      revealEntryInFinder(entry);
+  // file the panel can't view — reveals it in the platform file manager instead.
+  const openEntry = (entry: StudioOutputEntry, forceFileManagerReveal: boolean) => {
+    if (forceFileManagerReveal || !fileOpener?.openFile(entry.fullPath)) {
+      revealEntryInFileManager(entry);
     }
   };
 

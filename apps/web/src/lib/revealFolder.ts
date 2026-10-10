@@ -3,16 +3,15 @@
 //          through the desktop shell bridge, with a toast on failure.
 // Layer: lib
 
-import { toastManager } from "~/components/ui/toast";
+import { showFileManagerErrorToast } from "~/lib/fileManagerErrorToast";
 import { readNativeApi } from "~/nativeApi";
 
 export function revealFolderInShell(input: { path: string; onRevealed?: () => void }): void {
   const api = readNativeApi();
   if (!api) {
-    toastManager.add({
-      type: "error",
-      title: "Unable to open folder",
-      description: "The desktop connection is not available yet.",
+    showFileManagerErrorToast({
+      kind: "folder",
+      error: "The desktop connection is not available yet.",
     });
     return;
   }
@@ -20,10 +19,6 @@ export function revealFolderInShell(input: { path: string; onRevealed?: () => vo
     .showInFolder(input.path)
     .then(() => input.onRevealed?.())
     .catch((error) => {
-      toastManager.add({
-        type: "error",
-        title: "Unable to open folder",
-        description: error instanceof Error ? error.message : "An unknown error occurred.",
-      });
+      showFileManagerErrorToast({ kind: "folder", error });
     });
 }
