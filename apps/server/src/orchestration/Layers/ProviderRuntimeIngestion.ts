@@ -1093,9 +1093,22 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(undefined),
   });
   const isTurnFinalized = (threadId: ThreadId, turnId: TurnId) =>
-    Cache.getOption(finalizedTurnKeys, providerTurnKey(threadId, turnId)).pipe(
-      Effect.map((finalized) => Option.isSome(finalized) && finalized.value),
-    );
+    Effect.gen(function* () {
+      const key = providerTurnKey(threadId, turnId);
+      const cached = yield* Cache.getOption(finalizedTurnKeys, key);
+      if (Option.isSome(cached)) return cached.value;
+      // A restart (or cache eviction) must not leave a new item of an ended
+      // turn streaming. Cache open turns too, keeping this lookup off their
+      // per-delta path; lifecycle events update that cached state below.
+      const turn = yield* projectionTurnRepository.getByTurnId({ threadId, turnId });
+      const finalized =
+        Option.isSome(turn) &&
+        (turn.value.state === "completed" ||
+          turn.value.state === "interrupted" ||
+          turn.value.state === "error");
+      yield* Cache.set(finalizedTurnKeys, key, finalized);
+      return finalized;
+    });
   const markTurnFinalized = (threadId: ThreadId, turnId: TurnId) =>
     Cache.set(finalizedTurnKeys, providerTurnKey(threadId, turnId), true);
   const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
@@ -2639,7 +2652,7 @@ const make = Effect.gen(function* () {
       // turn for any turn-scoped cleanup (messages, reasoning, tool rows).
       const isAmbiguousTerminal = terminalApplicability?.reason === "ambiguous-missing-turn-id";
       if (event.type === "turn.started" && rawEventTurnId) {
-        yield* Cache.invalidate(finalizedTurnKeys, providerTurnKey(thread.id, rawEventTurnId));
+        yield* Cache.set(finalizedTurnKeys, providerTurnKey(thread.id, rawEventTurnId), false);
       }
 
       // In-flight tool tracking: a started-but-unfinished tool call counts as
@@ -3210,6 +3223,11 @@ const make = Effect.gen(function* () {
         );
         const shouldApplyFallbackCompletionText =
           !existingAssistantMessage || existingAssistantMessage.text.length === 0;
+        const completedMessageHasText =
+          hasRenderableAssistantText(existingAssistantMessage?.text) ||
+          (shouldApplyFallbackCompletionText &&
+            hasRenderableAssistantText(assistantCompletion.fallbackText)) ||
+          hasRenderableAssistantText(yield* getBufferedAssistantText(assistantMessageId));
         if (turnId) {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
@@ -3231,6 +3249,14 @@ const make = Effect.gen(function* () {
         });
 
         if (turnId) {
+          if (completedMessageHasText) {
+            // A real later answer replaces an earlier skipped empty item as
+            // the terminal message that owns this turn's generated images.
+            yield* Cache.invalidate(
+              skippedEmptyAssistantMessageByTurnKey,
+              providerTurnKey(thread.id, turnId),
+            );
+          }
           yield* forgetAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
       }
