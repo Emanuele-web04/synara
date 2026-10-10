@@ -13,14 +13,22 @@
 import type { ThreadId } from "@synara/contracts";
 
 import { ensureNativeApi } from "~/nativeApi";
+import { holdQueuedComposerTurnsForStop } from "./queuedComposerDrain";
 import { newCommandId } from "./utils";
 
 export async function interruptThreadTurn(threadId: ThreadId): Promise<void> {
   const api = ensureNativeApi();
-  await api.orchestration.dispatchCommand({
-    type: "thread.turn.interrupt",
-    commandId: newCommandId(),
-    threadId,
-    createdAt: new Date().toISOString(),
-  });
+  // A user Stop pauses the thread's waiting composer queue instead of sending it.
+  const releaseQueueHold = holdQueuedComposerTurnsForStop(threadId);
+  await api.orchestration
+    .dispatchCommand({
+      type: "thread.turn.interrupt",
+      commandId: newCommandId(),
+      threadId,
+      createdAt: new Date().toISOString(),
+    })
+    .catch((error: unknown) => {
+      releaseQueueHold();
+      throw error;
+    });
 }
