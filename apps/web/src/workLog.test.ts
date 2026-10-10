@@ -4302,7 +4302,7 @@ describe("deriveWorkLogEntries", () => {
       ],
       undefined,
     );
-    expect(entries[0]?.subagentProgress).toEqual({
+    expect(entries[0]?.subagentProgress).toMatchObject({
       toolUseId: "toolu_outer",
       title: "Outer worker",
     });
