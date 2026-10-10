@@ -14878,6 +14878,313 @@ describe("Claude subagent tracking", () => {
     );
   });
 
+  it.effect(
+    "bounds settled ownership history without losing live children or routing retired tails to the parent",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed" && isRootEvent(event)),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* startTrackingSession(adapter);
+        const LIVE = "toolu_live_history";
+        harness.query.emit(
+          rootToolUse(0, LIVE, "Agent", { description: "Live owner", run_in_background: true }),
+        );
+        harness.query.emit(
+          system("task_started", {
+            task_id: "task-live-history",
+            tool_use_id: LIVE,
+            task_type: "local_agent",
+            subagent_type: "general-purpose",
+            is_backgrounded: true,
+          }),
+        );
+        harness.query.emit(
+          userMessage(null, [trackingToolResult(LIVE, "Started")], {
+            agentId: "task-live-history",
+            status: "running",
+          }),
+        );
+        const OWNER = "toolu_settled_owner";
+        const NESTED = "toolu_live_nested";
+        const BASH = "toolu_owner_bash";
+        harness.query.emit(rootToolUse(900, OWNER, "Agent", { description: "Settled launcher" }));
+        harness.query.emit(
+          system("task_started", {
+            task_id: "task-settled-owner",
+            tool_use_id: OWNER,
+            task_type: "local_agent",
+            subagent_type: "general-purpose",
+          }),
+        );
+        harness.query.emit(
+          subagentAssistant(OWNER, [
+            {
+              type: "tool_use",
+              id: NESTED,
+              name: "Agent",
+              input: { description: "Nested worker", run_in_background: true },
+            },
+            {
+              type: "tool_use",
+              id: BASH,
+              name: "Bash",
+              input: { command: "sleep 1", run_in_background: true },
+            },
+          ]),
+        );
+        harness.query.emit(
+          system("task_started", {
+            task_id: "task-nested-history",
+            tool_use_id: NESTED,
+            task_type: "local_agent",
+            subagent_type: "general-purpose",
+            is_backgrounded: true,
+          }),
+        );
+        harness.query.emit(
+          system("task_started", {
+            task_id: "task-bash-history",
+            tool_use_id: BASH,
+            task_type: "local_bash",
+            description: "Pinned background task",
+          }),
+        );
+        harness.query.emit(
+          userMessage(
+            OWNER,
+            [trackingToolResult(NESTED, "Started"), trackingToolResult(BASH, "Started")],
+            { status: "async_launched" },
+          ),
+        );
+        harness.query.emit(
+          system("task_notification", {
+            task_id: "task-settled-owner",
+            tool_use_id: OWNER,
+            status: "completed",
+            output_file: "/tmp/history.out",
+            summary: "Done",
+          }),
+        );
+        harness.query.emit(
+          userMessage(null, [trackingToolResult(OWNER, "Done")], {
+            agentId: "task-settled-owner",
+            status: "completed",
+          }),
+        );
+        for (let i = 0; i < 205; i += 1) {
+          const id = `toolu_retained_${i}`;
+          const taskId = `task-retained-${i}`;
+          harness.query.emit(rootToolUse(i + 1, id, "Agent", { description: `Worker ${i}` }));
+          harness.query.emit(
+            system("task_started", {
+              task_id: taskId,
+              tool_use_id: id,
+              task_type: "local_agent",
+              subagent_type: "general-purpose",
+            }),
+          );
+          harness.query.emit(subagentAssistant(id, [{ type: "text", text: `worker ${i}` }]));
+          harness.query.emit(
+            userMessage(null, [trackingToolResult(id, "Done")], {
+              agentId: taskId,
+              status: "completed",
+            }),
+          );
+        }
+        // Contexts can expire before their compact task identity mapping: SDK
+        // launches without task_started still create contexts from their traffic.
+        for (let i = 0; i < 205; i += 1) {
+          const id = `toolu_no_task_start_${i}`;
+          harness.query.emit(
+            rootToolUse(1000 + i, id, "Agent", { description: "Unmapped worker" }),
+          );
+          harness.query.emit(subagentAssistant(id, [{ type: "text", text: "Unmapped work" }]));
+          harness.query.emit(
+            userMessage(null, [trackingToolResult(id, "Done")], { status: "completed" }),
+          );
+        }
+        // A retired identity is no longer safe to attribute from a late tail alone.
+        harness.query.emit(
+          subagentAssistant("toolu_retained_0", [{ type: "text", text: "RETIRED TAIL" }]),
+        );
+        harness.query.emit(
+          system("task_progress", {
+            task_id: "task-retained-0",
+            tool_use_id: "toolu_retained_0",
+            description: "RETIRED PROGRESS",
+            usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 },
+          }),
+        );
+        // Recent resumes keep their original identity; explicit native identity on
+        // an older SendMessage recovers safely without reusing its unrelated tool id.
+        for (const i of [204, 0]) {
+          const alias = `toolu_resume_history_${i}`;
+          harness.query.emit(
+            rootToolUse(300 + i, alias, "SendMessage", {
+              to: `task-retained-${i}`,
+              message: "Resume",
+            }),
+          );
+          harness.query.emit(
+            system("task_started", {
+              task_id: `task-retained-${i}`,
+              tool_use_id: alias,
+              task_type: "local_agent",
+              subagent_type: "general-purpose",
+              is_backgrounded: true,
+            }),
+          );
+          harness.query.emit(subagentAssistant(alias, [{ type: "text", text: `RESUMED ${i}` }]));
+          harness.query.emit(
+            system("task_notification", {
+              task_id: `task-retained-${i}`,
+              tool_use_id: alias,
+              status: "completed",
+              output_file: "/tmp/history.out",
+              summary: "Done",
+            }),
+          );
+          harness.query.emit(userMessage(null, [trackingToolResult(alias, "Done")]));
+          if (i === 204) {
+            const latestAlias = "toolu_latest_resume";
+            harness.query.emit(
+              rootToolUse(600, latestAlias, "SendMessage", {
+                to: "task-retained-204",
+                message: "Again",
+              }),
+            );
+            harness.query.emit(
+              system("task_started", {
+                task_id: "task-retained-204",
+                tool_use_id: latestAlias,
+                task_type: "local_agent",
+                subagent_type: "general-purpose",
+                is_backgrounded: true,
+              }),
+            );
+            harness.query.emit(subagentAssistant(alias, [{ type: "text", text: "RETIRED ALIAS" }]));
+            harness.query.emit(
+              system("task_progress", {
+                task_id: "task-retained-204",
+                tool_use_id: alias,
+                description: "RETIRED TASK ALIAS",
+                usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 },
+              }),
+            );
+            harness.query.emit(
+              subagentAssistant(latestAlias, [{ type: "text", text: "LATEST ALIAS" }]),
+            );
+            harness.query.emit(
+              system("task_notification", {
+                task_id: "task-retained-204",
+                tool_use_id: latestAlias,
+                status: "completed",
+                output_file: "/tmp/history.out",
+                summary: "Done",
+              }),
+            );
+            harness.query.emit(userMessage(null, [trackingToolResult(latestAlias, "Done")]));
+          }
+        }
+        harness.query.emit(subagentAssistant(NESTED, [{ type: "text", text: "NESTED OWNER" }]));
+        harness.query.emit(
+          system("task_progress", {
+            task_id: "task-bash-history",
+            tool_use_id: BASH,
+            description: "PINNED BACKGROUND",
+            usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 },
+          }),
+        );
+        harness.query.emit(
+          system("task_notification", {
+            task_id: "task-bash-history",
+            tool_use_id: BASH,
+            status: "completed",
+            output_file: "/tmp/history.out",
+            summary: "Done",
+          }),
+        );
+        harness.query.emit(
+          system("task_notification", {
+            task_id: "task-nested-history",
+            tool_use_id: NESTED,
+            status: "completed",
+            output_file: "/tmp/history.out",
+            summary: "Done",
+          }),
+        );
+        harness.query.emit(subagentAssistant(LIVE, [{ type: "text", text: "LIVE OWNER" }]));
+        harness.query.emit(
+          system("task_notification", {
+            task_id: "task-live-history",
+            tool_use_id: LIVE,
+            status: "completed",
+            output_file: "/tmp/history.out",
+            summary: "Done",
+          }),
+        );
+        harness.query.emit(success());
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        assert.equal(
+          events.some((event) => JSON.stringify(event.payload).includes("RETIRED")),
+          false,
+        );
+        assert.equal(
+          events.filter(
+            (event) =>
+              event.type === "turn.completed" &&
+              event.providerRefs?.providerThreadId?.startsWith("toolu_no_task_start_"),
+          ).length,
+          205,
+        );
+        const resumed = (i: number) =>
+          events.find(
+            (event) =>
+              event.type === "content.delta" &&
+              String(payloadRecord(event).delta).includes(`RESUMED ${i}`),
+          );
+        assert.equal(resumed(204)?.providerRefs?.providerThreadId, "toolu_retained_204");
+        assert.equal(resumed(0)?.providerRefs?.providerThreadId, "task:task-retained-0");
+        assert.equal(
+          events.some(
+            (event) =>
+              event.type === "content.delta" &&
+              onChild(event, NESTED) &&
+              String(payloadRecord(event).delta).includes("NESTED OWNER"),
+          ),
+          true,
+        );
+        const background = events.find(
+          (event) =>
+            event.type === "task.progress" &&
+            String(payloadRecord(event).description).includes("PINNED BACKGROUND"),
+        );
+        assert.equal(background?.providerRefs?.providerThreadId, OWNER);
+        const nestedDone = events.find(
+          (event) => event.type === "task.completed" && taskIdOf(event) === "task-nested-history",
+        );
+        assert.equal(nestedDone?.providerRefs?.providerThreadId, OWNER);
+        assert.equal(
+          events.some(
+            (event) =>
+              event.type === "content.delta" &&
+              onChild(event, LIVE) &&
+              String(payloadRecord(event).delta).includes("LIVE OWNER"),
+          ),
+          true,
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("resumes a subagent on its existing child thread", () => {
     const harness = makeHarness();
     const ORIGINAL = "toolu_original_agent";
