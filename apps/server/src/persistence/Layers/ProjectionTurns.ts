@@ -405,6 +405,20 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         ),
       );
 
+  const markStartedWithoutGitWorkspace: ProjectionTurnRepositoryShape["markStartedWithoutGitWorkspace"] =
+    ({ threadId, messageId }) =>
+      sql`
+        UPDATE projection_turns
+        SET started_without_git_workspace = 1
+        WHERE thread_id = ${threadId}
+          AND pending_message_id = ${messageId}
+      `.pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionTurnRepository.markStartedWithoutGitWorkspace:query"),
+        ),
+      );
+
   const getPendingTurnStartByThreadId: ProjectionTurnRepositoryShape["getPendingTurnStartByThreadId"] =
     (input) =>
       getPendingProjectionTurn(input).pipe(
@@ -510,6 +524,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
   return {
     upsertByTurnId,
     replacePendingTurnStart,
+    markStartedWithoutGitWorkspace,
     getPendingTurnStartByThreadId,
     deletePendingTurnStartByThreadId,
     listByThreadId,

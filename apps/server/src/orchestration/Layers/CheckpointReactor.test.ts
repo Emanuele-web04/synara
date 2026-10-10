@@ -3938,6 +3938,9 @@ describe("CheckpointReactor", () => {
     );
     await harness.drain();
 
+    const restarted = await restartCheckpointReactor();
+    await settleCheckpointWork(restarted.drain);
+
     runGit(workspace, ["init", "--initial-branch=main"]);
     runGit(workspace, ["config", "user.email", "test@example.com"]);
     runGit(workspace, ["config", "user.name", "Test User"]);
@@ -3945,15 +3948,13 @@ describe("CheckpointReactor", () => {
     runGit(workspace, ["add", "."]);
     runGit(workspace, ["commit", "-m", "Initial"]);
 
-    harness.provider.emit({
-      type: "turn.completed",
-      eventId: EventId.makeUnsafe("evt-turn-completed-restart-plain"),
-      provider: "claudeAgent",
-      createdAt: new Date().toISOString(),
-      threadId,
-      turnId,
-      payload: { state: "completed" },
-    });
+    await Effect.runPromise(
+      harness.runtimeEvents.append({
+        ...nativeCompletion("evt-turn-completed-restart-plain", threadId, turnId),
+        provider: "claudeAgent",
+      }),
+    );
+    await settleCheckpointWork(restarted.drain);
 
     const thread = await waitForThread(
       harness.engine,

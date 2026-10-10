@@ -1157,29 +1157,12 @@ const make = Effect.gen(function* () {
     });
     if (!workspace || workspace.isGitRepository) return;
 
-    // A newer turn can already own the single pending slot if the projector
-    // outruns this reactor. Never replace that newer request while replaying an
-    // older domain event.
-    const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-      threadId: event.payload.threadId,
-    });
-    if (
-      Option.isSome(pendingTurnStart) &&
-      pendingTurnStart.value.messageId !== event.payload.messageId
-    ) {
-      return;
-    }
-
-    // Persist this provider-independent fact alongside the pending turn. The
-    // projector may process the same event before or after this reactor; its
-    // replacement write preserves the marker for the matching message.
-    yield* projectionTurnRepository.replacePendingTurnStart({
+    // The projector commits the request before publishing it. A lagging reactor
+    // may see an already-promoted turn or a newer pending request, so mark only
+    // the row owned by this message without replacing the pending slot.
+    yield* projectionTurnRepository.markStartedWithoutGitWorkspace({
       threadId: event.payload.threadId,
       messageId: event.payload.messageId,
-      sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
-      sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
-      requestedAt: event.payload.createdAt,
-      startedWithoutGitWorkspace: true,
     });
     yield* Effect.logDebug(
       "checkpoint turn start marked workspace as not yet initialized as a git repository",

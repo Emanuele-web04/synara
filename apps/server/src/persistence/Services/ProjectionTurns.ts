@@ -140,6 +140,12 @@ export interface ProjectionTurnRepositoryShape {
     row: ProjectionPendingTurnStart,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  /** Records workspace classification on the request's current pending or concrete row. */
+  readonly markStartedWithoutGitWorkspace: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<void, ProjectionRepositoryError>;
+
   /**
    * Returns the newest pending-start placeholder for a thread; this is expected to be at most one row after replacement writes.
    */

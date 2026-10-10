@@ -9,6 +9,7 @@ import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurablePro
 import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
 import PullRequestAutoFixMigration from "./Migrations/130_PullRequestAutoFix.ts";
+import WorkspaceInitializationMigration from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -78,6 +79,27 @@ layer("reconcileMigrationLineage", (it) => {
         migrationEntries.map(([id, name]) => [id, name]),
       );
     }),
+  );
+
+  it.effect(
+    "adds workspace classification without changing existing turns or erasing it on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 132 });
+        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, checkpoint_files_json)
+        VALUES ('old-workspace-thread', 'old-workspace-turn', 'completed', '2026-10-10T10:00:00.000Z', '[]')`;
+        yield* runMigrations();
+        const read = () => sql<{
+          state: string;
+          marker: number;
+        }>`SELECT state, started_without_git_workspace AS marker
+        FROM projection_turns WHERE turn_id = 'old-workspace-turn'`;
+        assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 0 }]);
+        yield* sql`UPDATE projection_turns SET started_without_git_workspace = 1 WHERE turn_id = 'old-workspace-turn'`;
+        yield* WorkspaceInitializationMigration;
+        assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 1 }]);
+      }),
   );
 
   it.effect("leaves a healthy tracker alone", () =>
