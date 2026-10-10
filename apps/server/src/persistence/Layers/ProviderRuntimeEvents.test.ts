@@ -66,7 +66,11 @@ it.effect("indexes the same canonical event identity that the journal serializes
       [stored.eventId, stored.threadId, stored.turnId, stored.type],
     );
     assert.strictEqual(row.eventId, persisted.event.eventId);
-  }).pipe(Effect.provide(layer)),
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
 );
 
 const insertLiveProjectionThread = (threadId: string, createdAt: string) =>
