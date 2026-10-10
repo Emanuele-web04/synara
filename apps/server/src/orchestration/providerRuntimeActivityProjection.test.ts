@@ -1085,6 +1085,25 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    const [cursorResumedUsage] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "thread.token-usage.updated",
+        eventId: "cursor-resumed-usage",
+        provider: "cursor",
+        lifecycleGeneration: "generation-after-restart",
+        providerRefs: { providerThreadId: "cursor-native-session" },
+        payload: { usage: { usedTokens: 0, totalProcessedTokens: 4_200 } },
+      }),
+    );
+    expect(cursorResumedUsage).toMatchObject({
+      kind: "context-window.updated",
+      payload: {
+        provider: "cursor",
+        totalProcessedTokens: 4_200,
+        usageSessionId: "cursor-native-session",
+      },
+    });
+
     const [configured] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "session.configured",
