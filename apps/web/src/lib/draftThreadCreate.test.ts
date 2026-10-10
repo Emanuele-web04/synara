@@ -97,6 +97,50 @@ describe("draft thread creation", () => {
     );
   });
 
+  it("stamps a promoted draft at first dispatch instead of draft creation", async () => {
+    const projectId = ProjectId.makeUnsafe("project-draft-created-at");
+    const draftCreatedAt = "2026-03-04T12:00:00.000Z";
+    const threadId = createDraftThread({
+      projectId,
+      prompt: "Send this after the draft sat idle",
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      envMode: "local",
+    });
+    useComposerDraftStore.setState((state) => ({
+      draftThreadsByThreadId: {
+        ...state.draftThreadsByThreadId,
+        [threadId]: {
+          ...state.draftThreadsByThreadId[threadId]!,
+          createdAt: draftCreatedAt,
+        },
+      },
+    }));
+
+    const result = await dispatchDraftThread({
+      threadId,
+      projectId,
+      thread: null,
+      defaultProvider: "codex",
+      assistantDeliveryMode: "buffered",
+    });
+
+    expect(result).toEqual({ kind: "dispatched" });
+    const commands = nativeApiMocks.dispatchCommand.mock.calls.map(
+      ([command]) =>
+        command as {
+          type: string;
+          createdAt?: string;
+        },
+    );
+    const create = commands.find((command) => command.type === "thread.create");
+    const turnStart = commands.find((command) => command.type === "thread.turn.start");
+    expect(create?.createdAt).toBeDefined();
+    expect(create?.createdAt).toBe(turnStart?.createdAt);
+    expect(create?.createdAt).not.toBe(draftCreatedAt);
+  });
+
   it("drops the draft without sending when linking fails", async () => {
     const projectId = ProjectId.makeUnsafe("project-link-failure");
 

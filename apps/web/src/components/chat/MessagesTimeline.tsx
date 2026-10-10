@@ -62,7 +62,6 @@ import {
   ClockIcon,
   GitForkIcon,
   GoalIcon,
-  LoaderIcon,
   MessageDeliveryCheckIcon,
   type LucideIcon,
   NewThreadIcon,
@@ -75,6 +74,7 @@ import {
 import { pinActionLabel } from "~/lib/pin";
 import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { Button } from "../ui/button";
+import { LiveStatusSpinner } from "../ui/spinner";
 import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
@@ -311,7 +311,7 @@ function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"
   if (status === "active") {
     // Spinner sized to match the pending nodes, in foreground (black) so the
     // active step reads as the current work rather than an accent flourish.
-    return <LoaderIcon className="size-2.5 animate-spin text-[var(--color-text-foreground)]" />;
+    return <LiveStatusSpinner className="size-2.5 text-[var(--color-text-foreground)]" />;
   }
   if (status === "error") {
     return <CircleAlertIcon className="size-2.5 text-destructive" />;
@@ -428,6 +428,8 @@ interface MessagesTimelineProps {
   /** Resolve the in-flight worktree preparation (cancel the send or fall back to the local checkout). */
   onResolveWorktreeSetup?: (action: WorktreeSetupResolutionAction) => void;
   followLiveOutput?: boolean;
+  /** Normal sends ease into their anchor independently of end-follow ownership. */
+  animateTailAnchorSlide?: boolean;
   emptyStateContent?: ReactNode;
   historyHeader?: ReactElement | undefined;
   listRef?: RefObject<LegendListRef | null>;
@@ -554,6 +556,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   worktreeSetupPendingAction: worktreeSetupPendingActionProp,
   onResolveWorktreeSetup,
   followLiveOutput: followLiveOutputProp,
+  animateTailAnchorSlide,
   listRef,
   controllerRef,
   pinnedMessageIds,
@@ -790,7 +793,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     onAnchorSlideFinished: handleTailAnchorSlideFinished,
     contentChangeSignal: timelineEntries,
     messageChangeSignal: messageChangeSignalProp ?? timelineEntries,
-    animateAnchorSlide: !followLiveOutput,
+    animateAnchorSlide: animateTailAnchorSlide ?? !followLiveOutput,
   });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
@@ -1613,6 +1616,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <ChatMarkdown
                   text={segmentText}
                   cwd={markdownCwd}
+                  directionMode="auto-blocks"
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
@@ -2226,6 +2230,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <ChatMarkdown
                   text={item.message.text}
                   cwd={markdownCwd}
+                  directionMode="auto-blocks"
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
@@ -2356,6 +2361,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           : messageText
                       }
                       cwd={markdownCwd}
+                      directionMode="auto-blocks"
                       isStreaming={Boolean(row.message.streaming)}
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
@@ -3535,29 +3541,6 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   );
 });
 
-// Measures the clamped message against its content before paint so the fade mask
-// never flickers. Kept in a module helper (not compiled) so the synchronous
-// overflow setState — unavoidable for a layout measurement — stays out of the
-// compiled component.
-function measureUserMessageOverflow(
-  collapsed: boolean,
-  contentRef: RefObject<HTMLDivElement | null>,
-  setOverflowing: (overflowing: boolean) => void,
-): (() => void) | undefined {
-  if (!collapsed) {
-    return undefined;
-  }
-  const element = contentRef.current;
-  if (!element) {
-    return undefined;
-  }
-  const measure = () => {
-    setOverflowing(element.scrollHeight - element.clientHeight > 1);
-  };
-  measure();
-  return observeUserMessageOverflow(element, measure);
-}
-
 // Show more/less for long user messages: a visual max-height clamp (with a fade
 // mask) around the fully rendered message instead of the old character slice.
 const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(props: {
@@ -3572,21 +3555,26 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
   const [overflowing, setOverflowing] = useState(() => userMessageLikelyOverflows(props.text));
   const collapsed = !props.expanded;
 
-  useLayoutEffect(
-    () => measureUserMessageOverflow(collapsed, contentRef, setOverflowing),
-    [collapsed, props.text],
-  );
-
   const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(props.chatFontSizePx);
   const clampHeightPx = USER_MESSAGE_COLLAPSED_MAX_LINES * lineHeightPx;
   const fadeStartPx = clampHeightPx - USER_MESSAGE_COLLAPSED_FADE_LINES * lineHeightPx;
   const clamped = collapsed && overflowing;
 
+  // Observe the natural content inside the clamp. ResizeObserver reports its
+  // height after layout, including wrapping/font changes, so mounting recycled
+  // transcript rows never forces layout with scrollHeight/clientHeight reads.
+  useEffect(() => {
+    const element = contentRef.current;
+    if (!element || !collapsed) return;
+    return observeUserMessageOverflow(element, (contentHeight) => {
+      setOverflowing(contentHeight - clampHeightPx > 1);
+    });
+  }, [collapsed, clampHeightPx, props.text]);
+
   return (
     <>
       <div
         id={contentId}
-        ref={contentRef}
         data-user-message-clamp={clamped ? "true" : "false"}
         className={cn("min-w-0", collapsed && "overflow-hidden")}
         style={
@@ -3602,7 +3590,9 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
             : undefined
         }
       >
-        {props.children}
+        <div ref={contentRef} className="flow-root min-w-0">
+          {props.children}
+        </div>
       </div>
       {(clamped || props.expanded) && (
         <button
@@ -3640,6 +3630,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       <ChatMarkdown
         text={markdownText}
         cwd={props.markdownCwd}
+        directionMode="auto-blocks"
         variant="user"
         mentionReferences={props.mentionReferences}
         terminalContexts={props.terminalContexts}
@@ -3684,6 +3675,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       variant="user"
       text={props.text}
       cwd={props.markdownCwd}
+      directionMode="auto-blocks"
       isStreaming={false}
       mentionReferences={props.mentionReferences}
       className="font-system-ui"

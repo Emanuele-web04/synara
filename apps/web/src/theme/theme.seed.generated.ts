@@ -5,6 +5,42 @@
 
 import type { ChromeTheme, ThemeVariant } from "./theme.logic";
 
+// Synara uses Codex's complete palette and material, changing only the accent.
+const CODEX_THEME_SEEDS: Record<ThemeVariant, ChromeTheme> = {
+  dark: {
+    accent: "#0169cc",
+    contrast: 0,
+    fonts: {
+      code: null,
+      ui: null,
+    },
+    ink: "#fcfcfc",
+    opaqueWindows: false,
+    semanticColors: {
+      diffAdded: "#00a240",
+      diffRemoved: "#e02e2a",
+      skill: "#b06dff",
+    },
+    surface: "#111111",
+  },
+  light: {
+    accent: "#0169cc",
+    contrast: 0,
+    fonts: {
+      code: null,
+      ui: null,
+    },
+    ink: "#0d0d0d",
+    opaqueWindows: false,
+    semanticColors: {
+      diffAdded: "#00a240",
+      diffRemoved: "#e02e2a",
+      skill: "#751ed9",
+    },
+    surface: "#ffffff",
+  },
+};
+
 export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, ChromeTheme>>> = {
   absolutely: {
     dark: {
@@ -92,73 +128,10 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
       surface: "#eff1f5",
     },
   },
-  codex: {
-    dark: {
-      accent: "#0169cc",
-      contrast: 0,
-      fonts: {
-        code: null,
-        ui: null,
-      },
-      ink: "#fcfcfc",
-      opaqueWindows: false,
-      semanticColors: {
-        diffAdded: "#00a240",
-        diffRemoved: "#e02e2a",
-        skill: "#b06dff",
-      },
-      surface: "#111111",
-    },
-    light: {
-      accent: "#0169cc",
-      contrast: 0,
-      fonts: {
-        code: null,
-        ui: null,
-      },
-      ink: "#0d0d0d",
-      opaqueWindows: false,
-      semanticColors: {
-        diffAdded: "#00a240",
-        diffRemoved: "#e02e2a",
-        skill: "#751ed9",
-      },
-      surface: "#ffffff",
-    },
-  },
+  codex: CODEX_THEME_SEEDS,
   synara: {
-    dark: {
-      accent: "#f2612d",
-      contrast: 0,
-      fonts: {
-        code: null,
-        ui: null,
-      },
-      ink: "#fcfcfc",
-      opaqueWindows: false,
-      semanticColors: {
-        diffAdded: "#00a240",
-        diffRemoved: "#e02e2a",
-        skill: "#b06dff",
-      },
-      surface: "#111111",
-    },
-    light: {
-      accent: "#c74614",
-      contrast: 0,
-      fonts: {
-        code: null,
-        ui: null,
-      },
-      ink: "#0d0d0d",
-      opaqueWindows: false,
-      semanticColors: {
-        diffAdded: "#00a240",
-        diffRemoved: "#e02e2a",
-        skill: "#751ed9",
-      },
-      surface: "#ffffff",
-    },
+    dark: { ...CODEX_THEME_SEEDS.dark, accent: "#f2612d" },
+    light: { ...CODEX_THEME_SEEDS.light, accent: "#c74614" },
   },
   dracula: {
     dark: {

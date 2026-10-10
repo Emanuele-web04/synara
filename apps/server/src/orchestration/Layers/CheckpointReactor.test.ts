@@ -4694,6 +4694,149 @@ describe("CheckpointReactor", () => {
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { location: "same", state: "projected", scope: "thread", allowed: false },
+    { location: "alias", state: "projected", scope: "thread", allowed: false },
+    { location: "nested", state: "projected", scope: "files", allowed: false },
+    { location: "same", state: "runtime", scope: "thread", allowed: false },
+    { location: "same", state: "pending", scope: "thread", allowed: false },
+    { location: "worktree", state: "projected", scope: "thread", allowed: true },
+    { location: "same", state: "error", scope: "thread", allowed: true },
+    { location: "same", state: "idle", scope: "files", allowed: true },
+  ] as const)(
+    "guards shared workspace Undo: $location / $state / $scope",
+    async ({ location, state: peerState, scope: revertScope, allowed }) => {
+      const harness = await createHarness();
+      await seedRevertableThread(harness, "shared-workspace-revert");
+      const peerContainer = fs.mkdtempSync(path.join(os.tmpdir(), "synara-undo-peer-"));
+      tempDirs.push(peerContainer);
+      let peerCwd = harness.cwd;
+      if (location === "alias") {
+        peerCwd = path.join(peerContainer, "alias");
+        fs.symlinkSync(harness.cwd, peerCwd, "dir");
+      } else if (location === "nested") {
+        peerCwd = path.join(harness.cwd, "nested");
+        fs.mkdirSync(peerCwd);
+      } else if (location === "worktree") {
+        peerCwd = path.join(peerContainer, "worktree");
+        runGit(harness.cwd, ["worktree", "add", "--detach", peerCwd, "HEAD"]);
+      }
+      const peerId = ThreadId.makeUnsafe("shared-workspace-peer");
+      const createdAt = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("shared-workspace-peer-create"),
+          threadId: peerId,
+          projectId: asProjectId("project-1"),
+          title: "Working peer",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: peerCwd,
+          createdAt,
+        }),
+      );
+      if (peerState === "projected" || peerState === "error")
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe("shared-workspace-peer-running"),
+            threadId: peerId,
+            session: {
+              threadId: peerId,
+              status: peerState === "error" ? "error" : "running",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: asTurnId("peer-live-turn"),
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      if (peerState === "runtime") {
+        const listSessions = harness.provider.service.listSessions;
+        vi.spyOn(harness.provider.service, "listSessions").mockImplementation(() =>
+          listSessions().pipe(
+            Effect.map((sessions) => [
+              ...sessions,
+              {
+                provider: "codex",
+                status: "running",
+                runtimeMode: "full-access",
+                threadId: peerId,
+                cwd: peerCwd,
+                activeTurnId: asTurnId("peer-live-turn"),
+                createdAt,
+                updatedAt: createdAt,
+              } satisfies ProviderSession,
+            ]),
+          ),
+        );
+      } else if (peerState === "pending") {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe("shared-workspace-pending-start"),
+            threadId: peerId,
+            message: {
+              messageId: MessageId.makeUnsafe("peer-pending-message"),
+              role: "user",
+              text: "edit workspace",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt,
+          }),
+        );
+      }
+      if (revertScope === "files")
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.diff.complete",
+            commandId: CommandId.makeUnsafe("shared-workspace-files-diff"),
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            turnId: asTurnId("turn-2"),
+            completedAt: createdAt,
+            checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 2),
+            status: "ready",
+            files: [{ path: "README.md", kind: "modified", additions: 1, deletions: 1 }],
+            checkpointTurnCount: 2,
+            createdAt,
+          }),
+        );
+      const initialText = revertScope === "files" ? "v3\n" : "peer's live edits\n";
+      fs.writeFileSync(path.join(harness.cwd, "README.md"), initialText, "utf8");
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.makeUnsafe("shared-workspace-revert-request"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnCount: revertScope === "files" ? 2 : 1,
+          scope: revertScope,
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      expect(fs.readFileSync(path.join(harness.cwd, "README.md"), "utf8")).toBe(
+        allowed ? "v2\n" : initialText,
+      );
+      const state = await Effect.runPromise(harness.engine.getReadModel());
+      const target = state.threads.find((entry) => entry.id === "thread-1");
+      expect(target?.checkpoints).toHaveLength(allowed && revertScope === "thread" ? 1 : 2);
+      expect(
+        target?.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+      ).toBe(!allowed);
+      expect(harness.provider.rollbackConversation).toHaveBeenCalledTimes(
+        allowed && revertScope === "thread" ? 1 : 0,
+      );
+      expect(listRevertRescueRefs(harness.cwd)).toEqual([]);
+    },
+  );
+
   it("keeps full thread revert behavior for explicit thread scope", async () => {
     const harness = await createHarness();
     const createdAt = new Date().toISOString();

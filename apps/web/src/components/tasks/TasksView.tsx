@@ -27,7 +27,7 @@ const DONE_PREVIEW_COUNT = 2;
 
 export default function TasksView() {
   const navigate = useNavigate();
-  // The connected server may not offer Tasks (a browser on a Stable server): back to Kanban.
+  // The connected server may not offer Tasks (an older server): back to Kanban.
   const tasksSurfaceEnabled = useTasksSurfaceEnabled();
   useEffect(() => {
     if (!tasksSurfaceEnabled) void navigate({ to: "/kanban", replace: true });

@@ -123,6 +123,7 @@ beforeAll(() => {
     matchMedia,
     addEventListener: () => {},
     removeEventListener: () => {},
+    location: { origin: "http://localhost" },
     desktopBridge: undefined,
   });
   vi.stubGlobal("document", {
@@ -152,6 +153,43 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("MessagesTimeline", () => {
+  it("opts user and assistant transcript markdown into automatic direction mode", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "bidi-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("bidi-user"),
+              role: "user",
+              text: "مرحبا بالعالم",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "bidi-assistant",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("bidi-assistant"),
+              role: "assistant",
+              text: "[مرحبا](https://example.com)",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup.match(/data-direction-mode="auto-blocks"/g)).toHaveLength(2);
+  });
+
   // The first test pays the full dynamic-import cost of the MessagesTimeline
   // module graph, which can exceed 10s under CI thread contention.
   it("renders an accent deep link to the immediate fork source", async () => {

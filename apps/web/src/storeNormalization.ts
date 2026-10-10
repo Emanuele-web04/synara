@@ -26,6 +26,7 @@ import {
 } from "@synara/shared/threadSummary";
 
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
+import { textSegmentsCoverText } from "./messageTextSegments";
 import {
   countOutstandingBackgroundWork,
   derivePendingBackgroundWork,
@@ -120,6 +121,7 @@ export function threadSessionsEqual(
     left.provider === right.provider &&
     left.status === right.status &&
     left.orchestrationStatus === right.orchestrationStatus &&
+    left.runtimeMode === right.runtimeMode &&
     left.activeTurnId === right.activeTurnId &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
@@ -824,8 +826,19 @@ function mergeReadModelMessagesWithLiveHotPath(
     }
 
     changed = true;
+    // Segments must spell the text they ship with: the snapshot's describe its
+    // own (shorter) text, so keep whichever side still covers the retained text.
+    const { textSegments: _incomingTextSegments, ...incomingMessageWithoutSegments } =
+      incomingMessage;
+    const retainedTextSegments = [incomingMessage.textSegments, previousMessage.textSegments].find(
+      (segments) =>
+        segments !== undefined &&
+        segments.length > 0 &&
+        textSegmentsCoverText(segments, previousMessage.text),
+    );
     mergedById.set(incomingMessage.id, {
-      ...incomingMessage,
+      ...incomingMessageWithoutSegments,
+      ...(retainedTextSegments !== undefined ? { textSegments: retainedTextSegments } : {}),
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
@@ -923,7 +936,11 @@ function readModelSessionFromThreadSession(
     ...(previousSession.providerInstanceId !== undefined
       ? { providerInstanceId: previousSession.providerInstanceId }
       : {}),
-    runtimeMode: previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? "full-access",
+    runtimeMode:
+      previousSession.runtimeMode ??
+      previousThread?.runtimeMode ??
+      incomingSession?.runtimeMode ??
+      "full-access",
     activeTurnId: previousSession.activeTurnId ?? null,
     lastError: previousSession.lastError ?? null,
     updatedAt: previousSession.updatedAt,
@@ -1663,6 +1680,7 @@ export function normalizeThreadSession(
       : {}),
     status: toLegacySessionStatus(incoming.status),
     orchestrationStatus: incoming.status,
+    runtimeMode: incoming.runtimeMode,
     activeTurnId: incoming.activeTurnId ?? undefined,
     createdAt: incoming.updatedAt,
     updatedAt: incoming.updatedAt,
@@ -1674,6 +1692,7 @@ export function normalizeThreadSession(
     previous.providerInstanceId === nextSession.providerInstanceId &&
     previous.status === nextSession.status &&
     previous.orchestrationStatus === nextSession.orchestrationStatus &&
+    previous.runtimeMode === nextSession.runtimeMode &&
     previous.activeTurnId === nextSession.activeTurnId &&
     previous.createdAt === nextSession.createdAt &&
     previous.updatedAt === nextSession.updatedAt &&

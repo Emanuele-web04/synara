@@ -23,7 +23,18 @@ import {
 } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
-import { Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Random, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Random,
+  Schema,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, vi } from "vitest";
 
@@ -71,6 +82,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   }> = [];
   private done = false;
   private failure: unknown | undefined;
+  private pendingNext: Promise<IteratorResult<SDKMessage>> | undefined;
 
   public readonly interruptCalls: Array<void> = [];
   public readonly stopTaskCalls: Array<string> = [];
@@ -228,12 +240,21 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
             value: undefined,
           });
         }
-        return new Promise((resolve, reject) => {
+        const pending = new Promise<IteratorResult<SDKMessage>>((resolve, reject) => {
           this.waiters.push({
             resolve,
             reject,
           });
         });
+        this.pendingNext = pending;
+        return pending;
+      },
+      // The SDK query is an async generator: `return()` settles only after the pending
+      // `next()` does, so a consumer that awaits it while Claude is idle waits until
+      // something else (close, a message) settles that read.
+      return: async () => {
+        await this.pendingNext?.catch(() => undefined);
+        return { done: true, value: undefined };
       },
     };
   }
@@ -1543,6 +1564,60 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("publishes the effective fast mode state when a result changes it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const fastModeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "session.configured" &&
+            (event.payload.config as { fast_mode_state?: unknown }).fast_mode_state !== undefined,
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: { fastMode: true },
+        },
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "hello", attachments: [] });
+
+      const emitResult = (uuid: string, fastMode: Record<string, string>) =>
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-1",
+          uuid,
+          ...fastMode,
+        } as unknown as SDKMessage);
+      const blocked = { fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" };
+      emitResult("result-1", blocked);
+      // An unchanged state is not republished.
+      emitResult("result-2", blocked);
+      emitResult("result-3", { fast_mode_state: "cooldown" });
+
+      const events = Array.from(yield* Fiber.join(fastModeEventsFiber));
+      assert.deepEqual(
+        events.map((event) => (event.type === "session.configured" ? event.payload.config : null)),
+        [blocked, { fast_mode_state: "cooldown" }],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("ignores claude fast mode for non-opus models", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -2046,6 +2121,119 @@ describe("ClaudeAdapterLive", () => {
       );
     },
   );
+
+  it.effect("classifies exact image generation tools while preserving other tool kinds", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Exercise image tool classification",
+        attachments: [],
+      });
+      const cases = [
+        ["generate_image", "image_generation"],
+        ["image_gen", "image_generation"],
+        ["image_edit", "image_generation"],
+        ["mcp__visuals__generate_image", "image_generation"],
+        ["mcp__agent_image__image_edit", "image_generation"],
+        ["mcp__image_gen__view_image", "mcp_tool_call"],
+        ["mcp__visuals__render__generate_image", "mcp_tool_call"],
+        ["view_image", "image_view"],
+        ["generate_image_thumbnail", "image_view"],
+        ["Edit", "file_change"],
+        ["Bash", "command_execution"],
+      ] as const;
+      const input = { prompt: "Generate an image", path: "/tmp/example.png" };
+      for (const [index, [name]] of cases.entries()) {
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-image-kinds",
+          uuid: `stream-image-kind-${index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_start",
+            index,
+            content_block: { type: "tool_use", id: `image-kind-${index}`, name, input },
+          },
+        } as unknown as SDKMessage);
+      }
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-image-kinds",
+        uuid: "assistant-image-kinds",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-image-kinds",
+          content: cases.map(([name], index) => ({
+            type: "tool_use",
+            id: `image-kind-${index}`,
+            name,
+            input,
+          })),
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-image-kinds",
+        uuid: "user-image-kinds",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: cases.map(([name], index) => ({
+            type: "tool_result",
+            tool_use_id: `image-kind-${index}`,
+            content: name === "image_edit" ? "Image edit failed" : "Tool finished",
+            is_error: name === "image_edit",
+          })),
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-image-kinds",
+        uuid: "result-image-kinds",
+      } as unknown as SDKMessage);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      for (const [index, [name, itemType]] of cases.entries()) {
+        const toolEvents = events.filter(
+          (event) =>
+            (event.type === "item.started" || event.type === "item.completed") &&
+            event.itemId === `image-kind-${index}`,
+        );
+        assert.lengthOf(toolEvents, 2, name);
+        for (const event of toolEvents) {
+          if (event.type !== "item.started" && event.type !== "item.completed") {
+            assert.fail("expected a tool lifecycle event");
+            continue;
+          }
+          assert.equal(event.payload.itemType, itemType, name);
+          assert.deepInclude(event.payload.data, { toolName: name, input });
+          if (itemType === "image_generation") {
+            assert.equal(event.payload.title, "Image generation");
+          }
+          if (event.type === "item.completed") {
+            assert.equal(event.payload.status, name === "image_edit" ? "failed" : "completed");
+          }
+        }
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("maps Claude stream/runtime messages to canonical provider runtime events", () => {
     const harness = makeHarness();
@@ -3897,6 +4085,7 @@ describe("ClaudeAdapterLive", () => {
           ),
         );
 
+      const nextCallsBeforeTaskStart = harness.query.iteratorNextCalls;
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3907,6 +4096,15 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-steer",
         uuid: "task-started-steer-1",
       } as unknown as SDKMessage);
+      // Wait for the stream handler to register the subagent run before steering it:
+      // it pulls the next SDK message only after handling this one.
+      for (
+        let i = 0;
+        i < 10_000 && harness.query.iteratorNextCalls <= nextCallsBeforeTaskStart;
+        i += 1
+      ) {
+        yield* Effect.yieldNow;
+      }
 
       // No pending steer: the hook stays a clean passthrough.
       assert.deepEqual(yield* invokeHook("task-steer-1"), {});
@@ -3977,6 +4175,7 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
+      const nextCallsBeforeTaskStart = harness.query.iteratorNextCalls;
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3987,6 +4186,15 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-steer-attach",
         uuid: "task-started-steer-attach-1",
       } as unknown as SDKMessage);
+      // Wait for the stream handler to register the subagent run before steering it:
+      // it pulls the next SDK message only after handling this one.
+      for (
+        let i = 0;
+        i < 10_000 && harness.query.iteratorNextCalls <= nextCallsBeforeTaskStart;
+        i += 1
+      ) {
+        yield* Effect.yieldNow;
+      }
 
       const hook = harness.getLastCreateQueryInput()?.options.hooks?.PreToolUse?.[0]?.hooks[0];
       assert.isDefined(hook);
@@ -4374,6 +4582,81 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.stopTask(session.threadId, "wf-1");
       assert.deepEqual(harness.query.stopTaskCalls, ["wf-1"]);
       assert.equal(harness.query.interruptCalls.length, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("trims task event strings so untrimmed SDK descriptions stay journalable", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) => event.type === "task.updated" && event.payload.taskId === "bash-untrimmed",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "bash-untrimmed",
+        tool_use_id: "toolu-bash-untrimmed",
+        task_type: "local_bash",
+        description: "bun run test\n",
+        session_id: "sdk-session-untrimmed",
+        uuid: "bash-untrimmed-started",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "bash-untrimmed",
+        description: "  bun run test \n",
+        last_tool_name: "Bash ",
+        session_id: "sdk-session-untrimmed",
+        uuid: "bash-untrimmed-progress",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "bash-untrimmed",
+        patch: { status: "failed", error: "exit code 1\n" },
+        session_id: "sdk-session-untrimmed",
+        uuid: "bash-untrimmed-updated",
+      } as unknown as SDKMessage);
+
+      const taskEvents = Array.from(yield* Fiber.join(runtimeEventsFiber)).filter(
+        (event) =>
+          (event.type === "task.started" ||
+            event.type === "task.progress" ||
+            event.type === "task.updated") &&
+          event.payload.taskId === "bash-untrimmed",
+      );
+      assert.deepEqual(
+        taskEvents.map((event) => event.type),
+        ["task.started", "task.progress", "task.updated"],
+      );
+      for (const event of taskEvents) {
+        const encoded = yield* Schema.encodeEffect(ProviderRuntimeEvent)(event).pipe(Effect.exit);
+        assert.equal(Exit.isSuccess(encoded), true, `${event.type} must encode`);
+        if (event.type === "task.started" || event.type === "task.progress") {
+          assert.equal(event.payload.description, "bun run test");
+        }
+        if (event.type === "task.progress") {
+          assert.equal(event.payload.lastToolName, "Bash");
+        }
+        if (event.type === "task.updated") {
+          assert.equal(event.payload.error, "exit code 1");
+        }
+      }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -5632,6 +5915,35 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),
+    );
+  });
+
+  it.effect("stops an idle session without waiting on the SDK query's pending read", () => {
+    // Regression: quit left Claude running. Interrupting the stream awaited the SDK
+    // generator's return(), which queues behind a read that never settles while
+    // Claude is idle, so teardown never reached query.close() or the process tree.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      for (let i = 0; i < 10_000 && harness.query.iteratorNextCalls === 0; i += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      const stopping = yield* adapter.stopSession(THREAD_ID).pipe(Effect.forkChild);
+      for (let i = 0; i < 10_000 && stopping.pollUnsafe() === undefined; i += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      assert.notEqual(stopping.pollUnsafe(), undefined, "stopSession must not hang");
+      assert.equal(harness.query.closeCalls, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
     );
   });
 
@@ -7676,9 +7988,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect(
-    "keeps later command prompts supervised after always allowing a tool for the session",
-    () => {
+  it.effect.each(["mcp__docs__search", "image_edit", "mcp__visuals__generate_image"])(
+    "keeps later command prompts supervised after always allowing %s for the session",
+    (toolName) => {
       const harness = makeHarness();
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
@@ -7700,13 +8012,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         const toolSuggestions: PermissionUpdate[] = [
           {
             type: "addRules",
-            rules: [{ toolName: "mcp__docs__search" }],
+            rules: [{ toolName }],
             behavior: "allow",
             destination: "session",
           },
         ];
         const toolPermissionPromise = canUseTool(
-          "mcp__docs__search",
+          toolName,
           { query: "release notes" },
           {
             signal: new AbortController().signal,
