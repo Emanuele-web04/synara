@@ -28,6 +28,11 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "behavior:diff-line-wrapping")).toBe(true);
   });
 
+  it("indexes the stacked and split diff layout preference", () => {
+    const results = rankSettingsSearchEntries("stacked", 12);
+    expect(results.some((entry) => entry.id === "behavior:diff-layout")).toBe(true);
+  });
+
   it("surfaces every row in a section when searching the section label", () => {
     const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
     expect(results.some((entry) => entry.section === "appearance")).toBe(true);

@@ -5,6 +5,9 @@ import { memo, useState, type ReactNode } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { ThreadId } from "@synara/contracts";
+import { DIFF_RENDER_MODE_STORAGE_KEY } from "../diffRenderMode";
+import { useDiffRenderModeStore } from "../diffRenderModeStore";
 
 const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
 
@@ -31,7 +34,7 @@ import DiffPanel from "./DiffPanel";
 const MemoizedDiffPanel = memo(DiffPanel);
 const PANEL_STATE = { panel: "diff", diffTurnId: null, diffFilePath: null } as const;
 
-function DiffPanelHarness() {
+function DiffPanelHarness({ threadId }: { threadId?: ThreadId }) {
   const [open, setOpen] = useState(true);
   const [options, setOptions] = useState<ReactNode>(null);
 
@@ -43,6 +46,7 @@ function DiffPanelHarness() {
       {options}
       {open ? (
         <MemoizedDiffPanel
+          {...(threadId ? { threadId } : {})}
           hideHeader
           queriesEnabled={false}
           panelState={PANEL_STATE}
@@ -53,13 +57,13 @@ function DiffPanelHarness() {
   );
 }
 
-function mountPanel() {
+function mountPanel(threadId?: ThreadId) {
   const client = new QueryClient({
     defaultOptions: { queries: { enabled: false, retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
-      <DiffPanelHarness />
+      <DiffPanelHarness {...(threadId ? { threadId } : {})} />
     </QueryClientProvider>,
   );
 }
@@ -71,10 +75,39 @@ async function openOptions() {
 
 beforeEach(() => {
   localStorage.clear();
+  useDiffRenderModeStore.setState({ modeByThreadId: {} });
 });
 
 afterEach(() => {
+  useDiffRenderModeStore.setState({ modeByThreadId: {} });
   localStorage.clear();
+});
+
+it("keeps each thread's layout separate from the existing default across remounts", async () => {
+  localStorage.setItem(DIFF_RENDER_MODE_STORAGE_KEY, JSON.stringify("stacked"));
+  const threadA = ThreadId.makeUnsafe("diff-layout-a");
+  const threadB = ThreadId.makeUnsafe("diff-layout-b");
+  const first = await mountPanel(threadA);
+  await openOptions();
+  await expect
+    .element(page.getByRole("menuitemradio", { name: "Stacked diff", exact: true }))
+    .toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: "Split diff", exact: true }).click();
+  await userEvent.keyboard("{Escape}");
+  expect(localStorage.getItem(DIFF_RENDER_MODE_STORAGE_KEY)).toBe(JSON.stringify("stacked"));
+  await first.unmount();
+  const second = await mountPanel(threadB);
+  await openOptions();
+  await expect
+    .element(page.getByRole("menuitemradio", { name: "Stacked diff", exact: true }))
+    .toHaveAttribute("aria-checked", "true");
+  await second.unmount();
+  const reopened = await mountPanel(threadA);
+  await openOptions();
+  await expect
+    .element(page.getByRole("menuitemradio", { name: "Split diff", exact: true }))
+    .toHaveAttribute("aria-checked", "true");
+  await reopened.unmount();
 });
 
 it("remembers stacked and split diff choices after closing and remounting the panel", async () => {

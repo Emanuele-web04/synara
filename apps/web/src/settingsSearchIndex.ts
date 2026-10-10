@@ -434,6 +434,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. code review inbox github upstream remote fork",
   },
   {
+    id: "behavior:diff-layout",
+    section: "behavior",
+    title: "Diff layout",
+    keywords: "Default stacked split review panel side by side unified layout per thread",
+  },
+  {
     id: "behavior:diff-line-wrapping",
     section: "behavior",
     title: "Diff line wrapping",
