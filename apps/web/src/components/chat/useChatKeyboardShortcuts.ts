@@ -65,6 +65,7 @@ interface ChatKeyboardShortcutsInput {
   isVoiceRecording: ReturnType<typeof useComposerVoiceController>["isVoiceRecording"];
   isVoiceTranscribing: ReturnType<typeof useComposerVoiceController>["isVoiceTranscribing"];
   onVoiceRecordingEnter: () => void;
+  onVoiceRecordingEscape: () => void;
   isComposerApprovalState: boolean;
   terminalState: ReturnType<typeof useChatTerminalController>["terminalState"];
   terminalWorkspaceOpen: ReturnType<typeof useChatTerminalController>["terminalWorkspaceOpen"];
@@ -135,6 +136,7 @@ export function useChatKeyboardShortcuts({
   isVoiceRecording,
   isVoiceTranscribing,
   onVoiceRecordingEnter,
+  onVoiceRecordingEscape,
   isComposerApprovalState,
   terminalState,
   terminalWorkspaceOpen,
@@ -233,6 +235,24 @@ export function useChatKeyboardShortcuts({
         event.preventDefault();
         event.stopPropagation();
         onVoiceRecordingEnter();
+        return;
+      }
+      // Escape while dictating discards the recording, like the recorder's X.
+      if (
+        isVoiceRecording &&
+        !isVoiceTranscribing &&
+        event.key === "Escape" &&
+        !event.isComposing &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !isTerminalFocused() &&
+        canHandleComposerPickerShortcut(event, composerFormRef.current)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onVoiceRecordingEscape();
         return;
       }
       const composerPickerShortcutActive =
@@ -505,6 +525,7 @@ export function useChatKeyboardShortcuts({
     isVoiceRecording,
     isVoiceTranscribing,
     onVoiceRecordingEnter,
+    onVoiceRecordingEscape,
     setTerminalWorkspaceTab,
     surfaceMode,
     scheduleComposerFocus,

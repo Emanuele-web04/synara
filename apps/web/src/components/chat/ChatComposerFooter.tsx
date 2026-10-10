@@ -29,6 +29,7 @@ interface ChatComposerFooterProps {
     waveformLevels: readonly number[];
     onCancel: () => void;
     onSubmit: () => void;
+    onSend: () => void;
     onToggle: () => void;
   };
   pendingInput: {
@@ -142,12 +143,12 @@ export function ChatComposerFooter({
             isRecording={voice.recording}
             isWaitingForAudio={voice.waitingForAudio}
             isTranscribing={voice.transcribing}
-            durationLabel={voice.durationLabel}
             waveformLevels={voice.waveformLevels}
             onDiscard={voice.onCancel}
             onStop={() => {
               void voice.onSubmit();
             }}
+            onSend={voice.onSend}
           />
         ) : null}
         {pendingInput?.progress ? (

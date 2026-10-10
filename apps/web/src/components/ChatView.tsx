@@ -2888,19 +2888,28 @@ export default function ChatView({
     },
     onGuardWarning: warnVoiceGuard,
   });
-  // Bumped when Enter finishes a voice note under the "send" setting; the
-  // effect next to the late send handlers sends once the transcript commits.
+  // Bumped when a voice note finishes with a send (the recorder's send button,
+  // or Enter under the "send" setting); the effect next to the late send
+  // handlers sends once the transcript commits.
   const [voiceAutoSendRequest, setVoiceAutoSendRequest] = useState(0);
+  const finishComposerVoiceRecording = useCallback(
+    (autoSend: boolean) => {
+      const promptBeforeTranscript = promptRef.current;
+      void submitComposerVoiceRecording().then((transcribed) => {
+        // An empty transcript leaves the draft untouched; don't send it blind.
+        if (autoSend && transcribed && promptRef.current !== promptBeforeTranscript) {
+          setVoiceAutoSendRequest((current) => current + 1);
+        }
+      });
+    },
+    [promptRef, submitComposerVoiceRecording],
+  );
   const finishComposerVoiceRecordingFromEnter = useCallback(() => {
-    const autoSend = settings.voiceEnterBehavior === "send";
-    const promptBeforeTranscript = promptRef.current;
-    void submitComposerVoiceRecording().then((transcribed) => {
-      // An empty transcript leaves the draft untouched; don't send it blind.
-      if (autoSend && transcribed && promptRef.current !== promptBeforeTranscript) {
-        setVoiceAutoSendRequest((current) => current + 1);
-      }
-    });
-  }, [promptRef, settings.voiceEnterBehavior, submitComposerVoiceRecording]);
+    finishComposerVoiceRecording(settings.voiceEnterBehavior === "send");
+  }, [finishComposerVoiceRecording, settings.voiceEnterBehavior]);
+  const sendComposerVoiceRecording = useCallback(() => {
+    finishComposerVoiceRecording(true);
+  }, [finishComposerVoiceRecording]);
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       if (!activeThreadId) {
@@ -3848,6 +3857,7 @@ export default function ChatView({
     isVoiceRecording,
     isVoiceTranscribing,
     onVoiceRecordingEnter: finishComposerVoiceRecordingFromEnter,
+    onVoiceRecordingEscape: cancelComposerVoiceRecording,
     isComposerApprovalState,
     terminalState,
     terminalWorkspaceOpen,
@@ -6262,6 +6272,7 @@ export default function ChatView({
                     waveformLevels: voiceWaveformLevels,
                     onCancel: cancelComposerVoiceRecording,
                     onSubmit: submitComposerVoiceRecording,
+                    onSend: sendComposerVoiceRecording,
                     onToggle: toggleComposerVoiceRecording,
                   }}
                   pendingInput={
