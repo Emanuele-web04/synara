@@ -155,6 +155,97 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("MessagesTimeline", () => {
+  it("renders the launch header and the live Resumed clock when the provider reuses its turn id", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const turnId = TurnId.makeUnsafe("same-turn");
+    const launchAt = "2026-03-17T19:12:00.000Z";
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps("2026-03-17T19:12:23.000Z")}
+        isWorking
+        activeTurnInProgress
+        activeTurnId={turnId}
+        activeTurnStartedAt={launchAt}
+        timelineEntries={[
+          {
+            id: "request",
+            kind: "message",
+            createdAt: launchAt,
+            message: {
+              id: MessageId.makeUnsafe("request"),
+              role: "user",
+              text: "Launch delayed echo",
+              createdAt: launchAt,
+              streaming: false,
+              turnId,
+            },
+          },
+          {
+            id: "launch",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:04.000Z",
+            message: {
+              id: MessageId.makeUnsafe("launch"),
+              role: "assistant",
+              text: "Launched.",
+              createdAt: "2026-03-17T19:12:04.000Z",
+              completedAt: "2026-03-17T19:12:04.000Z",
+              streaming: false,
+              turnId,
+            },
+          },
+          {
+            id: "done",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:21.000Z",
+            entry: {
+              id: "done",
+              createdAt: "2026-03-17T19:12:21.000Z",
+              tone: "info",
+              label: "Done",
+              backgroundTaskCompletion: {
+                taskId: "task",
+                taskType: null,
+                description: "Delayed echo",
+                outcome: "finished",
+              },
+            },
+          },
+          {
+            id: "resumed",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:22.000Z",
+            message: {
+              id: MessageId.makeUnsafe("resumed"),
+              role: "assistant",
+              text: "Echo done.",
+              createdAt: "2026-03-17T19:12:22.000Z",
+              streaming: true,
+              turnId,
+            },
+          },
+        ]}
+        turnTimingByTurnId={
+          new Map([
+            [
+              turnId,
+              {
+                startedAt: launchAt,
+                completedAt: "2026-03-17T19:12:04.000Z",
+                interrupted: false,
+              },
+            ],
+          ])
+        }
+      />,
+    );
+    expect(markup).toContain("Worked 4.0s");
+    expect(markup).toContain("Resumed: “Delayed echo” finished · ");
+    expect(markup).toContain('class="tabular-nums">2s</span>');
+    expect(markup.indexOf("Worked 4.0s")).toBeLessThan(markup.indexOf("Resumed:"));
+    expect(markup.match(/data-turn-header="live"/g)).toHaveLength(1);
+  });
+
   it.each(["stopped", "interrupted"] as const)(
     "renders the %s header after its request when the turn produced no content",
     async (outcome) => {
