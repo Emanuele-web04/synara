@@ -24,6 +24,7 @@ import {
   MessageId,
   ModelSelection,
   ProjectId,
+  ProviderInstanceId,
   THREAD_GOAL_MAX_CHARS,
   ThreadId,
   TurnId,
@@ -34,6 +35,8 @@ import { homedir } from "node:os";
 
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { vi } from "vitest";
+import { getProviderInstanceUsageSnapshot } from "../../providerUsage/index.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
@@ -91,6 +94,11 @@ import { makeComputerServiceLayer } from "../../computer/Layers/ComputerService.
 import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
+
+// Gateway tests exercise authorization and conversion without reading local account credentials.
+vi.mock("../../providerUsage/index.ts", () => ({
+  getProviderInstanceUsageSnapshot: vi.fn(async () => null),
+}));
 
 const NOW = "2026-03-01T10:00:00.000Z";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -498,6 +506,7 @@ function makeHarnessLayer(
                       "thread:write",
                       "automation:write",
                       "diagnostics:read",
+                      "usage:read",
                     ] as const),
           }
         : null;
@@ -2138,6 +2147,156 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("requires the explicit usage capability for quota tools", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent-readonly",
+        name: "synara_get_usage",
+        args: {},
+      });
+      const error = toolResultJson(response.result).error as {
+        code: string;
+        details: { requiredCapability: string };
+      };
+      assert.equal(error.code, "capability_denied");
+      assert.equal(error.details.requiredCapability, "usage:read");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("scopes usage reads and context summaries to caller authority", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      vi.mocked(getProviderInstanceUsageSnapshot).mockResolvedValue({
+        provider: "codex",
+        updatedAt: new Date().toISOString(),
+        limits: [{ window: "Weekly", usedPercent: 75 }],
+        usageLines: [],
+        source: "codex-usage-api",
+        status: "ok",
+      });
+      const harness = yield* makeHarness;
+      const usageResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_get_usage",
+        args: {},
+      });
+      const usage = toolResultJson(usageResponse.result).usage as {
+        provider: string;
+        availability: string;
+        unavailableReason?: string;
+        snapshot: unknown;
+        quotaWindows: unknown[];
+      };
+      assert.equal(usage.provider, "codex");
+      assert.equal(usage.availability, "available");
+      assert.equal(
+        vi.mocked(getProviderInstanceUsageSnapshot).mock.lastCall?.[0].instanceId,
+        "codex",
+      );
+      assert.isArray(usage.quotaWindows);
+      assert.notProperty(usage, "credential");
+      assert.notProperty(usage, "token");
+
+      const contextResponse = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_context",
+        args: {},
+      });
+      const context = toolResultJson(contextResponse.result) as {
+        capabilities: { usageRead: boolean };
+        usage: { provider: string; availability: string };
+      };
+      assert.isTrue(context.capabilities.usageRead);
+      assert.equal(context.usage.provider, "codex");
+
+      const readonlyContextResponse = yield* harness.callTool({
+        token: "token-parent-readonly",
+        name: "synara_context",
+        args: {},
+      });
+      const readonlyContext = toolResultJson(readonlyContextResponse.result) as {
+        capabilities: { usageRead: boolean };
+        usage: { unavailableReason: string };
+      };
+      assert.isFalse(readonlyContext.capabilities.usageRead);
+      assert.equal(readonlyContext.usage.unavailableReason, "not-authorized");
+    }).pipe(
+      Effect.provide(gatewayLayer),
+      Effect.ensuring(Effect.sync(() => vi.mocked(getProviderInstanceUsageSnapshot).mockReset())),
+    );
+  });
+
+  it.effect("reads only the caller's selected account, never another enabled account", () => {
+    const threads = baseThreads.map((thread) =>
+      thread.id === "thread-parent"
+        ? {
+            ...thread,
+            modelSelection: {
+              ...thread.modelSelection,
+              instanceId: ProviderInstanceId.makeUnsafe("codex_work"),
+            },
+          }
+        : thread,
+    );
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(threads, [], {
+      serverSettings: {
+        providerInstances: {
+          codex_work: { driver: "codex", enabled: true },
+          codex_other: { driver: "codex", enabled: true },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      vi.mocked(getProviderInstanceUsageSnapshot).mockClear();
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_get_usage",
+        args: {},
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(
+        vi
+          .mocked(getProviderInstanceUsageSnapshot)
+          .mock.calls.map(([instance]) => instance.instanceId),
+        ["codex_work"],
+      );
+    }).pipe(
+      Effect.provide(gatewayLayer),
+      Effect.ensuring(Effect.sync(() => vi.mocked(getProviderInstanceUsageSnapshot).mockReset())),
+    );
+  });
+
+  it.effect("does not fall back to ambient credentials for a removed caller account", () => {
+    const threads = baseThreads.map((thread) =>
+      thread.id === "thread-parent"
+        ? {
+            ...thread,
+            modelSelection: {
+              ...thread.modelSelection,
+              instanceId: ProviderInstanceId.makeUnsafe("codex_removed"),
+            },
+          }
+        : thread,
+    );
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(threads);
+    return Effect.gen(function* () {
+      vi.mocked(getProviderInstanceUsageSnapshot).mockClear();
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_get_usage",
+        args: {},
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.equal(vi.mocked(getProviderInstanceUsageSnapshot).mock.calls.length, 0);
+      const usage = toolResultJson(response.result).usage as { availability: string };
+      assert.equal(usage.availability, "unavailable");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects oversized and duplicate-id JSON-RPC batches before dispatch", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -2227,6 +2386,8 @@ describe("AgentGateway", () => {
         "synara_read_thread_runtime_events",
         "synara_diagnose_thread",
         "synara_wait_for_threads",
+        "synara_get_usage",
+        "synara_list_provider_usage",
         "synara_create_threads",
         "synara_create_thread",
         "synara_send_message",
