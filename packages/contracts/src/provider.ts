@@ -56,6 +56,11 @@ export const ProviderSessionStartInput = Schema.Struct({
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Extra folders of a multi-folder project the session may read and write besides `cwd`.
+   * Only providers that can grant them natively (Codex, Claude) receive this.
+   */
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
   forkSourceResumeCursor: Schema.optional(Schema.Unknown),
@@ -99,10 +104,19 @@ export const ProviderForkThreadInput = Schema.Struct({
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   /** External imports must pin a completed native transcript boundary. */
   requireCompletedSource: Schema.optional(Schema.Boolean),
+  /**
+   * Fork only the native history through the end of this source turn ("Fork
+   * from this turn"). Absent = the source's latest point. An adapter that
+   * cannot honor the boundary must not fork at the latest point instead; the
+   * caller then rebuilds the fork from its imported transcript.
+   */
+  throughTurnId: Schema.optional(TurnId),
   providerInstanceId: Schema.optional(ProviderInstanceId),
   sourceResumeCursor: Schema.optional(Schema.Unknown),
   sourceCwd: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
+  /** Extra folders of a multi-folder project; see `ProviderSessionStartInput`. */
+  additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   /**

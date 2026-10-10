@@ -244,9 +244,20 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
           createIfMissing: input.command.createWorkspaceRootIfMissing === true,
         },
       );
+      // Extra folders of a multi-folder project must already exist: only the primary
+      // folder may be created from a hand-typed path.
+      const additionalFolders =
+        input.command.additionalFolders === undefined
+          ? undefined
+          : yield* Effect.forEach(
+              input.command.additionalFolders,
+              (folder) => options.canonicalizeProjectWorkspaceRoot(folder),
+              { concurrency: 1 },
+            );
       const command = {
         ...input.command,
         workspaceRoot,
+        ...(additionalFolders !== undefined ? { additionalFolders } : {}),
         createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
       } satisfies OrchestrationCommand;
       return {

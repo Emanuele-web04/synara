@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "./providerProcessPriority";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -48,7 +49,7 @@ import {
 } from "@synara/shared/jsonrpc-stdio";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
 import { spawnProcess } from "@synara/shared/processRuntime";
-import { Effect, ServiceMap } from "effect";
+import { Effect, Semaphore, ServiceMap } from "effect";
 
 import {
   CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
@@ -61,6 +62,7 @@ import {
 } from "./provider/codexCliVersion";
 import {
   buildCodexMcpConfigToml,
+  buildCodexMcpThreadConfig,
   SYNARA_AGENT_GATEWAY_TOKEN_ENV,
   SYNARA_MCP_SERVER_NAME,
 } from "./agentGateway/mcpInjection.ts";
@@ -82,7 +84,9 @@ import {
   buildCodexAppServerArgs,
   buildCodexProcessLaunchContext,
   buildCodexProcessEnv,
+  CodexPreparedHomeFileSnapshotError,
   prepareCodexAuthTracking,
+  readCodexAuthFingerprintAsync,
   readCodexPreparedAuthTrackingFingerprint,
   type CodexProcessEnvInput,
   type PreparedCodexAuthTracking,
@@ -188,6 +192,8 @@ type CodexApprovalsReviewer = "user" | "auto_review";
 type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexTurnSandboxPolicy = {
   readonly type: "readOnly" | "workspaceWrite" | "dangerFullAccess";
+  /** Extra writable folders of a multi-folder project, besides the session cwd. */
+  readonly writableRoots?: ReadonlyArray<string>;
 };
 type CodexSessionApprovalOverride = {
   readonly approvalPolicy: "never";
@@ -197,12 +203,18 @@ type CodexSessionApprovalOverride = {
   };
 };
 
+export class CodexSessionAuthInvalidatedError extends Error {}
+
 interface CodexSessionContext {
+  authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
-  readonly gatewaySessionLease?: AgentGatewaySessionLease;
+  gatewaySessionLease?: AgentGatewaySessionLease;
   /** Set once this runtime's bearer is permanently fenced to a terminal turn. */
   gatewayCredentialRetired?: boolean;
+  gatewayCredentialRenewable?: boolean;
+  gatewayRenewalInProgress?: boolean;
+  serviceTier?: string | null;
   activeInteractionMode?: ProviderInteractionMode | undefined;
   session: ProviderSession;
   lifecycleGeneration?: string;
@@ -216,6 +228,8 @@ interface CodexSessionContext {
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
   sessionApprovalOverride?: CodexSessionApprovalOverride;
+  /** Extra folders of a multi-folder project, granted as workspace-write roots. */
+  readonly additionalDirectories?: ReadonlyArray<string>;
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
@@ -368,6 +382,7 @@ export interface CodexAppServerStartSessionInput {
   readonly expectedCodexContinuationGeneration?: string;
   readonly forkSourceResumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
+  readonly additionalDirectories?: ProviderSessionStartInput["additionalDirectories"];
   /**
    * Session-start facts the gateway lease derives its capabilities from.
    * Required on purpose: a lease that forgets it fails silently (the
@@ -712,6 +727,7 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
 }
 
 interface CodexThreadSessionOverrides {
+  readonly config?: ReturnType<typeof buildCodexMcpThreadConfig>;
   readonly model: string | null;
   readonly serviceTier?: string;
   readonly cwd: string;
@@ -829,10 +845,18 @@ function resolveCodexTurnOverrides(context: CodexSessionContext): {
   readonly approvalsReviewer: CodexApprovalsReviewer;
   readonly sandboxPolicy: CodexTurnSandboxPolicy;
 } {
-  return (
+  const overrides =
     context.sessionApprovalOverride ??
-    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode)
-  );
+    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode);
+  // Read-only sessions can already read every folder and full access needs no grant;
+  // only workspace-write has to name the extra folders it may edit.
+  if (overrides.sandboxPolicy.type !== "workspaceWrite" || !context.additionalDirectories?.length) {
+    return overrides;
+  }
+  return {
+    ...overrides,
+    sandboxPolicy: { ...overrides.sandboxPolicy, writableRoots: context.additionalDirectories },
+  };
 }
 
 export function resolveCodexModelForAccount(
@@ -847,6 +871,7 @@ export function resolveCodexModelForAccount(
 }
 
 function spawnCodexAppServer(input: {
+  readonly lowerPriority: boolean;
   readonly binaryPath: string;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
@@ -855,12 +880,17 @@ function spawnCodexAppServer(input: {
   if (!sourceHomePath) {
     throw new Error("Codex app-server requires a verified shared continuation home.");
   }
-  return spawnProcess(input.binaryPath, buildCodexAppServerArgs(sourceHomePath), {
-    requireExecutable: true,
-    cwd: input.cwd,
-    env: input.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  return spawnProcess(
+    input.binaryPath,
+    [...buildCodexAppServerArgs(sourceHomePath), "--config", "thread_unload_delay_secs=0"],
+    {
+      lowerPriority: input.lowerPriority,
+      requireExecutable: true,
+      cwd: input.cwd,
+      env: input.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
 }
 
 export function normalizeCodexModelSlug(
@@ -1070,6 +1100,10 @@ export interface CodexAppServerManagerEvents {
 }
 
 const CODEX_DISCOVERY_CACHE_MAX_ENTRIES = 128;
+// Child (sub-agent) conversations outlive the parent turn that spawned them, so
+// their routing is kept until the child closes; cap it for sessions whose
+// children never report a close.
+const CODEX_COLLAB_RECEIVER_MAX_ENTRIES = 200;
 const GATEWAY_TURN_CANCELLATION_TIMEOUT_MS = 2_000;
 
 function getRecentCacheEntry<K, V>(cache: Map<K, V>, key: K): V | undefined {
@@ -1222,6 +1256,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly teardownProcessTree: typeof teardownProviderProcessTree;
   private readonly taskCompleteFallbackGraceMs: number;
   private readonly discoverySessionIdleMs: number;
+  private readonly authRevalidationTimeoutMs: number;
+  // Native filesystem promises cannot be cancelled. Keep their permits until
+  // they settle, even after the caller's deadline rejects its session origin.
+  // Stay below libuv's default four-worker pool so auth reads cannot occupy it all.
+  private readonly authReadSlots = Semaphore.makeUnsafe(2);
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -1237,6 +1276,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
       readonly taskCompleteFallbackGraceMs?: number;
       readonly discoverySessionIdleMs?: number;
+      readonly authRevalidationTimeoutMs?: number;
     },
   ) {
     super();
@@ -1250,14 +1290,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       0,
       options?.discoverySessionIdleMs ?? CODEX_DISCOVERY_SESSION_IDLE_MS,
     );
+    this.authRevalidationTimeoutMs = Math.max(1, options?.authRevalidationTimeoutMs ?? 5_000);
   }
 
-  // The Synara MCP server rides on the shared overlay config (no secrets),
-  // while the per-thread bearer token travels through the app-server process
-  // env referenced by `bearer_token_env_var`.
+  // Only the endpoint lives in shared config. Credentials travel over the owned
+  // pipe in thread config, so renewing them does not require a new process env.
   private async buildSessionProcessEnv(
     codexOptions: CodexDiscoveryOptions | undefined,
-    gatewayBearerToken: string | undefined,
     expectedCodexContinuationGeneration?: string,
   ) {
     const processEnvInput = {
@@ -1266,14 +1305,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { expectedSharedContinuationGeneration: expectedCodexContinuationGeneration }
         : {}),
       ...(this.agentGatewayMcp
-        ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
+        ? {
+            appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl(), "thread"),
+          }
         : {}),
     };
     const processLaunch = await buildCodexProcessLaunchContext(processEnvInput);
     const env = processLaunch.env;
-    if (gatewayBearerToken) {
-      env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewayBearerToken;
-    }
+    delete env[SYNARA_AGENT_GATEWAY_TOKEN_ENV];
     return {
       env,
       authTracking: processLaunch.authTracking,
@@ -1383,11 +1422,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       const processLaunch = await this.buildSessionProcessEnv(
         normalizedCodexOptions,
-        gatewaySessionLease?.connection.bearerToken,
         input.expectedCodexContinuationGeneration,
       );
       const launchAuthFingerprint = processLaunch.authFingerprint;
       const child = this.spawnAppServer({
+        lowerPriority: (await this.runPromise(providerProcessPriorityEnabled)) as boolean,
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: processLaunch.env,
@@ -1395,6 +1434,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       context = {
         autoApproveSynaraTools: input.autoApproveSynaraTools === true,
+        ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         enableComputerControl:
           gatewaySessionLease !== undefined &&
           input.agentGatewayCapabilityInput.enableComputerControl === true,
@@ -1422,6 +1462,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sessionAttemptId: randomUUID(),
         authTracking: processLaunch.authTracking,
         authFingerprint: launchAuthFingerprint,
+        ...(input.additionalDirectories?.length
+          ? { additionalDirectories: [...input.additionalDirectories] }
+          : {}),
         ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
@@ -1457,6 +1500,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         context.account,
       );
       const sessionOverrides = {
+        ...(gatewaySessionLease
+          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          : {}),
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         cwd: resolvedCwd,
@@ -1652,8 +1698,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         "Codex session gateway authority is retired; resume the provider runtime before starting another turn.",
       );
     }
-    context.collabReceiverTurns.clear();
-    context.collabReceiverParents.clear();
 
     // Normal sends never interrupt active work. The orchestration layer decides
     // when a queued follow-up is ready to become a provider turn.
@@ -1729,9 +1773,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
 
+    if (input.serviceTier !== undefined) context.serviceTier = input.serviceTier;
+
     this.updateSession(context, {
       status: "running",
       activeTurnId: turnId,
+      ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(context.session.resumeCursor !== undefined
         ? { resumeCursor: context.session.resumeCursor }
         : {}),
@@ -1909,6 +1956,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     // Flip the local admission fence before starting asynchronous request
     // drainage. No following turn may reuse this runtime's bearer.
     context.gatewayCredentialRetired = true;
+    context.gatewayCredentialRenewable = false;
     return this.runGatewayTurnCleanup(context, turnId, "retirement", () =>
       lease.retireTurn(turnId),
     );
@@ -1920,6 +1968,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     providerThreadIdOverride?: string,
   ): Promise<void> {
     const context = this.requireSession(threadId);
+    context.gatewayCredentialRenewable = false;
     const effectiveTurnId = turnId ?? context.session.activeTurnId;
 
     // Stop must also unpark codex from any question/approval it is blocked on;
@@ -2114,8 +2163,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     this.clearTaskCompleteFallback(context);
-    context.collabReceiverTurns.clear();
-    context.collabReceiverParents.clear();
     context.reviewTurnIds.delete(turnId);
     this.updateSession(context, {
       status: "ready",
@@ -2405,12 +2452,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
       const processLaunch = await this.buildSessionProcessEnv(
         normalizedCodexOptions,
-        gatewaySessionLease?.connection.bearerToken,
         input.expectedCodexContinuationGeneration,
       );
       signal?.throwIfAborted();
       const launchAuthFingerprint = processLaunch.authFingerprint;
+      const lowerPriority = (await this.runPromise(providerProcessPriorityEnabled)) as boolean;
+      signal?.throwIfAborted();
       const child = this.spawnAppServer({
+        lowerPriority,
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: processLaunch.env,
@@ -2418,6 +2467,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       context = {
         ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
+        enableComputerControl:
+          gatewaySessionLease !== undefined && input.enableComputerControl === true,
         ...(input.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: input.lifecycleGeneration }
           : {}),
@@ -2441,6 +2492,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sessionAttemptId: randomUUID(),
         authTracking: processLaunch.authTracking,
         authFingerprint: launchAuthFingerprint,
+        ...(input.additionalDirectories?.length
+          ? { additionalDirectories: [...input.additionalDirectories] }
+          : {}),
         ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
@@ -2467,6 +2521,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
             )
           : undefined;
       const serviceTier = resolveCodexServiceTier(input.modelSelection);
+      if (serviceTier !== undefined) context.serviceTier = serviceTier;
       signal?.throwIfAborted();
       let lastTurnId: TurnId | undefined;
       if (input.requireCompletedSource) {
@@ -2496,6 +2551,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         lastTurnId = lastTurn?.id;
       }
       const forkParams = {
+        ...(gatewaySessionLease
+          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          : {}),
         threadId: sourceProviderThreadId,
         excludeTurns: true,
         deferGoalContinuation: true,
@@ -2985,6 +3043,105 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return this.stopSessionContext(context);
   }
 
+  /** Keep the app-server warm, but replace the native thread's retired MCP client. */
+  async renewAgentGatewayCredential(threadId: ThreadId): Promise<boolean> {
+    const context = this.sessions.get(threadId);
+    const providerThreadId = context && readResumeCursorThreadId(context.session.resumeCursor);
+    if (
+      !context ||
+      !providerThreadId ||
+      !this.agentGatewayMcp ||
+      !context.gatewaySessionLease ||
+      context.gatewayCredentialRetired !== true ||
+      context.gatewayCredentialRenewable !== true ||
+      context.gatewayRenewalInProgress ||
+      context.session.activeTurnId !== undefined ||
+      context.sessionApprovalOverride ||
+      this.hasPendingHumanRequests(context) ||
+      !this.isContextInitializedAndRoutable(context)
+    )
+      return false;
+
+    let replacement: AgentGatewaySessionLease | undefined;
+    context.gatewayRenewalInProgress = true;
+    context.gatewayCredentialRenewable = false;
+    try {
+      this.assertContextAuthCurrent(context);
+      // Retirement already fenced writes. Revoke reads and drain the old MCP
+      // client too; neither a delayed request nor a descendant gets the new key.
+      context.gatewaySessionLease.release();
+      // A settled native child can still retain its own MCP client. Until all
+      // native clients can be rotated together, preserve full process recovery
+      // whenever this process contains anything besides the parent thread.
+      const loaded = this.readObject(
+        await this.sendRequest(context, "thread/loaded/list", { limit: 100 }, 1_000),
+      );
+      if (
+        !Array.isArray(loaded?.data) ||
+        loaded.data.length !== 1 ||
+        loaded.data[0] !== providerThreadId ||
+        loaded.nextCursor !== null
+      )
+        return false;
+      await this.sendRequest(context, "thread/unsubscribe", { threadId: providerThreadId }, 1_000);
+      // Unsubscribe acknowledges detachment, not shutdown. Never resume until
+      // Codex confirms that the old native thread is gone. Older CLIs which
+      // ignore the zero unload delay take the existing process-restart path.
+      let unloaded = false;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        this.assertContextAuthCurrent(context);
+        const response = this.readObject(
+          await this.sendRequest(context, "thread/loaded/list", { limit: 100 }, 1_000),
+        );
+        if (
+          Array.isArray(response?.data) &&
+          response.data.length === 0 &&
+          response.nextCursor === null
+        ) {
+          unloaded = true;
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+      if (!unloaded || !this.isContextRoutable(context)) return false;
+      replacement = this.agentGatewayMcp.acquireSessionLease(threadId, {
+        enableComputerControl: context.enableComputerControl === true,
+      });
+      const resumed = this.readObject(
+        await this.sendThreadOpenRequest(context, "thread/resume", {
+          threadId: providerThreadId,
+          excludeTurns: true,
+          cwd: context.session.cwd,
+          model: context.session.model ?? null,
+          ...(context.serviceTier !== undefined ? { serviceTier: context.serviceTier } : {}),
+          ...mapCodexRuntimeMode(context.session.runtimeMode),
+          config: buildCodexMcpThreadConfig(replacement.connection),
+        }),
+      );
+      if (
+        this.readString(this.readObject(resumed, "thread"), "id") !== providerThreadId ||
+        !this.isContextRoutable(context)
+      )
+        return false;
+      this.assertContextAuthCurrent(context);
+      context.gatewaySessionLease = replacement;
+      replacement = undefined;
+      context.gatewayCredentialRetired = false;
+      this.markSessionReadyAfterThreadOpen(context, {
+        threadOpenMethod: "thread/resume",
+        providerThreadId,
+      });
+      return true;
+    } catch {
+      // Do not log protocol errors here: a config error can quote a credential.
+      log.info("Codex gateway renewal requires a full process restart", { threadId });
+      return false;
+    } finally {
+      replacement?.release();
+      context.gatewayRenewalInProgress = false;
+    }
+  }
+
   private async stopSessionContext(
     context: CodexSessionContext,
     emitClosedLifecycle = true,
@@ -3003,6 +3160,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context.stopping) {
       context.stopping = true;
       this.clearTaskCompleteFallback(context);
+      context.collabReceiverTurns.clear();
+      context.collabReceiverParents.clear();
       context.gatewaySessionLease?.release();
 
       const stopError =
@@ -3101,13 +3260,133 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return inspections;
   }
 
+  /** Bind immutable origin metadata without filesystem work at callback admission. */
+  getSessionEventOrigin(
+    threadId: ThreadId,
+    lifecycleGeneration?: string,
+  ): {
+    readonly providerInstanceId: string | undefined;
+    readonly codexOptions: CodexDiscoveryOptions | undefined;
+    readonly inspect: () => Promise<CodexSessionInspection | undefined>;
+    readonly isAuthRejected: () => boolean;
+    readonly validationKey: object | undefined;
+    readonly rejectInspection: () => void;
+  } {
+    const context = this.sessions.get(threadId);
+    const matches =
+      context &&
+      (lifecycleGeneration === undefined || context.lifecycleGeneration === lifecycleGeneration);
+    return {
+      providerInstanceId: matches ? context.session.providerInstanceId : undefined,
+      codexOptions: matches ? normalizeCodexDiscoveryOptions(context.codexOptions) : undefined,
+      validationKey: matches ? context : undefined,
+      isAuthRejected: () => context?.authInvalidation !== undefined,
+      rejectInspection: () => {
+        if (matches)
+          this.invalidateContextAuth(
+            context,
+            "Codex configuration or authentication state could not be safely revalidated; the stale app-server session was stopped and must be restarted.",
+          );
+      },
+      inspect: async () => {
+        if (context?.authInvalidation)
+          throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
+        return matches && this.sessions.get(threadId) === context
+          ? this.inspectSessionAsync(threadId, context.lifecycleGeneration)
+          : undefined;
+      },
+    };
+  }
+
+  /** Event projection revalidates only its emitting session, outside the stdout callback. */
+  async inspectSessionAsync(
+    threadId: ThreadId,
+    lifecycleGeneration?: string,
+  ): Promise<CodexSessionInspection | undefined> {
+    const context = this.sessions.get(threadId);
+    if (context?.authInvalidation)
+      throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
+    if (
+      !context ||
+      !this.isContextRoutable(context) ||
+      (lifecycleGeneration !== undefined && context.lifecycleGeneration !== lifecycleGeneration)
+    )
+      return undefined;
+    let stalenessMessage: string | undefined;
+    if (context.authTracking && context.authFingerprint !== undefined) {
+      try {
+        let expired = false;
+        const abort = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const read = async () => {
+          for (let attempt = 0; ; attempt++) {
+            if (expired || context.authInvalidation)
+              throw new CodexSessionAuthInvalidatedError("Codex auth revalidation expired.");
+            try {
+              return await readCodexAuthFingerprintAsync(
+                codexProcessEnvInputForOptions(context.codexOptions),
+              );
+            } catch (error) {
+              // A token refresh may replace/rewrite auth between the descriptor checks.
+              // Retry the entire security algorithm, never a partial or cached snapshot.
+              if (
+                !(error instanceof CodexPreparedHomeFileSnapshotError) ||
+                error.failure !== "file-changed" ||
+                attempt >= 2
+              )
+                throw error;
+            }
+          }
+        };
+        let fingerprint: string;
+        try {
+          fingerprint = await Promise.race([
+            Effect.runPromise(
+              this.authReadSlots.withPermit(Effect.uninterruptible(Effect.promise(read))),
+              { signal: abort.signal },
+            ),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                expired = true;
+                abort.abort();
+                reject(new Error("Codex auth revalidation timed out."));
+              }, this.authRevalidationTimeoutMs);
+              timer.unref();
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+        if (fingerprint !== context.authFingerprint) {
+          stalenessMessage =
+            "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
+        }
+      } catch (error) {
+        log.warn("codex session auth freshness revalidation failed", {
+          threadId,
+          cause: error instanceof Error ? error.message : String(error),
+        });
+        stalenessMessage =
+          "Codex configuration or authentication state could not be safely revalidated; the stale app-server session was stopped and must be restarted.";
+      }
+    }
+    if (stalenessMessage) this.invalidateContextAuth(context, stalenessMessage);
+    // Other overlapping reads may have invalidated this origin while we awaited disk.
+    if (context.authInvalidation)
+      throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
+    // Filesystem awaits must not attach a replacement session's identity to an old event.
+    if (this.sessions.get(threadId) !== context || !this.isContextRoutable(context))
+      return undefined;
+    const codexOptions = normalizeCodexDiscoveryOptions(context.codexOptions);
+    return { session: { ...context.session }, ...(codexOptions ? { codexOptions } : {}) };
+  }
+
   hasSession(threadId: ThreadId): boolean {
     const context = this.sessions.get(threadId);
     if (!context || !this.isContextRoutable(context)) return false;
-    if (!this.isContextAuthCurrent(context)) {
-      void this.stopSession(threadId).catch((error) => {
-        log.warn("failed to stop stale Codex session", { threadId, error });
-      });
+    const stalenessMessage = this.contextAuthStalenessMessage(context);
+    if (stalenessMessage) {
+      this.invalidateContextAuth(context, stalenessMessage);
       return false;
     }
     return true;
@@ -3380,16 +3659,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     const stalenessMessage = this.contextAuthStalenessMessage(context);
     if (stalenessMessage) {
-      void this.stopSession(threadId).catch((error) => {
-        log.warn("failed to stop stale Codex session", { threadId, error });
-      });
+      this.invalidateContextAuth(context, stalenessMessage);
       throw new Error(stalenessMessage);
     }
 
     return context;
   }
 
+  private invalidateContextAuth(context: CodexSessionContext, message: string): void {
+    if (context.authInvalidation && context.teardownFailed !== true) return;
+    context.authInvalidation = message;
+    const threadId = context.session.threadId;
+    if (this.sessions.get(threadId) === context) {
+      void this.stopSession(threadId).catch((error) => {
+        log.warn("failed to stop stale Codex session", { threadId, error });
+      });
+    }
+  }
+
   private contextAuthStalenessMessage(context: CodexSessionContext): string | undefined {
+    if (context.authInvalidation) return context.authInvalidation;
     if (!context.authTracking || context.authFingerprint === undefined) return undefined;
     try {
       const codexOptions = context.codexOptions;
@@ -3443,11 +3732,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private pruneStaleAuthSessions(): void {
-    for (const [threadId, context] of this.sessions) {
-      if (this.isContextAuthCurrent(context)) continue;
-      void this.stopSession(threadId).catch((error) => {
-        log.warn("failed to stop stale Codex session", { threadId, error });
-      });
+    for (const context of this.sessions.values()) {
+      const stalenessMessage = this.contextAuthStalenessMessage(context);
+      if (stalenessMessage) this.invalidateContextAuth(context, stalenessMessage);
     }
   }
 
@@ -3694,6 +3981,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("Codex authentication changed before discovery launch; retry the request.");
     }
     const child = this.spawnAppServer({
+      lowerPriority: false,
       binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
       env: processLaunch.env,
@@ -4050,6 +4338,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       isChildConversation,
     } = resolvedCollaborationRoute;
     if (
+      context.gatewayRenewalInProgress &&
+      !isChildConversation &&
+      (notification.method === "thread/closed" ||
+        notification.method === "thread/started" ||
+        notification.method === "thread/status/changed")
+    )
+      return;
+    if (isChildConversation && notification.method === "thread/closed" && providerThreadId) {
+      // The child conversation ended; nothing more will arrive from it.
+      context.collabReceiverTurns.delete(providerThreadId);
+      context.collabReceiverParents.delete(providerThreadId);
+    }
+    if (
       isChildConversation &&
       this.shouldSuppressChildConversationNotification(notification.method)
     ) {
@@ -4090,6 +4391,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // may admit B as soon as it consumes that event, so A's bearer must already
       // be permanently unable to bind to another latestTurn.
       void this.retireGatewayTurn(context, terminalGatewayTurnId);
+      context.gatewayCredentialRenewable =
+        notification.method === "turn/completed" &&
+        this.readString(this.readObject(notification.params, "turn"), "status") === "completed";
     }
     const eventPayload = gatewayTurnAuthorityRetired
       ? {
@@ -4172,8 +4476,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       this.clearTaskCompleteFallback(context, rawRoute.turnId);
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -4197,8 +4499,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       this.clearTaskCompleteFallback(context, rawRoute.turnId);
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       if (rawRoute.turnId) {
         context.reviewTurnIds.delete(rawRoute.turnId);
       }
@@ -4670,8 +4970,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
 
-      context.collabReceiverTurns.clear();
-      context.collabReceiverParents.clear();
       context.reviewTurnIds.delete(turnId);
       const gatewayTurnAuthorityRetired = context.gatewaySessionLease !== undefined;
       if (gatewayTurnAuthorityRetired) {
@@ -4958,14 +5256,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     params: unknown,
   ): ResolvedCollaborationRoute {
-    const parentTurnId = this.readChildParentTurnId(context, params);
     const providerThreadId = normalizeProviderThreadId(this.readProviderConversationId(params));
-    const mappedProviderParentThreadId = this.readChildParentProviderThreadId(context, params);
     const activeProviderThreadId = normalizeProviderThreadId(
       readResumeThreadId({
         resumeCursor: context.session.resumeCursor,
       }),
     );
+    // Receiver maps outlive parent turns, so never let a stale entry reroute
+    // the active root conversation as a child.
+    const isActiveRootConversation =
+      providerThreadId !== undefined && providerThreadId === activeProviderThreadId;
+    const mappedParentTurnId = isActiveRootConversation
+      ? undefined
+      : this.readChildParentTurnId(context, params);
+    const mappedProviderParentThreadId = isActiveRootConversation
+      ? undefined
+      : this.readChildParentProviderThreadId(context, params);
     // A child can emit events before its collab tool-call payload populates the
     // receiver maps. During a live parent turn, another provider thread belongs
     // to that active conversation. Preserve the mapped parent when one exists;
@@ -4980,6 +5286,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const providerParentThreadId =
       mappedProviderParentThreadId ??
       (isUnmappedChildConversation ? activeProviderThreadId : undefined);
+    let parentTurnId = mappedParentTurnId;
+    if (isUnmappedChildConversation) {
+      // Codex often spawns children without a collab tool-call item, so this
+      // fallback may be the only time the child is recognized. Remember it so
+      // notifications after the parent turn ends still route as a child.
+      parentTurnId ??= context.session.activeTurnId;
+      this.rememberChildConversation(
+        context,
+        providerThreadId,
+        activeProviderThreadId,
+        parentTurnId,
+      );
+    }
 
     return {
       ...(parentTurnId ? { parentTurnId } : {}),
@@ -5022,19 +5341,62 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const payload = this.readObject(params);
     const item = this.readObject(payload, "item") ?? payload;
     const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
-    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
-      return;
-    }
     const parentProviderThreadId = normalizeProviderThreadId(
       this.readProviderConversationId(params),
     );
+    // Multi-agent v2 announces a spawned child with a subAgentActivity item
+    // (agentThreadId) instead of a collab tool call naming receivers.
+    if (itemType === "subAgentActivity") {
+      const agentThreadId = normalizeProviderThreadId(this.readString(item, "agentThreadId"));
+      if (agentThreadId) {
+        this.rememberChildConversation(
+          context,
+          agentThreadId,
+          parentProviderThreadId,
+          parentTurnId,
+        );
+      }
+      return;
+    }
+    if (itemType !== "collabAgentToolCall" && itemType !== "collabToolCall") {
+      return;
+    }
 
     const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
     for (const receiverThreadId of receiverThreadIds) {
-      context.collabReceiverTurns.set(receiverThreadId, parentTurnId);
-      if (parentProviderThreadId) {
-        context.collabReceiverParents.set(receiverThreadId, parentProviderThreadId);
-      }
+      this.rememberChildConversation(
+        context,
+        receiverThreadId,
+        parentProviderThreadId,
+        parentTurnId,
+      );
+    }
+  }
+
+  private rememberChildConversation(
+    context: CodexSessionContext,
+    childProviderThreadId: string,
+    parentProviderThreadId: string | undefined,
+    parentTurnId: TurnId | undefined,
+  ): void {
+    if (childProviderThreadId === parentProviderThreadId) {
+      return;
+    }
+    if (parentTurnId) {
+      setRecentCacheEntry(
+        context.collabReceiverTurns,
+        childProviderThreadId,
+        parentTurnId,
+        CODEX_COLLAB_RECEIVER_MAX_ENTRIES,
+      );
+    }
+    if (parentProviderThreadId) {
+      setRecentCacheEntry(
+        context.collabReceiverParents,
+        childProviderThreadId,
+        parentProviderThreadId,
+        CODEX_COLLAB_RECEIVER_MAX_ENTRIES,
+      );
     }
   }
 

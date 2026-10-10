@@ -1,3 +1,4 @@
+import { MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { diffRouteSearchEquals, parseDiffRouteSearch } from "./diffRouteSearch";
@@ -93,4 +94,14 @@ describe("parseDiffRouteSearch", () => {
       splitViewId: "split-1",
     });
   });
+});
+
+it("preserves message deep links independently of side-panel state", () => {
+  expect(parseDiffRouteSearch({ messageId: " earliest " })).toEqual({ messageId: "earliest" });
+  expect(
+    diffRouteSearchEquals(
+      { messageId: MessageId.makeUnsafe("one") },
+      { messageId: MessageId.makeUnsafe("two") },
+    ),
+  ).toBe(false);
 });

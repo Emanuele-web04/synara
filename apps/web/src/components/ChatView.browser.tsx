@@ -70,9 +70,17 @@ import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
 import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
+import { emitWsTransportState } from "../wsTransportEvents";
 import { dispatchKanbanDraftThread } from "../lib/kanbanDispatch";
+import {
+  endQueuedComposerAutoDispatch,
+  tryBeginQueuedComposerAutoDispatch,
+} from "../lib/queuedComposerDrain";
 import { useKanbanUiStore } from "../kanbanUiStore";
-import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
+import {
+  resetThreadDetailResumeCursors,
+  setThreadDetailResumeCursor,
+} from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
@@ -91,6 +99,7 @@ import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { getAppTypographyScale } from "../lib/appTypography";
 import { threadJumpCommandForIndex } from "../keybindings";
 import { useStore } from "../store";
+import { clearThreadDetailCache, writeThreadDetailCache } from "../lib/threadDetailCache";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -112,6 +121,7 @@ import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
+import { hasActiveComposerSend } from "../lib/composerSendOwnership";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
@@ -167,6 +177,7 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
+let threadDetailSnapshotBarrier: Promise<void> | null = null;
 const wsRequests: WsRequestEnvelope["body"][] = [];
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -1091,6 +1102,12 @@ function createSnapshotWithInlineToolOverflow(options: {
   };
 }
 
+function findInlineToolsTurnDisclosure(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
+    "[data-message-id='msg-assistant-inline-tools'] [data-turn-header='completed'] button[aria-expanded]",
+  );
+}
+
 function createSnapshotWithHistoricalToolHydrationDuringLiveTurn(options: {
   hydrateHistoricalActivities: boolean;
 }): OrchestrationReadModel {
@@ -1505,13 +1522,17 @@ const worker = setupWorker(
         if (!thread) {
           return;
         }
-        sendEffectRpcChunk(client, parsed.request.id, {
+        const detailSnapshot = {
           kind: "snapshot",
           snapshot: {
             snapshotSequence: fixture.snapshot.snapshotSequence,
             thread,
           },
-        });
+        };
+        const sendDetailSnapshot = () =>
+          sendEffectRpcChunk(client, parsed.request.id, detailSnapshot);
+        if (threadDetailSnapshotBarrier) void threadDetailSnapshotBarrier.then(sendDetailSnapshot);
+        else sendDetailSnapshot();
         return;
       }
       if (method === WS_METHODS.subscribeServerProviderStatuses) {
@@ -1524,6 +1545,7 @@ const worker = setupWorker(
       }
       if (
         method === WS_METHODS.subscribeServerSettings ||
+        method === WS_METHODS.subscribeServerKeepAwake ||
         method === WS_METHODS.subscribeTerminalEvents ||
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
@@ -2120,6 +2142,19 @@ async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasureme
   };
 }
 
+async function waitForSplitChatReady(threadIds: readonly ThreadId[]): Promise<void> {
+  // Empty secondary threads have a composer before detail hydration. Capture
+  // DOM identity after their loading layout has become the real empty landing.
+  await vi.waitFor(() => {
+    const state = useStore.getState();
+    for (const threadId of threadIds) {
+      expect(state.threadDetailSyncById?.[threadId]).toBe("synced");
+    }
+    expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(threadIds.length);
+  });
+  await waitForLayout();
+}
+
 async function waitForMountedChatReady(options: {
   host: HTMLElement;
   snapshot: OrchestrationReadModel;
@@ -2229,6 +2264,41 @@ async function mountChatView(options: {
 }
 
 describe("ChatView transcript geometry (full app)", () => {
+  it("keeps the active chat explicitly unread until the next visit", async () => {
+    const snapshot = createSnapshotWithInlineToolOverflow({ active: false });
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      const shell = () => useStore.getState().threadShellById?.[THREAD_ID];
+      const completedAt = snapshot.threads.find((thread) => thread.id === THREAD_ID)!.latestTurn!
+        .completedAt!;
+      await expect
+        .poll(() => Date.parse(shell()?.lastVisitedAt ?? ""))
+        .toBeGreaterThanOrEqual(Date.parse(completedAt));
+      const input = document.querySelector('[data-chat-composer-form="true"]')!;
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "u",
+          code: "KeyU",
+          metaKey: isMacNavigatorPlatform(),
+          ctrlKey: !isMacNavigatorPlatform(),
+          altKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await waitForLayout();
+      expect(Date.parse(shell()?.lastVisitedAt ?? "")).toBe(Date.parse(completedAt) - 1);
+      await mounted.router.navigate({ to: "/" });
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+      await expect
+        .poll(() => Date.parse(shell()?.lastVisitedAt ?? ""))
+        .toBeGreaterThanOrEqual(Date.parse(completedAt));
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   beforeAll(async () => {
     fixture = buildFixture(
       createSnapshotForTargetUser({
@@ -2265,8 +2335,11 @@ describe("ChatView transcript geometry (full app)", () => {
     });
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
+    resetThreadDetailResumeCursors();
+    await clearThreadDetailCache();
     await resetHomeChatProjectPrewarmStateForTests();
     attachmentResponseDelayMs = 0;
+    threadDetailSnapshotBarrier = null;
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
@@ -2307,6 +2380,8 @@ describe("ChatView transcript geometry (full app)", () => {
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
       threadDetailSyncById: {},
+      threadDetailAppliedSequenceById: {},
+      threadHistoryById: {},
       deletedProjectIdsById: {},
       deletedThreadIdsById: {},
       sidebarThreadSummaryById: {},
@@ -2328,6 +2403,112 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetHomeChatProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
+  });
+
+  it("keeps persistent turn failure visible after reopening and admits one manual continuation", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("failure-user"),
+      targetText: "Review the requested pull requests",
+    });
+    const turnId = TurnId.makeUnsafe("failed-turn");
+    const cause = "Selected model is at capacity. Please try a different model.";
+    const snapshot: OrchestrationReadModel = {
+      ...base,
+      threads: [
+        {
+          ...base.threads[0]!,
+          messages: [
+            createUserMessage({
+              id: MessageId.makeUnsafe("failure-user"),
+              text: "Review the requested pull requests",
+              offsetSeconds: 0,
+            }),
+            {
+              ...createAssistantMessage({
+                id: MessageId.makeUnsafe("progress"),
+                text: "I am checking the pull requests and their conflicts.",
+                offsetSeconds: 3,
+              }),
+              turnId,
+            },
+          ],
+          latestTurn: {
+            turnId,
+            state: "error",
+            requestedAt: NOW_ISO,
+            startedAt: NOW_ISO,
+            completedAt: isoAt(10),
+            assistantMessageId: null,
+          },
+          activities: [
+            {
+              id: EventId.makeUnsafe("fatal-error"),
+              turnId,
+              createdAt: isoAt(10),
+              sequence: 1,
+              kind: "runtime.error",
+              tone: "error",
+              summary: "Provider runtime error",
+              payload: { message: cause, class: "provider_error" },
+            },
+            {
+              id: EventId.makeUnsafe("failed-completed"),
+              turnId,
+              createdAt: isoAt(10),
+              sequence: 2,
+              kind: "turn.completed",
+              tone: "error",
+              summary: "Turn failed",
+              payload: { state: "failed", errorMessage: cause },
+            },
+          ],
+        },
+      ],
+    };
+    const first = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+    await first.cleanup();
+    const reopened = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    let releaseSend!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
+    try {
+      await expect.element(page.getByText("Task interrupted", { exact: true })).toBeVisible();
+      expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
+      await page.getByRole("button", { name: "Change model", exact: true }).click();
+      await expect.element(page.getByLabelText("Search models", { exact: true })).toBeVisible();
+      page
+        .getByLabelText("Search models", { exact: true })
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await page.getByRole("button", { name: "Continue task", exact: true }).click();
+      // Exercise a second click before the first dispatch settles.
+      (
+        page
+          .getByRole("button", { name: "Continue task", exact: true })
+          .element() as HTMLButtonElement
+      ).click();
+      await vi.waitFor(() => {
+        const starts = wsRequests.filter(
+          (request) =>
+            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            "command" in request &&
+            (request.command as { type?: string }).type === "thread.turn.start",
+        );
+        expect(starts).toHaveLength(1);
+        expect(starts[0]?.command).toMatchObject({
+          threadId: THREAD_ID,
+          message: { text: expect.stringContaining("avoid repeating") },
+        });
+      });
+      expect(document.querySelectorAll("[data-turn-failure]")).toHaveLength(1);
+    } finally {
+      releaseSend();
+      restoreApi();
+      await reopened.cleanup();
+    }
   });
 
   it.each([
@@ -2462,8 +2643,12 @@ describe("ChatView transcript geometry (full app)", () => {
             const hints = [...sidebar.querySelectorAll<HTMLElement>('[data-slot="kbd"]')].filter(
               (hint) => hint.closest("[data-thread-item]"),
             );
-            expect(hints.length).toBe(activityViewEnabled ? 5 : 6);
-            if (!activityViewEnabled) expect(sidebar.textContent).toContain("Atlas");
+            expect(hints.length).toBe(activityViewEnabled ? 5 : 7);
+            if (!activityViewEnabled) {
+              expect(sidebar.textContent).toContain("Atlas");
+              // The open subagent reveals its own child as well as its ancestors.
+              expect(sidebar.textContent).toContain("Nova");
+            }
             if (customShortcut) expect(hints[0]!.textContent).toContain("Ctrl+Alt+Shift+Meta");
             for (const hint of hints) {
               const row = hint.closest<HTMLElement>("[data-thread-item]")!;
@@ -2501,15 +2686,64 @@ describe("ChatView transcript geometry (full app)", () => {
                 index === 0 || hint.closest("[data-thread-item]")!.textContent?.includes("Atlas"),
             )) {
               const row = hoverHint.closest<HTMLElement>("[data-thread-item]")!;
+              let interaction = "hover";
               await userEvent.hover(row);
               const actions = activityViewEnabled
                 ? row.querySelector<HTMLElement>(
                     'span[class*="group-hover/activity-row:opacity-100"]',
                   )!
                 : row.querySelector<HTMLElement>('[data-testid^="thread-hover-actions-"]')!;
+              // The geometry contract is about settled hover/focus visibility, not
+              // transition timing. Under parallel Chromium CI, animation frames can
+              // lag past waitFor's deadline. Keep the real hover/focus selectors
+              // active but make these two measured transitions instantaneous.
+              hoverHint.style.setProperty("transition-duration", "0s", "important");
+              actions.style.setProperty("transition-duration", "0s", "important");
+              const hoverGroup = row.closest<HTMLElement>(
+                activityViewEnabled
+                  ? '[class~="group/activity-row"]'
+                  : '[class~="group/thread-row"]',
+              )!;
+              await userEvent.unhover(row);
+              await userEvent.hover(row);
               const assertHoverLayout = () => {
-                expect(Number(getComputedStyle(hoverHint).opacity)).toBe(0);
-                expect(Number(getComputedStyle(actions).opacity)).toBe(1);
+                const hintOpacity = Number(getComputedStyle(hoverHint).opacity);
+                const actionsOpacity = Number(getComputedStyle(actions).opacity);
+                const rect = row.getBoundingClientRect();
+                const group = hoverHint.closest<HTMLElement>(
+                  '[class~="group/thread-row"], [class~="group/activity-row"]',
+                );
+                const target = row.matches('[role="button"]')
+                  ? row
+                  : row.querySelector<HTMLElement>('button, [role="button"]');
+                const debug =
+                  hintOpacity === 0 && actionsOpacity === 1
+                    ? undefined
+                    : JSON.stringify({
+                        interaction,
+                        fontSize,
+                        width,
+                        hint: hoverHint.textContent,
+                        rowHover: row.matches(":hover"),
+                        rowFocusWithin: row.matches(":focus-within"),
+                        groupHover: group?.matches(":hover"),
+                        groupFocusWithin: group?.matches(":focus-within"),
+                        connected: row.isConnected && hoverHint.isConnected,
+                        target: target?.outerHTML.slice(0, 250),
+                        activeElement: document.activeElement?.outerHTML.slice(0, 250),
+                        activeFocusVisible: document.activeElement?.matches(":focus-visible"),
+                        documentHasFocus: document.hasFocus(),
+                        rowRect: rect.toJSON(),
+                        rowCenterHit: document
+                          .elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+                          ?.outerHTML.slice(0, 250),
+                        hintOpacity,
+                        actionsOpacity,
+                        hintClasses: hoverHint.className,
+                        actionsClasses: actions.className,
+                      });
+                expect(hintOpacity, debug).toBe(0);
+                expect(actionsOpacity, debug).toBe(1);
                 const actionsRect = actions.getBoundingClientRect();
                 for (const label of [...row.querySelectorAll<HTMLElement>("span")].filter(
                   (element) =>
@@ -2527,13 +2761,14 @@ describe("ChatView transcript geometry (full app)", () => {
                   }
                 }
               };
-              await vi.waitFor(assertHoverLayout);
+              await vi.waitFor(assertHoverLayout, { timeout: 3_000 });
               await userEvent.unhover(row);
               const focusTarget = row.matches('[role="button"]')
                 ? row
                 : row.querySelector<HTMLElement>('button, [role="button"]')!;
+              interaction = "focus";
               focusTarget.focus();
-              await vi.waitFor(assertHoverLayout);
+              await vi.waitFor(assertHoverLayout, { timeout: 3_000 });
               focusTarget.blur();
             }
             window.dispatchEvent(new KeyboardEvent("keyup", { key: mod, bubbles: true }));
@@ -2811,10 +3046,7 @@ describe("ChatView transcript geometry (full app)", () => {
           search: () => ({ splitViewId }),
         });
       await openSplit();
-      await vi.waitFor(() =>
-        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
-      );
-      await waitForLayout();
+      await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
       const editors = [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')];
       const divider = document.querySelector<HTMLElement>('[data-split-divider="true"]')!;
       const frame = divider.parentElement!.getBoundingClientRect();
@@ -2915,10 +3147,7 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
-        );
-        await waitForLayout();
+        await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
         const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const editorForThread = (threadId: ThreadId) => {
           const scope = splitViewPaneScopeId(
@@ -2991,10 +3220,7 @@ describe("ChatView transcript geometry (full app)", () => {
         params: { threadId: THREAD_ID },
         search: () => ({ splitViewId }),
       });
-      await vi.waitFor(() =>
-        expect(document.querySelectorAll('[contenteditable="true"]').length).toBe(2),
-      );
-      await waitForLayout();
+      await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
       const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
       if (
         split.root.kind !== "split" ||
@@ -3075,10 +3301,7 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(3),
-        );
-        await waitForLayout();
+        await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID, thirdId]);
         const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const editorForThread = (threadId: ThreadId) => {
           const scope = splitViewPaneScopeId(
@@ -3174,10 +3397,9 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(panes),
+        await waitForSplitChatReady(
+          panes === 3 ? [THREAD_ID, OTHER_THREAD_ID, thirdId] : [THREAD_ID, OTHER_THREAD_ID],
         );
-        await waitForLayout();
         const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const targetThreadId = closing === "source" ? thirdId : THREAD_ID;
         const editorForThread = (threadId: ThreadId) => {
@@ -3705,7 +3927,12 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
       await page.getByRole("button", { name: /Approve once/u }).click();
-      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
+      await vi.waitFor(() =>
+        expect(subscribeThread).toHaveBeenCalledWith({
+          threadId: THREAD_ID,
+          messageWindow: { limit: 100 },
+        }),
+      );
       await expect
         .element(page.getByRole("button", { name: /Approve once/u }))
         .not.toBeInTheDocument();
@@ -3791,7 +4018,8 @@ describe("ChatView transcript geometry (full app)", () => {
               ...pendingThread,
               pendingInteractions: pendingThread.pendingInteractions.map((row) => ({
                 ...row,
-                status: "uncertain" as const,
+                status: "confirmed" as const,
+                resolvedAt: NOW_ISO,
               })),
               activities: [
                 ...pendingThread.activities,
@@ -3969,7 +4197,7 @@ describe("ChatView transcript geometry (full app)", () => {
     ).toBeLessThan(2.5);
   });
 
-  it("cancels a multi-question prompt with choices through the orchestration command", async () => {
+  it.each(["confirmed", "stale"])("cancels a multi-question (%s)", async (settlement) => {
     const requestId = ApprovalRequestId.makeUnsafe("question-cancel");
     const lifecycleGeneration = "cancel-generation";
     const questions = [1, 2].map((id) => ({
@@ -4025,14 +4253,37 @@ describe("ChatView transcript geometry (full app)", () => {
         if (command.type !== "thread.user-input.respond") {
           throw new Error("Unexpected command in the cancellation fixture.");
         }
-        // Model provider-confirmed cancellation in the server fixture. The client
-        // must fetch this settlement; command acceptance alone is not confirmation.
+        // Both a provider-confirmed cancellation and an invalidated callback
+        // settle durably. Acceptance alone is not settlement.
         fixture.snapshot = {
           ...fixture.snapshot,
           snapshotSequence: fixture.snapshot.snapshotSequence + 1,
           threads: [
             {
               ...pendingThread,
+              ...(settlement === "stale"
+                ? {
+                    activities: [
+                      ...pendingThread.activities,
+                      {
+                        id: EventId.makeUnsafe("question-cancel-expired"),
+                        createdAt: NOW_ISO,
+                        kind: "provider.user-input.respond.failed",
+                        summary: "Questions expired",
+                        tone: "error" as const,
+                        turnId: null,
+                        sequence: 2,
+                        payload: {
+                          requestId,
+                          lifecycleGeneration,
+                          responseCommandId: command.commandId,
+                          settlementStatus: "uncertain",
+                          detail: buildStalePendingRequestFailureDetail("user-input", requestId),
+                        },
+                      },
+                    ],
+                  }
+                : {}),
               pendingInteractions: pendingThread.pendingInteractions.map((interaction) =>
                 Object.assign({}, interaction, {
                   status: "confirmed" as const,
@@ -4049,7 +4300,10 @@ describe("ChatView transcript geometry (full app)", () => {
     );
     Object.defineProperty(window, "nativeApi", {
       configurable: true,
-      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand, subscribeThread } },
+      value: {
+        ...api,
+        orchestration: { ...api.orchestration, dispatchCommand, subscribeThread },
+      },
     });
     try {
       setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
@@ -4066,10 +4320,25 @@ describe("ChatView transcript geometry (full app)", () => {
           answers: {},
         }),
       );
-      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
+      await vi.waitFor(() =>
+        expect(subscribeThread).toHaveBeenCalledWith({
+          threadId: THREAD_ID,
+          messageWindow: { limit: 100 },
+        }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 250));
       await expect.element(page.getByText("Choose option 1?")).not.toBeInTheDocument();
       await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
+      // A later snapshot can omit the failure and all terminal rows. The old
+      // request activity must not bring the question card back.
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: [{ ...pendingThread, pendingInteractions: [] }],
+      };
+      await api.orchestration.subscribeThread({ threadId: THREAD_ID });
+      await expect.element(page.getByText("Choose option 1?")).not.toBeInTheDocument();
+      expect(await waitForComposerEditor()).toBeDefined();
     } finally {
       if (previousNativeApi)
         Object.defineProperty(window, "nativeApi", {
@@ -4134,6 +4403,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForServerConfigToApply();
       return {
         commands,
+        setViewport: mounted.setViewport,
         cleanup: async () => {
           if (previousNativeApi)
             Object.defineProperty(window, "nativeApi", {
@@ -4164,8 +4434,144 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect.element(page.getByText("Continue in a new thread")).toBeVisible();
     }
 
+    it.each([
+      {
+        provider: "claudeAgent" as const,
+        model: "claude-opus-4-6",
+        sessionStatus: "ready" as const,
+      },
+      {
+        provider: "codex" as const,
+        model: "gpt-5.3-codex",
+        sessionStatus: "ready" as const,
+      },
+      {
+        provider: "claudeAgent" as const,
+        model: "claude-opus-4-6",
+        sessionStatus: "running" as const,
+      },
+      {
+        provider: "codex" as const,
+        model: "gpt-5.3-codex",
+        sessionStatus: "running" as const,
+      },
+    ])(
+      "shows a dismissible pre-send tip above the composer when leaving Claude for $provider ($sessionStatus)",
+      async ({ provider, model, sessionStatus }) => {
+        const snapshot = createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("msg-claude-model-switch"),
+          targetText: "Continue the task",
+          sessionStatus,
+        });
+        const thread = snapshot.threads[0]!;
+        const claudeSnapshot: OrchestrationReadModel = {
+          ...snapshot,
+          threads: [
+            {
+              ...thread,
+              modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+              session: { ...thread.session!, providerName: "claudeAgent" },
+            },
+          ],
+        };
+        const mounted = await mountWithCapturedCommands(
+          claudeSnapshot,
+          respondToHandoff("completed"),
+        );
+        try {
+          await waitForServerConfigToApply();
+          const note = page.getByTestId("composer-claude-model-switch-note");
+          await expect.element(note).not.toBeInTheDocument();
+          const surface = document.querySelector<HTMLElement>(".chat-composer-surface")!;
+          const originalHeight = surface.getBoundingClientRect().height;
+          useComposerDraftStore.getState().setModelSelection(THREAD_ID, { provider, model });
+          await vi.waitFor(() => expect(note.query()).not.toBeNull(), { timeout: 3_000 });
+          await expect.element(note).toBeVisible();
+          expect(surface.contains(note.element())).toBe(false);
+          // Stacked panels share the composer's top border by one pixel.
+          expect(note.element().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+            surface.getBoundingClientRect().top + 1,
+          );
+          expect(surface.getBoundingClientRect().height).toBeCloseTo(originalHeight, 0);
+          await expect
+            .element(note)
+            .toHaveTextContent(provider === "claudeAgent" ? "Next reply" : "new provider");
+          expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+          expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, "Continue the task");
+          if (sessionStatus === "ready") {
+            await expect
+              .element(page.getByRole("button", { name: "Send message", exact: true }))
+              .toBeEnabled();
+          } else {
+            await expect
+              .element(page.getByRole("button", { name: "Stop generation", exact: true }))
+              .toBeVisible();
+          }
+          const screenshotName =
+            provider === "claudeAgent"
+              ? "claude-model-switch-note"
+              : "claude-provider-handoff-note";
+          await page.screenshot({
+            path: `../../../../output/playwright/${screenshotName}.png`,
+          });
+          await mounted.setViewport({ name: "narrow", width: 480, height: 640 });
+          await expect.element(note).toBeVisible();
+          expect(surface.contains(note.element())).toBe(false);
+          await page.screenshot({
+            path: `../../../../output/playwright/${screenshotName}-narrow.png`,
+          });
+          await note.getByRole("button", { name: "Dismiss tip" }).click();
+          await expect.element(note).not.toBeInTheDocument();
+
+          useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-6",
+            options: { effort: "high" },
+          });
+          await expect.element(note).not.toBeInTheDocument();
+          useComposerDraftStore.getState().setModelSelection(THREAD_ID, { provider, model });
+          await expect.element(note).toBeVisible();
+          document
+            .querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]')!
+            .requestSubmit();
+          const handoffBlocked = sessionStatus === "running" && provider !== "claudeAgent";
+          if (handoffBlocked) {
+            await vi.waitFor(() =>
+              expect(document.body.textContent).toContain("Cannot switch to Codex yet"),
+            );
+            expect(mounted.commands).toHaveLength(0);
+            expect(
+              useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns,
+            ).toHaveLength(0);
+            await expect.element(note).toBeVisible();
+          } else if (sessionStatus === "running") {
+            await vi.waitFor(() => {
+              expect(
+                useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns[0],
+              ).toMatchObject({ kind: "chat", modelSelection: { provider, model } });
+              expect(document.querySelector('[data-testid="queued-follow-up-row"]')).not.toBeNull();
+            });
+            expect(fixture.snapshot.threads[0]?.modelSelection.provider).toBe("claudeAgent");
+            expect(fixture.snapshot.threads[0]?.session?.status).toBe("running");
+          } else {
+            await vi.waitFor(() =>
+              expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+                true,
+              ),
+            );
+          }
+          if (!handoffBlocked) {
+            await expect.element(note).not.toBeInTheDocument();
+          }
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+    );
+
     it("continues in the same thread by rebinding its provider", async () => {
-      const mounted = await mountWithCapturedCommands();
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
       try {
         await openHandoffMenu();
         const sameThreadItem = document.querySelector<HTMLElement>(
@@ -4180,6 +4586,11 @@ describe("ChatView transcript geometry (full app)", () => {
           providerHandoff: true,
           modelSelection: { provider: "claudeAgent" },
         });
+        // The handoff waits for its durable outcome, not just command admission.
+        // Settle it before unmounting so its timeout cannot toast over a later test.
+        await vi.waitFor(() =>
+          expect(fixture.snapshot.threads[0]?.modelSelection.provider).toBe("claudeAgent"),
+        );
         // Same thread: no new thread, and the route stays put.
         expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
           false,
@@ -4231,7 +4642,9 @@ describe("ChatView transcript geometry (full app)", () => {
         >[0],
       ) => {
         if (command.type !== "thread.meta.update" || command.providerHandoff !== true) return;
-        const { commandId } = command;
+        const { commandId, modelSelection } = command;
+        const targetProvider = modelSelection?.provider ?? "claudeAgent";
+        const targetModel = modelSelection?.model ?? "claude-sonnet-4-6";
         fixture.snapshot = {
           ...fixture.snapshot,
           snapshotSequence: fixture.snapshot.snapshotSequence + 1,
@@ -4243,14 +4656,14 @@ describe("ChatView transcript geometry (full app)", () => {
                   ...(outcome === "completed"
                     ? {
                         modelSelection: {
-                          provider: "claudeAgent" as const,
-                          model: "claude-sonnet-4-6",
+                          provider: targetProvider,
+                          model: targetModel,
                         },
                         session: {
                           threadId: THREAD_ID,
                           status: "ready" as const,
-                          providerName: "claudeAgent",
-                          providerInstanceId: "claudeAgent",
+                          providerName: targetProvider,
+                          providerInstanceId: targetProvider,
                           runtimeMode: "full-access" as const,
                           activeTurnId: null,
                           lastError: null,
@@ -4276,8 +4689,8 @@ describe("ChatView transcript geometry (full app)", () => {
                       payload: {
                         sourceProvider: thread.modelSelection.provider,
                         sourceModel: thread.modelSelection.model,
-                        targetProvider: "claudeAgent",
-                        targetModel: "claude-sonnet-4-6",
+                        targetProvider,
+                        targetModel,
                         ...(outcome === "failed" ? { detail: "Claude CLI is not signed in." } : {}),
                       },
                     },
@@ -4559,6 +4972,54 @@ describe("ChatView transcript geometry (full app)", () => {
     });
   });
 
+  it("uses the persisted thread access mode instead of a stale composer draft", async () => {
+    const base = createSnapshotForTargetUser({
+      targetMessageId: "msg-runtime-stale-draft" as MessageId,
+      targetText: "Hub worker awaiting approval",
+    });
+    const snapshot: OrchestrationReadModel = {
+      ...base,
+      threads: base.threads.map((thread) =>
+        Object.assign({}, thread, {
+          runtimeMode: "approval-required" as const,
+          session: thread.session
+            ? { ...thread.session, runtimeMode: "approval-required" as const }
+            : null,
+        }),
+      ),
+    };
+    useComposerDraftStore.getState().setRuntimeMode(THREAD_ID, "full-access");
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Ask for approval", exact: true }))
+        .toBeVisible();
+      const trigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[title^="Ask for approval:"]'),
+        "Missing persisted access mode trigger",
+      );
+      trigger.click();
+      const fullAccess = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-radio-item"]')).find(
+            (item) => item.textContent?.trim().startsWith("Full access"),
+          ) ?? null,
+        "Missing Full access override",
+      );
+      fullAccess.click();
+      await vi.waitFor(() => {
+        expect(
+          wsRequests
+            .map(readDispatchedCommand)
+            .filter((command) => command?.type === "thread.runtime-mode.set")
+            .map((command) => command?.runtimeMode),
+        ).toEqual(["full-access"]);
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
     const baseSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-runtime-reversal" as MessageId,
@@ -4762,6 +5223,41 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("shows transport recovery without auto-following a detached transcript", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await waitForLayout();
+      scrollContainer.scrollTop = 100;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+      const previousTop = scrollContainer.scrollTop;
+      emitWsTransportState("connecting");
+      await expect
+        .element(page.getByRole("status").filter({ hasText: "Reconnecting to Synara…" }), {
+          timeout: 4000,
+        })
+        .toBeVisible();
+      await waitForLayout();
+      expect(Math.abs(scrollContainer.scrollTop - previousTop)).toBeLessThanOrEqual(1);
+      emitWsTransportState("open");
+      await expect
+        .element(page.getByRole("status").filter({ hasText: "Reconnecting to Synara…" }))
+        .not.toBeInTheDocument();
+      await waitForLayout();
+      expect(Math.abs(scrollContainer.scrollTop - previousTop)).toBeLessThanOrEqual(1);
+    } finally {
+      emitWsTransportState("open");
+      await mounted.cleanup();
+    }
+  });
+
   it("[geometry:linux] keeps the composer visible while a long assistant response forces a viewport relayout", async () => {
     const mounted = await mountChatView({
       viewport: TEXT_VIEWPORT_MATRIX[0],
@@ -4861,6 +5357,35 @@ describe("ChatView transcript geometry (full app)", () => {
       ).toBe(true);
     } finally {
       restoreScrollTo();
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not snap to the end when reading down from a transcript moved off its end", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithInlineToolOverflow({ active: false }),
+    });
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(4),
+      );
+      // Layout, not a reader gesture, moves the following transcript to the top.
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForTranscriptLayoutToSettle(scrollContainer);
+      expect(scrollContainer.scrollHeight).toBeGreaterThan(scrollContainer.clientHeight * 2);
+
+      await userEvent.wheel(scrollContainer, { delta: { y: 40 } });
+      await waitForTranscriptLayoutToSettle(scrollContainer);
+      expect(scrollContainer.scrollTop).toBeGreaterThan(0);
+      expect(scrollContainer.scrollTop).toBeLessThan(scrollContainer.clientHeight);
+    } finally {
       await mounted.cleanup();
     }
   });
@@ -5675,7 +6200,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.body.textContent).toContain("Thinking");
           expect(document.body.textContent).not.toContain("Loading");
-          expect(document.body.textContent).not.toContain("Working for");
+          expect(document.querySelector("[data-turn-header='live']")).toBeNull();
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -5687,7 +6212,7 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       expect(document.body.textContent).toContain("Thinking");
       expect(document.body.textContent).not.toContain("Loading");
-      expect(document.body.textContent).not.toContain("Working for");
+      expect(document.querySelector("[data-turn-header='live']")).toBeNull();
 
       syncActiveThread((thread) => ({
         ...thread,
@@ -5711,7 +6236,9 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Thinking");
-          expect(document.body.textContent).toContain("Working for");
+          const liveHeader = document.querySelector("[data-turn-header='live']");
+          expect(liveHeader).not.toBeNull();
+          expect(liveHeader?.textContent).toMatch(/^Working \d/);
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -5724,7 +6251,7 @@ describe("ChatView transcript geometry (full app)", () => {
   // Regression: the sent message must reach its anchored coordinate in one
   // motion and then stay there for the rest of the turn. The failure this guards
   // is the message visibly jumping up and down through send → Thinking →
-  // "Working for" → streaming, which is what a fixed-target scroll produces once
+  // Working → streaming, which is what a fixed-target scroll produces once
   // the coordinate moves under it (reserve sizing, rows above being remeasured).
   it("moves a sent message to its anchor and handles a long streamed response", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
@@ -5841,7 +6368,7 @@ describe("ChatView transcript geometry (full app)", () => {
           updatedAt: isoAt(1_301),
         }));
       });
-      // Turn actually starts: the "Working for" header replaces Thinking.
+      // Turn actually starts: the Working header appears beside Thinking.
       at(420, () => {
         syncActiveThread((thread) => ({
           ...thread,
@@ -6331,10 +6858,15 @@ describe("ChatView transcript geometry (full app)", () => {
           container.dispatchEvent(new Event("scroll"));
         }
         await vi.waitFor(
-          () =>
+          () => {
+            if (action === "thread switch") {
+              expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+              expect(isTranscriptContentVisible(container)).toBe(true);
+            }
             expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(
               action === "thread switch" ? AUTO_SCROLL_BOTTOM_THRESHOLD_PX : 4,
-            ),
+            );
+          },
           { timeout: 3_000 },
         );
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
@@ -6342,6 +6874,21 @@ describe("ChatView transcript geometry (full app)", () => {
       for (let index = 0; index < 8; index += 1) {
         grow();
         await waitForLayout();
+      }
+      if (action === "thread switch") {
+        // The reveal still drains after delivery. Verify follow at the painted
+        // end, rather than during the first frames of the final text batch.
+        await vi.waitFor(
+          () => {
+            const paragraphs = container
+              .querySelector(`[data-message-id='${CSS.escape(messageId)}']`)
+              ?.querySelectorAll("p");
+            expect(paragraphs?.length).toBe(24);
+            expect(paragraphs?.[23]?.textContent).toBe("More streaming output. ".repeat(35).trim());
+          },
+          { timeout: 10_000, interval: 20 },
+        );
+        await waitForTranscriptLayoutToSettle(container);
       }
       await vi.waitFor(() =>
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
@@ -6352,7 +6899,229 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("auto-follows real transcript changes without re-sticking for non-message activity", async () => {
+  it("follows the final text batch when the assistant turn settles", async () => {
+    let snapshot = createSnapshotWithLongAssistantResponse();
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    const messageId = MessageId.makeUnsafe("msg-final-text-batch");
+    const turnId = TurnId.makeUnsafe("turn-final-text-batch");
+    const syncReply = (text: string, streaming: boolean) => {
+      snapshot = {
+        ...snapshot,
+        snapshotSequence: snapshot.snapshotSequence + 1,
+        threads: snapshot.threads.map((thread) =>
+          thread.id !== THREAD_ID
+            ? thread
+            : {
+                ...thread,
+                session: thread.session
+                  ? {
+                      ...thread.session,
+                      status: streaming ? "running" : "ready",
+                      activeTurnId: streaming ? turnId : null,
+                    }
+                  : null,
+                latestTurn: {
+                  turnId,
+                  state: streaming ? "running" : "completed",
+                  requestedAt: isoAt(1_200),
+                  startedAt: isoAt(1_201),
+                  completedAt: streaming ? null : isoAt(1_204),
+                  assistantMessageId: messageId,
+                },
+                messages: [
+                  ...thread.messages.filter((message) => message.id !== messageId),
+                  {
+                    id: messageId,
+                    role: "assistant",
+                    source: "native",
+                    text,
+                    turnId,
+                    streaming,
+                    createdAt: isoAt(1_202),
+                    updatedAt: isoAt(1_203),
+                    ...(streaming ? {} : { completedAt: isoAt(1_204) }),
+                  },
+                ],
+              },
+        ),
+      };
+      fixture = { ...fixture, snapshot };
+      useStore.getState().syncServerReadModel(snapshot);
+    };
+    try {
+      const container = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Transcript did not mount.",
+      );
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+      syncReply("The reply starts.", true);
+      await vi.waitFor(() => expect(container.textContent).toContain("The reply starts."));
+      await waitForTranscriptLayoutToSettle(container);
+      expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
+      syncReply(
+        `${Array.from(
+          { length: 40 },
+          (_, index) => `Paragraph ${index}. ${"Delivered assistant output. ".repeat(8)}`,
+        ).join("\n\n")}\n\nEnd of reply.`,
+        false,
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("End of reply."));
+      await waitForTranscriptLayoutToSettle(container);
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps following work after assistant text finishes streaming", async () => {
+    let snapshot = createSnapshotWithInlineToolOverflow({ active: true });
+    const messageId = MessageId.makeUnsafe("msg-assistant-inline-tools");
+    const turnId = TurnId.makeUnsafe("turn-inline-tools");
+    snapshot = {
+      ...snapshot,
+      threads: snapshot.threads.map((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, text: "I will check the transcript layout.", streaming: true }
+            : message,
+        ),
+      })),
+    };
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    const syncThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      snapshot = {
+        ...snapshot,
+        snapshotSequence: snapshot.snapshotSequence + 1,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+      };
+      fixture = { ...fixture, snapshot };
+      useStore.getState().syncServerReadModel(snapshot);
+    };
+    const appendWork = (index: number) =>
+      syncThread((thread) => ({
+        ...thread,
+        activities: [
+          ...thread.activities,
+          {
+            id: EventId.makeUnsafe(`activity-after-commentary-${index}`),
+            createdAt: isoAt(1_110 + index),
+            kind: "tool.started",
+            summary: `Checking transcript layout ${index}`,
+            tone: "tool",
+            turnId,
+            payload: {
+              itemType: "command_execution",
+              status: "inProgress",
+              title: "Run transcript checks",
+              detail: `bun run test transcript-layout-${index}`,
+            },
+          },
+        ],
+      }));
+    try {
+      const container = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Transcript did not mount.",
+      );
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
+      );
+      syncThread((thread) => ({
+        ...thread,
+        messages: thread.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, streaming: false, completedAt: isoAt(1_110) }
+            : message,
+        ),
+      }));
+      await waitForTranscriptLayoutToSettle(container);
+      expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
+      const beforeWorkHeight = container.scrollHeight;
+      for (let index = 0; index < 4; index += 1) {
+        appendWork(index);
+        await waitForLayout();
+      }
+      await waitForTranscriptLayoutToSettle(container);
+      expect(container.scrollHeight).toBeGreaterThan(beforeWorkHeight + 20);
+      expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4);
+
+      // Reading earlier output releases follow even between text messages.
+      await userEvent.wheel(container, { delta: { y: -350 } });
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThan(100),
+      );
+      await waitForTranscriptLayoutToSettle(container);
+      const readerTop = container.scrollTop;
+      appendWork(4);
+      syncThread((thread) => ({
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            id: MessageId.makeUnsafe("msg-after-commentary-work"),
+            role: "assistant",
+            source: "native",
+            text: "The layout checks have completed.",
+            turnId,
+            streaming: false,
+            createdAt: isoAt(1_120),
+            updatedAt: isoAt(1_120),
+            completedAt: isoAt(1_120),
+          },
+        ],
+      }));
+      await waitForTranscriptLayoutToSettle(container);
+      expect(container.scrollTop).toBeCloseTo(readerTop, 0);
+      expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThan(100);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the previous turn folded while a follow-up send awaits its new turn", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithInlineToolOverflow({ active: false }),
+    });
+    let releaseSend!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
+    try {
+      await vi.waitFor(() =>
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false"),
+      );
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Thanks");
+      (await waitForSendButton()).click();
+      await vi.waitFor(() => expect(hasDispatchedCommandType("thread.turn.start")).toBe(true));
+      // Inspect the whole pending-send window: an unfold followed by a fold
+      // changes transcript height even if the final settled state looks right.
+      for (let frame = 0; frame < 20; frame += 1) {
+        await nextFrame();
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+        expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
+        expect(document.body.textContent).not.toContain("Used 6 tools");
+      }
+    } finally {
+      releaseSend();
+      restoreApi();
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not rearm detached reading for non-message activity", async () => {
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-auto-follow-wiring" as MessageId,
       targetText: "auto-follow wiring target",
@@ -6418,8 +7187,15 @@ describe("ChatView transcript geometry (full app)", () => {
       }
       scrollSpy.calls.length = 0;
 
-      // Buffering/connecting state changes generic turn chrome, but does not add a
-      // transcript message and therefore must not re-stick the transcript.
+      await userEvent.wheel(scrollContainer, { delta: { y: -350 } });
+      await vi.waitFor(() =>
+        expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(100),
+      );
+      await waitForTranscriptLayoutToSettle(scrollContainer);
+      scrollSpy.calls.length = 0;
+
+      // Buffering/connecting changes turn chrome but must not reclaim the
+      // viewport from someone reading earlier messages.
       syncActiveThread((thread) => ({
         ...thread,
         session: thread.session
@@ -6432,7 +7208,6 @@ describe("ChatView transcript geometry (full app)", () => {
         updatedAt: isoAt(1_201),
       }));
       await waitForLayout();
-      await expect.element(page.getByText("Starting Codex…", { exact: true })).toBeInTheDocument();
       expect(scrollSpy.calls).toHaveLength(0);
 
       for (const status of ["error", "starting", "ready"] as const) {
@@ -6448,11 +7223,6 @@ describe("ChatView transcript geometry (full app)", () => {
         }));
         await waitForLayout();
         expect(scrollSpy.calls).toHaveLength(0);
-        if (status !== "starting") {
-          await expect
-            .element(page.getByText("Starting Codex…", { exact: true }))
-            .not.toBeInTheDocument();
-        }
       }
 
       const activeTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
@@ -6703,6 +7473,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(createThreadCommand).toMatchObject({
             type: "thread.create",
             threadId: THREAD_ID,
+            createdAt: expect.any(String),
             envMode: "worktree",
             branch: "feature/draft-automation",
             worktreePath: "/repo/worktrees/draft-automation",
@@ -6719,6 +7490,7 @@ describe("ChatView transcript geometry (full app)", () => {
             runtimeMode: "full-access",
             interactionMode: "default",
           });
+          expect(createThreadCommand?.createdAt).not.toBe(NOW_ISO);
 
           expect(wsRequests[automationCreateIndex]).toMatchObject({
             _tag: WS_METHODS.automationCreate,
@@ -8503,6 +9275,311 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
       restoreNativeApi();
     }
+  });
+
+  describe("queue paused by Stop", () => {
+    const queuedPrompt = "queued prompt held after stop";
+    const stoppedTurnId = TurnId.makeUnsafe("turn-stopped-by-user");
+    const turnStartText = (request: (typeof wsRequests)[number]): string | null =>
+      request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+      typeof request.command === "object" &&
+      request.command !== null &&
+      "type" in request.command &&
+      request.command.type === "thread.turn.start" &&
+      "message" in request.command &&
+      typeof request.command.message === "object" &&
+      request.command.message !== null &&
+      "text" in request.command.message &&
+      typeof request.command.message.text === "string"
+        ? request.command.message.text
+        : null;
+    const sentQueuedPrompt = () =>
+      wsRequests.some((request) => turnStartText(request)?.includes(queuedPrompt) === true);
+
+    async function mountPausedQueue(kind: "chat" | "plan-follow-up" = "chat") {
+      const baseSnapshot =
+        kind === "plan-follow-up"
+          ? createSnapshotWithSettledPlanAwaitingFollowUp()
+          : createSnapshotForTargetUser({
+              targetMessageId: "msg-user-paused-queue-target" as MessageId,
+              targetText: "paused queue target",
+              sessionStatus: "ready",
+            });
+      const snapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                // Claude settles a stopped turn as "completed"; the recorded Stop still holds.
+                latestTurn: {
+                  turnId: stoppedTurnId,
+                  state: "completed",
+                  requestedAt: NOW_ISO,
+                  startedAt: NOW_ISO,
+                  completedAt: NOW_ISO,
+                  assistantMessageId: null,
+                },
+              }
+            : thread,
+        ),
+      };
+      const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      const queuedTurn = {
+        id: "queued-turn-paused",
+        kind: "chat" as const,
+        createdAt: NOW_ISO,
+        previewText: queuedPrompt,
+        prompt: queuedPrompt,
+        images: [],
+        files: [],
+        assistantSelections: [],
+        browserAnnotations: [],
+        terminalContexts: [],
+        fileComments: [],
+        pastedTexts: [],
+        pullRequestContexts: [],
+        skills: [],
+        mentions: [],
+        selectedProvider: "codex" as const,
+        selectedModel: "gpt-5",
+        selectedPromptEffort: null,
+        modelSelection: { provider: "codex" as const, model: "gpt-5" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        envMode: "local" as const,
+      };
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(
+          THREAD_ID,
+          kind === "plan-follow-up"
+            ? { ...queuedTurn, kind, text: queuedPrompt, interactionMode: "plan" }
+            : queuedTurn,
+        );
+      if (kind === "plan-follow-up") {
+        useComposerDraftStore.getState().setInteractionMode(THREAD_ID, "plan");
+      }
+      // Same tick as the enqueue: the Stop action recorded this turn before it settled.
+      useComposerDraftStore.getState().pauseQueuedTurnsAfterStop(THREAD_ID, stoppedTurnId);
+
+      await vi.waitFor(
+        () => {
+          const notice = document.querySelector('[data-testid="queued-follow-up-paused-notice"]');
+          expect(notice?.textContent).toContain("Queue paused");
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      // Give the drain a few frames: a held queue must not send on its own.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(sentQueuedPrompt()).toBe(false);
+      return mounted;
+    }
+
+    it("holds the queue with a notice and sends it after Resume", async () => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountPausedQueue();
+      try {
+        await page.getByRole("button", { name: "Resume", exact: true }).click();
+
+        await vi.waitFor(
+          () => {
+            expect(sentQueuedPrompt()).toBe(true);
+            expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(
+              0,
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId ?? null,
+        ).toBe(null);
+      } finally {
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    });
+
+    it.each(["chat", "plan-follow-up"] as const)(
+      "sends a %s typed by hand first and releases the stop pause",
+      async (kind) => {
+        const restoreNativeApi = installDeterministicSendNativeApi();
+        const mounted = await mountPausedQueue(kind);
+        const manualPrompt = "message typed while the queue is paused";
+        try {
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, manualPrompt);
+          const composerEditor = await waitForComposerEditor();
+          await vi.waitFor(() => expect(composerEditor.textContent ?? "").toContain(manualPrompt), {
+            timeout: 8_000,
+            interval: 16,
+          });
+          if (kind === "plan-follow-up") {
+            await userEvent.click(composerEditor);
+            await userEvent.keyboard("{Enter}");
+          } else {
+            const sendButton = await waitForSendButton();
+            await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+              timeout: 8_000,
+              interval: 16,
+            });
+            sendButton.click();
+          }
+
+          await vi.waitFor(() => {
+            expect(
+              wsRequests.some((request) => turnStartText(request)?.includes(manualPrompt) === true),
+            ).toBe(true);
+          });
+          if (kind === "plan-follow-up") {
+            await page.screenshot({
+              path: "../../../../output/playwright/queue-plan-resume.png",
+            });
+          }
+          await vi.waitFor(
+            () => {
+              expect(
+                wsRequests.some(
+                  (request) => turnStartText(request)?.includes(manualPrompt) === true,
+                ),
+              ).toBe(true);
+              expect(
+                useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId ??
+                  null,
+              ).toBe(null);
+            },
+            { timeout: 8_000, interval: 16 },
+          );
+          // The typed message goes first; the queued one waits for that turn to end.
+          expect(sentQueuedPrompt()).toBe(false);
+        } finally {
+          await mounted.cleanup();
+          restoreNativeApi();
+        }
+      },
+    );
+
+    it("preserves the last queued item and stop hold when Steer fails", async () => {
+      let releaseSend!: () => void;
+      const sendBarrier = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi({
+        beforeTurnStart: () => sendBarrier,
+        rejectTurnStart: true,
+      });
+      const mounted = await mountPausedQueue();
+      const originalQueue =
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]!.queuedTurns;
+      try {
+        const steer = page.getByRole("button", { name: "Steer", exact: true }).first();
+        await steer.click();
+        await vi.waitFor(() => expect(sentQueuedPrompt()).toBe(true));
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns).toEqual(
+          originalQueue,
+        );
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId,
+        ).toBe(stoppedTurnId);
+        const acquired = tryBeginQueuedComposerAutoDispatch(THREAD_ID);
+        if (acquired) endQueuedComposerAutoDispatch(THREAD_ID);
+        expect(acquired).toBe(false);
+        await steer.click();
+        expect(
+          wsRequests.filter((request) => turnStartText(request)?.includes(queuedPrompt)),
+        ).toHaveLength(1);
+        releaseSend();
+        await vi.waitFor(() =>
+          expect(document.body.textContent).toContain("Turn start failed for test."),
+        );
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns).toEqual(
+          originalQueue,
+        );
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId,
+        ).toBe(stoppedTurnId);
+      } finally {
+        releaseSend();
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    });
+
+    it("releases the stop hold after a queued plan follow-up Steer succeeds", async () => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountPausedQueue("plan-follow-up");
+      const queuedTurn =
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]!.queuedTurns[0]!;
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(THREAD_ID, { ...queuedTurn, id: "remaining-plan-follow-up" });
+      try {
+        await page.getByRole("button", { name: "Steer", exact: true }).first().click();
+        await vi.waitFor(() => {
+          expect(
+            useComposerDraftStore
+              .getState()
+              .draftsByThreadId[THREAD_ID]?.queuedTurns.map((turn) => turn.id),
+          ).toEqual(["remaining-plan-follow-up"]);
+          expect(
+            useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId ??
+              null,
+          ).toBe(null);
+        });
+        expect(
+          wsRequests.filter((request) => turnStartText(request)?.includes(queuedPrompt)),
+        ).toHaveLength(1);
+      } finally {
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    });
+
+    it("preserves a newer Stop and a replacement queued item while Steer completes", async () => {
+      let releaseSend!: () => void;
+      const sendBarrier = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi({
+        beforeTurnStart: () => sendBarrier,
+      });
+      const mounted = await mountPausedQueue();
+      const queuedTurn =
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]!.queuedTurns[0]!;
+      const newerStoppedTurnId = TurnId.makeUnsafe("newer-stop-while-steering");
+      try {
+        await page.getByRole("button", { name: "Steer", exact: true }).first().click();
+        await vi.waitFor(() => expect(sentQueuedPrompt()).toBe(true));
+        useComposerDraftStore
+          .getState()
+          .enqueueQueuedTurn(THREAD_ID, { ...queuedTurn, id: "edited-queued-turn" });
+        useComposerDraftStore.getState().removeQueuedTurn(THREAD_ID, queuedTurn.id);
+        useComposerDraftStore.getState().pauseQueuedTurnsAfterStop(THREAD_ID, newerStoppedTurnId);
+        releaseSend();
+        await vi.waitFor(() => {
+          const acquired = tryBeginQueuedComposerAutoDispatch(THREAD_ID);
+          if (acquired) endQueuedComposerAutoDispatch(THREAD_ID);
+          expect(acquired).toBe(true);
+        });
+        // Let the accepted turn and its draft effects settle before inspecting newer controls.
+        await waitForLayout();
+        expect(
+          useComposerDraftStore
+            .getState()
+            .draftsByThreadId[THREAD_ID]?.queuedTurns.map((turn) => turn.id),
+        ).toEqual(["edited-queued-turn"]);
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId,
+        ).toBe(newerStoppedTurnId);
+        expect(
+          wsRequests.filter((request) => turnStartText(request)?.includes(queuedPrompt)),
+        ).toHaveLength(1);
+      } finally {
+        releaseSend();
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    });
   });
 
   it("auto-dispatches a queued chat turn as a chat message even while a plan follow-up is pending", async () => {
@@ -10601,6 +11678,8 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       const prompt = "Keep the first message on screen";
+      const draftCreatedAt = useComposerDraftStore.getState().getDraftThread(THREAD_ID)?.createdAt;
+      expect(draftCreatedAt).toBeDefined();
       useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
       const sendButton = await waitForSendButton();
       expect(sendButton.disabled).toBe(false);
@@ -10612,6 +11691,11 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(command).toBeDefined();
         return command!;
       });
+      const createCommand = wsRequests
+        .map(readDispatchedCommand)
+        .find((command) => command?.type === "thread.create");
+      expect(createCommand?.createdAt).toBe(startCommand.createdAt);
+      expect(createCommand?.createdAt).not.toBe(draftCreatedAt);
       const message = startCommand.message as { messageId: MessageId; text: string };
       const messageSelector = `[data-message-id="${message.messageId}"][data-message-role="user"]`;
       const expectTranscript = async () => {
@@ -10658,6 +11742,147 @@ describe("ChatView transcript geometry (full app)", () => {
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
+    }
+  });
+
+  it("keeps a sent draft prompt out of the composer once the server recorded it", async () => {
+    const turnStartCommand = () =>
+      wsRequests
+        .map(readDispatchedCommand)
+        .find((command) => command?.type === "thread.turn.start");
+    // The server records the first message, then the acknowledgement fails.
+    const restoreNativeApi = installDeterministicSendNativeApi({
+      rejectTurnStart: true,
+      beforeTurnStart: async () => {
+        const command = turnStartCommand()!;
+        const message = command.message as { messageId: MessageId; text: string };
+        const createdSnapshot = addThreadToSnapshot(fixture.snapshot, THREAD_ID);
+        const startedThread = {
+          ...createdSnapshot.threads[0]!,
+          session: null,
+          messages: [
+            {
+              ...createUserMessage({ id: message.messageId, text: message.text, offsetSeconds: 1 }),
+              createdAt: command.createdAt as string,
+              updatedAt: command.createdAt as string,
+            },
+          ],
+        };
+        fixture.snapshot = { ...createdSnapshot, threads: [startedThread] };
+        useStore
+          .getState()
+          .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
+        useStore.getState().syncServerThreadDetailHotPath(startedThread);
+      },
+    });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Send this only once");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+      sendButton.click();
+      await vi.waitFor(() => expect(turnStartCommand()).toBeDefined());
+      await vi.waitFor(() => expect(hasActiveComposerSend(THREAD_ID)).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      await waitForLayout();
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt ?? "").toBe("");
+      expect(
+        wsRequests.map(readDispatchedCommand).some((command) => command?.type === "thread.delete"),
+      ).toBe(false);
+    } finally {
+      restoreNativeApi();
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps composer edits made while New thread reopens a stored draft", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("stored-draft-reopen"),
+        targetText: "Stored draft reopen",
+      }),
+    });
+
+    try {
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID);
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Older stored draft");
+      const newThreadButton = page.getByLabelText("Create new thread in Project").element();
+      (newThreadButton as HTMLElement).click();
+      // Type into the reopened draft as soon as its route is active, while the
+      // New thread navigation is still settling.
+      await new Promise<void>((resolve) => {
+        let microtaskChecks = 0;
+        const editWhenRouted = () => {
+          if (mounted.router.state.location.pathname === `/${OTHER_THREAD_ID}`) {
+            useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Newer typed text");
+            resolve();
+            return;
+          }
+          microtaskChecks += 1;
+          if (microtaskChecks < 10_000) queueMicrotask(editWhenRouted);
+          else window.setTimeout(editWhenRouted, 0);
+        };
+        editWhenRouted();
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull(),
+      );
+      await waitForLayout();
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+        "Newer typed text",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("explains a second send instead of ignoring it while the first is in flight", async () => {
+    let releaseTurnStart!: () => void;
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurnStart = resolve;
+    });
+    const restoreNativeApi = installDeterministicSendNativeApi({
+      beforeTurnStart: () => turnGate,
+    });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+    const turnCommands = () =>
+      wsRequests
+        .map(readDispatchedCommand)
+        .filter((command) => command?.type === "thread.turn.start");
+
+    try {
+      await page.getByTestId("composer-editor").fill("First message");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+      sendButton.click();
+      await vi.waitFor(() => expect(turnCommands()).toHaveLength(1));
+
+      await page.getByTestId("composer-editor").fill("Second message");
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(page.getByText("Still sending your last message")).toBeInTheDocument();
+      expect(turnCommands()).toHaveLength(1);
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+        "Second message",
+      );
+    } finally {
+      releaseTurnStart();
+      restoreNativeApi();
+      await mounted.cleanup();
     }
   });
 
@@ -10747,6 +11972,10 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       await expect.element(page.getByTestId("empty-landing-heading")).toBeInTheDocument();
+      // The project name sits in a combobox, which must not drop out of the heading's name.
+      expect(
+        page.getByTestId("empty-landing-heading").element().getAttribute("aria-label"),
+      ).toMatch(/^What should we do in \S.*\?$/);
       const pendingTurn = {
         turnId: TurnId.makeUnsafe("first-turn-starting"),
         state: "running" as const,
@@ -10823,8 +12052,14 @@ describe("ChatView transcript geometry (full app)", () => {
       });
 
       try {
-        expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull();
-        expect(document.querySelector('[data-empty-landing-composer-block="true"]')).not.toBeNull();
+        // A shell with no messages is not the authoritative empty detail yet.
+        await expect
+          .poll(() => useStore.getState().threadDetailSyncById?.[THREAD_ID])
+          .toBe("synced");
+        await expect.element(page.getByTestId("empty-landing-heading")).toBeInTheDocument();
+        await expect
+          .poll(() => document.querySelector('[data-empty-landing-composer-block="true"]'))
+          .not.toBeNull();
       } finally {
         await mounted.cleanup();
       }
@@ -13490,7 +14725,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("shows the skinny inline plan card for active turn plans", async () => {
+  it("aligns the inline plan card with the composer input", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithActiveInlinePlan(),
@@ -13520,11 +14755,11 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      // Active plan activity shares the centered queued-follow-up rail, intentionally inset to
-      // fourteen fifteenths of the composer width while the input keeps its rounded top corners.
+      // Active plan activity shares the composer column width while the input keeps its
+      // rounded top corners. The stacked frame must stay aligned at every viewport size.
       const taskRect = taskListCard!.getBoundingClientRect();
       const composerRect = composerShell!.getBoundingClientRect();
-      expect(Math.abs(taskRect.width - (composerRect.width * 14) / 15)).toBeLessThanOrEqual(2);
+      expect(Math.abs(taskRect.width - composerRect.width)).toBeLessThanOrEqual(2);
       expect(
         Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
       ).toBeLessThanOrEqual(1);
@@ -13601,7 +14836,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("collapses a settled leading tool run mid-turn, then folds into Worked for after the grace delay", async () => {
+  it("collapses a settled leading tool run mid-turn, then folds into the turn header after the grace delay", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithInlineToolOverflow({ active: true }),
@@ -13628,20 +14863,23 @@ describe("ChatView transcript geometry (full app)", () => {
         snapshotSequence: fixture.snapshot.snapshotSequence + 1,
       });
 
-      // The first settled paint keeps the live layout: no "Worked for" fold yet.
+      // The first settled paint keeps the live layout: no turn disclosure yet.
       expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
+      expect(findInlineToolsTurnDisclosure()).toBeNull();
       expect(document.body.textContent).toContain("Used 6 tools");
 
       await new Promise<void>((resolve) => {
         window.setTimeout(() => resolve(), 260);
       });
 
-      // Once the grace delay lapses the settled turn folds into "Worked for…",
+      // Once the grace delay lapses the settled turn folds into its Worked header,
       // but the old details stay mounted briefly inside the shared disclosure
       // close transition so the transcript height eases down instead of snapping.
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Worked for");
+          const settledTrigger = findInlineToolsTurnDisclosure();
+          expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
+          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
           const transitionClone = document.querySelector(
             "[data-settled-turn-collapse-transition='true']",
           );
@@ -13658,19 +14896,14 @@ describe("ChatView transcript geometry (full app)", () => {
       });
 
       // After the close motion finishes, details are only available by opening
-      // the "Worked for…" disclosure.
+      // the Worked header's disclosure.
       await vi.waitFor(
         () => {
           expect(
             document.querySelector("[data-settled-turn-collapse-transition='true']"),
           ).toBeNull();
           expect(document.body.textContent).not.toContain("Tool 1");
-          const settledTrigger = Array.from(
-            document.querySelectorAll<HTMLButtonElement>("button"),
-          ).find((element) => element.textContent?.includes("Worked for"));
-          if (settledTrigger) {
-            expect(settledTrigger.getAttribute("aria-expanded")).toBe("false");
-          }
+          expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -13693,7 +14926,9 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Worked for");
+          const settledTrigger = findInlineToolsTurnDisclosure();
+          expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
+          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -13721,6 +14956,75 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each([
+    { streaming: false, confirmedRunning: false },
+    { streaming: true, confirmedRunning: false },
+    { streaming: true, confirmedRunning: true },
+  ])(
+    "only animates later live settlement after cached running detail confirms (streaming=$streaming, confirmedRunning=$confirmedRunning)",
+    async ({ streaming, confirmedRunning }) => {
+      await clearThreadDetailCache();
+      const originalCached = createSnapshotWithInlineToolOverflow({ active: true });
+      const cached = {
+        ...originalCached,
+        threads: originalCached.threads.map((thread) => ({
+          ...thread,
+          messages: thread.messages.map((message) =>
+            message.id === MessageId.makeUnsafe("msg-assistant-inline-tools")
+              ? { ...message, streaming }
+              : message,
+          ),
+        })),
+      };
+      await writeThreadDetailCache(
+        { origin: location.origin, serverInstanceId: "browser-test-server" },
+        { snapshotSequence: cached.snapshotSequence, thread: cached.threads[0]! },
+      );
+      let releaseSnapshot!: () => void;
+      threadDetailSnapshotBarrier = new Promise<void>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+      const authoritative = createSnapshotWithInlineToolOverflow({ active: confirmedRunning });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...authoritative, snapshotSequence: cached.snapshotSequence + 1 },
+      });
+      try {
+        expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("cached");
+        expect(useStore.getState().threadTurnStateById?.[THREAD_ID]?.latestTurn?.state).toBe(
+          "running",
+        );
+        releaseSnapshot();
+        if (confirmedRunning) {
+          await vi.waitFor(() => {
+            expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+          });
+          await nextFrame();
+          useStore.getState().syncServerReadModel({
+            ...createSnapshotWithInlineToolOverflow({ active: false }),
+            snapshotSequence: cached.snapshotSequence + 2,
+          });
+        }
+        let transitionFrames = 0;
+        const startedAt = performance.now();
+        while (performance.now() - startedAt < 1_000) {
+          await nextFrame();
+          if (document.querySelector("[data-settled-turn-collapse-transition='true']"))
+            transitionFrames += 1;
+        }
+        expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+        if (confirmedRunning) expect(transitionFrames).toBeGreaterThan(0);
+        else expect(transitionFrames).toBe(0);
+      } finally {
+        releaseSnapshot();
+        threadDetailSnapshotBarrier = null;
+        await mounted.cleanup();
+        await clearThreadDetailCache();
+      }
+    },
+  );
+
   // Thread detail does not always land in one write: a thread can paint its
   // transcript before the record that says its last turn already completed. Until
   // that record lands the tail turn is treated as live, so every tool row renders
@@ -13742,7 +15046,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       // Baseline: with no turn record the tail turn reads as live, so its work
-      // sits inline instead of folded into the turn's "Worked for…" disclosure.
+      // sits inline instead of folded into the turn header's disclosure.
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Wrapped up the inline tool review.");
@@ -13750,7 +15054,7 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      expect(document.body.textContent).not.toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()).toBeNull();
 
       useStore.getState().syncServerReadModel({
         ...settledSnapshot,
@@ -13781,7 +15085,8 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       // The turn must land folded, in one step, with no animated close replay.
-      expect(document.body.textContent).toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
       expect(transitionFrames).toBe(0);
       // One settle step is the floor: the fold itself changes the height once.
       expect(heightChangeFrames).toBeLessThanOrEqual(2);
@@ -13824,7 +15129,11 @@ describe("ChatView transcript geometry (full app)", () => {
         }
       }
 
-      expect(document.body.textContent).toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+m \d+s·/);
+      expect(document.querySelector("[data-turn-header='live']")?.textContent).toMatch(
+        /^Working \d/,
+      );
       expect(transitionFrames).toBe(0);
     } finally {
       await mounted.cleanup();

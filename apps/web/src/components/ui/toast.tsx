@@ -54,7 +54,7 @@ type ThreadToastData = {
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
   dismissAfterVisibleMs?: number;
-  /** Compact Undo toast for chat actions. Archive links to its Settings list; snooze passes a message. */
+  /** Compact Undo toast for chat actions. Archive links to Settings; Done and snooze pass a message. */
   archiveUndo?: {
     onUndo: () => boolean | Promise<boolean>;
     onViewArchived?: () => void | Promise<void>;

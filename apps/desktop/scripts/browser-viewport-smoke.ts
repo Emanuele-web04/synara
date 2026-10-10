@@ -4,7 +4,7 @@ import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, nativeImage } from "electron";
 import { ThreadId } from "@synara/contracts";
 import { DesktopBrowserManager } from "../src/browserManager";
 
@@ -66,6 +66,34 @@ async function smoke(): Promise<void> {
       await waitForViewport(bounds);
       console.log(`Viewport ${width}x600 recovered to 700x500 and 900x650 without reloading.`);
     }
+    await manager.getAutomationRuntime({ threadId, tabId: state.activeTabId! }, { restore: false });
+    const browserView = window.contentView.children.find(
+      (view) => "webContents" in view && view.webContents === webContents,
+    );
+    assert.ok(browserView);
+    const liveImage = await webContents.capturePage();
+    manager.setPanelBounds({ threadId, surface: "native", bounds: null, occluded: true });
+    assert.deepEqual(browserView.getBounds(), { ...bounds, x: 0, y: 0 });
+    assert.deepEqual(await viewport(), { width: bounds.width, height: bounds.height });
+    const preview = await manager.capturePreview({ threadId, tabId: state.activeTabId! });
+    assert.ok(preview, "An obscured native page must supply a visible replacement frame.");
+    const previewImage = nativeImage.createFromDataURL(preview);
+    assert.deepEqual(previewImage.getSize(), liveImage.getSize());
+    const [blue, green, red] = previewImage.toBitmap();
+    assert.ok(
+      green! > 180 && green! > red! + 100 && green! > blue! + 100,
+      "The frame must contain the page's lime border.",
+    );
+    setBounds(bounds);
+    assert.equal(await webContents.executeJavaScript("document.body.dataset.sentinel"), "kept");
+    assert.equal(
+      manager.getVisibleAutomationRuntime({ threadId, tabId: state.activeTabId! }).webContents,
+      webContents,
+    );
+    assert.equal(await manager.capturePreview({ threadId, tabId: state.activeTabId! }), null);
+    console.log(
+      "Native overlay preview retained full-size page pixels and restored the same live document.",
+    );
     // The real window's closed handler calls setWindow(null) after Electron has
     // destroyed its native contentView. Automation pages must still be released.
     await manager.getAutomationRuntime({ threadId, tabId: state.activeTabId! }, { restore: false });

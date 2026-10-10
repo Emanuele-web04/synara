@@ -28,6 +28,7 @@ import {
   IconChevronRight,
   IconChevronUp,
   IconCircleCheck,
+  IconCoffee,
   IconColumns2,
   IconDots,
   IconDownload,
@@ -146,6 +147,7 @@ export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questio
 export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
+export const CoffeeIcon = adaptIcon(IconCoffee);
 export const ChangesIcon = centralIconWrapper("changes");
 /** The one "Keybindings" glyph: the Help menu row, the feature tour, and (by basename) the
  *  Settings nav entry, so the three always match. */

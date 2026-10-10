@@ -41,6 +41,7 @@ export const WS_NEGOTIATE_QUERY = {
 export const WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY = "projects.github-provisioning";
 export const WS_PROJECT_FILE_WATCH_CAPABILITY = "projects.file-watch";
 export const WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY = "orchestration.turn-dispatch-settlement";
+export const WS_SERVER_RUNTIME_STATUS_CAPABILITY = "server.runtime-status";
 export const WS_GIT_ACTION_RECOVERY_CAPABILITY = "git.action-recovery";
 
 // Capabilities the current client refuses to run without. Kept separate from
@@ -65,6 +66,7 @@ export const WS_SERVER_CAPABILITIES = [
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
+  WS_SERVER_RUNTIME_STATUS_CAPABILITY,
   // Single-handshake connect: negotiation is available over plain HTTP at
   // WS_NEGOTIATE_HTTP_PATH, so a connect costs exactly one WebSocket upgrade.
   "transport.http-negotiate",

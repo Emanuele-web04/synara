@@ -25,6 +25,7 @@ interface ChatRuntimeModesInput {
   serverThread: Thread | undefined;
   isLocalDraftThread: boolean;
   runtimeMode: RuntimeMode;
+  onRuntimeModePersisted: (mode: RuntimeMode) => void;
   interactionMode: ProviderInteractionMode;
   selectedProvider: ProviderKind;
   selectedRuntimeModel: ReturnType<typeof resolveRuntimeModelDescriptor>;
@@ -39,6 +40,7 @@ export function useChatRuntimeModes({
   serverThread,
   isLocalDraftThread,
   runtimeMode,
+  onRuntimeModePersisted,
   interactionMode,
   selectedProvider,
   selectedRuntimeModel,
@@ -116,7 +118,11 @@ export function useChatRuntimeModes({
             return false;
           }
         }
-        setComposerDraftRuntimeMode(threadId, nextMode);
+        if (serverThread) {
+          onRuntimeModePersisted(nextMode);
+        } else {
+          setComposerDraftRuntimeMode(threadId, nextMode);
+        }
         if (isLocalDraftThread) {
           setDraftThreadContext(threadId, { runtimeMode: nextMode });
         }
@@ -126,6 +132,7 @@ export function useChatRuntimeModes({
     },
     [
       isLocalDraftThread,
+      onRuntimeModePersisted,
       runtimeMode,
       scheduleComposerFocus,
       selectedModelSelection,

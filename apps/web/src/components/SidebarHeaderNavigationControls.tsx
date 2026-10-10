@@ -172,8 +172,9 @@ export function SidebarLeadingControlsDock({
   );
 }
 
-// Reserve the cluster's footprint and exclude it from the host's native drag region.
+// Reserve the cluster's responsive footprint and exclude it while controls are shown.
 // Electron applies drag rectangles in document order, after the earlier dock's no-drag box.
+// An overflow-clipped inactive slot still has a border box, so it must not emit no-drag.
 function SidebarLeadingControlsAnchor({
   register,
   active = true,
@@ -191,13 +192,13 @@ function SidebarLeadingControlsAnchor({
     <div
       ref={ref}
       aria-hidden
-      className={cn(LEADING_CONTROLS_CLASS, "[-webkit-app-region:no-drag]")}
+      className={cn(LEADING_CONTROLS_CLASS, active && "[-webkit-app-region:no-drag]")}
     >
-      <div className="size-7 shrink-0" />
+      <div className="size-7 shrink-0 sm:size-6" />
       {isElectron ? (
         <div className="flex shrink-0 items-center gap-0.5">
-          <div className="size-8" />
-          <div className="size-8" />
+          <div className="size-8 sm:size-7" />
+          <div className="size-8 sm:size-7" />
         </div>
       ) : null}
     </div>

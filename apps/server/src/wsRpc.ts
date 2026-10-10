@@ -1,3 +1,4 @@
+import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
 import { execFile } from "node:child_process";
@@ -32,6 +33,7 @@ import {
   type ModelSelection,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationProject,
   type ProjectDevServerEvent,
   type ProviderStartOptions,
   type OrchestrationShellStreamEvent,
@@ -93,6 +95,7 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
+import { PROJECT_FOLDERS_WORKTREE_ISSUE } from "@synara/shared/projectFolders";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
 import {
@@ -176,11 +179,13 @@ import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsag
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { RecapStatsQuery } from "./recapStats";
+import { ThreadSearchQuery } from "./threadSearch";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
@@ -467,6 +472,24 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   );
 }
 
+/** Keeps the two worktree RPCs behind the same project eligibility check. */
+export function makeProjectWorktreeGuard<E1, R1, E2, R2>(dependencies: {
+  readonly canonicalizeWorkspaceRoot: (cwd: string) => Effect.Effect<string, E1, R1>;
+  readonly getActiveProjectByWorkspaceRoot: (
+    cwd: string,
+  ) => Effect.Effect<Option.Option<OrchestrationProject>, E2, R2>;
+}) {
+  return (cwd: string) =>
+    dependencies.canonicalizeWorkspaceRoot(cwd).pipe(
+      Effect.flatMap(dependencies.getActiveProjectByWorkspaceRoot),
+      Effect.flatMap((project) =>
+        Option.isSome(project) && (project.value.additionalFolders ?? []).length > 0
+          ? Effect.fail(new WsRpcError({ message: PROJECT_FOLDERS_WORKTREE_ISSUE }))
+          : Effect.void,
+      ),
+    );
+}
+
 const makeWsRpcHandlersLayer = () =>
   AdmittedWsFeatureRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -494,6 +517,7 @@ const makeWsRpcHandlersLayer = () =>
       const githubInbox = yield* GitHubInboxService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const recapStatsQuery = yield* RecapStatsQuery;
+      const threadSearchQuery = yield* ThreadSearchQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
@@ -503,6 +527,7 @@ const makeWsRpcHandlersLayer = () =>
       const runtimeStartup = yield* ServerRuntimeStartup;
       const serverEnvironment = yield* ServerEnvironment;
       const serverSettings = yield* ServerSettingsService;
+      const keepAwake = yield* KeepAwakeService;
       const terminalManager = yield* TerminalManager;
       const textGeneration = yield* TextGeneration;
       const workspaceEntries = yield* WorkspaceEntries;
@@ -657,11 +682,17 @@ const makeWsRpcHandlersLayer = () =>
       // is actively running. Waiting here is safe because the cursor-safe
       // stream attaches its live tap before evaluating the snapshot effect, so
       // no event that commits during the wait is lost.
-      const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
+      const loadThreadDetailSnapshotWithBootstrapWait = (
+        threadId: ThreadId,
+        messageWindow?: import("@synara/contracts").OrchestrationThreadMessageWindow,
+      ) =>
         Effect.gen(function* () {
           const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
           while (true) {
-            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
+            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(
+              threadId,
+              messageWindow,
+            );
             if (Option.isSome(detail) || Date.now() >= deadline) {
               return detail;
             }
@@ -748,6 +779,11 @@ const makeWsRpcHandlersLayer = () =>
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
         );
+      });
+      // Fail before Git runs; a refused turn must not leave an orphaned worktree.
+      const refuseMultiFolderProjectWorktree = makeProjectWorktreeGuard({
+        canonicalizeWorkspaceRoot: canonicalizeProjectWorkspaceRoot,
+        getActiveProjectByWorkspaceRoot: projectionReadModelQuery.getActiveProjectByWorkspaceRoot,
       });
       // One mkdir loop shared by every container kind; the relative directory set is the
       // only thing that varies (general chats scaffold work/outputs, Studio mirrors the
@@ -1150,7 +1186,7 @@ const makeWsRpcHandlersLayer = () =>
       const tasksEnabled = isServerBetaFeatureEnabled("tasks");
       const tasksUnavailableError = () =>
         new WsRpcError({
-          message: "Tasks is available in Synara Beta.",
+          message: "Tasks is unavailable on this server.",
           code: TASKS_UNAVAILABLE_ERROR_CODE,
           retryable: false,
         });
@@ -1348,10 +1384,12 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
           rpcEffect(
             projectionReadModelQuery
-              .getThreadDetailSnapshotById(input.threadId)
+              .getThreadDetailSnapshotById(input.threadId, input.messageWindow)
               .pipe(Effect.map(Option.getOrNull)),
             "Failed to load orchestration thread detail snapshot",
           ),
+        [ORCHESTRATION_WS_METHODS.searchThreads]: (input) =>
+          rpcEffect(threadSearchQuery.searchThreads(input), "Failed to search threads"),
         [ORCHESTRATION_WS_METHODS.repairState]: () =>
           rpcEffect(orchestrationEngine.repairState(), "Failed to repair orchestration state"),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
@@ -1470,7 +1508,10 @@ const makeWsRpcHandlersLayer = () =>
                         snapshot: item.snapshot,
                       }),
                     )
-                  : toShellStreamEvent(item.event),
+                  : item.kind === "event"
+                    ? toShellStreamEvent(item.event)
+                    : // The shell stream never opts into batched replay.
+                      Effect.succeed(Option.none<OrchestrationShellStreamItem>()),
               ),
               Stream.flatMap((item) =>
                 Option.isSome(item) ? Stream.succeed(item.value) : Stream.empty,
@@ -1496,6 +1537,10 @@ const makeWsRpcHandlersLayer = () =>
               // gap. Out-of-range cursors (negative or overflowing gap) fall
               // back to the snapshot inside the stream factory.
               resumeFromSequence: input.afterSequence,
+              // Opted-in clients get the whole gap as one item and apply it in a
+              // single store update, so a stale cached turn does not replay its
+              // intermediate states on screen.
+              batchReplay: input.batchReplay,
               // A hard-purged thread leaves no rows to replay while the journal
               // head stays above the cursor, so the gap check alone would
               // accept the resume and stream nothing. Falling through to the
@@ -1523,7 +1568,10 @@ const makeWsRpcHandlersLayer = () =>
                 label: "orchestration.thread-detail",
                 onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
               },
-              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
+              snapshot: loadThreadDetailSnapshotWithBootstrapWait(
+                input.threadId,
+                input.messageWindow,
+              ).pipe(
                 Effect.flatMap(
                   Option.match({
                     onNone: () =>
@@ -1565,6 +1613,13 @@ const makeWsRpcHandlersLayer = () =>
                   return Stream.succeed<OrchestrationThreadStreamItem>({
                     kind: "event",
                     event: item.event,
+                  });
+                }
+                if (item.kind === "replay") {
+                  return Stream.succeed<OrchestrationThreadStreamItem>({
+                    kind: "replay",
+                    events: item.events,
+                    threadId: input.threadId,
                   });
                 }
                 // A silently empty snapshot would leave the client waiting forever
@@ -1945,9 +2000,13 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(git.listRecentCommits(input), "Failed to list recent commits"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
-              input.cwd,
-              git.withMutation(input.cwd, git.createWorktree(input)),
+            refuseMultiFolderProjectWorktree(input.cwd).pipe(
+              Effect.andThen(
+                refreshGitStatusAfter(
+                  input.cwd,
+                  git.withMutation(input.cwd, git.createWorktree(input)),
+                ),
+              ),
             ),
             "Failed to create worktree",
           ),
@@ -1955,28 +2014,34 @@ const makeWsRpcHandlersLayer = () =>
           bufferLiveUiStream(
             Stream.callback<GitWorktreeSetupProgressEvent, WsRpcError>((queue) => {
               const progressId = input.progressId ?? null;
-              return refreshGitStatusAfter(
-                input.cwd,
-                git.withMutation(
-                  input.cwd,
-                  git.createDetachedWorktree(input, {
-                    onPhase: (phase) =>
-                      Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
+              return refuseMultiFolderProjectWorktree(input.cwd)
+                .pipe(
+                  Effect.andThen(
+                    refreshGitStatusAfter(
+                      input.cwd,
+                      git.withMutation(
+                        input.cwd,
+                        git.createDetachedWorktree(input, {
+                          onPhase: (phase) =>
+                            Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
+                              Effect.asVoid,
+                            ),
+                        }),
+                      ),
+                    ),
+                  ),
+                )
+                .pipe(
+                  Effect.matchCauseEffect({
+                    onFailure: (cause) =>
+                      Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
+                    onSuccess: (result) =>
+                      Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
+                        Effect.andThen(Queue.end(queue)),
                         Effect.asVoid,
                       ),
                   }),
-                ),
-              ).pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) =>
-                    Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
-                  onSuccess: (result) =>
-                    Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
-                      Effect.andThen(Queue.end(queue)),
-                      Effect.asVoid,
-                    ),
-                }),
-              );
+                );
             }),
             { label: "git.create-detached-worktree" },
           ),
@@ -2171,6 +2236,8 @@ const makeWsRpcHandlersLayer = () =>
             ),
           ),
 
+        [WS_METHODS.serverGetRuntimeStatus]: () =>
+          rpcEffect(readEventLoopStatus, "Failed to read runtime status"),
         [WS_METHODS.serverGetConfig]: () =>
           rpcEffect(loadServerConfig, "Failed to load server config"),
         [WS_METHODS.serverGetEnvironment]: () =>
@@ -2505,6 +2572,22 @@ const makeWsRpcHandlersLayer = () =>
               }).pipe(Stream.map((settings) => ({ settings }))),
             ).pipe(
               Stream.mapError((cause) => toWsRpcError(cause, "Server settings stream failed")),
+            ),
+          ),
+        [WS_METHODS.subscribeServerKeepAwake]: (_, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: "server.keep-awake" },
+            Stream.concat(
+              Stream.fromEffect(
+                keepAwake.getState.pipe(Effect.map((state) => ({ keepAwake: state }))),
+              ),
+              bufferLiveUiStream(keepAwake.streamChanges, {
+                label: "server.keep-awake",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              }).pipe(Stream.map((state) => ({ keepAwake: state }))),
+            ).pipe(
+              Stream.mapError((cause) => toWsRpcError(cause, "Server keep-awake stream failed")),
             ),
           ),
 
@@ -2972,7 +3055,7 @@ const makeWsRpcHandlersLayer = () =>
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
           ),
-        // Tasks is Beta-only; Stable refuses it here and keeps Kanban.
+        // Keep refusal handling for hosts that do not offer Tasks.
         [WS_METHODS.todoList]: () =>
           whenTasksEnabled(rpcEffect(todoService.list(), "Failed to list tasks")),
         [WS_METHODS.todoCreate]: (input) =>

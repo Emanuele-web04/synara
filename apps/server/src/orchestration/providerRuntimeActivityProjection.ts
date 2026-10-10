@@ -394,14 +394,17 @@ function buildContextWindowActivityPayload(
   // Stamp the emitting provider so token stats can attribute usage to the
   // provider that actually processed the turn, not the thread's persisted
   // model selection (which can drift, e.g. across future per-turn providers).
+  const providerThreadId = event.providerRefs?.providerThreadId;
+  const usageSessionId =
+    providerThreadId === undefined
+      ? undefined
+      : event.provider === "cursor" || event.provider === "codex"
+        ? providerThreadId
+        : `${providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`;
   return toActivityPayload({
     ...usage,
     provider: event.provider,
-    ...(event.providerRefs?.providerThreadId
-      ? {
-          usageSessionId: `${event.providerRefs.providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`,
-        }
-      : {}),
+    ...(usageSessionId !== undefined ? { usageSessionId } : {}),
   });
 }
 
@@ -490,6 +493,21 @@ function buildConfiguredContextWindowPayload(
     maxTokens,
     ...(configuredWindow ? { contextWindow: configuredWindow } : {}),
   });
+}
+
+// Claude Code reports whether fast mode actually serves requests; the requested
+// option alone cannot tell the composer that the account refused it.
+function buildFastModeStatePayload(event: ProviderRuntimeEvent): ActivityPayload | undefined {
+  if (event.type !== "session.configured") {
+    return undefined;
+  }
+  const config = asObject(event.payload.config);
+  const state = asString(config?.fast_mode_state);
+  if (state !== "on" && state !== "off" && state !== "cooldown") {
+    return undefined;
+  }
+  const disabledReason = asString(config?.fast_mode_disabled_reason);
+  return toActivityPayload({ state, ...(disabledReason ? { disabledReason } : {}) });
 }
 
 export function runtimePayloadRecord(
@@ -662,7 +680,9 @@ export function projectProviderRuntimeActivities(
   // Claude previews are coalesced by ingestion; other providers publish their
   // readable reasoning only at completion. Empty/encrypted boundaries stay hidden.
   if (
-    (((event.provider === "codex" || event.provider === "antigravity") &&
+    (((event.provider === "codex" ||
+      event.provider === "antigravity" ||
+      event.provider === "opencode") &&
       event.type === "item.completed") ||
       (event.provider === "claudeAgent" &&
         (event.type === "item.updated" || event.type === "item.completed"))) &&
@@ -697,21 +717,36 @@ export function projectProviderRuntimeActivities(
   switch (event.type) {
     case "session.configured": {
       const payload = buildConfiguredContextWindowPayload(event);
-      if (!payload) {
-        return [];
-      }
-
+      const fastModePayload = buildFastModeStatePayload(event);
       return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "info",
-          kind: "context-window.configured",
-          summary: "Context window configured",
-          payload,
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
+        ...(payload
+          ? [
+              {
+                id: event.eventId,
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "context-window.configured",
+                summary: "Context window configured",
+                payload,
+                turnId: toTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
+        ...(fastModePayload
+          ? [
+              {
+                id: payload ? EventId.makeUnsafe(`${event.eventId}:fast-mode`) : event.eventId,
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "fast-mode.state",
+                summary: "Fast mode state reported",
+                payload: fastModePayload,
+                turnId: toTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
       ];
     }
 
@@ -792,6 +827,7 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             message: truncateDetail(message, 500),
             ...(errorClass ? { class: errorClass } : {}),
+            ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -808,6 +844,10 @@ export function projectProviderRuntimeActivities(
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
       const isClaudeRetry = event.provider === "claudeAgent" && detailSubtype === "api_retry";
+      // Claude Monitor events that woke the agent, read back from its transcript.
+      const isMonitorEvent = event.provider === "claudeAgent" && detailSubtype === "monitor_event";
+      const willRetry =
+        event.payload.willRetry === true || asObject(event.payload.detail)?.willRetry === true;
       const isPiInfoNotification =
         event.provider === "pi" &&
         raw?.method === "extension/ui/notify" &&
@@ -820,23 +860,31 @@ export function projectProviderRuntimeActivities(
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: "info",
+          tone:
+            isMonitorEvent && asObject(event.payload.detail)?.outcome === "failed"
+              ? "error"
+              : "info",
           kind: "runtime.warning",
           summary: isPiInfoNotification
             ? "Pi extension"
-            : isClaudeRetry
-              ? message
-              : isBackgroundMove
-                ? "Moved to background"
-                : event.provider === "opencode" &&
-                    (nativeType === "session.next.retried" || nativeType === "session.status")
-                  ? "OpenCode retrying"
-                  : "Runtime warning",
+            : willRetry
+              ? "Provider retrying"
+              : isClaudeRetry
+                ? message
+                : isBackgroundMove
+                  ? "Moved to background"
+                  : isMonitorEvent
+                    ? "Monitor event"
+                    : event.provider === "opencode" &&
+                        (nativeType === "session.next.retried" || nativeType === "session.status")
+                      ? "OpenCode retrying"
+                      : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,
             detail: message,
-            ...(isBackgroundMove || isClaudeRetry
+            ...(willRetry ? { willRetry: true } : {}),
+            ...(isBackgroundMove || isClaudeRetry || isMonitorEvent
               ? { nativeEventType: detailSubtype }
               : nativeType
                 ? { nativeEventType: nativeType }
@@ -955,15 +1003,24 @@ export function projectProviderRuntimeActivities(
     }
 
     case "task.progress": {
+      // A subagent's own progress is that subagent's current step, attributed
+      // to it, never the launcher's reasoning. Other task progress (Codex's
+      // legacy agent_reasoning, workflow updates) keeps its compact grouping.
+      const summary =
+        event.payload.toolUseId !== undefined ? "Subagent progress" : "Reasoning update";
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.progress",
-          summary: "Reasoning update",
+          summary,
           payload: toActivityPayload({
             taskId: event.payload.taskId,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.subagentTitle
+              ? { subagentTitle: truncateDetail(event.payload.subagentTitle) }
+              : {}),
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
             // Kept verbatim next to detail: workflow progress encodes
             // "<phase>: <agent label>" here and the panel parses it back out.
@@ -1000,6 +1057,7 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             status: event.payload.status,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.summary
               ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
               : {}),
@@ -1257,6 +1315,28 @@ export function projectProviderRuntimeActivities(
       ];
     }
 
+    case "turn.started": {
+      // A quiet lifecycle record of the model the provider ran the turn on, so
+      // transcripts can mark where the model changed between turns. Clients
+      // never render it as a work row.
+      const model = nonEmptyTrimmed(event.payload.model);
+      if (!model) {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "turn.started",
+          summary: "Turn started",
+          payload: toActivityPayload({ model, provider: event.provider }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "turn.completed": {
       const state = runtimeTurnState(event);
       const modelUsage = compactTurnModelUsage(event.payload.modelUsage);
@@ -1289,6 +1369,7 @@ export function projectProviderRuntimeActivities(
               ? { cumulativeCostUsd: event.payload.cumulativeCostUsd }
               : {}),
             ...(errorMessage ? { errorMessage } : {}),
+            ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

@@ -15,6 +15,13 @@ import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useLocalStorage } from "../hooks/useLocalStorage";
+import {
+  DEFAULT_DIFF_RENDER_MODE,
+  DIFF_RENDER_MODE_STORAGE_KEY,
+  DiffRenderModeSchema,
+  type DiffRenderMode,
+} from "../diffRenderMode";
 
 import {
   type AppSettings,
@@ -104,6 +111,8 @@ import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
+import { KeepAwakeSettingsSection } from "../components/KeepAwakeControls";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
@@ -326,6 +335,11 @@ type BooleanSettingKey = {
 // ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
+  const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
+    DIFF_RENDER_MODE_STORAGE_KEY,
+    DEFAULT_DIFF_RENDER_MODE,
+    DiffRenderModeSchema,
+  );
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
@@ -346,6 +360,7 @@ function SettingsRouteView() {
   } = useTheme();
   const { settings, defaults, updateSettings, updateSettingsAndWait, resetSettings } =
     useAppSettings();
+  const keepAwake = useKeepAwakeState();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
@@ -429,6 +444,9 @@ function SettingsRouteView() {
   const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
   const isInstallSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
   const hiddenProviderCount = new Set(settings.hiddenProviders).size;
+  const enabledProviderSelectOptions = PROVIDER_SELECT_OPTIONS.filter(
+    (provider) => !settings.disabledProviders.includes(provider),
+  );
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const isProviderActivityDirty =
     settings.disabledProviders.length !== defaults.disabledProviders.length ||
@@ -531,6 +549,10 @@ function SettingsRouteView() {
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),
+    ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
+      ? ["Keep Synara responsive"]
+      : []),
+    ...(defaultDiffRenderMode !== DEFAULT_DIFF_RENDER_MODE ? ["Diff layout"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
       ? ["Open pull requests and issues"]
@@ -590,6 +612,7 @@ function SettingsRouteView() {
 
     setTheme("system");
     resetAllThemes();
+    setDefaultDiffRenderMode(DEFAULT_DIFF_RENDER_MODE);
     await resetSettings();
     setResetEpoch((current) => current + 1);
   }
@@ -652,20 +675,30 @@ function SettingsRouteView() {
           }
           control={
             <SettingsSelectControl
-              value={settings.defaultProvider}
+              value={
+                settings.disabledProviders.includes(settings.defaultProvider)
+                  ? null
+                  : settings.defaultProvider
+              }
+              disabled={enabledProviderSelectOptions.length === 0}
               onValueChange={(value) => {
-                if (!isProviderSelectOption(value)) return;
+                if (!isProviderSelectOption(value) || settings.disabledProviders.includes(value))
+                  return;
                 updateSettings({ defaultProvider: value });
               }}
               ariaLabel="Default provider"
               valueContent={
-                <ProviderOptionLabel
-                  provider={settings.defaultProvider}
-                  label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
-                />
+                settings.disabledProviders.includes(settings.defaultProvider) ? (
+                  "Choose an enabled provider"
+                ) : (
+                  <ProviderOptionLabel
+                    provider={settings.defaultProvider}
+                    label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
+                  />
+                )
               }
             >
-              {PROVIDER_SELECT_OPTIONS.map((provider) => (
+              {enabledProviderSelectOptions.map((provider) => (
                 <SelectItem hideIndicator key={provider} value={provider}>
                   <ProviderOptionLabel
                     provider={provider}
@@ -868,6 +901,15 @@ function SettingsRouteView() {
         </SettingsSection>
 
         <SettingsSection title="Code and status">
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentSubagents",
+            title: "Subagents",
+            description:
+              "Show a compact summary of the chat's subagents in the Environment panel. Click it to open the full list, running and done, in the right dock.",
+            resetLabel: "subagents section",
+            ariaLabel: "Show the Subagents section in the Environment panel",
+          })}
+
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentUsage",
             title: "Usage",
@@ -1478,7 +1520,39 @@ function SettingsRouteView() {
         })}
       </SettingsSection>
 
+      <KeepAwakeSettingsSection
+        state={keepAwake}
+        mode={settings.keepAwakeMode}
+        defaultMode={defaults.keepAwakeMode}
+        onSelectMode={(keepAwakeMode) => updateSettings({ keepAwakeMode })}
+      />
+
       <SettingsSection title="Review">
+        <SettingsRow
+          title="Diff layout"
+          description="Default stacked or split layout for threads without a saved choice. Each thread remembers its review-panel changes independently."
+          resetAction={
+            defaultDiffRenderMode !== DEFAULT_DIFF_RENDER_MODE ? (
+              <SettingResetButton
+                label="diff layout"
+                onClick={() => setDefaultDiffRenderMode(DEFAULT_DIFF_RENDER_MODE)}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={defaultDiffRenderMode}
+              onValueChange={setDefaultDiffRenderMode}
+              ariaLabel="Diff layout"
+              options={
+                [
+                  { value: "stacked", label: "Stacked" },
+                  { value: "split", label: "Split" },
+                ] satisfies ReadonlyArray<{ value: DiffRenderMode; label: string }>
+              }
+            />
+          }
+        />
         <SettingsRow
           title="Open pull requests and issues"
           description="Choose where a pull request or issue link in a chat opens: the built-in review view, the in-app browser, or your external browser. Ctrl/Cmd+click always opens the external browser."

@@ -51,10 +51,19 @@ or reporting an uncaught exception; other stream errors still propagate.
 Beta also records handled Git action failures (request, branch, commit, push,
 and PR stages), voice recording/transcription failures, Claude compaction request
 failures or uncertain acceptance, failed/uncertain Claude cache reviews, and
-backend startup blocks. These use the existing `app.error` envelope with a fixed
+backend startup blocks, and server event-loop stalls. These use the existing `app.error` envelope with a fixed
 `Handled issue: <code> (<reason>)` message. They are not crash reports. The issue
 allowlist lives in `DesktopDiagnosticIssue` in `packages/contracts/src/ipc.ts`.
 No new event names or ingest fields are required by this change.
+
+`server.event-loop.stall` uses that same shared issue allowlist and carries only
+bounded `durationMs`. The collector passes its fixed message and duration context
+through `diagnosticsRedaction.ts` before queueing. CPU, memory, system load,
+percentiles and stacks are not attached to the stall issue. Backend warnings have
+a 30 second limit; the existing issue collector also groups identical reports
+for ten minutes and applies its shared hourly cap. Stable emits no stall issue
+markers. See [local stall monitoring](event-loop-stalls.md) for status/UI behavior
+and the attribution limitations.
 
 The reason is a coarse local classification (authentication, invalid response,
 timeout, output limit, live database owner, unknown owner, or unknown). It does
@@ -157,7 +166,10 @@ network URL (`https://github.com/org/repo` becomes `https://github.com/…`),
 GitHub/Slack/AWS/Google tokens, JWTs), sensitive `key=value`/`key: value`
 fields, IP addresses, and any remaining long opaque token (hex, base64url, or
 standard base64). Paths are reduced to the last segment: `/Users/you/code/my-repo/app.ts` becomes `~/…/app.ts`, so
-folder and repository names are not sent. Redaction is best-effort — error
+folder and repository names, including directory names containing spaces on
+Windows and POSIX, are not sent. Network error codes (`net::ERR_*`) and Node
+stack locations remain readable instead of being mistaken for IPv6 addresses.
+Redaction is best-effort — error
 text can still include fragments of whatever was on screen. The worker runs
 the same redaction again before storing.
 

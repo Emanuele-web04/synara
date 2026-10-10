@@ -79,6 +79,66 @@ disable-model-invocation: true
       "disable-model-invocation": true,
     });
   });
+
+  it("reads block scalars and keeps nested keys from overriding top-level ones", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: check-code
+description: >-
+  Review recent code changes
+  before they are merged.
+
+  Use it after every edit.
+summary: |
+  First line
+    indented line
+metadata:
+  env:
+    - name: API_KEY
+      description: Service key
+license: MIT
+---
+`),
+    ).toEqual({
+      name: "check-code",
+      description: "Review recent code changes before they are merged.\nUse it after every edit.",
+      summary: "First line\n  indented line",
+      license: "MIT",
+    });
+  });
+
+  it("reads a short description kept under metadata", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: codex-style
+description: Long description
+metadata:
+  short-description: Short text
+---
+`),
+    ).toEqual({
+      name: "codex-style",
+      description: "Long description",
+      "short-description": "Short text",
+    });
+  });
+
+  it("parses frontmatter with many keys without a quadratic slowdown", () => {
+    const keys = Array.from({ length: 40_000 }, (_, index) => `key${index}: value`).join("\n");
+    const startedAt = performance.now();
+    expect(parseSkillFrontmatter(`---\nname: wide\n${keys}\n---\n`).name).toBe("wide");
+    expect(performance.now() - startedAt).toBeLessThan(3_000);
+  });
+
+  it("falls back to the line reader for frontmatter that is not valid YAML", () => {
+    expect(
+      parseSkillFrontmatter(`---
+name: loose
+description: Use when: the user asks for it
+---
+`),
+    ).toEqual({ name: "loose", description: "Use when: the user asks for it" });
+  });
 });
 
 describe("pathIsWithin", () => {

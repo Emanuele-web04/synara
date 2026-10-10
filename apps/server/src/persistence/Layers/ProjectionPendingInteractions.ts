@@ -4,7 +4,7 @@ import {
 } from "@synara/shared/pendingInteractions";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Array as Arr, Effect, Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -78,7 +78,6 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
         response_requested_at AS "responseRequestedAt", created_at AS "createdAt", resolved_at AS "resolvedAt"
       FROM projection_pending_interactions
       WHERE status != 'confirmed'
-        AND NOT (interaction_kind = 'approval' AND status = 'uncertain')
         AND ${threadId === undefined ? sql`1 = 1` : sql`thread_id = ${threadId}`}
     `,
   });
@@ -230,21 +229,7 @@ const makeProjectionPendingInteractionRepository = Effect.gen(function* () {
         ),
       ),
     listUnsettled: (input) =>
-      Effect.gen(function* () {
-        const rows = yield* listUnsettledRows(input);
-        if (rows.length === 0) return rows;
-        const activities = yield* failureActivities(input);
-        const byThread = new Map(
-          Object.entries(Arr.groupBy(activities, (activity) => activity.threadId)),
-        );
-        const matchers = new Map(
-          [...byThread].map(([threadId, failures]) => [
-            threadId,
-            createStalePendingInteractionMatcher(failures),
-          ]),
-        );
-        return rows.filter((row) => !matchers.get(row.threadId)?.(row));
-      }).pipe(
+      listUnsettledRows(input).pipe(
         Effect.mapError(
           toPersistenceSqlError("ProjectionPendingInteractionRepository.listUnsettled"),
         ),

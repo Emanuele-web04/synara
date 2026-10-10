@@ -86,6 +86,13 @@ Valid groups may outlive their leader; cleanup must continue to reach those desc
 `apps/server/src/platform/effectProcessSignals.test.ts` against the installed
 runtime, including its Windows cases.
 
+The same patch makes writable stream errors fail the owning Effect sink, waits
+for accepted writes before completing, and removes drain/finish listeners on
+cancellation. Pending writes retain an error listener until they settle so a
+late broken pipe cannot become an uncaught process exception. Keep the source
+and compiled runtime changes together and run
+`apps/server/src/platform/effectWritableSink.test.ts` after updating Effect.
+
 Process-tree teardown captures POSIX start times and Windows creation times for
 checking descendants during delayed cleanup and exit verification. Start times
 add evidence to the existing command-line comparison. POSIX start times have

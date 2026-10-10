@@ -25,7 +25,6 @@ import {
   type ModelSelection,
   type OmpModelOptions,
   type OmpModelSelection,
-  type OmpThinkingLevel,
   type OpenCodeModelOptions,
   type OpenCodeModelSelection,
   type PiModelOptions,
@@ -48,7 +47,22 @@ export interface ProviderModelOption {
   description?: string;
   upstreamProviderId?: string;
   upstreamProviderName?: string;
-  role?: { name: string; model: string; thinkingLevel?: OmpThinkingLevel };
+}
+
+/** Old picker-only role keys are not model selectors. An exact, non-custom
+ * catalog entry can still prove that an opaque selector is a real model. */
+export function getOmpModelSelectionIssue(
+  model: string,
+  options: ReadonlyArray<{ slug: string; isCustom?: boolean }>,
+): string | null {
+  const selector = model.trim();
+  if (
+    !selector.startsWith("role:") ||
+    options.some((option) => option.slug === selector && option.isCustom !== true)
+  ) {
+    return null;
+  }
+  return "This saved OMP role is no longer supported. Choose an OMP model before sending.";
 }
 
 export interface ProviderModelOptionGroup {

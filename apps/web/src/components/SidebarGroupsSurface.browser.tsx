@@ -193,16 +193,21 @@ async function waitForText(text: string): Promise<HTMLElement> {
   return found!;
 }
 
-async function mount(props: { projects: Project[]; threadsHydrated: boolean }) {
+async function mount(props: {
+  projects: Project[];
+  threadsHydrated: boolean;
+  dataById?: ReadonlyMap<ProjectId, SidebarDerivedProjectData>;
+}) {
   const callbacks = makeCallbacks(
-    new Map(
-      props.projects.map((project) => [
-        project.id,
-        project.id === GROUP_A_ID
-          ? projectData(makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one"))
-          : emptyProjectData(),
-      ]),
-    ),
+    props.dataById ??
+      new Map(
+        props.projects.map((project) => [
+          project.id,
+          project.id === GROUP_A_ID
+            ? projectData(makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one"))
+            : emptyProjectData(),
+        ]),
+      ),
   );
   useStore.setState({ projects: props.projects, threadsHydrated: props.threadsHydrated });
   if (mountedRoot) {
@@ -354,6 +359,42 @@ describe("SidebarGroupsSurface", () => {
     coordinatorRow!.click();
     await vi.waitFor(() => {
       expect(callbacks.onOpenThread).toHaveBeenCalledWith(coordinatorThreadId);
+    });
+  });
+
+  it("keeps a collapsed hub with chats expandable without an active hub thread", async () => {
+    const group = makeGroupProject({
+      id: GROUP_A_ID,
+      kind: "group",
+      name: "Team Alpha",
+      cwd: `${GROUPS_ROOT}/team-alpha`,
+      expanded: false,
+    });
+    const data = projectData(makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one"));
+    // Collapsed hubs omit their rows when no thread inside them is active.
+    data.visibleEntries = [];
+    await mount({
+      projects: [group],
+      threadsHydrated: true,
+      dataById: new Map([[GROUP_A_ID, data]]),
+    });
+
+    await waitForText("Team Alpha");
+    const toggle = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show threads in Team Alpha"]',
+    );
+    expect(toggle).not.toBeNull();
+    expect(getComputedStyle(toggle!).visibility).toBe("visible");
+    expect(toggle!.tabIndex).toBe(0);
+    expect(toggle!.getAttribute("aria-expanded")).toBe("false");
+    toggle!.focus();
+    expect(document.activeElement).toBe(toggle);
+    toggle!.click();
+    await vi.waitFor(() => {
+      expect(toggle!.getAttribute("aria-expanded")).toBe("true");
+      expect(
+        useStore.getState().projects.find((project) => project.id === GROUP_A_ID)?.expanded,
+      ).toBe(true);
     });
   });
 

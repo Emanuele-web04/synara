@@ -43,6 +43,7 @@ export function normalizeProviderStatusForLocalConfig(input: {
     return {
       ...status,
       provider: input.provider,
+      enabled: false,
       status: "warning",
       available: false,
       authStatus: "unknown",

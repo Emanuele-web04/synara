@@ -1269,9 +1269,15 @@ export const createComposerDraftStoreState =
         if (!current || current.queuedTurns.every((entry) => entry.id !== queuedTurnId)) {
           return state;
         }
+        const queuedTurns = current.queuedTurns.filter((entry) => entry.id !== queuedTurnId);
         const nextDraft: ComposerThreadDraftState = {
           ...current,
-          queuedTurns: current.queuedTurns.filter((entry) => entry.id !== queuedTurnId),
+          queuedTurns,
+          // A drained queue no longer needs its Resume acknowledgement.
+          ...(queuedTurns.length === 0 &&
+          (current.queueResumedTurnId != null || current.queueStoppedTurnId != null)
+            ? { queueResumedTurnId: null, queueStoppedTurnId: null }
+            : {}),
         };
         const nextDraftsByThreadId = { ...state.draftsByThreadId };
         if (shouldRemoveDraft(nextDraft)) {
@@ -1280,6 +1286,58 @@ export const createComposerDraftStoreState =
           nextDraftsByThreadId[threadId] = nextDraft;
         }
         return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    // Only a waiting queue records the stop: a message queued after Stop was
+    // typed with the stop in mind and keeps sending as before.
+    // `null` withdraws the record when the stop request itself failed.
+    pauseQueuedTurnsAfterStop: (threadId, stoppedTurnId) => {
+      if (threadId.length === 0 || stoppedTurnId?.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (
+          !current ||
+          current.queuedTurns.length === 0 ||
+          (current.queueStoppedTurnId ?? null) === stoppedTurnId
+        ) {
+          return state;
+        }
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: { ...current, queueStoppedTurnId: stoppedTurnId },
+          },
+        };
+      });
+    },
+    // Clears a recorded stop; a turn id also acknowledges that turn's failure.
+    resumeQueuedTurns: (threadId, pausedTurnId) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        const nextResumedTurnId = pausedTurnId ?? current?.queueResumedTurnId ?? null;
+        if (
+          !current ||
+          current.queuedTurns.length === 0 ||
+          ((current.queueStoppedTurnId ?? null) === null &&
+            (current.queueResumedTurnId ?? null) === nextResumedTurnId)
+        ) {
+          return state;
+        }
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: {
+              ...current,
+              queueStoppedTurnId: null,
+              queueResumedTurnId: nextResumedTurnId,
+            },
+          },
+        };
       });
     },
     addImage: (threadId, image) => {
