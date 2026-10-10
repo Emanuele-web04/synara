@@ -4937,7 +4937,11 @@ describe("ProviderCommandReactor", () => {
 
       await respondToReview(harness, review, "continue");
 
-      expect((await readHarnessThread(harness))?.claudeCacheReview).toBeNull();
+      const recoveredThread = await readHarnessThread(harness);
+      expect(recoveredThread?.claudeCacheReview).toBeNull();
+      expect(
+        recoveredThread?.messages.find((message) => message.id === "cache-held-message"),
+      ).toMatchObject({ turnId: "turn-1", startsNewTurn: true });
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
       expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
         input: "Continue with this exact message",
@@ -11382,7 +11386,7 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-image-edit-assistant-complete"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         messageId: asMessageId("assistant-image-edit"),
-        turnId: asTurnId("turn-image-edit"),
+        turnId: asTurnId("turn-1"),
         createdAt: now,
       }),
     );
