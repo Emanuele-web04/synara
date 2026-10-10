@@ -393,13 +393,13 @@ export function ChatTranscriptPane({
           <SubagentRunContext.Provider value={subagentRunContextValue}>
             <MessagesTimeline
               key={activeThreadId}
+              {...(onStopBackgroundTask ? { onStopBackgroundTask } : {})}
               subagentThread={subagentThread ?? null}
               historyHeader={
                 importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
                   <ImportedHistoryButton history={importedHistory} />
                 ) : subagentThread ? (
-                  <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread}
-              onStopBackgroundTask={onStopBackgroundTask} />
+                  <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
                 ) : undefined
               }
               hasMessages={hasMessages}
