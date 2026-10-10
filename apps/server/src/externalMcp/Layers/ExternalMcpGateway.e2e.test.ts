@@ -143,6 +143,7 @@ describe("external MCP gateway stdio flow", () => {
     } as never);
 
     const engineLayer = Layer.succeed(OrchestrationEngineService, {
+      drain: Effect.void,
       dispatch: (command: OrchestrationCommand) =>
         Effect.sync(() => {
           dispatched.push(command);
@@ -431,6 +432,7 @@ describe("external MCP gateway stdio flow", () => {
           "synara_capabilities",
           "synara_list_allowed_projects",
           "synara_create_task",
+          "synara_send_task_message",
           "synara_wait_for_task",
           "synara_read_task",
         ]);
@@ -597,6 +599,97 @@ describe("external MCP gateway stdio flow", () => {
           },
         ]);
 
+        const followupText = "Continue the same task without creating a worktree.";
+        const followupArgs = { requestId: "followup-e2e", threadId, message: followupText };
+        const callFollowup = (args: Record<string, unknown>) =>
+          gateway
+            .handlePost({
+              authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
+              body: {
+                jsonrpc: "2.0",
+                id: "followup-e2e",
+                method: "tools/call",
+                params: { name: "synara_send_task_message", arguments: args },
+              },
+            })
+            .pipe(Effect.map((response) => toolPayload(response.body as Record<string, unknown>)));
+        const followup = yield* callFollowup(followupArgs);
+        expect(followup).toMatchObject({
+          threadId,
+          state: "pending",
+          turnId: null,
+          mode: "queue",
+          terminal: false,
+        });
+        expect(followup.runId).toMatch(/^mcp_run_/);
+        const followupCommand = dispatched.findLast(
+          (command) => command.type === "thread.turn.start",
+        );
+        expect(followupCommand).toMatchObject({
+          type: "thread.turn.start",
+          threadId,
+          dispatchMode: "queue",
+          dispatchOrigin: "agent",
+          runtimeMode: "approval-required",
+          message: { role: "user", text: followupText, attachments: [] },
+          taskWritePrecondition: { projectId: PROJECT_ID, envMode: "worktree" },
+        });
+        expect(followupCommand).not.toHaveProperty("modelSelection");
+        const dispatchCount = dispatched.length;
+        expect((yield* callFollowup(followupArgs)).runId).toBe(followup.runId);
+        expect(dispatched).toHaveLength(dispatchCount);
+        expect(
+          JSON.stringify(yield* callFollowup({ ...followupArgs, message: "Different payload" })),
+        ).toContain("idempotency_conflict");
+        const exactWait = yield* gateway.handlePost({
+          authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
+          body: {
+            jsonrpc: "2.0",
+            id: "followup-wait",
+            method: "tools/call",
+            params: {
+              name: "synara_wait_for_task",
+              arguments: { threadId, runId: followup.runId, timeoutMs: 0 },
+            },
+          },
+        });
+        expect(toolPayload(exactWait.body as Record<string, unknown>)).toMatchObject({
+          runId: followup.runId,
+          turnId: null,
+          state: "pending",
+          terminal: false,
+          summary: null,
+        });
+        const ownerThread = threads.get(threadId)!;
+        threads.set(threadId, { ...ownerThread, archivedAt: NOW });
+        expect(
+          JSON.stringify(yield* callFollowup({ ...followupArgs, requestId: "archived" })),
+        ).toContain("task_archived");
+        expect((yield* callFollowup(followupArgs)).runId).toBe(followup.runId);
+        threads.set(threadId, { ...ownerThread, runtimeMode: "full-access" });
+        expect(
+          JSON.stringify(yield* callFollowup({ ...followupArgs, requestId: "runtime-changed" })),
+        ).toContain("capability_denied");
+        threads.set(threadId, ownerThread);
+        const reader = yield* service.createIntegration({
+          name: "Project reader",
+          projectIds: [PROJECT_ID],
+          capabilities: ["projects:read", "tasks:read-project", "tasks:read", "tasks:create"],
+        });
+        const readerPair = yield* service.pair(
+          reader.pairingCode,
+          "syn_mcp_v1_project-reader-fixture",
+        );
+        const readerClient = yield* service.verifyCredential(readerPair.credential);
+        yield* service.assertTaskRead(readerClient, threadId);
+        expect(
+          yield* service.assertTaskWrite(readerClient, threadId).pipe(Effect.flip),
+        ).toMatchObject({ code: "task_denied" });
+        expect(worktreeCreates).toHaveLength(1);
+        expect(dispatched).toHaveLength(dispatchCount);
+        const followupRows = yield* sql`SELECT * FROM external_mcp_task_followups`;
+        expect(JSON.stringify(followupRows)).not.toContain(followupText);
+
         const interruptedWait = yield* gateway
           .handlePost({
             authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
@@ -671,7 +764,12 @@ describe("external MCP gateway stdio flow", () => {
           FROM external_mcp_audit_log
           ORDER BY created_at ASC, audit_id ASC
         `;
-        expect(auditRows).toHaveLength(9);
+        expect(auditRows).toHaveLength(16);
+        expect(
+          auditRows
+            .filter((row) => row.requestId === "followup-e2e")
+            .every((row) => row.createdTaskIdsJson === "[]"),
+        ).toBe(true);
         expect(auditRows.find((row) => row.requestId === "external-e2e-request")).toMatchObject({
           projectId: PROJECT_ID,
           runtimeMode: "approval-required",
@@ -680,6 +778,7 @@ describe("external MCP gateway stdio flow", () => {
           detail: null,
         });
         expect(JSON.stringify(auditRows)).not.toContain(prompt);
+        expect(JSON.stringify(auditRows)).not.toContain(followupText);
         expect(auditRows.some((row) => row.detail?.includes("Capability denied"))).toBe(true);
         expect(auditRows.some((row) => row.outcome === "started")).toBe(false);
         const operationPlans = yield* sql<{ readonly planJson: string }>`
