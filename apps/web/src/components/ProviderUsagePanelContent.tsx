@@ -4,7 +4,8 @@
 // The limit rows are the point of the popover, so reset credits and usage lines
 // sit behind a "Details" toggle whose state persists in app settings.
 
-import type { ProviderKind, ServerCodexResetCredits } from "@synara/contracts";
+import type { ServerCodexResetCredits } from "@synara/contracts";
+import type { DisplayProvider } from "~/lib/providerIdentity";
 import { providerUsageLabel } from "@synara/shared/providerUsage";
 
 import { useAppSettings } from "~/appSettings";
@@ -27,7 +28,7 @@ import { DisclosureRegion } from "./ui/DisclosureRegion";
 export { providerUsageLabel };
 
 export function ProviderUsagePanelContent(props: {
-  provider: ProviderKind | null | undefined;
+  provider: DisplayProvider | null | undefined;
   rateLimits: ReadonlyArray<ProviderRateLimit>;
   usageLines?: ReadonlyArray<OpenUsageUsageLine> | undefined;
   notice?: string | null | undefined;

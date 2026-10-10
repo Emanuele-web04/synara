@@ -97,6 +97,7 @@ function binaryPathForProvider(
   config: Readonly<Record<string, unknown>>,
   baseEnv: NodeJS.ProcessEnv,
 ): string | null {
+  if (provider === "external") return null;
   const configured = readConfigString(config, "binaryPath");
   return resolveExecutable(configured ?? PROVIDER_CLI_COMMAND_BY_KIND[provider], { env: baseEnv });
 }
@@ -114,6 +115,7 @@ export async function deriveManagedTerminalProfiles(input: {
   const commandNames = new Set<string>();
 
   for (const instance of deriveProviderInstances(input.settings)) {
+    if (instance.driver === "external") continue;
     if (!instance.enabled || (input.onlyInstanceId && instance.instanceId !== input.onlyInstanceId))
       continue;
     const commandName = providerCliCommandName({

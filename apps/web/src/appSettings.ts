@@ -232,7 +232,8 @@ type CustomModelSettingsKey =
   | "customDevinModels"
   | "customOpenCodeModels"
   | "customPiModels"
-  | "customOmpModels";
+  | "customOmpModels"
+  | "customExternalModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -254,6 +255,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
   omp: new Set(getModelOptions("omp").map((option) => option.slug)),
+  external: new Set(getModelOptions("external").map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -282,6 +284,7 @@ const PersistedProviderKind = Schema.Literals([
   "opencode",
   "pi",
   "omp",
+  "external",
 ]).pipe(
   Schema.decodeTo(
     ProviderKind,
@@ -557,6 +560,7 @@ export const AppSettingsSchema = Schema.Struct({
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOmpModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customExternalModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
@@ -717,14 +721,25 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "provider/model",
     example: "anthropic/claude-sonnet-4-5",
   },
+  external: {
+    provider: "external",
+    settingsKey: "customExternalModels",
+    defaultSettingsKey: "customExternalModels",
+    title: "External",
+    description: "Save additional External model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "partner/custom-model",
+  },
 };
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
 
 // Droid's ACP catalog is authoritative and rejects unknown slugs. Preserve its
 // persisted config for compatibility, but do not offer an editor it cannot honor.
+// External agent profiles resolve models from their connector, so custom slugs
+// stay persistence-compatible without an editor.
 export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS.filter(
-  (config) => config.provider !== "droid",
+  (config) => config.provider !== "droid" && config.provider !== "external",
 );
 
 export function normalizeCustomModelSlugs(
@@ -836,7 +851,7 @@ export function resolveTerminalFontFamilyStack(value: string | null | undefined)
 }
 
 function normalizeProviderBinaryPathOverride(
-  provider: ProviderKind,
+  provider: Exclude<ProviderKind, "external">,
   value: string | null | undefined,
 ): string {
   const trimmed = value?.trim() ?? "";
@@ -1059,8 +1074,8 @@ export function getProviderInstanceOptions(
     }))
     .toSorted((left, right) => {
       const providerDelta =
-        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
-        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
+        (PROVIDER_INSTANCE_PROVIDER_ORDER as readonly ProviderKind[]).indexOf(left.provider) -
+        (PROVIDER_INSTANCE_PROVIDER_ORDER as readonly ProviderKind[]).indexOf(right.provider);
       if (providerDelta !== 0) {
         return providerDelta;
       }
@@ -1480,6 +1495,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
     customOmpModels: normalizeCustomModelSlugs(settings.customOmpModels, "omp"),
+    customExternalModels: normalizeCustomModelSlugs(settings.customExternalModels, "external"),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     disabledProviders: normalizeHiddenProviders(settings.disabledProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
@@ -1492,7 +1508,9 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
 export function getServerDisabledProviders(
   settings: Pick<ServerSettingsView, "providers">,
 ): ProviderKind[] {
-  return DEFAULT_PROVIDER_ORDER.filter((provider) => !settings.providers[provider].enabled);
+  return DEFAULT_PROVIDER_ORDER.filter(
+    (provider) => provider !== "external" && !settings.providers[provider].enabled,
+  );
 }
 
 export function didProviderEnablementChange(
@@ -1502,7 +1520,9 @@ export function didProviderEnablementChange(
   return (
     previous === undefined ||
     DEFAULT_PROVIDER_ORDER.some(
-      (provider) => previous.providers[provider].enabled !== next.providers[provider].enabled,
+      (provider) =>
+        provider !== "external" &&
+        previous.providers[provider].enabled !== next.providers[provider].enabled,
     )
   );
 }
@@ -1639,6 +1659,7 @@ function pruneProviderPatchAgainstCurrentSettings(
   currentSettings: Pick<ServerSettingsView, "providers">,
 ): void {
   for (const provider of DEFAULT_PROVIDER_ORDER) {
+    if (provider === "external") continue;
     const providerPatch = providers[provider];
     if (!providerPatch) continue;
 
@@ -1847,6 +1868,7 @@ export function appSettingsPatchToServerSettingsPatch(
   if (hasOwn(patch, "disabledProviders")) {
     const disabledProviders = new Set(normalizeHiddenProviders(patch.disabledProviders ?? []));
     for (const provider of DEFAULT_PROVIDER_ORDER) {
+      if (provider === "external") continue;
       const enabled = !disabledProviders.has(provider);
       if (currentSettings?.providers[provider].enabled === enabled) {
         continue;
@@ -2106,6 +2128,7 @@ export function getCustomModelsByProvider(
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
     omp: getCustomModelsForProvider(settings, "omp"),
+    external: settings.customExternalModels ?? [],
   };
 }
 
@@ -2341,6 +2364,7 @@ function omitProviderStartOptions(
   providerOptions: ProviderStartOptions,
   provider: ProviderKind,
 ): ProviderStartOptions {
+  if (provider === "external") return providerOptions;
   const { [provider]: _omittedProviderOptions, ...remainingProviderOptions } = providerOptions;
   void _omittedProviderOptions;
   return remainingProviderOptions as ProviderStartOptions;
@@ -2617,6 +2641,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
     case "omp":
       return normalizeProviderBinaryPathOverride(provider, settings.ompBinaryPath);
+    case "external":
+      return "";
   }
 }
 
@@ -2625,6 +2651,7 @@ export function getCustomBinaryPathForProviderInstance(
   provider: ProviderKind,
   instanceId: ProviderInstanceId,
 ): string {
+  if (provider === "external") return "";
   const providerOptions = getProviderStartOptions(settings, instanceId)?.[provider];
   const binaryPath = isRecord(providerOptions) ? providerOptions.binaryPath : undefined;
   return typeof binaryPath === "string"

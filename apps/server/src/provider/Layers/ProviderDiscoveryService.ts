@@ -114,7 +114,7 @@ const PROVIDER_DISCOVERY_OPTION_KEYS = {
   opencode: ["binaryPath", "serverUrl", "serverPassword", "experimentalWebSockets", "environment"],
   pi: ["binaryPath", "agentDir", "environment"],
   omp: ["binaryPath", "agentDir", "environment"],
-} as const satisfies Record<ProviderKind, readonly string[]>;
+} as const satisfies Record<Exclude<ProviderKind, "external">, readonly string[]>;
 
 const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
@@ -189,6 +189,7 @@ const make = Effect.gen(function* () {
     providerOptions: ProviderStartOptions | undefined,
     replaceProviderOptions: boolean,
   ): T => {
+    if (parsed.provider === "external") return parsed;
     const base = { ...parsed } as Record<string, unknown>;
     if (replaceProviderOptions) {
       for (const key of PROVIDER_DISCOVERY_OPTION_KEYS[parsed.provider]) {
