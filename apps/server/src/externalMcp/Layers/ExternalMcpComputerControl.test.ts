@@ -118,6 +118,7 @@ describe("external MCP computer control scope", () => {
     } as never);
 
     const engineLayer = Layer.succeed(OrchestrationEngineService, {
+      drain: Effect.void,
       dispatch: (command: OrchestrationCommand) =>
         Effect.sync(() => {
           dispatched.push(command);

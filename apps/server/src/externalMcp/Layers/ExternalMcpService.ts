@@ -22,6 +22,7 @@ import {
 } from "../Services/ExternalMcpService.ts";
 import type { ExternalMcpIntegrationRecord } from "../Services/ExternalMcpRepository.ts";
 import { externalMcpLauncher, externalMcpShellCommand } from "../launcher.ts";
+import { resolveExternalMcpRuntimePolicy } from "../runtimePolicy.ts";
 
 const DEFAULT_EXPIRY_DAYS = 30;
 const PAIRING_TTL_MS = 10 * 60 * 1_000;
@@ -467,6 +468,106 @@ export const makeExternalMcpService = Effect.gen(function* () {
           ),
         );
 
+  const assertTaskWrite: ExternalMcpServiceShape["assertTaskWrite"] = (client, threadId) =>
+    Effect.gen(function* () {
+      yield* assertActive(client.integration.integrationId);
+      const task = yield* repository.getTask({
+        integrationId: client.integration.integrationId,
+        threadId,
+      });
+      const operation = task === null ? null : yield* repository.getOperationById(task.operationId);
+      if (
+        !client.capabilities.has("tasks:create") ||
+        task?.status !== "created" ||
+        operation?.status !== "completed"
+      ) {
+        return yield* toExternalMcpError(
+          "task_denied",
+          "Follow-up writes require a task successfully created by this integration.",
+          403,
+        );
+      }
+      const selected = yield* snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId));
+      if (Option.isNone(selected)) {
+        return yield* toExternalMcpError("task_not_found", "The owned task was not found.", 404);
+      }
+      const thread = selected.value;
+      if (
+        thread.creationSource !== "external_mcp" ||
+        thread.gatewayOperationId !== task.operationId ||
+        !client.allowedProjectIds.has(thread.projectId)
+      ) {
+        return yield* toExternalMcpError(
+          "task_denied",
+          "The task is outside this integration's write authority.",
+          403,
+        );
+      }
+      if (thread.archivedAt != null) {
+        return yield* toExternalMcpError(
+          "task_archived",
+          "Unarchive the task before sending a follow-up.",
+          409,
+        );
+      }
+      const selectedProject = yield* snapshotQuery.getProjectShellById(thread.projectId);
+      if (Option.isNone(selectedProject)) {
+        return yield* toExternalMcpError("task_denied", "The task project is unavailable.", 403);
+      }
+      yield* Effect.try({
+        try: () => {
+          resolveExternalMcpRuntimePolicy({
+            requestedEnvironment: thread.envMode ?? "local",
+            requestedRuntimeMode: thread.runtimeMode,
+            capabilities: client.capabilities,
+          });
+          // A mode change can be deferred until the live turn settles. Native
+          // steering still runs inside that session's current permissions.
+          if (thread.session && ["starting", "running", "ready"].includes(thread.session.status)) {
+            resolveExternalMcpRuntimePolicy({
+              requestedEnvironment: thread.envMode ?? "local",
+              requestedRuntimeMode: thread.session.runtimeMode,
+              capabilities: client.capabilities,
+            });
+          }
+        },
+        catch: (cause) =>
+          toExternalMcpError(
+            "capability_denied",
+            cause instanceof Error ? cause.message : "Task runtime is not permitted.",
+            403,
+          ),
+      });
+      return {
+        thread,
+        precondition: {
+          projectId: thread.projectId,
+          projectWorkspaceRoot: selectedProject.value.workspaceRoot,
+          envMode: thread.envMode ?? "local",
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          workingDirectory: thread.workingDirectory ?? null,
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          modelSelection: thread.modelSelection,
+          sessionProviderInstanceId: thread.session?.providerInstanceId ?? null,
+          sessionRuntimeMode: thread.session?.runtimeMode ?? null,
+          gatewayOperationId: task.operationId,
+        },
+      };
+    }).pipe(
+      Effect.mapError((cause) =>
+        cause instanceof ExternalMcpError
+          ? cause
+          : toExternalMcpError(
+              "repository_error",
+              "Could not verify task write authority.",
+              500,
+              cause,
+            ),
+      ),
+    );
+
   const assertTaskRead: ExternalMcpServiceShape["assertTaskRead"] = (client, threadId) =>
     repository.getTask({ integrationId: client.integration.integrationId, threadId }).pipe(
       Effect.mapError((cause) =>
@@ -588,6 +689,7 @@ export const makeExternalMcpService = Effect.gen(function* () {
     assertActive,
     assertProject,
     assertTaskRead,
+    assertTaskWrite,
     beginAudit,
     finishAudit,
   } satisfies ExternalMcpServiceShape;

@@ -7,6 +7,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { AgentGatewayOperationRecord } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
+import type { ExternalMcpWaitState } from "../waitForTask.ts";
 
 export interface ExternalMcpIntegrationRecord {
   readonly integrationId: string;
@@ -55,7 +56,61 @@ export interface ExternalMcpTaskRecord {
   readonly updatedAt: string;
 }
 
+export interface ExternalMcpFollowupRecord {
+  readonly runId: string;
+  readonly integrationId: string;
+  readonly requestId: string;
+  readonly fingerprint: string;
+  readonly taskOperationId: string;
+  readonly threadId: string;
+  readonly messageId: string;
+  readonly commandId: string;
+  readonly mode: "queue" | "steer";
+  readonly status: "reserved" | "dispatching" | "accepted" | "failed";
+  readonly errorCode: string | null;
+  readonly createdAt: string;
+}
+
+export interface ExternalMcpFollowupRun {
+  readonly runId: string;
+  readonly threadId: string;
+  readonly turnId: string | null;
+  readonly state: ExternalMcpWaitState;
+  readonly blocked: boolean;
+  readonly errorCode: string | null;
+}
+
+export type ReserveExternalMcpFollowupResult =
+  | {
+      readonly kind: "reserved" | "replay" | "idempotency_conflict";
+      readonly followup: ExternalMcpFollowupRecord;
+    }
+  | { readonly kind: "task_denied" }
+  | { readonly kind: "inactive" }
+  | { readonly kind: "concurrency_limited"; readonly activeCount: number; readonly limit: number };
+
 export interface ExternalMcpRepositoryShape {
+  readonly reserveFollowup: (
+    input: Omit<ExternalMcpFollowupRecord, "status" | "errorCode">,
+  ) => Effect.Effect<ReserveExternalMcpFollowupResult, Error>;
+  readonly getFollowupByRequest: (input: {
+    readonly integrationId: string;
+    readonly requestId: string;
+  }) => Effect.Effect<ExternalMcpFollowupRecord | null, Error>;
+  readonly getFollowupRun: (input: {
+    readonly integrationId: string;
+    readonly threadId: string;
+    readonly runId: string;
+  }) => Effect.Effect<ExternalMcpFollowupRun | null, Error>;
+  readonly markFollowupDispatching: (runId: string) => Effect.Effect<boolean, Error>;
+  readonly settleFollowupDispatch: (input: {
+    readonly runId: string;
+    readonly accepted: boolean;
+    readonly notAttempted?: boolean;
+  }) => Effect.Effect<void, Error>;
+  readonly failReservedFollowup: (runId: string) => Effect.Effect<void, Error>;
+  /** Startup only, before serving requests and after the command engine drains. */
+  readonly recoverFollowups: () => Effect.Effect<void, Error>;
   readonly listActiveProjects: () => Effect.Effect<ReadonlyArray<ExternalMcpProjectRecord>, Error>;
   readonly createIntegration: (input: {
     readonly integrationId: string;

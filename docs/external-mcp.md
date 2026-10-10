@@ -137,6 +137,8 @@ The advertised catalog is filtered by the integration's granted scopes. It expos
 - `synara_capabilities` — provider/model construction and safety limits for an allowed project.
 - `synara_list_allowed_projects` — only projects selected by the user.
 - `synara_create_task` — one task per stable `requestId`.
+- `synara_send_task_message` — continue a task successfully created by this integration, using
+  the existing provider instance, conversation, and workspace. Requires `tasks:create`.
 - `synara_wait_for_task` — wait for an authorized task without changing it.
 - `synara_read_task` — read tasks created by the integration. Reading other tasks requires the
   separate `tasks:read-project` scope.
@@ -145,6 +147,52 @@ Creation requires an explicit `projectId`, `provider`, `model`, `prompt`, and st
 The default environment is a managed worktree and the default runtime is approval-required. Local
 checkout execution and full-access execution are independent, explicit scopes.
 
+### Continue an owned task
+
+After creating a task, keep its `threadId`. Send a follow-up with a new, stable `requestId`:
+
+```json
+{
+  "requestId": "review-fix-2",
+  "threadId": "the-created-thread-id",
+  "message": "Address the remaining review comments.",
+  "mode": "queue"
+}
+```
+
+`queue` is the default. `steer` uses the normal provider steering rules and can become queued
+work when native steering is unavailable or the previous turn has finished. Follow-ups accept
+no provider, instance, model, workspace, or runtime override. If the task's owner changes it to
+local or full-access execution, the integration needs the corresponding runtime grant.
+
+Pass the response's **exact `runId`** with the same `threadId` to `synara_wait_for_task`:
+
+```json
+{
+  "threadId": "the-created-thread-id",
+  "runId": "mcp_run_returned-by-send",
+  "timeoutMs": 30000
+}
+```
+
+This opaque handle identifies the follow-up request, including while it is queued. The wait
+also returns `turnId` after provider acceptance; native steering can share the existing turn.
+It never substitutes the previous completed turn. Use `synara_read_task` for the conversation
+and results. Existing waits using native turn IDs remain supported.
+
+Retry the same message and mode with the same `requestId` if a response is lost. The original
+run handle is replayed without sending twice; a different payload under that key is refused.
+Creation and follow-up keys have separate namespaces. A definitively rejected request reports
+a terminal error; read the task and use a new key for an intentional new attempt. A response
+with `blocked: true` is **not terminal**: Synara cannot yet prove the provider delivery outcome.
+Resolve that delivery in Synara before submitting replacement work.
+For `dispatch_uncertain`, restarting Synara reconciles the request against committed commands;
+wait for that result before intentionally submitting another attempt.
+
+Project-wide read permission does not grant writes. This tool accepts only unarchived tasks
+successfully created by the same integration and still in its allowed projects. Sending into
+other project tasks requires a future explicit project-write grant.
+
 ## Security and lifecycle
 
 - `/mcp/external` is available only while Synara itself is loopback-only. Configuring remote or
@@ -152,12 +200,15 @@ checkout execution and full-access execution are independent, explicit scopes.
 - External credentials have the fixed `synara.external-mcp` audience. They are opaque, expiring,
   revocable, stored as SHA-256 hashes in the server database, and cannot authenticate browser,
   WebSocket, server-token, or internal provider-session paths.
-- Expiry and revocation are checked at request ingress and again while long-running create/wait
+- Expiry and revocation are checked at request ingress and again while long-running create/send/wait
   operations continue.
 - Every integration has project, capability, per-minute call, and active-agent-task limits. A slot
   is reserved transactionally while creation is in progress, remains occupied while the owned
   task's current turn is pending or running, and is released when creation fails or that turn
-  becomes terminal. An idempotent retry of the same `requestId` never consumes another slot.
+  becomes terminal. Restarting an idle owned task also reserves a slot; multiple queued or
+  steering requests for the same active task share that slot. Pending follow-ups retain it
+  between turns and across restart. Unknown delivery outcomes retain capacity until resolved.
+  An idempotent retry of the same `requestId` never consumes another slot.
 - Audit rows record integration identity, tool, request ID, project, environment, runtime, outcome,
   and created task IDs. Full prompts are not copied into audit rows or durable recovery plans.
   Rate-limit rejections are aggregated per integration/window and old audit history is pruned.

@@ -13,6 +13,44 @@ const inactive = () =>
   Effect.fail(new GatewayToolError("external_credential_inactive", "Integration revoked."));
 
 describe("waitForExternalMcpTaskState", () => {
+  it("waits on an exact follow-up handle and reports blocked delivery without claiming completion", async () => {
+    let reads = 0;
+    const result = await Effect.runPromise(
+      waitForExternalMcpTaskState({
+        threadId: "owned-thread",
+        runId: "mcp_run_exact",
+        initialState: "pending",
+        timeoutMs: 500,
+        assertActive: () => Effect.void,
+        projectionTurns: {
+          getManyWaitSnapshot: () =>
+            Effect.die("Opaque request handles must not become provider turn ids."),
+        },
+        resolveLatestTurn: () => Effect.die("A follow-up must not bind to the previous run."),
+        resolveRequestRun: () =>
+          Effect.sync(() =>
+            ++reads === 1
+              ? { turnId: null, state: "pending" as const, blocked: false, errorCode: null }
+              : {
+                  turnId: null,
+                  state: "pending" as const,
+                  blocked: true,
+                  errorCode: "provider_delivery_blocked",
+                },
+          ),
+      }),
+    );
+    expect(result).toMatchObject({
+      runId: "mcp_run_exact",
+      turnId: null,
+      state: "pending",
+      terminal: false,
+      blocked: true,
+      timedOut: false,
+      errorCode: "provider_delivery_blocked",
+    });
+  });
+
   it("keeps an explicit null run id unpinned while omission selects the latest turn", () => {
     expect(requestedExternalMcpRunId({}, "turn-latest")).toBe("turn-latest");
     expect(requestedExternalMcpRunId({ runId: null }, "turn-latest")).toBeNull();

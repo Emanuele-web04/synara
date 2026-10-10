@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type {
   OrchestrationCommand,
   OrchestrationEvent,
@@ -1856,6 +1858,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
+      if (command.taskWritePrecondition !== undefined) {
+        const expected = command.taskWritePrecondition;
+        const project = readModel.projects.find((entry) => entry.id === targetThread.projectId);
+        const actual = {
+          projectId: targetThread.projectId,
+          projectWorkspaceRoot: project?.workspaceRoot,
+          envMode: targetThread.envMode ?? "local",
+          branch: targetThread.branch,
+          worktreePath: targetThread.worktreePath,
+          workingDirectory: targetThread.workingDirectory ?? null,
+          runtimeMode: targetThread.runtimeMode,
+          interactionMode: targetThread.interactionMode,
+          modelSelection: targetThread.modelSelection,
+          sessionProviderInstanceId: targetThread.session?.providerInstanceId ?? null,
+          sessionRuntimeMode: targetThread.session?.runtimeMode ?? null,
+          gatewayOperationId: targetThread.gatewayOperationId,
+        };
+        if (
+          targetThread.archivedAt != null ||
+          targetThread.creationSource !== "external_mcp" ||
+          !project ||
+          project.deletedAt !== null ||
+          !isDeepStrictEqual(actual, expected)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "The authorized task target changed or was archived. Read the task before retrying with a new requestId.",
+          });
+        }
+      }
       if (command.resumePrecondition !== undefined) {
         // Quit-resume continuations are only valid while the thread is exactly as
         // it was recorded; checked here so it holds inside the serialized dispatch.
