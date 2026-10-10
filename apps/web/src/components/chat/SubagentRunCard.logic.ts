@@ -602,7 +602,6 @@ function nestedRowsFor(input: {
         primaryLabel: presentation.nickname ?? presentation.primaryLabel,
         fullLabel: presentation.fullLabel,
         role: presentation.role,
-        accentColor: presentation.accentColor,
         modelLabel: formatSubagentModelLabel(thread.modelSelection.model),
         statusLabel,
         statusKind,
