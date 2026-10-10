@@ -64,8 +64,9 @@ Restored detail can be displayed promptly, while pending approvals, questions, p
 and automatic queue dispatch wait for an applied authoritative snapshot or complete replay. The
 opt-in batched replay includes an empty confirmation after validating the thread and cursor.
 Servers that omit that confirmation trigger an authoritative snapshot fallback after two seconds.
-Existing user-stop/failure queue pause markers remain in the composer draft and survive cache
-verification until their ordinary explicit Resume behavior clears them.
+If a paged detail stream fails after verification, queued sends wait for authoritative detail to
+return. Existing user-stop/failure queue pause markers remain in the composer draft and survive
+cache verification until their ordinary explicit Resume behavior clears them.
 
 Cached running or streaming detail does not count as observed live work. If confirmation shows
 that the turn already finished, it opens folded without replaying a completion animation. Once

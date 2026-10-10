@@ -7,7 +7,8 @@
 // drive pause/resume on settled runs.
 // Layer: Chat composer logic
 // Exports: deriveWorkflowRunState, WorkflowRunState, WorkflowAgentRow,
-// workflowElapsedMs, and buildWorkflowResumePrompt
+// workflowElapsedMs, buildWorkflowResumePrompt, and the shared collectTaskSnapshots
+// fold (also read by the Environment panel's subagent roster)
 
 import { ThreadId, type OrchestrationThreadActivity } from "@synara/contracts";
 
@@ -121,7 +122,7 @@ interface WorkflowAgentPlanEntry {
   effort: string | null;
 }
 
-interface TaskSnapshot {
+export interface TaskSnapshot {
   taskId: string;
   startedAt: string;
   description: string;
@@ -132,7 +133,13 @@ interface TaskSnapshot {
   toolUseId: string | null;
   status: "running" | "paused" | "completed" | "failed" | "stopped";
   totalTokens: number | null;
+  toolUses: number | null;
   durationMs: number | null;
+  lastToolName: string | null;
+  // task.completed summary, or the task.updated error for a failed task.
+  summary: string | null;
+  // When the task reached a terminal status; null while it runs (or after a reopen).
+  settledAt: string | null;
   phases: Array<{ title: string; detail: string | null }> | null;
   agentPhases: Record<string, string> | null;
   agentPlans: Record<string, WorkflowAgentPlanEntry> | null;
@@ -153,13 +160,22 @@ function asString(value: unknown): string | null {
 
 function readUsage(payload: Record<string, unknown>): {
   totalTokens: number | null;
+  toolUses: number | null;
   durationMs: number | null;
 } {
   const usage = asRecord(payload.usage);
   return {
     totalTokens: usage && typeof usage.total_tokens === "number" ? usage.total_tokens : null,
+    toolUses: usage && typeof usage.tool_uses === "number" ? usage.tool_uses : null,
     durationMs: usage && typeof usage.duration_ms === "number" ? usage.duration_ms : null,
   };
+}
+
+function applyUsage(snapshot: TaskSnapshot, payload: Record<string, unknown>): void {
+  const usage = readUsage(payload);
+  snapshot.totalTokens = usage.totalTokens ?? snapshot.totalTokens;
+  snapshot.toolUses = usage.toolUses ?? snapshot.toolUses;
+  snapshot.durationMs = usage.durationMs ?? snapshot.durationMs;
 }
 
 function readPhases(value: unknown): TaskSnapshot["phases"] {
@@ -289,7 +305,7 @@ function completionStatus(status: string | null): TaskSnapshot["status"] {
 
 // Folds the task lifecycle activities into one snapshot per task id. Later
 // activities win on status/usage; identity fields stick from task.started.
-function collectTaskSnapshots(
+export function collectTaskSnapshots(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): Map<string, TaskSnapshot> {
   const snapshots = new Map<string, TaskSnapshot>();
@@ -320,7 +336,11 @@ function collectTaskSnapshots(
         toolUseId: asString(payload.toolUseId),
         status: "running",
         totalTokens: null,
+        toolUses: null,
         durationMs: null,
+        lastToolName: null,
+        summary: null,
+        settledAt: null,
         phases: readPhases(payload.workflowPhases),
         agentPhases: readAgentPhases(payload.workflowAgentPhases),
         agentPlans: readAgentPlans(payload.workflowAgentPlans),
@@ -339,9 +359,8 @@ function collectTaskSnapshots(
     }
 
     if (activity.kind === "task.progress") {
-      const usage = readUsage(payload);
-      snapshot.totalTokens = usage.totalTokens ?? snapshot.totalTokens;
-      snapshot.durationMs = usage.durationMs ?? snapshot.durationMs;
+      applyUsage(snapshot, payload);
+      snapshot.lastToolName = asString(payload.lastToolName) ?? snapshot.lastToolName;
       // Poller-emitted snapshot events: their description is synthetic, not a
       // "<phase>: <label>" progress entry.
       const liveAgents = readLiveAgents(payload.workflowAgents);
@@ -367,19 +386,25 @@ function collectTaskSnapshots(
         snapshot.status = "paused";
       } else if (status === "running" || status === "pending") {
         snapshot.status = "running";
+        snapshot.settledAt = null;
       } else if (status === "killed") {
         snapshot.status = "stopped";
+        snapshot.settledAt = activity.createdAt;
       } else if (status === "completed" || status === "failed") {
         snapshot.status = status;
+        snapshot.settledAt = activity.createdAt;
+        if (status === "failed") {
+          snapshot.summary = asString(payload.detail) ?? snapshot.summary;
+        }
       }
       continue;
     }
 
     snapshot.status = completionStatus(asString(payload.status));
+    snapshot.settledAt = activity.createdAt;
+    snapshot.summary = asString(payload.detail) ?? snapshot.summary;
     snapshot.finalAgents = readFinalAgents(payload.workflowAgents) ?? snapshot.finalAgents;
-    const usage = readUsage(payload);
-    snapshot.totalTokens = usage.totalTokens ?? snapshot.totalTokens;
-    snapshot.durationMs = usage.durationMs ?? snapshot.durationMs;
+    applyUsage(snapshot, payload);
   }
   return snapshots;
 }
