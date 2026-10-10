@@ -1392,6 +1392,41 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ]);
     });
 
+    it("keeps an already usable Pi provider ready after its advisory timeout wording", () => {
+      const previousReadyPi = {
+        provider: "pi",
+        instanceId: "pi",
+        driver: "pi",
+        status: "ready",
+        available: true,
+        authStatus: "unknown",
+        version: "0.84.4",
+        checkedAt: "2026-09-04T01:03:00.000Z",
+        message: "Pi CLI is installed. Configure provider credentials inside Pi as needed.",
+      } satisfies ServerProviderStatus;
+      const piTimeout = {
+        provider: "pi",
+        instanceId: "pi",
+        driver: "pi",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-09-04T01:04:00.000Z",
+        message:
+          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts([previousReadyPi], [piTimeout]),
+        [
+          {
+            ...previousReadyPi,
+            checkedAt: "2026-09-04T01:04:00.000Z",
+          },
+        ],
+      );
+    });
+
     it("does not keep a stale Claude auth error after a transient auth timeout", () => {
       const previousUnauthenticatedClaude = {
         provider: "claudeAgent",

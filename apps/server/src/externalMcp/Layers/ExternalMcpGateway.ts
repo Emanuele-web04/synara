@@ -15,7 +15,7 @@ import {
   type ServerProviderStatus,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
-import { isProviderKind } from "@synara/shared/providerInstances";
+import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -56,6 +56,7 @@ import {
   agentGatewayTargetOptionGuidance,
   loadAgentGatewayProviderCatalog,
   type AgentGatewayProviderAvailability,
+  type AgentGatewayProviderInstanceAvailability,
 } from "../../agentGateway/targetResolver.ts";
 import {
   decodeCreateThreadsInput,
@@ -96,8 +97,27 @@ import {
 } from "../Services/ExternalMcpGateway.ts";
 
 const EXTERNAL_MCP_INSTRUCTIONS =
-  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Tools are restricted to the integration's allowed projects and scopes. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
+  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Call synara_capabilities with a projectId to choose an exact provider instanceId and model from the advertised catalog. Tools are restricted to the integration's allowed projects and scopes. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
 const MCP_MAX_BATCH_MESSAGES = 50;
+
+const providerInstanceAvailability = (
+  instance: ReturnType<typeof deriveProviderInstances>[number],
+  status: ServerProviderStatus | undefined,
+): AgentGatewayProviderInstanceAvailability => {
+  const result = {
+    instanceId: instance.instanceId,
+    displayName: instance.displayName,
+    isDefault: instance.isDefault,
+    enabled: instance.enabled,
+  };
+  return status === undefined
+    ? result
+    : {
+        ...result,
+        available: status.available,
+        authStatus: status.authStatus,
+      };
+};
 
 interface ExternalToolContext {
   readonly principal: ExternalClientPrincipal;
@@ -200,19 +220,32 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       settings.getSettings,
       providerHealth.getStatuses,
     ]);
-    const statusByProvider = new Map<ProviderKind, ServerProviderStatus>();
+    const statusByInstance = new Map<string, ServerProviderStatus>();
     for (const status of statuses) {
       if (isProviderKind(status.driver)) {
-        statusByProvider.set(status.driver, status);
+        const instanceId = status.instanceId ?? status.provider;
+        statusByInstance.set(`${status.driver}\u0000${instanceId}`, status);
       }
+    }
+    const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
+    for (const instance of deriveProviderInstances(serverSettings)) {
+      const instances = instancesByProvider.get(instance.driver) ?? [];
+      instancesByProvider.set(instance.driver, [...instances, instance]);
     }
     return new Map<ProviderKind, AgentGatewayProviderAvailability>(
       PROVIDER_KINDS.map((provider) => {
-        const status = statusByProvider.get(provider);
+        const status = statusByInstance.get(`${provider}\u0000${provider}`);
+        const instances = instancesByProvider.get(provider) ?? [];
         return [
           provider,
           {
             enabled: serverSettings.providers[provider].enabled,
+            instances: instances.map((instance) =>
+              providerInstanceAvailability(
+                instance,
+                statusByInstance.get(`${instance.driver}\u0000${instance.instanceId}`),
+              ),
+            ),
             ...(status
               ? {
                   available: status.available,
@@ -308,6 +341,9 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
               provider.provider,
               {
                 modelValueSource: "providers[].models[].slug",
+                instanceIdValueSource: "providers[].instances[].instanceId",
+                instanceIdSelectionRule:
+                  "Use an enabled instanceId advertised for this provider; omit it to use the provider's default instance.",
                 ...agentGatewayTargetOptionGuidance(provider),
               },
             ]),
@@ -423,6 +459,11 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           requestId: { type: "string", maxLength: 256 },
           projectId: { type: "string" },
           provider: { type: "string", enum: [...PROVIDER_KINDS] },
+          instanceId: {
+            type: "string",
+            description:
+              "Exact provider instance ID from synara_capabilities providers[].instances[].instanceId. Omit to use the provider's default instance.",
+          },
           model: { type: "string" },
           options: {
             type: "object",
@@ -499,6 +540,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
                 ...(input.title ? { title: input.title } : {}),
                 target: {
                   provider: input.provider,
+                  ...(input.instanceId ? { instanceId: input.instanceId } : {}),
                   model: input.model,
                   ...(input.options ? { options: input.options } : {}),
                 },
