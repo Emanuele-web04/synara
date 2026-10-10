@@ -11,7 +11,6 @@ import {
 import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
 import { type ReactNode } from "react";
 
-import { useAppSettings } from "~/appSettings";
 import {
   type ProviderUsageSummaryData,
   useProviderUsageSummary,
@@ -92,13 +91,11 @@ export function useProviderUsageMenuModel(
     providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
   } = {},
 ): ProviderUsageMenuModel {
-  const { settings } = useAppSettings();
   const threads = useStore(selectAccountRateLimitThreads);
   const usageSummary = useProviderUsageSummary({
     provider,
     instanceId: input.instanceId,
     threads,
-    codexHomePath: settings.codexHomePath || null,
     providerSnapshot: input.providerSnapshot,
     fetchOpenUsageData: false,
   });

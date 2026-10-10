@@ -5,8 +5,8 @@
 // Exports: Vitest coverage for ProfileStatsArchive.
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { MessageId, ThreadId, TurnId } from "@synara/contracts";
-import { Effect, Layer } from "effect";
+import { MessageId, ThreadId, TurnId, ProfileTokenStats } from "@synara/contracts";
+import { Effect, Layer, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -561,7 +561,23 @@ describe("ProfileStatsArchive", () => {
         yield* archive.purgeThreadWithStatsSnapshot({
           threadId: ThreadId.makeUnsafe("thread-purge"),
         });
-        expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 })).toEqual(before);
+        const after = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 });
+        // Lifetime token/account/model totals survive deletion exactly. The new
+        // provider detail reports retained turns/costs only, not invented archives.
+        expect({ ...after, providerUsage: undefined }).toEqual({
+          ...before,
+          providerUsage: undefined,
+        });
+        expect(
+          after.providerUsage?.find((entry) => entry.provider === "claudeAgent"),
+        ).toMatchObject({
+          tokens: 1500,
+          tokensReported: true,
+          turnCount: 0,
+          costUsd: null,
+          tokenCoverage: "not-reported",
+          costCoverage: "not-reported",
+        });
         expect(
           yield* sql`
         SELECT tokens, token_accounting_version AS version FROM profile_stats_deleted_tokens
@@ -814,6 +830,120 @@ describe("ProfileStatsArchive", () => {
         expect(purgedAgain).toBe(false);
         const statsAfterRepurge = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsAfterRepurge.activity).toEqual(statsBefore.activity);
+      }),
+    );
+  });
+
+  it("keeps modelUsage attribution and baselines when archiving deleted threads", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-archive-modelusage',
+            'Archive Model Usage',
+            '/work/archive-modelusage',
+            '{}',
+            '2026-06-12T09:00:00.000Z',
+            '2026-06-12T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-archive-modelusage',
+            'project-archive-modelusage',
+            'Archive Model Usage',
+            '{"provider":"codex","instanceId":"codex_work","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-06-15T09:00:00.000Z',
+            '2026-06-15T09:00:00.000Z',
+            NULL
+          )
+        `;
+        // The modelUsage turn (M) sits between two context-window rows (A, B)
+        // AND has its own context-window row (M-row): the archive must keep the
+        // M-row in the LAG baseline (contribution zero) and add the modelUsage
+        // tokens, exactly like the live query.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES
+            (
+              'archive-mu-a', 'thread-archive-modelusage', 'turn-archive-a',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":100,"provider":"codex"}', 1, '2026-06-15T09:05:00.000Z'
+            ),
+            (
+              'archive-mu-m', 'thread-archive-modelusage', 'turn-archive-m',
+              'info', 'turn.completed', 'Turn completed',
+              '{"modelUsage":{"openai/gpt-5":{"totalTokens":80},"bad":"invalid"}}', 2, '2026-06-15T09:15:00.000Z'
+            ),
+            (
+              'archive-mu-m-earlier', 'thread-archive-modelusage', 'turn-archive-m',
+              'info', 'turn.completed', 'Earlier duplicate',
+              '{"modelUsage":{"openai/gpt-5":{"totalTokens":999}}}', 1, '2026-06-15T09:14:00.000Z'
+            ),
+            (
+              'archive-mu-m-row', 'thread-archive-modelusage', 'turn-archive-m',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":180,"provider":"codex"}', 3, '2026-06-15T09:16:00.000Z'
+            ),
+            (
+              'archive-mu-b', 'thread-archive-modelusage', 'turn-archive-b',
+              'info', 'context-window.updated', 'Tokens updated',
+              '{"totalProcessedTokens":300,"provider":"codex"}', 4, '2026-06-15T09:25:00.000Z'
+            ),
+            (
+              'archive-mu-b-turn', 'thread-archive-modelusage', 'turn-archive-b',
+              'info', 'turn.completed', 'Turn completed',
+              '{}', 5, '2026-06-15T09:26:00.000Z'
+            )
+        `;
+
+        const statsBefore = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        Schema.decodeUnknownSync(ProfileTokenStats)(statsBefore);
+        expect(statsBefore.lifetimeTotalTokens).toBe(300);
+        expect(statsBefore.models).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ model: "gpt-5-codex", tokens: 220 }),
+            expect.objectContaining({
+              model: "openai/gpt-5",
+              instanceId: "codex_work",
+              tokens: 80,
+            }),
+          ]),
+        );
+
+        const purged = yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: "thread-archive-modelusage",
+        });
+        expect(purged).toBe(true);
+
+        // The archived snapshot keeps the same totals AND the modelUsage-attributed
+        // model: no double count and no fallback shift to the selected model.
+        const statsAfter = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(statsAfter.lifetimeTotalTokens).toBe(300);
+        expect(statsAfter.models).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ model: "gpt-5-codex", tokens: 220 }),
+            expect.objectContaining({
+              model: "openai/gpt-5",
+              instanceId: "codex_work",
+              tokens: 80,
+            }),
+          ]),
+        );
       }),
     );
   });
