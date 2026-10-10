@@ -1,4 +1,4 @@
-import { Effect, Layer, Semaphore } from "effect";
+import { Deferred, Effect, Layer, Semaphore } from "effect";
 
 import {
   canonicalImportPath,
@@ -12,20 +12,68 @@ import {
 } from "../Services/TurnCheckpointCoordinator.ts";
 
 const make = Effect.sync(() => {
-  const leases = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>();
+  const leases = new Map<
+    string,
+    {
+      readonly semaphore: Semaphore.Semaphore;
+      users: number;
+      activations: number;
+      drained: Deferred.Deferred<void> | undefined;
+    }
+  >();
 
-  const withLease = <A, E, R>(key: string, effect: Effect.Effect<A, E, R>) =>
+  const withLease = <A, E, R>(key: string, effect: Effect.Effect<A, E, R>, shared = false) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.suspend(() => {
         let entry = leases.get(key);
         if (entry === undefined) {
-          entry = { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+          entry = {
+            semaphore: Semaphore.makeUnsafe(1),
+            users: 0,
+            activations: 0,
+            drained: undefined,
+          };
           leases.set(key, entry);
         }
         entry.users += 1;
         const acquiredEntry = entry;
 
-        return restore(acquiredEntry.semaphore.withPermits(1)(effect)).pipe(
+        const owned = shared
+          ? Effect.gen(function* () {
+              yield* restore(acquiredEntry.semaphore.take(1));
+              if (acquiredEntry.activations === 0) {
+                acquiredEntry.drained = Deferred.makeUnsafe<void>();
+              }
+              acquiredEntry.activations += 1;
+              yield* acquiredEntry.semaphore.release(1);
+              return yield* restore(effect).pipe(
+                Effect.ensuring(
+                  Effect.suspend(() => {
+                    acquiredEntry.activations -= 1;
+                    if (acquiredEntry.activations === 0 && acquiredEntry.drained !== undefined) {
+                      const drained = acquiredEntry.drained;
+                      acquiredEntry.drained = undefined;
+                      return Deferred.succeed(drained, undefined);
+                    }
+                    return Effect.void;
+                  }),
+                ),
+              );
+            })
+          : restore(
+              acquiredEntry.semaphore.withPermits(1)(
+                Effect.suspend(() => {
+                  // Hold admission closed while existing provider activations drain.
+                  const wait =
+                    acquiredEntry.drained === undefined
+                      ? Effect.void
+                      : Deferred.await(acquiredEntry.drained);
+                  return wait.pipe(Effect.andThen(effect));
+                }),
+              ),
+            );
+
+        return owned.pipe(
           Effect.ensuring(
             Effect.sync(() => {
               acquiredEntry.users -= 1;
@@ -57,10 +105,17 @@ const make = Effect.sync(() => {
       Effect.flatMap((identity) => withWorkspaceIdentityLease(identity, effect)),
     );
 
+  const withWorkspaceActivationLease: TurnCheckpointCoordinatorShape["withWorkspaceActivationLease"] =
+    (cwd, effect) =>
+      resolveWorkspaceIdentity(cwd).pipe(
+        Effect.flatMap((identity) => withLease(`workspace:${identity}`, effect, true)),
+      );
+
   return {
     withThreadLease,
     withWorkspaceLease,
     withWorkspaceIdentityLease,
+    withWorkspaceActivationLease,
     resolveWorkspaceIdentity,
   } satisfies TurnCheckpointCoordinatorShape;
 });

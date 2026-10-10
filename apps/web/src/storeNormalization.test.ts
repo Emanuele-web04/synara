@@ -14,6 +14,7 @@ import {
   normalizeActivities,
   normalizeChatMessage,
   normalizeThreadFromReadModel,
+  normalizeThreadSession,
   normalizeThreadShellSnapshot,
   threadShellsEqual,
   toLegacyProvider,
@@ -638,5 +639,25 @@ describe("toLegacyProvider", () => {
 
   it("falls back to codex for null", () => {
     expect(toLegacyProvider(null)).toBe("codex");
+  });
+});
+
+describe("session approval mode", () => {
+  it("keeps the active session mode independently of the saved thread mode", () => {
+    const thread = makeReadModelThread({ runtimeMode: "full-access" });
+    const session = {
+      threadId: thread.id,
+      status: "running" as const,
+      providerName: "codex" as const,
+      runtimeMode: "approval-required" as const,
+      activeTurnId: TurnId.makeUnsafe("active-approval-turn"),
+      lastError: null,
+      updatedAt: thread.updatedAt,
+    };
+    const normalized = normalizeThreadSession(session, null);
+    expect(normalized?.runtimeMode).toBe("approval-required");
+    const updated = normalizeThreadSession({ ...session, runtimeMode: "full-access" }, normalized);
+    expect(updated?.runtimeMode).toBe("full-access");
+    expect(updated).not.toBe(normalized);
   });
 });
