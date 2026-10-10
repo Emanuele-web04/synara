@@ -630,6 +630,9 @@ describe("store event reducer", () => {
       completedAt: null,
       assistantMessageId: MessageId.makeUnsafe("assistant-running"),
     });
+    expect(threadsOf(next)[0]?.activities).toMatchObject([
+      { kind: "turn.stop-requested", turnId: "turn-running" },
+    ]);
   });
 
   it("keeps pending proposed-plan linkage across live turn updates", () => {

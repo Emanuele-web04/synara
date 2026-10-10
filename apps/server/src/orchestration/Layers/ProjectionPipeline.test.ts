@@ -4618,6 +4618,12 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           },
         });
 
+        const stopRows = yield* sql<{ readonly turnId: string; readonly kind: string }>`
+          SELECT turn_id AS "turnId", kind FROM projection_thread_activities
+          WHERE thread_id = 'thread-conflict'
+        `;
+        assert.deepEqual(stopRows, [{ turnId: "turn-interrupted", kind: "turn.stop-requested" }]);
+
         yield* appendAndProject({
           type: "thread.message-sent",
           eventId: EventId.makeUnsafe("evt-conflict-4"),

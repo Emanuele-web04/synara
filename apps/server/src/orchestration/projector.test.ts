@@ -120,6 +120,53 @@ async function projectThreadWithRunningTurn(input: { createdAt: string; startedA
 }
 
 describe("orchestration projector", () => {
+  it("records a Stop request against the active turn without settling it", async () => {
+    const before = await projectThreadWithRunningTurn({
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+    });
+    const next = await Effect.runPromise(
+      projectEvent(
+        before,
+        makeEvent({
+          sequence: 3,
+          type: "thread.turn-interrupt-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-01-01T00:00:02Z",
+          commandId: "cmd-stop",
+          payload: { threadId: "thread-1", createdAt: "2026-01-01T00:00:02Z" },
+        }),
+      ),
+    );
+    expect(next.threads[0]?.activities).toMatchObject([
+      { kind: "turn.stop-requested", turnId: "turn-1" },
+    ]);
+    expect(next.threads[0]?.latestTurn?.state).toBe("running");
+  });
+
+  it("does not attribute an intentional application quit to the user Stop control", async () => {
+    const before = await projectThreadWithRunningTurn({
+      createdAt: "2026-01-01T00:00:00Z",
+      startedAt: "2026-01-01T00:00:01Z",
+    });
+    const next = await Effect.runPromise(
+      projectEvent(
+        before,
+        makeEvent({
+          sequence: 3,
+          type: "thread.turn-interrupt-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-01-01T00:00:02Z",
+          commandId: "quit-resume-interrupt:thread-1",
+          payload: { threadId: "thread-1", createdAt: "2026-01-01T00:00:02Z" },
+        }),
+      ),
+    );
+    expect(next.threads[0]?.activities).toHaveLength(0);
+  });
+
   it("applies thread.created events", async () => {
     const now = new Date().toISOString();
     const model = createEmptyReadModel(now);

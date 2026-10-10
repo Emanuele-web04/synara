@@ -103,6 +103,34 @@ it("persists terminal error identity and announced retry state in chat activitie
   }
 });
 
+it("records the model a turn started on and nothing when the provider names none", () => {
+  const event = runtimeEvent({
+    provider: "claudeAgent",
+    type: "turn.started",
+    eventId: "turn-started",
+    turnId: TURN_ID,
+    payload: { model: "claude-haiku-5-5" },
+  });
+  expect(projectProviderRuntimeActivities(event, 7)).toEqual([
+    {
+      id: EventId.makeUnsafe("turn-started"),
+      createdAt: CREATED_AT,
+      tone: "info",
+      kind: "turn.started",
+      summary: "Turn started",
+      payload: { model: "claude-haiku-5-5", provider: "claudeAgent" },
+      turnId: TURN_ID,
+      sequence: 7,
+    },
+  ]);
+  expectSchemaValidActivities(event);
+  expect(
+    projectProviderRuntimeActivities(
+      runtimeEvent({ type: "turn.started", eventId: "bare", turnId: TURN_ID, payload: {} }),
+    ),
+  ).toEqual([]);
+});
+
 it("projects tool summaries with stable group identity and no empty rows", () => {
   const event = runtimeEvent({
     provider: "claudeAgent",
