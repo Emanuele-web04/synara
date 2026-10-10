@@ -271,7 +271,7 @@ import {
   shouldStartActiveTurnLayoutGrace,
   type PendingFileUndo,
 } from "./ChatView.logic";
-import { createThreadLineageSelector, localSubagentThreadId } from "./ChatView.selectors";
+import { createThreadLineageSelector } from "./ChatView.selectors";
 import { ComposerPromptEditor } from "./ComposerPromptEditor";
 import PlanSidebar from "./PlanSidebar";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -330,10 +330,10 @@ import { ComposerPullRequestAutoFixHint } from "./chat/ComposerPullRequestAutoFi
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
+import { useSubagentRunControls } from "./chat/useSubagentRunControls";
 import {
   collectForegroundRunningSubagentStripItems,
   collectRunningSubagentStripItems,
-  type ComposerSubagentStripItem,
 } from "./chat/ComposerSubagentStrip.logic";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ExpandedImageOverlay } from "./chat/ExpandedImageOverlay";
@@ -1492,12 +1492,17 @@ export default function ChatView({
   const isConnecting = phase === "connecting";
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
-  const { workLogEntries, composerSubagentStripItems, stripSourceThreadId, workflowRunState } =
-    useChatWorkLog({
-      activeThread,
-      latestTurnSettled,
-      latestTurnLive,
-    });
+  const {
+    workLogEntries,
+    composerSubagentStripItems,
+    subagentRoster,
+    stripSourceThreadId,
+    workflowRunState,
+  } = useChatWorkLog({
+    activeThread,
+    latestTurnSettled,
+    latestTurnLive,
+  });
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
     () => deriveAgentActivityTimelineState(workLogEntries),
@@ -3666,41 +3671,10 @@ export default function ChatView({
     });
   }, [activeThread, workflowRunState]);
 
-  const onBackgroundSubagentStripItem = useCallback(
-    async (item: ComposerSubagentStripItem) => {
-      const api = readNativeApi();
-      // The Task tool_use lives on the strip source thread (the parent while a
-      // subagent thread is open), so route the command there.
-      if (!api || !stripSourceThreadId) return;
-      await api.orchestration.dispatchCommand({
-        type: "thread.task.background",
-        commandId: newCommandId(),
-        threadId: stripSourceThreadId,
-        toolUseId: item.providerThreadId,
-        createdAt: new Date().toISOString(),
-      });
-    },
-    [stripSourceThreadId],
-  );
-
-  // Stop goes through the interrupt seam: on a subagent thread the reactor
-  // resolves the tool_use_id and stops that task instead of the whole turn.
-  // Target the canonical child id derived from the strip source thread —
-  // item.threadId can still be the raw tool_use_id while client-side thread
-  // resolution lags, which the server would reject as an unknown thread.
-  const onStopSubagentStripItem = useCallback(
-    async (item: ComposerSubagentStripItem) => {
-      const api = readNativeApi();
-      if (!api || !stripSourceThreadId) return;
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.interrupt",
-        commandId: newCommandId(),
-        threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
-        createdAt: new Date().toISOString(),
-      });
-    },
-    [stripSourceThreadId],
-  );
+  const {
+    backgroundSubagent: onBackgroundSubagentStripItem,
+    stopSubagent: onStopSubagentStripItem,
+  } = useSubagentRunControls(stripSourceThreadId);
 
   // Stop-all fans out through the same per-row stop so both paths share one seam.
   const onStopAllSubagentStripItems = useCallback(async () => {
@@ -5669,6 +5643,7 @@ export default function ChatView({
     diffOpen: resolvedDiffOpen,
     threadAutomations: threadAutomationItems,
     sidechats: environmentSidechats,
+    subagentRoster,
     diffDisabledReason,
     diffTotals: repoDiffTotals,
     branchToolbar: activeThreadIsSidechat ? null : branchToolbarProps,
