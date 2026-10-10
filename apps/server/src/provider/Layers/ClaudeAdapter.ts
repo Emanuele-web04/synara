@@ -4235,7 +4235,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               turnId,
               payload: {
                 message: event.message,
-                detail: { type: "system", subtype: "monitor_event", task_id: event.taskId },
+                detail: {
+                  type: "system",
+                  subtype: "monitor_event",
+                  task_id: event.taskId,
+                  notificationId: event.id,
+                  name: event.name,
+                  output: event.output,
+                  outcome: event.outcome,
+                },
               },
               providerRefs: nativeProviderRefs(context),
             });

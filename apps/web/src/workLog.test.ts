@@ -598,13 +598,45 @@ describe("deriveWorkLogEntries", () => {
     });
     expect(entry).toMatchObject({
       id: "monitor-event",
-      label: "Monitor event",
+      label: "Monitor updated",
       detail: message,
       nativeEventType: "monitor_event",
-      backgroundTaskCompletion: { taskId: "bu336ro2k", taskType: "monitor", description: null },
+      monitorNotification: { taskId: "bu336ro2k", name: "", output: message, outcome: "updated" },
     });
     expect(isPlainRuntimeNoticeWorkEntry(entry!)).toBe(false);
   });
+
+  it.each(["updated", "completed", "failed", "stopped"] as const)(
+    "keeps Monitor %s state and multiline details separate from background completion",
+    (outcome) => {
+      const [entry] = deriveWorkLogEntries(
+        [
+          makeActivity({
+            kind: "runtime.warning",
+            summary: "Monitor event",
+            tone: "info",
+            payload: {
+              nativeEventType: "monitor_event",
+              message: "CI checks — first · second",
+              data: { task_id: "monitor-ci", name: "CI checks", output: "first\nsecond", outcome },
+            },
+          }),
+        ],
+        undefined,
+      );
+      expect(entry?.label).toBe(
+        `Monitor · CI checks ${outcome === "completed" ? "finished" : outcome}`,
+      );
+      expect(entry?.monitorNotification).toEqual({
+        taskId: "monitor-ci",
+        name: "CI checks",
+        output: "first\nsecond",
+        outcome,
+      });
+      expect(entry?.backgroundTaskCompletion).toBeUndefined();
+      expect(entry?.tone).toBe(outcome === "failed" ? "error" : "info");
+    },
+  );
 
   it("collapses task-list snapshots into one progressing row per turn", () => {
     const taskListActivity = (

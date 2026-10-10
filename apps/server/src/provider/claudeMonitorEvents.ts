@@ -16,7 +16,15 @@ import { readAppendedLines } from "./claudeWorkflowRuntime.ts";
 const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
 const MAX_MONITOR_EVENT_CHARS = 2_000;
 
-export interface ClaudeMonitorEvent {
+export interface ClaudeMonitorNotification {
+  readonly taskId: string;
+  readonly message: string;
+  readonly name: string;
+  readonly output: string;
+  readonly outcome: "updated" | "completed" | "failed" | "stopped";
+}
+
+export interface ClaudeMonitorEvent extends ClaudeMonitorNotification {
   // Transcript entry uuid of the notification.
   readonly id: string;
   readonly createdAt: string;
@@ -44,7 +52,7 @@ function tagText(body: string, tag: string): string | undefined {
 // task_notification messages.
 export function parseClaudeMonitorEventNotification(
   text: string,
-): { readonly taskId: string; readonly message: string } | undefined {
+): ClaudeMonitorNotification | undefined {
   const body = tagText(text, "task-notification");
   const taskId = body ? tagText(body, "task-id")?.trim() : undefined;
   const event = body ? tagText(body, "event") : undefined;
@@ -55,6 +63,15 @@ export function parseClaudeMonitorEventNotification(
     .replace(/^Monitor event:\s*/i, "")
     .replace(/^Monitor\s+/i, "")
     .replace(/"([^"]*)"/, "$1");
+  const status = tagText(body, "status")?.trim();
+  const outcome =
+    status === "completed" || status === "failed" || status === "stopped"
+      ? status
+      : status === "cancelled"
+        ? "stopped"
+        : "updated";
+  const output = event.trim().slice(0, MAX_MONITOR_EVENT_CHARS);
+  const displayName = name.replace(/\s+stream ended$/i, "").slice(0, MAX_MONITOR_EVENT_CHARS);
   const lines = event
     .split("\n")
     .map((line) => line.trim())
@@ -63,6 +80,9 @@ export function parseClaudeMonitorEventNotification(
   if (message.length === 0) return undefined;
   return {
     taskId,
+    name: displayName,
+    output,
+    outcome,
     message:
       message.length > MAX_MONITOR_EVENT_CHARS
         ? `${message.slice(0, MAX_MONITOR_EVENT_CHARS - 1)}…`
@@ -112,8 +132,7 @@ function monitorEventFromLine(line: string, notBeforeMs: number) {
   return {
     id: record.uuid,
     createdAt: new Date(createdAtMs).toISOString(),
-    taskId: parsed.taskId,
-    message: parsed.message,
+    ...parsed,
   } satisfies ClaudeMonitorEvent;
 }
 

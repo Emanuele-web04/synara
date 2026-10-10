@@ -158,9 +158,13 @@ export interface WorkLogEntry {
   // batch roll-up) render as compact centered pills in the coordinator
   // conversation, each carrying a link into the reported thread.
   synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
-  // A task the agent moved to the background finished, or a Claude Monitor
-  // reported an event. Either wakes the agent into a new turn, so the row also
-  // marks where that new response starts.
+  // Completion notices and Monitor updates both anchor the response they woke.
+  monitorNotification?: {
+    taskId: string;
+    name: string;
+    output: string;
+    outcome: "updated" | "completed" | "failed" | "stopped";
+  };
   backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
   // Computer-control denial rows render as an actionable card (enable control
   // and retry) instead of a plain error line; carry just what that card needs.
@@ -1247,11 +1251,20 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   // it gets the same standalone row that marks where the new response starts.
   if (activity.kind === "runtime.warning" && nativeEventType === "monitor_event") {
     const taskId = asTrimmedString(asRecord(payload?.data)?.task_id);
-    entry.backgroundTaskCompletion = {
+    const data = asRecord(payload?.data);
+    const outcome =
+      data?.outcome === "completed" || data?.outcome === "failed" || data?.outcome === "stopped"
+        ? data.outcome
+        : "updated";
+    const name = asTrimmedString(data?.name) ?? "";
+    entry.monitorNotification = {
       taskId: taskId ?? activity.id,
-      taskType: "monitor",
-      description: null,
+      name,
+      output: asTrimmedString(data?.output) ?? runtimeWarningMessage ?? "",
+      outcome,
     };
+    entry.label = `Monitor${name ? ` · ${name}` : ""} ${outcome === "completed" ? "finished" : outcome}`;
+    if (outcome === "failed") entry.tone = "error";
   }
   if (activity.kind === "auth.status") {
     entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;
