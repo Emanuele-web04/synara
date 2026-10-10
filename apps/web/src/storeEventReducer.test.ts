@@ -1049,7 +1049,13 @@ describe("store event reducer", () => {
     const linked = syncServerThreadDetailHotPath(
       single,
       makeReadModelThread({
-        messages: [{ ...request("first-send", "2026-02-27T00:01:00.000Z"), turnId }],
+        messages: [
+          {
+            ...request("first-send", "2026-02-27T00:01:00.000Z"),
+            updatedAt: "2026-02-27T00:01:00.000Z",
+            turnId,
+          },
+        ],
       }),
       10,
     );
