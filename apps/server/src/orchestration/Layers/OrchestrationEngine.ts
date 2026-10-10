@@ -678,6 +678,35 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.user-input.respond":
       case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+      case "thread.message.assistant.delta": {
+        // The command model only holds messages touched since startup. The
+        // first delta for any other message reads that exact row, so a late
+        // delta for a message finalized before a restart cannot reopen it.
+        const thread = commandReadModel.threads.find((entry) => entry.id === command.threadId);
+        if (!thread || thread.messages.some((entry) => entry.id === command.messageId)) {
+          return Effect.succeed(commandReadModel);
+        }
+        return messageRepository
+          .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new OrchestrationCommandInternalError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  detail: `Failed to load the streamed assistant message: ${error.message}`,
+                }),
+            ),
+            Effect.map((message) =>
+              Option.isNone(message)
+                ? commandReadModel
+                : overlayThread(commandReadModel, {
+                    ...thread,
+                    messages: [orchestrationMessageFromStoredMessage(message.value)],
+                  }),
+            ),
+          );
+      }
       case "thread.message.assistant.complete":
         // Read the exact message, including a resumed message older than the
         // transcript window. This avoids loading a whole thread to finalize it.

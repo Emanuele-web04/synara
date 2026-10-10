@@ -151,6 +151,11 @@ usage limits, and interruptions without a recorded Stop request say **Interrupte
 when known. Background commands keep one row as they run and settle; a completion that wakes the
 provider starts a separate **Resumed** response with its own duration.
 
+**Stop** settles the turn once the provider accepts the interrupt and no provider turn is still
+running, even if the provider had already finished and its final events are still arriving.
+Output that arrives after a turn ended is added to its message without marking it as streaming
+again. An assistant item that ends without any text does not add an empty response row.
+
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
 If it was not accepted, Synara records a rejection that also blocks a delayed copy, then restores
