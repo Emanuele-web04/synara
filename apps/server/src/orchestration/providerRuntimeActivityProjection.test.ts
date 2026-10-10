@@ -577,7 +577,7 @@ describe("provider runtime activity projection", () => {
     expect(events.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
   });
 
-  it("projects only readable completed Codex-family reasoning summaries", () => {
+  it("projects only readable completed Codex, Antigravity, and OpenCode reasoning", () => {
     const absent = [
       runtimeEvent({
         type: "content.delta",
@@ -608,7 +608,7 @@ describe("provider runtime activity projection", () => {
     ];
     expect(absent.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
 
-    for (const provider of ["codex", "antigravity"] as const) {
+    for (const provider of ["codex", "antigravity", "opencode"] as const) {
       const [activity] = projectProviderRuntimeActivities(
         runtimeEvent({
           type: "item.completed",
