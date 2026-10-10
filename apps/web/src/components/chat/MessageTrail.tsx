@@ -487,10 +487,14 @@ export function MessageTrail({
     }
   }, [rovingIndex, trailWindow.start, trailWindow.end]);
 
-  // Reposition the ticks whenever the layout changes (count → new centres).
+  // Reposition committed ticks, then repaint active magnification on the new window.
+  // A scroll frame can run before React mounts that window and publishes its ref.
   useEffect(() => {
     layoutTicks();
-  }, [geometry, layoutTicks]);
+    if (latestPointerClientYRef.current !== null || focusOverrideIndexRef.current !== null) {
+      scheduleFrame();
+    }
+  }, [geometry, layoutTicks, scheduleFrame, trailWindow.start, trailWindow.end]);
 
   // Refresh idle highlights when the current anchor or visible-message set changes.
   useEffect(() => {

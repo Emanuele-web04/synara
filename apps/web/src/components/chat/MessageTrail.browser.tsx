@@ -92,7 +92,7 @@ it("bounds the mounted rail while keyboard and scroll can reach every history me
   }
 });
 
-it("keeps pointer frames outside React and preserves magnification, tooltip and audio in a scrolled window", async () => {
+it("redraws a scrolled window under a stationary pointer without React pointer frames", async () => {
   await page.viewport(1_440, 900);
   let commits = 0;
   let emitAudio: ((level: number) => void) | undefined;
@@ -115,21 +115,32 @@ it("keeps pointer frames outside React and preserves magnification, tooltip and 
   );
   try {
     await expect.poll(() => emitAudio !== undefined).toBe(true);
+    await expect.poll(() => getComputedStyle(rail()).opacity).toBe("1");
+    await page.getByRole("button", { name: "Message 1: Question 1", exact: true }).hover();
+    await expect
+      .poll(
+        () =>
+          rail().querySelector<HTMLButtonElement>('button[aria-label="Message 1: Question 1"]')
+            ?.style.width,
+      )
+      .toBe("30px");
     viewport().scrollTop = 5_000;
     viewport().dispatchEvent(new Event("scroll", { bubbles: true }));
     await expect
       .poll(() => rail().querySelector('button[aria-label="Message 501: Question 501"]') !== null)
       .toBe(true);
+    await expect
+      .poll(() => rail().querySelector('[role="tooltip"]')?.textContent)
+      .toContain("Question 501");
+    const focused = rail().querySelector<HTMLButtonElement>(
+      'button[aria-label="Message 501: Question 501"]',
+    )!;
+    // Scrolling mounts fresh ticks without another pointer event to style them.
+    await expect.poll(() => Number.parseFloat(focused.style.width)).toBe(30);
+    expect(rail().querySelectorAll("button").length).toBeLessThan(100);
     await frame();
     const before = commits;
     const rect = viewport().getBoundingClientRect();
-    viewport().dispatchEvent(
-      new PointerEvent("pointerover", {
-        pointerType: "mouse",
-        clientY: rect.top + 12,
-        bubbles: true,
-      }),
-    );
     for (let index = 0; index < 20; index++) {
       viewport().dispatchEvent(
         new PointerEvent("pointermove", {
@@ -140,9 +151,6 @@ it("keeps pointer frames outside React and preserves magnification, tooltip and 
       );
       await frame();
     }
-    const focused = rail().querySelector<HTMLButtonElement>(
-      'button[aria-label="Message 501: Question 501"]',
-    )!;
     expect(Number.parseFloat(focused.style.width)).toBe(30);
     expect(rail().querySelector('[role="tooltip"]')?.textContent).toContain("Question 501");
     expect(commits).toBe(before);
