@@ -590,6 +590,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             subagentNickname: event.payload.subagentNickname ?? null,
             subagentRole: event.payload.subagentRole ?? null,
             forkSourceThreadId: event.payload.forkSourceThreadId,
+            forkSourceMessageId: event.payload.forkSourceMessageId ?? null,
             sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
             sidechatContext: event.payload.sidechatContext,
             sidechatLastActivityAt: event.payload.sidechatLastActivityAt,
@@ -1497,6 +1498,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 (Option.isSome(pendingTurnStart)
                   ? pendingTurnStart.value.sourceProposedPlanId
                   : null),
+              startedWithoutGitWorkspace:
+                existingTurn.value.startedWithoutGitWorkspace === true ||
+                (Option.isSome(pendingTurnStart) &&
+                  pendingTurnStart.value.startedWithoutGitWorkspace === true),
               startedAt:
                 existingTurn.value.startedAt ?? event.payload.session.updatedAt ?? event.occurredAt,
               requestedAt:
@@ -1518,6 +1523,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               sourceProposedPlanId: Option.isSome(pendingTurnStart)
                 ? pendingTurnStart.value.sourceProposedPlanId
                 : null,
+              startedWithoutGitWorkspace: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.startedWithoutGitWorkspace === true
+                : false,
               assistantMessageId: null,
               state: "running",
               requestedAt: Option.isSome(pendingTurnStart)
