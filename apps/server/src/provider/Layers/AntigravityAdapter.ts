@@ -61,7 +61,10 @@ import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
-import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
+import {
+  createAntigravityPrintResultParser,
+  isAntigravityPostResponseTimeout,
+} from "../antigravityPrintResult.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -206,6 +209,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   /** Guards against double turn.completed (process close + interrupt/stop). */
   turnTerminalEmitted: boolean;
   stopTeardownRequested?: boolean;
+  stopTeardownPromise?: ReturnType<typeof teardownChildProcessTree>;
 };
 
 function messageFromCause(cause: unknown, fallback: string): string {
@@ -1412,7 +1416,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
       const child = context.activeProcess;
       context.stopTeardownRequested = true;
-      void teardownProcessTree(child).catch(() => {
+      context.stopTeardownPromise = teardownProcessTree(child);
+      void context.stopTeardownPromise.catch(() => {
         try {
           child.kill("SIGKILL");
         } catch {
@@ -2489,6 +2494,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.interrupted = false;
         context.turnTerminalEmitted = false;
         delete context.stopTeardownRequested;
+        delete context.stopTeardownPromise;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
           ...context.session,
@@ -2642,8 +2648,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            // Only our stop-hook teardown may replace a missing clean process exit.
-            // A provider ERROR is authoritative even when earlier response steps are DONE.
+            // Only our stop-hook teardown may replace a missing clean process exit. A
+            // provider ERROR is authoritative unless it is the exact timeout emitted
+            // after a durable final response (agy can report this after the reply is visible).
             const completedAfterStopTeardown =
               context.stopTeardownRequested === true &&
               printResult?.completedResponse === true &&
@@ -2652,13 +2659,53 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               context.pendingTools.length === 0 &&
               context.pendingBackgroundTasks.size === 0 &&
               context.pendingAnonymousBackgroundTasks.length === 0;
+            const exactPostResponseTimeout =
+              isAntigravityPostResponseTimeout(printResult?.terminalError) ||
+              (printResult?.hasExplicitResultError !== true &&
+                printResult?.terminalError === undefined &&
+                isAntigravityPostResponseTimeout(stderr));
+            const benignPostResponseTimeout =
+              context.stopTeardownPromise !== undefined &&
+              !context.interrupted &&
+              printResult?.hasConflictingResultError !== true &&
+              signal === null &&
+              (printResult?.resultStatus === undefined || printResult.resultStatus === "ERROR") &&
+              (printResult?.streamError === undefined ||
+                isAntigravityPostResponseTimeout(printResult.streamError)) &&
+              (!stderr.trim() || isAntigravityPostResponseTimeout(stderr)) &&
+              exactPostResponseTimeout &&
+              printResult?.hasCompleteAssistantResponse === true &&
+              context.sawAssistant &&
+              context.pendingTools.length === 0 &&
+              context.pendingBackgroundTasks.size === 0 &&
+              context.pendingAnonymousBackgroundTasks.length === 0;
+            // Only the existing stop-hook teardown can have captured helpers
+            // while their parent was alive. A snapshot after close is insufficient.
+            let completedAfterBenignPostResponseTimeout = false;
+            if (benignPostResponseTimeout) {
+              try {
+                const teardown = await context.stopTeardownPromise;
+                completedAfterBenignPostResponseTimeout =
+                  teardown?.capturedBeforeRootExit === true && teardown.signalErrors.length === 0;
+              } catch {
+                // Keep the provider failure when process exit cannot be proven.
+              }
+              if (!ownsTurn()) {
+                await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                return;
+              }
+            }
+            const completedAfterExpectedPostResponseExit =
+              completedAfterStopTeardown || completedAfterBenignPostResponseTimeout;
             const interrupted =
               context.interrupted ||
               printResult?.state === "interrupted" ||
-              (signal !== null && printResult?.state !== "failed" && !completedAfterStopTeardown);
+              (signal !== null &&
+                printResult?.state !== "failed" &&
+                !completedAfterExpectedPostResponseExit);
             const failed =
               !interrupted &&
-              !completedAfterStopTeardown &&
+              !completedAfterExpectedPostResponseExit &&
               ((code ?? 1) !== 0 ||
                 (printResult !== undefined && printResult.state !== "completed"));
             if (failed && stderr.trim()) {
