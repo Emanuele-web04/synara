@@ -30,6 +30,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
@@ -51,6 +54,12 @@ jobs:
       - name: Verify native handoff, input, zoom, popups and annotations
         timeout-minutes: 10
         run: xvfb-run -a bun run --cwd apps/web test:electron:e2e
+
+      - name: Record tested revision
+        if: always()
+        run: |
+          mkdir -p apps/web/test-results
+          git rev-parse HEAD > apps/web/test-results/tested-head.txt
 
       - name: Upload native acceptance evidence
         if: always()
