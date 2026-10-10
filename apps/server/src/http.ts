@@ -78,7 +78,8 @@ import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
 import { ServerSettingsService } from "./serverSettings";
-import { isLoopbackHost } from "./startupAccess";
+import { formatHostForUrl, isLoopbackHost } from "./startupAccess";
+import { normalizeRemotePairingOrigin } from "@synara/shared/pairingUrl";
 import {
   attachmentPrincipalForSession,
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
@@ -422,6 +423,20 @@ export function isLegacyTokenAuthorized(input: {
   return !input.config.authToken || legacyToken === input.config.authToken;
 }
 
+/** Prefer configured server addresses; never reflect the request Host header. */
+export function resolvePairingBaseUrl(
+  config: Pick<ServerConfigShape, "publicUrl" | "host" | "port">,
+): string | undefined {
+  if (config.publicUrl) {
+    return config.publicUrl.protocol === "https:"
+      ? normalizeRemotePairingOrigin(config.publicUrl.href)
+      : undefined;
+  }
+  return config.host
+    ? normalizeRemotePairingOrigin(`http://${formatHostForUrl(config.host)}:${config.port}`)
+    : undefined;
+}
+
 function encodeCookie(input: {
   readonly name: string;
   readonly value: string;
@@ -585,7 +600,9 @@ export const authEffectRouteLayer = HttpRouter.add(
               ),
             )
           : {};
-      return HttpServerResponse.jsonUnsafe(yield* serverAuth.issuePairingCredential(payload));
+      const issued = yield* serverAuth.issuePairingCredential(payload);
+      const pairingBaseUrl = resolvePairingBaseUrl(config);
+      return HttpServerResponse.jsonUnsafe(pairingBaseUrl ? { ...issued, pairingBaseUrl } : issued);
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/logout") {

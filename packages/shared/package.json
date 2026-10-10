@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./pairingUrl": {
+      "types": "./src/pairingUrl.ts",
+      "import": "./src/pairingUrl.ts"
+    },
     "./diagnosticIssue": {
       "types": "./src/diagnosticIssue.ts",
       "import": "./src/diagnosticIssue.ts"
