@@ -117,6 +117,76 @@ describe("foldSubagentRunWorkEntries", () => {
     expect(folded[1]!.subagentRun?.members[0]?.latestStep).toBeNull();
   });
 
+  it("keeps a same-turn resume live while later wait and input calls update its own invocation", () => {
+    const first = spawn("first", launchedAtIso, [{ threadId: "a", rawStatus: "running" }]);
+    const wait = (id: string, createdAt: string) =>
+      entry({
+        id,
+        createdAt,
+        itemType: "collab_agent_tool_call",
+        subagentAction: { tool: "wait", status: "completed", summaryText: "Waited" },
+        subagents: [{ threadId: "a", rawStatus: "completed" }],
+      });
+    const resumedAt = "2026-10-10T00:01:00.000Z";
+    const resume = {
+      ...spawn("resume", resumedAt, [{ threadId: "a", rawStatus: "running" }]),
+      subagentAction: { tool: "resumeAgent", status: "completed", summaryText: "Resumed" },
+    };
+    const input = {
+      ...spawn("input", "2026-10-10T00:01:01.000Z", [
+        { threadId: "a", providerThreadId: "provider-a", rawStatus: "running" },
+      ]),
+      subagentAction: { tool: "sendInput", status: "completed", summaryText: "Updated" },
+    };
+    const events = [
+      first,
+      wait("first-ended", "2026-10-10T00:00:08.000Z"),
+      resume,
+      input,
+      entry({
+        id: "late-first-progress",
+        createdAt: "2026-10-10T00:00:04.000Z",
+        detail: "First action",
+        subagentProgress: { toolUseId: "a", title: "First", outcome: "completed" },
+      }),
+      entry({
+        id: "resume-progress",
+        createdAt: "2026-10-10T00:01:02.000Z",
+        detail: "Resumed action",
+        subagentProgress: { toolUseId: "provider-a", title: "Resumed" },
+      }),
+    ];
+    const folded = foldSubagentRunWorkEntries(events);
+    expect(folded.map((item) => item.id)).toEqual(["subagent-run:first", "subagent-run:resume"]);
+    expect(folded[0]!.subagentRun?.members[0]?.nextLaunchedAt).toBe(resumedAt);
+    expect(folded[1]!.subagentRun?.members[0]?.launchedAt).toBe(resumedAt);
+    expect(folded.map((item) => item.subagentRun?.members[0]?.latestStep)).toEqual([
+      "First action",
+      "Resumed action",
+    ]);
+    const taskEndByToolUseId = new Map([
+      ["a", { outcome: "completed" as const, endedAt: "2026-10-10T00:00:08.000Z" }],
+    ]);
+    expect(
+      findLatestRunningSubagentRun({
+        entries: folded,
+        threads: [],
+        parentThreadId: PARENT,
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+        taskEndByToolUseId,
+      }),
+    ).toEqual({ entryId: "subagent-run:resume", runningCount: 1 });
+
+    const settled = foldSubagentRunWorkEntries([
+      ...events,
+      wait("resume-ended", "2026-10-10T00:01:03.000Z"),
+    ]);
+    expect(settled.map((item) => item.subagentRun?.members[0]?.settledAt)).toEqual([
+      "2026-10-10T00:00:08.000Z",
+      "2026-10-10T00:01:03.000Z",
+    ]);
+  });
+
   it("folds a turn's launches and progress into one card at the first launch", () => {
     const entries = [
       entry({ id: "read", label: "Read calc.py" }),
