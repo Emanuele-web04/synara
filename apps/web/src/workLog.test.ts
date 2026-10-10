@@ -12,6 +12,7 @@ import {
 import type { ChatMessage } from "./types";
 import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
+import { isPlainRuntimeNoticeWorkEntry } from "./components/chat/agentActivity.logic";
 
 describe("deriveSubagentTaskEnds", () => {
   it("preserves settled invocations while a resumed task waits for its own completion", () => {
@@ -596,6 +597,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["moved", "agent-done"]);
     expect(completion?.label).toBe("Subagent finished: Server startup");
     expect(completion?.backgroundTaskCompletion).toEqual({
+      outcome: "completed",
       taskId: "agent-1",
       taskType: "local_agent",
       description: "Server startup",
@@ -678,6 +680,70 @@ describe("deriveWorkLogEntries", () => {
       "next-answer",
     ]);
   });
+
+  it("shows a Claude Monitor event as the row that starts the response it woke", () => {
+    const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "monitor-event",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "Monitor event",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message,
+          detail: message,
+          nativeEventType: "monitor_event",
+          data: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+    expect(entry).toMatchObject({
+      id: "monitor-event",
+      label: "Monitor updated",
+      detail: message,
+      nativeEventType: "monitor_event",
+      monitorNotification: { taskId: "bu336ro2k", name: "", output: message, outcome: "updated" },
+    });
+    expect(isPlainRuntimeNoticeWorkEntry(entry!)).toBe(false);
+  });
+
+  it.each(["updated", "completed", "failed", "stopped"] as const)(
+    "keeps Monitor %s state and multiline details separate from background completion",
+    (outcome) => {
+      const [entry] = deriveWorkLogEntries(
+        [
+          makeActivity({
+            kind: "runtime.warning",
+            summary: "Monitor event",
+            tone: "info",
+            payload: {
+              nativeEventType: "monitor_event",
+              message: "CI checks — first · second",
+              data: { task_id: "monitor-ci", name: "CI checks", output: "first\nsecond", outcome },
+            },
+          }),
+        ],
+        undefined,
+      );
+      expect(entry?.label).toBe(
+        `Monitor · CI checks ${outcome === "completed" ? "finished" : outcome}`,
+      );
+      expect(entry?.monitorNotification).toEqual({
+        taskId: "monitor-ci",
+        name: "CI checks",
+        output: "first\nsecond",
+        outcome,
+      });
+      expect(entry?.backgroundTaskCompletion).toBeUndefined();
+      expect(entry?.tone).toBe(outcome === "failed" ? "error" : "info");
+    },
+  );
 
   it("collapses task-list snapshots into one progressing row per turn", () => {
     const taskListActivity = (
@@ -946,6 +1012,62 @@ describe("deriveWorkLogEntries", () => {
       },
     });
     expect(entry?.providerContextLifecycle?.recapPreview?.length).toBeLessThanOrEqual(600);
+  });
+
+  it("marks each side of a handoff with the fast mode state its own session reported", () => {
+    const handoffPayload = {
+      sourceProvider: "claudeAgent",
+      sourceModel: "claude-opus-4-6",
+      targetProvider: "claudeAgent",
+      targetModel: "claude-opus-4-6",
+    };
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "fast-blocked",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:01.000Z",
+          payload: { state: "off", disabledReason: "extra_usage_disabled" },
+        }),
+        makeActivity({
+          id: "handoff-1",
+          kind: "provider.handoff",
+          createdAt: "2026-10-10T00:00:02.000Z",
+          payload: handoffPayload,
+        }),
+        makeActivity({
+          id: "fast-on",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:03.000Z",
+          payload: { state: "on" },
+        }),
+        makeActivity({
+          id: "handoff-2",
+          kind: "provider.handoff",
+          createdAt: "2026-10-10T00:00:04.000Z",
+          payload: handoffPayload,
+        }),
+        makeActivity({
+          id: "fast-cooldown",
+          kind: "fast-mode.state",
+          createdAt: "2026-10-10T00:00:05.000Z",
+          payload: { state: "cooldown" },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-visible"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]) },
+    );
+
+    expect(
+      entries.map((entry) => [
+        entry.id,
+        entry.providerHandoff?.sourceFastModeNotice?.kind ?? null,
+        entry.providerHandoff?.targetFastModeNotice?.kind ?? null,
+      ]),
+    ).toEqual([
+      ["handoff-1", "blocked", null],
+      ["handoff-2", null, "cooldown"],
+    ]);
   });
 
   it("derives same-thread handoff rows with source, target, and transferred context", () => {
@@ -4275,7 +4397,7 @@ describe("deriveWorkLogEntries", () => {
       ],
       undefined,
     );
-    expect(entries[0]?.subagentProgress).toEqual({
+    expect(entries[0]?.subagentProgress).toMatchObject({
       toolUseId: "toolu_outer",
       title: "Outer worker",
     });
@@ -4705,6 +4827,86 @@ describe("deriveWorkLogEntries", () => {
 });
 
 describe("deriveTimelineEntries", () => {
+  it.each(["adjacent", "reply-between", "different-outcome"] as const)(
+    "preserves Monitor wake boundaries while avoiding a duplicate terminal notice: %s",
+    (caseKind) => {
+      const work = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "move",
+            createdAt: "2026-03-17T19:12:00.000Z",
+            kind: "runtime.warning",
+            tone: "info",
+            payload: {
+              nativeEventType: "background_tasks_changed",
+              data: { tasks: [{ task_id: "ci", task_type: "monitor", description: "CI checks" }] },
+            },
+          }),
+          makeActivity({
+            id: "sdk-end",
+            createdAt: "2026-03-17T19:12:01.000Z",
+            kind: "task.completed",
+            tone: "info",
+            payload: { taskId: "ci", status: "completed" },
+          }),
+          makeActivity({
+            id: "monitor-end",
+            createdAt: "2026-03-17T19:12:02.000Z",
+            kind: "runtime.warning",
+            tone: "info",
+            payload: {
+              nativeEventType: "monitor_event",
+              message: "CI checks — final output",
+              data: {
+                task_id: "ci",
+                name: "CI checks",
+                output: "final output",
+                outcome: caseKind === "different-outcome" ? "failed" : "completed",
+              },
+            },
+          }),
+        ],
+        undefined,
+      );
+      const messages: ChatMessage[] =
+        caseKind === "reply-between"
+          ? [
+              {
+                id: MessageId.makeUnsafe("wake-answer"),
+                role: "assistant",
+                text: "First wake reply",
+                createdAt: "2026-03-17T19:12:01.500Z",
+                streaming: false,
+              },
+            ]
+          : [];
+      const timeline = deriveTimelineEntries(messages, [], work);
+      const terminal = timeline.filter(
+        (row) =>
+          row.kind === "work" &&
+          (row.entry.monitorNotification || row.entry.backgroundTaskCompletion),
+      );
+      expect(terminal).toHaveLength(caseKind === "adjacent" ? 1 : 2);
+      expect(terminal.at(-1)).toMatchObject({
+        kind: "work",
+        entry: {
+          monitorNotification: {
+            output: "final output",
+            outcome: caseKind === "different-outcome" ? "failed" : "completed",
+          },
+        },
+      });
+      if (caseKind === "adjacent") expect(terminal[0]?.createdAt).toBe("2026-03-17T19:12:01.000Z");
+      if (caseKind === "reply-between")
+        expect(timeline.map((row) => row.id)).toEqual([
+          "move",
+          "sdk-end",
+          "wake-answer",
+          "monitor-end",
+        ]);
+    },
+  );
+
   it.each([false, true])(
     "keeps tools and plans after repeated steering messages (later narration: %s)",
     (hasLaterNarration) => {
@@ -4781,6 +4983,87 @@ describe("deriveTimelineEntries", () => {
       ]);
     },
   );
+
+  it("keeps a block chronological when a server-written row carries an unrelated low sequence", () => {
+    // Provider rows carry the runtime journal sequence; server-written rows
+    // (checkpoint feedback) carry the orchestration sequence, which here is
+    // lower although the row is the latest one of the block.
+    const questionTurnId = TurnId.makeUnsafe("question-turn");
+    const backgroundTurnId = TurnId.makeUnsafe("background-subagent-turn");
+    const at = (time: string) => `2026-10-08T${time}Z`;
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Do steps 8 and 9",
+          createdAt: at("09:40:09.000"),
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("progress"),
+          role: "assistant",
+          turnId: questionTurnId,
+          text: "Starting step 8",
+          createdAt: at("09:42:23.000"),
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("final-summary"),
+          role: "assistant",
+          turnId: backgroundTurnId,
+          text: "Steps 8 and 9 are done",
+          createdAt: at("09:57:07.000"),
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "question",
+          turnId: questionTurnId,
+          createdAt: at("09:40:20.239"),
+          sequence: 155_732,
+          tone: "info",
+          label: "Asked a question",
+        },
+        {
+          id: "answer",
+          turnId: questionTurnId,
+          createdAt: at("09:40:48.588"),
+          sequence: 155_739,
+          tone: "info",
+          label: "Answered",
+        },
+        {
+          id: "tool",
+          turnId: questionTurnId,
+          createdAt: at("09:44:00.000"),
+          sequence: 156_000,
+          tone: "tool",
+          label: "Ran command",
+        },
+        {
+          id: "checkpoint-baseline-skipped",
+          turnId: backgroundTurnId,
+          createdAt: at("09:57:12.611"),
+          sequence: 145_293,
+          tone: "info",
+          label: "Checkpoint baseline unavailable for this turn",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "request",
+      "question",
+      "answer",
+      "progress",
+      "tool",
+      "final-summary",
+      "checkpoint-baseline-skipped",
+    ]);
+  });
 
   it("keeps late interrupted-turn tools before a non-native steer turn", () => {
     const interruptedTurnId = TurnId.makeUnsafe("interrupted-turn");

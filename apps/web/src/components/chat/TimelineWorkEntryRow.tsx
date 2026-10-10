@@ -19,6 +19,7 @@ import {
 
 import { basenameOfPath } from "~/file-icons";
 import type { TimestampFormat } from "../../appSettings";
+import { formatTimestamp } from "../../timestampFormat";
 import {
   ArrowUpCircleIcon,
   BackgroundTrayIcon,
@@ -47,6 +48,7 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { computerToolName, describeComputerToolCall } from "~/lib/computerToolPresentation";
 import { cn } from "~/lib/utils";
+import type { FastModeNotice } from "~/lib/fastModeState";
 import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
@@ -160,6 +162,7 @@ function extractFilePathFromDetail(detail: string): string | null {
 }
 
 function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
+  if (workEntry.monitorNotification) return null;
   if (isReasoningUpdateWorkEntry(workEntry)) {
     return formatAgentActivityEntryPreview(workEntry);
   }
@@ -250,6 +253,8 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.activityKind === "checkpoint.baseline.skipped") return CircleAlertIcon;
   // "Moved to background" notices read as a tray drop, not a warning check.
   if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
+  if (workEntry.monitorNotification)
+    return workEntry.monitorNotification.outcome === "failed" ? CircleAlertIcon : EyeIcon;
   if (workEntry.backgroundTaskCompletion) {
     return workEntry.backgroundTaskCompletion.taskType === "local_agent"
       ? AgentTaskIcon
@@ -364,7 +369,7 @@ function isSynaraToolCall(workEntry: TimelineWorkEntry): boolean {
 // compact density so every tool-call line shares one height regardless of whether
 // it carries a disclosure chevron.
 export function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
-  if (isCodexActivityStatusWorkEntry(workEntry)) {
+  if (isCodexActivityStatusWorkEntry(workEntry) || workEntry.monitorNotification) {
     return true;
   }
   // Commands stay compact even when surfaced with a non-terminal icon (read-only
@@ -405,7 +410,7 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   // Task progress is semantic copy, not a tool lifecycle status. Preserve the
   // trailing "completed" instead of passing it through the compact tool-label
   // normalizer, which intentionally strips lifecycle suffixes.
-  if (workEntry.activityKind === "turn.tasks.updated") {
+  if (workEntry.activityKind === "turn.tasks.updated" || workEntry.monitorNotification) {
     return capitalizePhrase(workEntry.label);
   }
   const synaraTitle = deriveSynaraMcpToolTitle({
@@ -609,6 +614,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const hasToolDetails = Boolean(workEntry.toolDetails);
   const providerContextLifecycle = workEntry.providerContextLifecycle;
   const providerHandoff = workEntry.providerHandoff;
+  const monitorNotification = workEntry.monitorNotification;
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
@@ -693,6 +699,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     Boolean(
       providerContextLifecycle ||
       providerHandoff ||
+      monitorNotification ||
       workEntry.toolDetails ||
       (workEntry.liveActivity && !canOpenReadFile),
     );
@@ -856,7 +863,19 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 details={workEntry.toolDetails}
                 activity={workEntry.liveActivity}
                 detailContent={
-                  providerContextLifecycle ? (
+                  monitorNotification ? (
+                    <div className="space-y-1 text-ui-sm">
+                      <time
+                        className="text-ui-xs text-muted-foreground"
+                        dateTime={workEntry.createdAt}
+                      >
+                        {formatTimestamp(workEntry.createdAt, timestampFormat)}
+                      </time>
+                      <pre className="whitespace-pre-wrap break-words font-chat-code">
+                        {monitorNotification.output}
+                      </pre>
+                    </div>
+                  ) : providerContextLifecycle ? (
                     <ProviderContextLifecycleDetails info={providerContextLifecycle} />
                   ) : providerHandoff ? (
                     <ProviderHandoffDetails info={providerHandoff} />
@@ -1054,13 +1073,16 @@ function ProviderContextLifecycleDetails(props: {
   );
 }
 
-function providerModelLabel(selection: ModelSelection): string {
+function providerModelLabel(
+  selection: ModelSelection,
+  fastModeNotice?: FastModeNotice | null,
+): string {
   const displayName =
     PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === selection.provider)
       ?.displayName ?? selection.provider;
   const summary = resolveThreadModelSummary(selection);
   const modelLabel = summary
-    ? `${formatThreadModelSummaryLabel(summary)}${summary.fastMode ? " · Fast" : ""}`
+    ? `${formatThreadModelSummaryLabel(summary)}${summary.fastMode ? ` · ${fastModeNotice?.label ?? "Fast"}` : ""}`
     : selection.model;
   return `${displayName} · ${modelLabel}`;
 }
@@ -1073,9 +1095,13 @@ export function ProviderHandoffDetails(props: {
     <div className="space-y-3" data-provider-handoff-details="true">
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
         <dt className="text-muted-foreground/56">From</dt>
-        <dd className="text-foreground/84">{providerModelLabel(info.sourceModelSelection)}</dd>
+        <dd className="text-foreground/84">
+          {providerModelLabel(info.sourceModelSelection, info.sourceFastModeNotice)}
+        </dd>
         <dt className="text-muted-foreground/56">To</dt>
-        <dd className="text-foreground/84">{providerModelLabel(info.targetModelSelection)}</dd>
+        <dd className="text-foreground/84">
+          {providerModelLabel(info.targetModelSelection, info.targetFastModeNotice)}
+        </dd>
         {info.status === "failed" ? (
           <>
             <dt className="text-muted-foreground/56">Error</dt>

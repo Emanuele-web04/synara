@@ -2786,7 +2786,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const existingMessage = thread.messages.find((message) => message.id === command.messageId);
-      return {
+      const turnId = resolveStableMessageTurnId({
+        existingTurnId: existingMessage?.turnId,
+        incomingTurnId: command.turnId,
+      });
+      const deltaEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -2803,15 +2807,40 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.segmentSequence !== undefined
             ? { segmentSequence: command.segmentSequence }
             : {}),
-          turnId: resolveStableMessageTurnId({
-            existingTurnId: existingMessage?.turnId,
-            incomingTurnId: command.turnId,
-          }),
+          turnId,
           streaming: true,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
       };
+      if (existingMessage?.role !== "assistant" || existingMessage.streaming) {
+        return deltaEvent;
+      }
+      // A finalized message stays finalized. A late provider delta (after its
+      // item or turn already completed) is appended and settled again in the
+      // same command, because nothing would ever complete a reopened row.
+      return [
+        deltaEvent,
+        {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: command.messageId,
+            role: "assistant",
+            text: `${existingMessage.text}${command.delta}`,
+            turnId,
+            streaming: false,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
     }
 
     case "thread.message.assistant.complete": {

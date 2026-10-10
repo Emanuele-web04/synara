@@ -147,7 +147,9 @@ import Migration0128 from "./Migrations/128_HubWork.ts";
 import Migration0129 from "./Migrations/129_ProjectionThreadsSnooze.ts";
 import Migration0130 from "./Migrations/130_PullRequestAutoFix.ts";
 import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
-import Migration0132 from "./Migrations/132_ProjectionThreadsForkSourceMessage.ts";
+import Migration0132 from "./Migrations/132_ExternalMcpTurnCapacityRecovery.ts";
+import Migration0133 from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
+import Migration0134 from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -295,7 +297,9 @@ export const migrationEntries = [
   [129, "ProjectionThreadsSnooze", Migration0129],
   [130, "PullRequestAutoFix", Migration0130],
   [131, "ProjectSourceFolders", Migration0131],
-  [132, "ProjectionThreadsForkSourceMessage", Migration0132],
+  [132, "ExternalMcpTurnCapacityRecovery", Migration0132],
+  [133, "ProjectionTurnsWorkspaceInitialization", Migration0133],
+  [134, "ProjectionThreadsForkSourceMessage", Migration0134],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

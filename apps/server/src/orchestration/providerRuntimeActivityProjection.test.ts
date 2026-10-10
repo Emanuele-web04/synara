@@ -183,6 +183,36 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
 
+it("projects Claude Monitor events as labeled notices", () => {
+  const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "claudeAgent",
+      type: "runtime.warning",
+      eventId: "claude-monitor-event",
+      turnId: TURN_ID,
+      payload: {
+        message,
+        detail: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+      },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    tone: "info",
+    kind: "runtime.warning",
+    summary: "Monitor event",
+    turnId: TURN_ID,
+    payload: {
+      message,
+      detail: message,
+      nativeEventType: "monitor_event",
+      data: { task_id: "bu336ro2k" },
+    },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
 it("keeps the full runtime warning message so the row's hover card can reveal it", () => {
   // The work-log row clips the notice to one line with CSS `truncate`; the hover
   // card can only show what the server stored, so the payload must carry the full
@@ -614,7 +644,7 @@ describe("provider runtime activity projection", () => {
     expect(events.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
   });
 
-  it("projects only readable completed Codex-family reasoning summaries", () => {
+  it("projects only readable completed Codex, Antigravity, and OpenCode reasoning", () => {
     const absent = [
       runtimeEvent({
         type: "content.delta",
@@ -645,7 +675,7 @@ describe("provider runtime activity projection", () => {
     ];
     expect(absent.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
 
-    for (const provider of ["codex", "antigravity"] as const) {
+    for (const provider of ["codex", "antigravity", "opencode"] as const) {
       const [activity] = projectProviderRuntimeActivities(
         runtimeEvent({
           type: "item.completed",
@@ -1122,6 +1152,31 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    for (const [provider, usageSessionId] of [
+      ["cursor", "native-session"],
+      ["codex", "native-session"],
+      ["antigravity", "native-session:generation-after-restart"],
+    ] as const) {
+      const [resumedUsage] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "thread.token-usage.updated",
+          eventId: `${provider}-resumed-usage`,
+          provider,
+          lifecycleGeneration: "generation-after-restart",
+          providerRefs: { providerThreadId: "native-session" },
+          payload: { usage: { usedTokens: 0, totalProcessedTokens: 4_200 } },
+        }),
+      );
+      expect(resumedUsage).toMatchObject({
+        kind: "context-window.updated",
+        payload: {
+          provider,
+          totalProcessedTokens: 4_200,
+          usageSessionId,
+        },
+      });
+    }
+
     const [configured] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "session.configured",
@@ -1160,6 +1215,46 @@ describe("provider runtime activity projection", () => {
       kind: "context-window.configured",
       payload: { cleared: true },
     });
+
+    const [blockedFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-blocked",
+        provider: "claudeAgent",
+        payload: {
+          config: { fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" },
+        },
+      }),
+    );
+    expect(blockedFastMode).toMatchObject({
+      id: "fast-mode-blocked",
+      kind: "fast-mode.state",
+      payload: { state: "off", disabledReason: "extra_usage_disabled" },
+    });
+
+    const [activeFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-on",
+        provider: "claudeAgent",
+        payload: { config: { fast_mode_state: "on" } },
+      }),
+    );
+    expect(activeFastMode).toMatchObject({ kind: "fast-mode.state", payload: { state: "on" } });
+
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "session.configured",
+          eventId: "fast-mode-with-context",
+          provider: "claudeAgent",
+          payload: { config: { autoCompactWindow: "1m", fast_mode_state: "cooldown" } },
+        }),
+      ).map((activity) => [activity.id, activity.kind]),
+    ).toEqual([
+      ["fast-mode-with-context", "context-window.configured"],
+      ["fast-mode-with-context:fast-mode", "fast-mode.state"],
+    ]);
 
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({

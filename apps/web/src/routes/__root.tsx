@@ -1356,8 +1356,8 @@ function EventRouter() {
       ThreadId,
       PreSnapshotThreadEventBuffer<OrchestrationEvent>
     >();
-    // Cached resume cursor each subscription started from. While the applied
-    // cursor still equals it, an older stream snapshot is a server-side reset.
+    // Cached resume cursor each subscription started from, until a current
+    // snapshot confirms the subscription. Before that, a lower snapshot can be a server reset.
     const threadResumeSeedSequenceById = new Map<ThreadId, number>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
     const threadSnapshotRefreshPending = new Set<ThreadId>();
@@ -2138,6 +2138,7 @@ function EventRouter() {
         // dropping or failing to reduce one of the corresponding live events.
         const stateBeforeProjectionApply = useStore.getState();
         syncServerThreadDetailHotPath(snapshot.thread, snapshot.snapshotSequence);
+        threadResumeSeedSequenceById.delete(threadId);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
         projectionConfirmed = true;
@@ -2376,6 +2377,7 @@ function EventRouter() {
           return;
         }
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        threadResumeSeedSequenceById.delete(threadId);
         toastManager.close(threadOverflowToastId(threadId));
         threadSnapshotNotFoundRetryAttempted.delete(threadId);
         // Snapshots replace cached detail wholesale, so overwrite the cursor
