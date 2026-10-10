@@ -1711,11 +1711,34 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     },
   );
 
-  it("completes a durable reply when agy exits with its exact post-response timeout", async () => {
+  it.each([
+    { name: "exact timeout", expected: "completed" },
+    { name: "stderr timeout", expected: "completed", stderrOnly: true },
+    { name: "unrelated stderr", expected: "failed", stderr: "quota exceeded" },
+    { name: "unrelated stream error", expected: "failed", streamError: "quota exceeded" },
+    { name: "earlier stream error", expected: "failed", earlierStreamError: true },
+    { name: "earlier terminal error", expected: "failed", earlierResultError: true },
+    { name: "interrupt result", expected: "interrupted", status: "INTERRUPTED" },
+    { name: "incomplete assistant", expected: "failed", responseState: "ACTIVE" },
+    { name: "signal exit", expected: "failed", signal: "SIGKILL" as const },
+    { name: "unproven teardown", expected: "failed", teardownFailure: true },
+    { name: "teardown signal error", expected: "failed", teardownSignalError: true },
+    { name: "late descendant capture", expected: "failed", lateCapture: true },
+    { name: "unobserved cleanup", expected: "failed", noStopHook: true },
+    { name: "malformed record", expected: "failed", malformed: true },
+    { name: "pending tool", expected: "failed", pendingTool: true },
+    { name: "pending background task", expected: "failed", background: true },
+    { name: "nonterminal status", expected: "failed", status: "WAITING" },
+    { name: "explicit malformed error", expected: "failed", malformedError: true },
+  ])("settles post-response timeout safely: $name", async (scenario) => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "synara-antigravity-post-response-timeout-"),
     );
     const children: ChildProcess[] = [];
+    let observeTeardown!: () => void;
+    const teardownObserved = new Promise<void>((resolve) => {
+      observeTeardown = resolve;
+    });
     try {
       await Effect.runPromise(
         Effect.gen(function* () {
@@ -1741,26 +1764,86 @@ describe("Antigravity turn settle on cancel (#465)", () => {
                 event: "step_update",
                 step_update: {
                   step_index: 1,
-                  state: "DONE",
+                  state: scenario.responseState ?? "DONE",
                   step_type: "agent_response",
                   text_delta: "Finished",
                 },
               }),
+              ...(scenario.earlierResultError
+                ? [
+                    JSON.stringify({
+                      event: "result",
+                      result: { status: "ERROR", error: "quota exceeded" },
+                    }),
+                  ]
+                : []),
+              ...(scenario.earlierStreamError
+                ? [
+                    JSON.stringify({ event: "error", message: "quota exceeded" }),
+                    JSON.stringify({ event: "error", message: "timeout waiting for response" }),
+                  ]
+                : []),
               JSON.stringify({
                 event: "result",
-                result: { status: "ERROR", error: "timeout waiting for response" },
+                result: {
+                  status: scenario.status ?? "ERROR",
+                  ...(scenario.stderrOnly
+                    ? {}
+                    : { error: scenario.malformedError ? {} : "timeout waiting for response" }),
+                },
               }),
+              ...(scenario.streamError
+                ? [{ event: "error", message: scenario.streamError }].map((event) =>
+                    JSON.stringify(event),
+                  )
+                : []),
+              ...(scenario.pendingTool
+                ? [
+                    JSON.stringify({
+                      event: "step_update",
+                      step_update: { step_index: 2, state: "ACTIVE", step_type: "tool" },
+                    }),
+                  ]
+                : []),
+              ...(scenario.malformed ? ['{"event":invalid}'] : []),
             ].join("\n"),
           );
-          children[0]!.stderr!.emit("data", "Error: timeout waiting for response\n");
-          children[0]!.emit("close", 1, null);
+          children[0]!.stderr!.emit(
+            "data",
+            `${scenario.stderr ?? "Error: timeout waiting for response"}\n`,
+          );
+          if (scenario.background) {
+            yield* Effect.promise(() =>
+              fs.writeFile(
+                (children[0] as ChildProcess & { eventFile: string }).eventFile,
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command"},"toolOutput":"Task id \'task-pending\' is now running in the background"}\n',
+              ),
+            );
+          }
+          if (!scenario.noStopHook) {
+            yield* Effect.promise(() =>
+              fs.appendFile(
+                (children[0] as ChildProcess & { eventFile: string }).eventFile,
+                "stop\t{}\n",
+              ),
+            );
+            if (!scenario.background) yield* Effect.promise(() => teardownObserved);
+          }
+          children[0]!.emit("close", scenario.signal ? null : 1, scenario.signal ?? null);
           const events = Array.from(
             yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(events.find((event) => event.type === "runtime.error")).toBeUndefined();
+          if (scenario.expected === "completed") {
+            expect(events.find((event) => event.type === "runtime.error")).toBeUndefined();
+          }
           expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
-            state: "completed",
-            stopReason: "model_stop",
+            state: scenario.expected,
+            stopReason:
+              scenario.expected === "completed"
+                ? "model_stop"
+                : scenario.expected === "interrupted"
+                  ? "interrupted"
+                  : "error",
           });
           expect(
             events.filter((event) => event.type === "content.delta").map((event) => event.payload),
@@ -1771,6 +1854,15 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             makeAntigravityAdapterLive({
               ensurePlugin: async () => undefined,
               spawnProcess: makeSpawnProcess(children),
+              teardownProcessTree: async () => {
+                observeTeardown();
+                if (scenario.teardownFailure) throw new Error("helper exit unproven");
+                return {
+                  escalated: false,
+                  capturedBeforeRootExit: scenario.lateCapture !== true,
+                  signalErrors: scenario.teardownSignalError ? [new Error("signal denied")] : [],
+                };
+              },
             }).pipe(
               Layer.provideMerge(
                 ServerConfig.layerTest(root, { prefix: "antigravity-post-response-timeout-" }),
