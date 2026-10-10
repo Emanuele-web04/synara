@@ -3732,6 +3732,7 @@ export default function ChatView({
     await api.orchestration
       .dispatchCommand({
         type: "thread.turn.interrupt",
+        requestedBy: "user",
         commandId: newCommandId(),
         threadId: activeThread.id,
         createdAt: new Date().toISOString(),
@@ -3756,6 +3757,31 @@ export default function ChatView({
       });
     });
   }, [onInterrupt]);
+
+  // Background command rows offer Stop while their task runs. A rejected stop
+  // leaves the row running, so the failure is reported instead of swallowed.
+  const onStopBackgroundTask = useCallback(
+    (taskId: string) => {
+      const api = readNativeApi();
+      if (!api || !activeThread) return;
+      void api.orchestration
+        .dispatchCommand({
+          type: "thread.task.stop",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          taskId,
+          createdAt: new Date().toISOString(),
+        })
+        .catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not stop the background task",
+            description: error instanceof Error ? error.message : "Try again in a moment.",
+          });
+        });
+    },
+    [activeThread],
+  );
 
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
@@ -6781,6 +6807,7 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
+                    onStopBackgroundTask={onStopBackgroundTask}
                     computerControlEnabled={enableComputerControl}
                     onEnableComputerControl={handleEnableComputerControlFromDenial}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}

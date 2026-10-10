@@ -1755,11 +1755,15 @@ const ThreadClaudeCacheCompactedCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const TurnInterruptRequestedBy = Schema.Literals(["user", "agent", "system"]);
+
 const ThreadTurnInterruptCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  // Explicit intent provenance. Historical/automatic requests may omit it.
+  requestedBy: Schema.optional(TurnInterruptRequestedBy),
   createdAt: IsoDateTime,
 });
 
@@ -2463,6 +2467,7 @@ export const ThreadGoalContinuationRequestedPayload = Schema.Struct({
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  requestedBy: Schema.optional(TurnInterruptRequestedBy),
   createdAt: IsoDateTime,
 });
 
