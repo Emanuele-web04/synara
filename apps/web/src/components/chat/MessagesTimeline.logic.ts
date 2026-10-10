@@ -626,7 +626,8 @@ export type MessagesTimelineRow =
       inlineWorkEntries?: WorkLogEntry[];
       inlineWorkGroupId?: string;
       collapsedTurnItems?: CollapsedTurnItem[];
-      // Set on the terminal message of every settled turn.
+      // Set on the terminal assistant, or the request if an interrupted turn
+      // produced no assistant/work rows.
       turnHeader?: TurnHeader;
       // Set on the last row of a stopped turn that has no settled header.
       turnEndMarker?: TurnEndMarker;
@@ -1274,6 +1275,7 @@ function markInterruptedTurnsWithoutHeader(
 ): void {
   const headedTurnIds = new Set<TurnId>();
   const lastRowIndexByTurnId = new Map<TurnId, number>();
+  const requestRowIndexByTurnId = new Map<TurnId, number>();
   rows.forEach((row, index) => {
     if (row.kind === "message" && row.message.role === "assistant" && row.message.turnId) {
       if (row.turnHeader) headedTurnIds.add(row.message.turnId);
@@ -1282,6 +1284,14 @@ function markInterruptedTurnsWithoutHeader(
       for (const entry of row.groupedEntries) {
         if (entry.turnId) lastRowIndexByTurnId.set(entry.turnId, index);
       }
+    } else if (
+      row.kind === "message" &&
+      row.message.role === "user" &&
+      row.message.turnId &&
+      row.message.startsNewTurn !== false &&
+      !requestRowIndexByTurnId.has(row.message.turnId)
+    ) {
+      requestRowIndexByTurnId.set(row.message.turnId, index);
     }
   });
   for (const [turnId, index] of lastRowIndexByTurnId) {
@@ -1296,6 +1306,25 @@ function markInterruptedTurnsWithoutHeader(
           : null,
       outcome: timing.stoppedByUser && !timing.failed ? "stopped" : "interrupted",
       reason: timing.failureReason ?? null,
+    };
+  }
+  // A request bound to a terminal turn is durable ownership evidence. A
+  // queued, unbound request or Stop intent alone must never acquire a header.
+  for (const [turnId, index] of requestRowIndexByTurnId) {
+    if (lastRowIndexByTurnId.has(turnId) || headedTurnIds.has(turnId)) continue;
+    const timing = turnTimingByTurnId.get(turnId);
+    if (!timing?.completedAt || (!timing.interrupted && !timing.failed)) continue;
+    const row = rows[index]!;
+    if (row.kind !== "message") continue;
+    row.turnHeader = {
+      elapsed: timing.startedAt
+        ? (formatElapsed(timing.startedAt, timing.completedAt) ?? null)
+        : null,
+      endedAt: timing.completedAt,
+      outcome: timing.stoppedByUser && !timing.failed ? "stopped" : "interrupted",
+      reason: timing.failureReason ?? null,
+      modelChange: null,
+      resumedBy: null,
     };
   }
 }

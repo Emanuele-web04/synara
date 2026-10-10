@@ -1995,6 +1995,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         })()}
 
       {row.kind === "message" &&
+        row.message.role === "user" &&
+        row.turnHeader &&
+        !conversationOnly && (
+          <div className="pt-2">
+            <TurnHeaderLine
+              kind="settled"
+              header={row.turnHeader}
+              fontSize={chatTypographyStyle.fontSize}
+              timestampFormat={timestampFormat}
+            />
+          </div>
+        )}
+
+      {row.kind === "message" &&
         row.message.role === "assistant" &&
         (() => {
           const messageText = resolveAssistantMessageDisplayText(row);
