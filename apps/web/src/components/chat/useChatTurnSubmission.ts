@@ -1,3 +1,4 @@
+import type { ThreadId } from "@synara/contracts";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
 import { projectFoldersSessionIssue } from "@synara/shared/projectFolders";
@@ -36,13 +37,16 @@ import { setPendingUserInputCustomAnswer } from "../../pendingUserInput";
 import { resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import { buildSourceProposedPlanReference } from "../../session-logic";
 import {
+  buildBlockedComposerSendToastCopy,
   buildExpiredTerminalContextToastCopy,
   createWorktreeSetupResolution,
   deriveComposerSendState,
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
+  resolveBlockedComposerSendReason,
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveQueuedTurnDispatchSettings,
+  type BlockedComposerSendReason,
 } from "../ChatView.logic";
 import { toastManager } from "../ui/toast";
 import type { ChatTurnSubmissionInput } from "./chatSendTypes";
@@ -56,6 +60,17 @@ import { resolveChatPromptCaptures } from "./resolveChatPromptCaptures";
 import { useChatTurnExecution } from "./useChatTurnExecution";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
+
+// One toast per chat: pressing Send again refreshes it instead of stacking copies.
+function notifyBlockedComposerSend(threadId: ThreadId, reason: BlockedComposerSendReason): void {
+  const copy = buildBlockedComposerSendToastCopy(reason);
+  toastManager.add({
+    id: `composer-send-blocked:${threadId}`,
+    type: copy.type,
+    title: copy.title,
+    description: copy.description,
+  });
+}
 
 export function useChatTurnSubmission({
   threadId,
@@ -259,15 +274,31 @@ export function useChatTurnSubmission({
         !api ||
         !lateSendHandlers ||
         !activeThread ||
-        hasActiveComposerSend(activeThread.id) ||
         activeThread.claudeCacheReview != null ||
         activeThread.sidechatExpiredAt ||
-        isSendBusy ||
-        isConnecting ||
-        isVoiceTranscribing ||
-        sendPreflightInFlightRef.current ||
-        sendInFlightRef.current
+        isVoiceTranscribing
       ) {
+        return false;
+      }
+      const sendInFlight =
+        hasActiveComposerSend(activeThread.id) ||
+        isSendBusy ||
+        sendPreflightInFlightRef.current ||
+        sendInFlightRef.current;
+      if (sendInFlight || isConnecting) {
+        const blockedReason = resolveBlockedComposerSendReason({
+          sendInFlight,
+          sessionStarting: isConnecting,
+          hasComposerContent:
+            (composerEditorRef.current?.readSnapshot().value ?? promptRef.current).trim().length >
+              0 ||
+            composerImages.length > 0 ||
+            composerFiles.length > 0,
+        });
+        // Queue drains retry on their own; only a person pressing Send needs to hear why.
+        if (blockedReason !== null && !queuedTurn) {
+          notifyBlockedComposerSend(activeThread.id, blockedReason);
+        }
         return false;
       }
       const hasPendingCacheReview = () =>
@@ -528,7 +559,10 @@ export function useChatTurnSubmission({
         }
         return false;
       }
-      if (!activeProject) return false;
+      if (!activeProject) {
+        if (queuedChatTurn === null) notifyBlockedComposerSend(activeThread.id, "no-project");
+        return false;
+      }
       if (queuedChatTurn === null && !isLivePlanFollowUpSubmission) {
         const handled = await handleChatAutomationSend({
           threadId,

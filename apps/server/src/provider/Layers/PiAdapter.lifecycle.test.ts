@@ -81,7 +81,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "until-abort";
+type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "tool" | "until-abort";
 function responses(...kinds: ResponseKind[]) {
   let calls = 0;
   captured.stream = (model, context, options) => {
@@ -128,6 +128,15 @@ function responses(...kinds: ResponseKind[]) {
         message.stopReason = "error";
         message.errorMessage = "[rate_limit_exceeded] Rate limit exceeded";
         stream.push({ type: "error", reason: "error", error: message });
+      } else if (kind === "tool") {
+        message.content.push({
+          type: "toolCall",
+          id: "read-settings",
+          name: "read",
+          arguments: { path: "settings.json" },
+        });
+        message.stopReason = "toolUse";
+        stream.push({ type: "done", reason: "toolUse", message });
       } else if (kind === "until-abort") {
         const abort = () => {
           message.stopReason = "aborted";
@@ -245,6 +254,8 @@ it.each([
   { toolName: "bash", args: { command: "printf hello \n" }, title: "printf hello" },
   { toolName: "bash", args: { command: " \n" }, title: "bash" },
   { toolName: "read", args: { path: "file.txt " }, title: "read file.txt" },
+  { toolName: " custom_tool \n", args: { command: " raw input \n" }, title: "custom_tool" },
+  { toolName: " \t", args: { command: " raw input \n" }, title: "Tool" },
 ])(
   "persists $toolName lifecycle titles without changing tool arguments: $title",
   async ({ toolName, args, title }) => {
@@ -286,13 +297,49 @@ it.each([
           ),
         );
         expect(encodable).toBe(true);
-        expect(event.payload).toMatchObject({ title });
+        expect(event.payload).toMatchObject({ title, data: { toolName, args } });
       }
       const snapshot = await Effect.runPromise(adapter.readThread(threadId));
       expect(snapshot.turns.find((entry) => entry.id === turn.turnId)?.items).toContainEqual(
         expect.objectContaining({ callId: "title-tool", args }),
       );
       await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+      await waitFor(() => expect(completions(events)).toHaveLength(1));
+      const assistant = session.messages.find((message) => message.role === "assistant");
+      if (!assistant) throw new Error("Expected the completed SDK assistant message");
+      session.agent.state.messages = [
+        {
+          ...assistant,
+          content: [{ type: "toolCall", id: "history-tool", name: toolName, arguments: args }],
+          stopReason: "toolUse",
+        },
+        {
+          role: "toolResult",
+          toolCallId: "history-tool",
+          toolName,
+          content: [{ type: "text", text: "done" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+      ];
+      const history = await Effect.runPromise(adapter.readThread(threadId));
+      const historyItems = history.turns.flatMap((entry) => entry.items);
+      expect(historyItems).toEqual([
+        expect.objectContaining({
+          callId: "history-tool",
+          status: "started",
+          title,
+          toolName,
+          args,
+        }),
+        expect.objectContaining({
+          callId: "history-tool",
+          status: "completed",
+          title,
+          toolName,
+          data: expect.objectContaining({ args }),
+        }),
+      ]);
     });
   },
 );
@@ -922,12 +969,15 @@ it.each(["adapter", "extension"] as const)(
   },
 );
 
-it("keeps partial assistant and reasoning items open across retries until final settlement", async () => {
+it("closes failed message items before retrying with separate items", async () => {
   responses("partial-error", "success");
   await withAdapter(async (adapter, events) => {
     const turn = await send(adapter);
     await waitFor(() => expect(captured.sessions[0]!.isRetrying).toBe(true));
-    expect(events.filter((event) => event.type === "item.completed")).toHaveLength(0);
+    await waitFor(() =>
+      expect(events.filter((event) => event.type === "item.completed")).toHaveLength(2),
+    );
+    expect(completions(events)).toHaveLength(0);
     await waitFor(() => expect(completions(events)).toHaveLength(1));
     for (const itemType of ["assistant_message", "reasoning"] as const) {
       const started = events.filter(
@@ -936,18 +986,23 @@ it("keeps partial assistant and reasoning items open across retries until final 
       const completed = events.filter(
         (event) => event.type === "item.completed" && event.payload.itemType === itemType,
       );
-      expect(started).toHaveLength(1);
-      expect(completed).toHaveLength(1);
+      expect(started).toHaveLength(2);
+      expect(completed).toHaveLength(2);
       expect(completed[0]).toMatchObject({
         itemId: started[0]!.itemId,
         turnId: turn.turnId,
-        payload: { status: "completed" },
+        payload: { status: "failed" },
       });
       expect(
         events.filter(
           (event) => event.type === "content.delta" && event.itemId === started[0]!.itemId,
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
+      expect(completed[1]).toMatchObject({
+        itemId: started[1]!.itemId,
+        payload: { status: "completed" },
+      });
+      expect(started[1]!.itemId).not.toBe(started[0]!.itemId);
     }
   });
 });
@@ -1281,4 +1336,40 @@ it("keeps Computer schemas out of idle model requests and refreshes them on resu
     { enableComputerControl: false },
     fetch,
   );
+});
+
+it("separates assistant and reasoning messages across a real SDK tool loop", async () => {
+  const calls = responses("tool", "success");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(calls()).toBe(2);
+    const toolStart = events.findIndex(
+      (event) => event.type === "item.started" && event.itemId === "pi-tool-read-settings",
+    );
+    expect(toolStart).toBeGreaterThan(-1);
+    for (const itemType of ["assistant_message", "reasoning"] as const) {
+      const started = events.filter(
+        (event) => event.type === "item.started" && event.payload.itemType === itemType,
+      );
+      const completed = events.filter(
+        (event) => event.type === "item.completed" && event.payload.itemType === itemType,
+      );
+      expect(started).toHaveLength(2);
+      expect(completed).toHaveLength(2);
+      expect(started[0]!.itemId).not.toBe(started[1]!.itemId);
+      expect(events.indexOf(completed[0]!)).toBeLessThan(toolStart);
+      expect(events.indexOf(started[1]!)).toBeGreaterThan(toolStart);
+      for (const [index, start] of started.entries()) {
+        expect(completed[index]).toMatchObject({
+          itemId: start.itemId,
+          turnId: turn.turnId,
+          payload: { status: "completed" },
+        });
+        expect(
+          events.filter((event) => event.type === "content.delta" && event.itemId === start.itemId),
+        ).toHaveLength(1);
+      }
+    }
+  });
 });

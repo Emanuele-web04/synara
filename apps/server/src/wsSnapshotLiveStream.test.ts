@@ -624,6 +624,86 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     ]);
   });
 
+  it("batches the resume gap into one replay item followed by live events", async () => {
+    const items = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const live = yield* PubSub.unbounded<OrchestrationEvent>();
+          return yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: PubSub.subscribe(live).pipe(
+              Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+            ),
+            snapshot: Effect.die(new Error("cursor resume must not load the snapshot")),
+            snapshotSequence: () => 0,
+            getHighWaterSequence: Effect.succeed(5),
+            resumeFromSequence: 3,
+            batchReplay: true,
+            replay: () =>
+              Stream.concat(
+                Stream.fromEffect(PubSub.publish(live, event(6))).pipe(Stream.drain),
+                // Out-of-fence rows stay filtered out of the batch.
+                Stream.make(event(3), event(4), event(5), event(6)),
+              ),
+          }).pipe(Stream.take(2), Stream.runCollect);
+        }),
+      ),
+    );
+
+    expect(Array.from(items)).toEqual([
+      { kind: "replay", events: [event(4), event(5)] },
+      { kind: "event", event: event(6) },
+    ]);
+  });
+
+  it("emits no replay item when the batched resume gap is empty", async () => {
+    const items = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const live = yield* PubSub.unbounded<OrchestrationEvent>();
+          return yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: PubSub.subscribe(live).pipe(
+              Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+            ),
+            snapshot: Effect.die(new Error("cursor resume must not load the snapshot")),
+            snapshotSequence: () => 0,
+            getHighWaterSequence: Effect.succeed(5),
+            resumeFromSequence: 5,
+            batchReplay: true,
+            replay: () => Stream.fromEffect(PubSub.publish(live, event(6))).pipe(Stream.drain),
+          }).pipe(Stream.take(1), Stream.runCollect);
+        }),
+      ),
+    );
+
+    expect(Array.from(items)).toEqual([{ kind: "event", event: event(6) }]);
+  });
+
+  it("keeps per-event replay after a snapshot even when batching is requested", async () => {
+    const items = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const live = yield* PubSub.unbounded<OrchestrationEvent>();
+          return yield* makeCursorSafeSnapshotLiveStream({
+            subscribeLive: PubSub.subscribe(live).pipe(
+              Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+            ),
+            snapshot: Effect.succeed({ snapshotSequence: 3 }),
+            snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+            getHighWaterSequence: Effect.succeed(5),
+            batchReplay: true,
+            replay: () => Stream.make(event(4), event(5)),
+          }).pipe(Stream.take(3), Stream.runCollect);
+        }),
+      ),
+    );
+
+    expect(Array.from(items)).toEqual([
+      { kind: "snapshot", snapshot: { snapshotSequence: 3 } },
+      { kind: "event", event: event(4) },
+      { kind: "event", event: event(5) },
+    ]);
+  });
+
   it("does not lose an event published while the resume path reads the durable head", async () => {
     // The resume branch must share the snapshot path's attach-before-IO
     // discipline: the live subscription attaches before the durable head is

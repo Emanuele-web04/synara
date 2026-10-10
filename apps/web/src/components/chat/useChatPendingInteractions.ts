@@ -29,7 +29,13 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
 import { expiredUserInputDrafts } from "../../pendingUserInputRecovery";
-import { derivePendingApprovals, derivePendingUserInputs } from "../../session-logic";
+import {
+  canSessionAnswerPendingRequests,
+  derivePendingApprovals,
+  derivePendingUserInputs,
+  type PendingApproval,
+  type PendingUserInput,
+} from "../../session-logic";
 import { useStore } from "../../store";
 import {
   buildThreadSubscribeInput,
@@ -39,6 +45,8 @@ import { type Thread } from "../../types";
 import { respondToThreadApproval } from "./respondToThreadApproval";
 import { usePendingUserInputDrafts } from "./usePendingUserInputDrafts";
 const EMPTY_ACTIVITIES: Thread["activities"] = [];
+const EMPTY_PENDING_APPROVALS: PendingApproval[] = [];
+const EMPTY_PENDING_USER_INPUTS: PendingUserInput[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 interface ChatPendingInteractionsInput {
   threadId: ThreadId;
@@ -71,13 +79,21 @@ export function useChatPendingInteractions({
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
 
+  // A closed or errored session has no live provider callback, so its requests
+  // can never be answered. Gate them exactly like the sidebar pill, Kanban and
+  // Tasks so a dead approval cannot keep the composer locked; the server settles
+  // the rows once the runtime reports the turn or session gone.
+  const canAnswerPendingRequests = canSessionAnswerPendingRequests(activeThread?.session);
   const pendingApprovals = useMemo(
     () =>
-      derivePendingApprovals(threadActivities, activeThread?.pendingInteractions, {
-        authoritativeHasPending: activeThread?.hasPendingApprovals,
-        latestTurnId: activeThread?.latestTurn?.turnId,
-      }),
+      canAnswerPendingRequests
+        ? derivePendingApprovals(threadActivities, activeThread?.pendingInteractions, {
+            authoritativeHasPending: activeThread?.hasPendingApprovals,
+            latestTurnId: activeThread?.latestTurn?.turnId,
+          })
+        : EMPTY_PENDING_APPROVALS,
     [
+      canAnswerPendingRequests,
       activeThread?.hasPendingApprovals,
       activeThread?.latestTurn?.turnId,
       activeThread?.pendingInteractions,
@@ -115,12 +131,15 @@ export function useChatPendingInteractions({
   }, [nextUserInputResponseReclaimAt]);
   const pendingUserInputs = useMemo(
     () =>
-      derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions, {
-        authoritativeHasPending: activeThread?.hasPendingUserInput,
-        latestTurnId: activeThread?.latestTurn?.turnId,
-        responseClaimReferenceAt: userInputResponseClaimReferenceAt,
-      }),
+      canAnswerPendingRequests
+        ? derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions, {
+            authoritativeHasPending: activeThread?.hasPendingUserInput,
+            latestTurnId: activeThread?.latestTurn?.turnId,
+            responseClaimReferenceAt: userInputResponseClaimReferenceAt,
+          })
+        : EMPTY_PENDING_USER_INPUTS,
     [
+      canAnswerPendingRequests,
       activeThread?.hasPendingUserInput,
       activeThread?.latestTurn?.turnId,
       activeThread?.pendingInteractions,
@@ -133,7 +152,7 @@ export function useChatPendingInteractions({
     answersRef: pendingUserInputAnswersByRequestIdRef,
     setAnswers: setPendingUserInputAnswersByRequestId,
     drafts: pendingUserInputDrafts,
-  } = usePendingUserInputDrafts(threadId, pendingUserInputs, activeThread?.pendingInteractions);
+  } = usePendingUserInputDrafts(threadId, pendingUserInputs, threadActivities);
   const expiredQuestionDrafts = useMemo(
     () => expiredUserInputDrafts(pendingUserInputDrafts, threadActivities),
     [pendingUserInputDrafts, threadActivities],

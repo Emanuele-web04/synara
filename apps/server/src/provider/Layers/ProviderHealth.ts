@@ -117,6 +117,7 @@ import {
   normalizeCommandPath,
   parseGenericCliVersion,
   resolveProviderMaintenanceCapabilitiesEffect,
+  withOpenCodeMaintenanceVersion,
   type PackageManagedProviderMaintenanceDefinition,
 } from "../providerMaintenance";
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
@@ -879,7 +880,11 @@ function isAccountIsolatedProviderDriver(
   provider: ProviderChildKind,
 ): provider is Extract<ProviderProcessEnvDriver, ProviderChildKind> {
   return (
-    provider === "cursor" || provider === "grok" || provider === "opencode" || provider === "pi"
+    provider === "cursor" ||
+    provider === "grok" ||
+    provider === "opencode" ||
+    provider === "pi" ||
+    provider === "omp"
   );
 }
 
@@ -1033,8 +1038,12 @@ const runPiCommand = (
     ),
   );
 
-const runOmpCommand = (args: ReadonlyArray<string>, executable = "omp") =>
-  runProviderCommand(executable, args, { env: providerCommandEnv(OMP_PROVIDER) }).pipe(
+const runOmpCommand = (
+  args: ReadonlyArray<string>,
+  executable = "omp",
+  env: NodeJS.ProcessEnv = providerCommandEnv(OMP_PROVIDER),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -1985,13 +1994,24 @@ export const checkPiProviderStatus = (
 export const checkOmpProviderStatus = (
   agentDir?: string,
   binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined);
+    const probeEnvResult = tryMakeProviderProbeEnv(OMP_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(OMP_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
+    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined, {
+      env: probeEnv,
+      ...(probeEnv.HOME ? { homeDir: probeEnv.HOME } : {}),
+    });
 
     const versionProbe = yield* probeProviderCliVersion(
-      runOmpCommand(["--version"], executable),
+      runOmpCommand(["--version"], executable, probeEnv),
       DEFAULT_TIMEOUT_MS,
     );
 
@@ -2070,6 +2090,10 @@ export const checkAntigravityProviderStatus = (
     const probeEnv = {
       ...makeProviderProbeEnv(ANTIGRAVITY_PROVIDER, environment),
       NO_BROWSER: "true",
+      // Health probes are read-only. Prevent Antigravity from starting its
+      // detached updater, which can flash a console on Windows when Synara
+      // refreshes provider status (#1029).
+      AGY_CLI_DISABLE_AUTO_UPDATE: "true",
     };
     const versionProbe = yield* probeProviderCliVersion(
       runAntigravityCommand(["--version"], executable, probeEnv),
@@ -2543,11 +2567,13 @@ export function providerStatusesEqual(
 }
 
 function isTransientProviderCommandTimeout(status: ServerProviderStatus): boolean {
-  return (
-    status.status !== "ready" &&
-    status.authStatus === "unknown" &&
-    (status.message ?? "").includes(PROVIDER_COMMAND_TIMEOUT_DETAIL)
-  );
+  const message = status.message ?? "";
+  // Most providers use the shared detail string, but Pi's advisory probe has
+  // a provider-specific explanation. Keep a slow CLI probe from replacing an
+  // already usable status just because its wording differs.
+  const describesTimeout =
+    message.includes(PROVIDER_COMMAND_TIMEOUT_DETAIL) || /\btimed out\b/i.test(message);
+  return status.status !== "ready" && status.authStatus === "unknown" && describesTimeout;
 }
 
 function wasPreviouslyUsableProviderStatus(status: ServerProviderStatus): boolean {
@@ -3024,10 +3050,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         function* (target: {
           readonly provider: ProviderKind;
           readonly instanceId?: ProviderInstanceId | undefined;
+          readonly installedVersion?: string | null | undefined;
         }) {
           const settings = yield* serverSettings.getSettings;
           const instance = resolveProviderInstanceTarget(settings, target);
           if (!instance || !instance.enabled) {
+            return makeManualProviderMaintenanceCapabilities(target.provider);
+          }
+          if (target.provider === "opencode" && readInstanceConfigString(instance, "serverUrl")) {
             return makeManualProviderMaintenanceCapabilities(target.provider);
           }
           const configuredBinaryPath = readInstanceConfigString(instance, "binaryPath");
@@ -3061,11 +3091,26 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 { cause },
               ),
           });
-          return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-            binaryPath: binaryPath ?? null,
-            env: updateEnv,
-            platform: process.platform,
-          }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+          let installedVersion = target.installedVersion;
+          if (target.provider === "opencode" && installedVersion === undefined) {
+            const probe = yield* probeProviderCliVersion(
+              runOpenCodeCommand(["--version"], binaryPath ?? "opencode", updateEnv),
+              OPENCODE_HEALTH_TIMEOUT_MS,
+            ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+            if (probe.outcome !== "success")
+              return makeManualProviderMaintenanceCapabilities(target.provider);
+            installedVersion = parseGenericCliVersion(
+              `${probe.result.stdout}\n${probe.result.stderr}`,
+            );
+          }
+          return yield* resolveProviderMaintenanceCapabilitiesEffect(
+            withOpenCodeMaintenanceVersion(definition, installedVersion),
+            {
+              binaryPath: binaryPath ?? null,
+              env: updateEnv,
+              platform: process.platform,
+            },
+          ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
         },
       );
 
@@ -3162,6 +3207,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return getProviderMaintenanceCapabilities({
               provider,
               instanceId: providerStatusInstanceKey(status),
+              installedVersion: status.version ?? null,
             }).pipe(
               Effect.flatMap((capabilities) =>
                 enrichProviderStatusWithVersionAdvisory(status, capabilities),
@@ -3325,11 +3371,19 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               ),
             );
           }
-          case "omp":
+          case "omp": {
+            const ompOptions = providerStartOptionsFromInstance(instance)?.omp;
             return checkProviderInstanceWhenEnabled(
               instance,
-              checkOmpProviderStatus(readInstanceConfigString(instance, "agentDir"), binaryPath),
+              checkOmpProviderStatus(
+                readInstanceConfigString(instance, "agentDir"),
+                binaryPath,
+                ompOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
             );
+          }
         }
       };
 

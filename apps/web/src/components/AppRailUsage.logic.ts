@@ -1,46 +1,86 @@
 // FILE: AppRailUsage.logic.ts
 // Purpose: Pure selection rules for the provider usage rings at the bottom of the app rail.
 
-import type { ProviderKind } from "@synara/contracts";
-import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
+import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
+import type { ResolvedProviderInstance } from "@synara/shared/providerInstances";
+import { PROVIDER_USAGE_PROVIDERS, providerUsageDisplayName } from "@synara/shared/providerUsage";
 
 import type { RailUsageWindow } from "~/appSettings";
+import { providerAccountQualifiedLabel } from "~/lib/providerInstancePresentation";
 import type { ProviderUsageDisplayRow } from "~/lib/providerUsageDisplay";
 
 /** The rail is one icon wide, so only a couple of rings fit above the Help button. */
-export const MAX_RAIL_USAGE_PROVIDERS = 2;
+export const MAX_RAIL_USAGE_ACCOUNTS = 2;
 
-/** Stored selection → the providers actually drawn: usage-capable, unique, capped. */
-export function resolveRailUsageProviders(
-  selected: ReadonlyArray<ProviderKind>,
-  disabledProviders: ReadonlyArray<ProviderKind> = [],
-): ReadonlyArray<ProviderKind> {
-  return [...new Set(selected)]
-    .filter(
-      (provider) =>
-        PROVIDER_USAGE_PROVIDERS.includes(provider) && !disabledProviders.includes(provider),
-    )
-    .slice(0, MAX_RAIL_USAGE_PROVIDERS);
+export interface RailUsageAccount {
+  readonly instance: ResolvedProviderInstance;
+  readonly label: string;
+  readonly dotted: boolean;
 }
 
-/** Next selection after a Settings toggle; a provider past the cap is ignored. */
-export function toggleRailUsageProvider(
-  selected: ReadonlyArray<ProviderKind>,
-  provider: ProviderKind,
-  enabled: boolean,
+/** Enabled usage-capable accounts, named consistently in Settings and the rail. */
+export function getRailUsageAccounts(
+  instances: ReadonlyArray<ResolvedProviderInstance>,
   disabledProviders: ReadonlyArray<ProviderKind> = [],
-): ReadonlyArray<ProviderKind> {
-  const current = resolveRailUsageProviders(selected, disabledProviders);
-  const savedDisabled = [...new Set(selected)].filter(
-    (entry) => PROVIDER_USAGE_PROVIDERS.includes(entry) && disabledProviders.includes(entry),
-  );
+): ReadonlyArray<RailUsageAccount> {
+  return PROVIDER_USAGE_PROVIDERS.flatMap((provider) => {
+    const accounts = instances.filter(
+      (instance) =>
+        instance.enabled &&
+        instance.driver === provider &&
+        !disabledProviders.includes(instance.driver),
+    );
+    const providerName = providerUsageDisplayName(provider);
+    return accounts.map((instance) => {
+      const showAccountName =
+        !instance.isDefault || accounts.length > 1 || Boolean(instance.raw.displayName?.trim());
+      const accountName =
+        instance.isDefault && !instance.raw.displayName?.trim()
+          ? "Default account"
+          : instance.displayName;
+      return {
+        instance,
+        dotted: accounts.length > 1 && !instance.isDefault,
+        label: showAccountName
+          ? providerAccountQualifiedLabel(providerName, accountName)
+          : providerName,
+      };
+    });
+  });
+}
+
+/** Stored selection → unique available accounts, capped after dropping stale ids. */
+export function resolveRailUsageAccounts(
+  selected: ReadonlyArray<ProviderInstanceId>,
+  available: ReadonlyArray<RailUsageAccount>,
+): ReadonlyArray<RailUsageAccount> {
+  const byId = new Map(available.map((account) => [account.instance.instanceId, account]));
+  return [...new Set(selected)]
+    .flatMap((instanceId) => {
+      const account = byId.get(instanceId);
+      return account ? [account] : [];
+    })
+    .slice(0, MAX_RAIL_USAGE_ACCOUNTS);
+}
+
+/** Next selection after a Settings toggle; an account past the cap is ignored. */
+export function toggleRailUsageAccount(
+  selected: ReadonlyArray<ProviderInstanceId>,
+  instanceId: ProviderInstanceId,
+  enabled: boolean,
+  available: ReadonlyArray<RailUsageAccount>,
+): ReadonlyArray<ProviderInstanceId> {
+  const current = [...new Set(selected)];
   if (!enabled) {
-    return [...savedDisabled, ...current.filter((entry) => entry !== provider)];
+    return current.filter((entry) => entry !== instanceId);
   }
-  if (current.includes(provider) || current.length >= MAX_RAIL_USAGE_PROVIDERS) {
-    return [...savedDisabled, ...current];
+  if (
+    current.includes(instanceId) ||
+    resolveRailUsageAccounts(current, available).length >= MAX_RAIL_USAGE_ACCOUNTS
+  ) {
+    return current;
   }
-  return [...savedDisabled, ...current, provider];
+  return [...current, instanceId];
 }
 
 /**
