@@ -1,7 +1,3 @@
-// FILE: terminalModeReplay.ts
-// Purpose: Tracks live terminal modes so a fresh renderer can reattach with matching input state.
-// Layer: Terminal infrastructure
-
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -118,9 +114,7 @@ export function createTerminalModeReplayTracker(
       if (!modes.wraparoundMode) parts.push("\u001b[?7l");
       if (internals._core?.coreService?.isCursorHidden === true) parts.push("\u001b[?25l");
 
-      // Do not replay mouse tracking modes. After app restart the TUI that
-      // enabled mouse reporting may be gone, and reasserting it makes ordinary
-      // mouse movement print raw escape sequences into the shell.
+      // don't replay mouse tracking — after restart the TUI may be gone and reasserting it prints raw escapes into the shell
 
       if (kittyKeyboardState.flags > 0) {
         parts.push(`\u001b[=${kittyKeyboardState.flags};1u`);

@@ -1,19 +1,4 @@
-// FILE: perf/pipeline.tsx
-// Purpose: Pipeline-mode performance harness. Unlike perf/main.tsx (which sets component
-//          state directly), this harness drives real orchestration domain events through
-//          the production reducer -> zustand store -> selectors -> workLog/timeline
-//          derivations -> ChatTranscriptPane, so per-flush store and derivation costs are
-//          measured on the same code path the app runs while a thread streams.
-// Layer: Perf tooling (dev-only page, not shipped in the app bundle)
-// Exposes: window.__synaraPipelinePerf { runStream, runQuiet, scrollCycle, snapshot, resetMetrics }
-//
-// URL params:
-//   messages=<n>      settled seed messages (default 200)
-//   working=0         render as idle instead of mid-turn
-//   instrument=1      patch getBoundingClientRect to count layout reads (keep OFF for
-//                     uninstrumented timing runs — instrumented and timing runs are
-//                     separate by design)
-//   animations=off, shimmer=off, scrollFade=off   style cost toggles (see metrics.ts)
+// pipeline-mode perf harness: drives real domain events through the production reducer→store→selectors→ChatTranscriptPane path; exposes window.__synaraPipelinePerf {runStream,runQuiet,scrollCycle,snapshot,resetMetrics}; URL params: messages=<n>, working=0, instrument=1 (layout-read counter — keep off for timing runs), animations=off, shimmer=off, scrollFade=off
 
 import "../src/index.css";
 
@@ -127,8 +112,7 @@ const EMPTY_PROPOSED_PLANS: never[] = [];
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-pipeline");
 const STREAM_TURN_ID = TurnId.makeUnsafe("pipeline-turn-streaming");
-// Per-run stream message id so repeated runs in one page session append to a fresh
-// message instead of merging into the previous run's text.
+// Per-run stream message id so repeated runs in one page session append to a fresh message instead of merging into the previous run's text.
 let streamRunIndex = 0;
 let STREAM_MESSAGE_ID = MessageId.makeUnsafe("pipeline-message-streaming-0");
 
@@ -136,10 +120,7 @@ const params = new URLSearchParams(window.location.search);
 const seedMessageCount = Math.max(1, Number(params.get("messages") ?? 200));
 const working = params.get("working") !== "0";
 const instrumentLayout = params.get("instrument") === "1";
-// `composer=0` drops the floating composer overlay. By default the harness mounts the
-// same frosted composer surface the app floats over the transcript (and the matching
-// bottom inset + viewport mask), because that overlay is where the compositor cost of a
-// streaming turn lives and a transcript-only harness cannot see it.
+// composer=0 drops the floating composer overlay — that overlay is where the compositor cost of a streaming turn lives, and a transcript-only harness can't see it
 const composerOverlay = params.get("composer") !== "0";
 const COMPOSER_OVERLAY_HEIGHT_PX = 148;
 const composerInsetBottomPx = composerOverlay
@@ -147,10 +128,6 @@ const composerInsetBottomPx = composerOverlay
   : 0;
 
 installCostToggleStyles();
-
-// ---------------------------------------------------------------------------
-// Metrics collection (module-level so the driver and the component share it)
-// ---------------------------------------------------------------------------
 
 const metrics = {
   reactCommits: 0,
@@ -191,10 +168,6 @@ if (typeof PerformanceObserver !== "undefined") {
     // Long task timing is unsupported in this browser; counters stay at zero.
   }
 }
-
-// ---------------------------------------------------------------------------
-// Store seeding: a long settled transcript in the REAL normalized store
-// ---------------------------------------------------------------------------
 
 function seedStore(messageCount: number): void {
   const messages: ChatMessage[] = [];
@@ -239,10 +212,6 @@ seedStore(seedMessageCount);
 useStore.subscribe(() => {
   metrics.storeCommits += 1;
 });
-
-// ---------------------------------------------------------------------------
-// Event drivers: dispatch real domain events through the production reducer
-// ---------------------------------------------------------------------------
 
 let eventSequence = 1_000;
 
@@ -469,10 +438,6 @@ window.__synaraPipelinePerf = {
   debugStreamText,
 };
 
-// ---------------------------------------------------------------------------
-// Component: real selector + real ChatView derivation chain -> real pane
-// ---------------------------------------------------------------------------
-
 function PipelineHarness() {
   const selectThread = useMemo(() => createThreadSelector(THREAD_ID), []);
   const thread = useStore(selectThread);
@@ -482,8 +447,7 @@ function PipelineHarness() {
   const activities = thread?.activities ?? [];
   const proposedPlans = thread?.proposedPlans ?? EMPTY_PROPOSED_PLANS;
 
-  // Same derivation chain ChatView runs per store flush (workLog entries from
-  // activities, then merged timeline entries), memoized on the same identities.
+  // Same derivation chain ChatView runs per store flush (workLog entries from activities, then merged timeline entries), memoized on the same identities.
   const workEntries = useMemo(
     () =>
       deriveWorkLogEntries(activities, working ? STREAM_TURN_ID : undefined, {
@@ -541,8 +505,7 @@ function PipelineHarness() {
         worktreeSetup={null}
       />
       {composerOverlay ? (
-        // Same shell/surface classes as the real composer so index.css applies the
-        // identical glass (`.chat-composer-surface::before` backdrop-filter).
+        // Same shell/surface classes as the real composer so index.css applies the identical glass (`.chat-composer-surface::before` backdrop-filter).
         <div
           aria-hidden
           className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center px-4"

@@ -103,9 +103,6 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
         if (update) expect(id).toBe(originalId);
         expect((await vault.reveal({ id, password: master })).password).toBe("new-synthetic");
 
-        // Restore the last successfully written preferences, as after a
-        // transient filesystem failure. The encrypted record survives restart
-        // even if its first provenance write never reached disk.
         await rm(preferencesPath, { recursive: true });
         await writeFile(preferencesPath, preferences);
         restored = new BrowserVault(home);
@@ -175,7 +172,6 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     await vault.configure({ agentUse: true, offerSave: true, autosave: false });
     await vault.saveCaptured(origin, { username: "human", password: "synthetic-human" }, "user");
     await vault.saveCaptured(origin, { username: "agent", password: "synthetic-agent" }, "agent");
-    // A pending record created by an older release must remain owner-recoverable.
     const keys = new VaultKeyProtection(join(home, "vault"));
     await keys.authenticate(master);
     const legacyVault = createLocalCredentialVault({ home, keyProvider: () => keys.provide() });

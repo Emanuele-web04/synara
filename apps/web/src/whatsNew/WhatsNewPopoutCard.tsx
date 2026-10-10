@@ -1,10 +1,3 @@
-// FILE: whatsNew/WhatsNewPopoutCard.tsx
-// Purpose: Post-update "popout" card that lives in the bottom-left corner of
-// the app after an upgrade. Clicking the card body opens the release-notes
-// dialog; clicking the ✕ dismisses the update silently. Matches the
-// IndieDevs `UpdateCard` pattern but themed for our dark-first surface.
-// Layer: overlay — rendered once from the root route next to the dialog.
-
 import { useEffect, useState, type KeyboardEvent } from "react";
 
 import { XIcon } from "~/lib/icons";
@@ -13,11 +6,7 @@ import { SynaraLogo } from "~/components/SynaraLogo";
 
 import type { WhatsNewEntry } from "./logic";
 
-// The card anchors bottom-left over the thread sidebar, so it must fit inside
-// the sidebar's live width (user-resizable via --sidebar-width) rather than
-// assume a fixed size. We observe the sidebar-gap element because its width is
-// the sidebar's real layout width and animates to 0/icon-width on collapse,
-// which a ResizeObserver catches — the fixed container only translates.
+// card anchors bottom-left over the sidebar and must fit its live width — observe the sidebar-gap element (its width animates to 0/icon-width on collapse, which ResizeObserver catches) rather than assume a fixed size
 const LEFT_SIDEBAR_GAP_SELECTOR =
   "[data-slot='sidebar'][data-side='left'] [data-slot='sidebar-gap']";
 const CARD_EDGE_INSET_PX = 12; // matches the card's `left-3`; mirrored on the right
@@ -57,16 +46,7 @@ export interface WhatsNewPopoutCardProps {
   readonly className?: string;
 }
 
-/**
- * A small attention-grabber card. Clicking the body acts as a "open release
- * notes" affordance; the ✕ in the corner is a deliberate "not interested" —
- * both paths mark the release as seen, so the card never nags twice.
- *
- * The card is keyboard-reachable (tab-stop with Enter/Space activating) to
- * match the mouse affordance, since base-ui's Dialog otherwise owns the only
- * trigger in the IndieDevs implementation (their `<DialogTrigger>` wraps the
- * whole card).
- */
+// both body-click and ✕ mark the release as seen so the card never nags twice; keyboard-reachable (Enter/Space) since base-ui Dialog otherwise owns the only trigger
 export function WhatsNewPopoutCard({
   entry,
   currentVersion,
@@ -96,8 +76,7 @@ export function WhatsNewPopoutCard({
       )}
       style={{
         width: cardWidth,
-        // Inline @keyframes so the popout doesn't need a tailwind plugin or
-        // global stylesheet just for one 200ms fade-in.
+        // Inline @keyframes so the popout doesn't need a tailwind plugin or global stylesheet just for one 200ms fade-in.
         animationName: "whats-new-popout-in",
       }}
     >

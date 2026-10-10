@@ -1,8 +1,3 @@
-// FILE: rightDockPaneMeta.tsx
-// Purpose: Shared semantic metadata (icon + label) for right-dock pane kinds.
-// Layer: Chat right-dock UI primitives
-// Exports: per-kind meta map, launcher items, and pane label/icon resolvers.
-
 import type { ReactNode } from "react";
 
 import { basenameOfPath } from "~/file-icons";
@@ -35,9 +30,7 @@ export interface RightDockLauncherItem extends RightDockPaneMeta {
 
 export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> = {
   browser: { label: "Browser", Icon: GlobeIcon },
-  // The contracts stay platform-neutral ("device") so Android emulators can plug
-  // in later, but the only backend today is the iOS Simulator, so that is what
-  // the label says.
+  // contracts stay platform-neutral ("device") so Android emulators can plug in later, but the only backend today is iOS Simulator
   device: { label: "iOS Simulator", Icon: DeviceMobileIcon },
   diff: { label: "Diff", Icon: DiffIcon },
   explorer: { label: "Explorer", Icon: FoldersIcon },
@@ -48,24 +41,18 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
 };
 
-// Neutral fallback for any pane kind we no longer recognize (e.g. stale
-// persisted state). Persisted dock state is sanitized on rehydrate, so this is
-// only a defensive guard to keep a single bad pane from crashing render.
+// neutral fallback for unrecognized pane kinds (stale persisted state); defensive guard so one bad pane can't crash render
 const FALLBACK_RIGHT_DOCK_PANE_META: RightDockPaneMeta = {
   label: "Panel",
   Icon: InfoIcon,
 };
 
-// Always resolve pane meta through this helper instead of indexing the map
-// directly, so an unknown kind degrades gracefully rather than throwing.
+// always resolve through this helper instead of indexing the map directly, so unknown kinds degrade gracefully
 export function getRightDockPaneMeta(kind: RightDockPaneKind): RightDockPaneMeta {
   return RIGHT_DOCK_PANE_META[kind] ?? FALLBACK_RIGHT_DOCK_PANE_META;
 }
 
-// Empty-dock launchers prioritize the everyday workspace tools. Review only
-// appears when the selected diff scope contains changes, Git is gated by
-// repository discovery, and Explorer needs a concrete workspace. Context-only
-// file and pull-request panes continue to open from their owning surfaces.
+// empty-dock launchers prioritize everyday tools; Review needs changes, Git needs repo discovery, Explorer needs a workspace
 const RIGHT_DOCK_LAUNCHER_ORDER: readonly RightDockPaneKind[] = [
   "diff",
   "terminal",
@@ -118,8 +105,7 @@ export function resolveRightDockLauncherItems(input: {
   });
 }
 
-// Resolves a tab label, preferring caller-provided per-pane overrides (e.g. the
-// embedded sidechat thread title) before falling back to the kind label.
+// tab label prefers caller-provided per-pane overrides (e.g. embedded sidechat title) before the kind label
 export function resolveRightDockPaneLabel(
   pane: RightDockPane,
   overrides?: Record<string, string | undefined>,
@@ -152,11 +138,7 @@ export function buildRightDockPaneLabelOverrides(
   return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
-// Resolves a tab glyph: file panes show the per-file-type icon (matching the
-// pane header and explorer rows), every other pane uses its kind icon. The file
-// glyph inherits the tab's muted foreground color (colorMode="inherit") instead
-// of its extension color, so dock tabs read like the changed-file rows rather
-// than carrying a loud per-type tint.
+// file panes show the per-file-type icon; the glyph inherits the tab's muted foreground instead of its extension color so dock tabs read like changed-file rows
 export function resolveRightDockPaneIcon(pane: RightDockPane): ReactNode {
   if (pane.kind === "file" && pane.filePath) {
     return (

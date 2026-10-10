@@ -1,8 +1,3 @@
-// FILE: appNavigation.test.ts
-// Purpose: Verifies browser-style route navigation state without rendering the app shell.
-// Layer: Web routing utility tests
-// Depends on: TanStack memory history and appNavigation helpers
-
 import { createMemoryHistory } from "@tanstack/react-router";
 import { describe, expect, it, vi } from "vitest";
 

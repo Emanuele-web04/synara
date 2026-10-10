@@ -1,7 +1,3 @@
-// FILE: llms-full.txt/route.ts
-// Purpose: Serves expanded product, FAQ, and changelog context for AI retrieval.
-// Layer: App Router route handler.
-
 import { buildLlmsFullTxt } from "@/lib/llmText";
 
 export const revalidate = false;

@@ -169,10 +169,7 @@ export function useChatComposerEditing({
     };
   }, [readComposerSnapshot]);
 
-  // Shared insertion path for picker selections (mentions, plugins, skills,
-  // agents, provider-native commands, local folders). Guarantees the replacement
-  // is flanked by a leading space when landing next to a non-whitespace char and
-  // absorbs an existing trailing space so we don't end up with double spaces.
+  // shared insertion path for picker selections: guarantees a leading space next to non-whitespace and absorbs an existing trailing space
   const applyComposerTriggerReplacement = useCallback(
     (params: {
       snapshot: { value: string };
@@ -227,10 +224,7 @@ export function useChatComposerEditing({
     [applyComposerTriggerReplacement, resolveActiveComposerTrigger],
   );
 
-  // Rewrites the active `@...` mention to an absolute folder path with a trailing separator
-  // so the local-folder picker stays open and the user can keep browsing by clicking or typing.
-  // Paths that need quoting (spaces, parentheses, …) are written as an unclosed
-  // `@"...` so detectComposerTrigger keeps matching while the user descends (#351).
+  // paths needing quoting are written as unclosed `@"...` so detectComposerTrigger keeps matching while the user descends (#351)
   const handleNavigateLocalFolder = useCallback(
     (absolutePath: string) => {
       const { snapshot, trigger } = resolveActiveComposerTrigger();

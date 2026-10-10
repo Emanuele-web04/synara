@@ -5,9 +5,6 @@ import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import { createServer } from "vite";
 
-// Measure the actual Vite transform pipeline without browser/network/backend
-// time or speculative transforms. Each invalidation models retransforming an
-// edited module, not end-to-end HMR latency. Run variants serially.
 const args = process.argv.slice(2);
 if (args.some((arg) => arg !== "--compiler")) {
   throw new Error("Usage: node scripts/measure-dev-transforms.mjs [--compiler]");

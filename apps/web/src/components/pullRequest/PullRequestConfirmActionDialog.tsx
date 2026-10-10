@@ -1,10 +1,3 @@
-// FILE: PullRequestConfirmActionDialog.tsx
-// Purpose: The one confirmation dialog for the irreversible pull request actions (merge,
-//          close), shared by the PR detail panel and the Environment panel's PR menu, plus the
-//          "copy PR link" helper both surfaces expose next to those actions.
-// Layer: Pull request UI
-// Depends on: the shared alert dialog, toast manager, and clipboard helper.
-
 import type { PullRequestMergeMethod, PullRequestStack } from "@synara/contracts";
 import { useState } from "react";
 
@@ -87,8 +80,7 @@ export function PullRequestConfirmActionDialog({
   onConfirm: (action: PullRequestConfirmAction) => void;
   onDismiss: () => void;
 }) {
-  // Keep rendering the last action while the dialog animates out, so the copy does not
-  // flip to another action's text once the owner resets `action` to null.
+  // keep rendering the last action while the dialog animates out so the copy doesn't flip once the owner resets `action` to null
   const [shownAction, setShownAction] = useState(action);
   // Compared by value: owners may build the action object inline on every render.
   if (

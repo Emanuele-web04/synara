@@ -1,7 +1,3 @@
-// FILE: lib/siteRoutes.ts
-// Purpose: Defines canonical crawl targets shared by sitemap routes.
-// Layer: server utility.
-
 import type { MetadataRoute } from "next";
 import { getSortedReleases, toVersionSlug } from "@/lib/changelog";
 import { getDocumentationCatalog } from "@/lib/docs";

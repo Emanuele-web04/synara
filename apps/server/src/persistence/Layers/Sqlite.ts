@@ -73,11 +73,7 @@ const makeSetup = ({
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       if (dbPath) {
-        // The runtime owns this database for its entire lifetime (enforced by
-        // DatabaseLifecycleLock), so make SQLite enforce the same boundary.
-        // This must happen before the first WAL access: SQLite then keeps its
-        // WAL index in heap memory instead of memory-mapping a shared `-shm`
-        // file that an unrelated sqlite client could truncate or rebuild.
+        // the runtime owns this database for its lifetime — make SQLite enforce the same boundary; before the first WAL access so the WAL index stays in heap, not a shared -shm another client could truncate
         const lockingModeRows = yield* sql<{ readonly locking_mode: string }>`
           PRAGMA locking_mode = EXCLUSIVE;
         `;
@@ -100,46 +96,20 @@ const makeSetup = ({
           resultingJournalMode: journalMode ?? "unknown",
         });
       }
-      // synchronous = NORMAL under WAL preserves database consistency and is
-      // safe across application crashes (no corruption, no torn writes). The
-      // only accepted risk is that an OS crash or power loss may lose the most
-      // recent committed transaction(s) that had not yet been checkpointed.
-      // That tradeoff is deliberate: at our per-event write rate, FULL's fsync
-      // on every commit is too costly, and losing the last few events on a hard
-      // power loss is acceptable.
+      // synchronous=NORMAL under WAL is consistent across app crashes; the accepted risk is losing the last committed transaction(s) on OS crash/power loss — FULL's per-commit fsync is too costly at this write rate
       yield* sql`PRAGMA synchronous = NORMAL;`;
       yield* sql`PRAGMA foreign_keys = ON;`;
-      // The event log alone can exceed a gigabyte, so the 2MB default page
-      // cache thrashes during projector replay and large projection reads.
-      // The page cache (negative value = KiB) keeps the hot b-tree interior
-      // pages resident and is sized to the host's physical memory (see
-      // sqliteMemoryBudget.ts). It is an on-demand ceiling for the single
-      // serialized connection, not an upfront allocation. temp_store stays at
-      // its default deliberately: the snapshot window queries can build
-      // temp b-trees proportional to live-thread history, and MEMORY would
-      // turn those into unbounded native RSS; the disk default already keeps
-      // small temp structures in memory and only spills when they grow.
+      // the event log can exceed a GB — the 2MB default cache thrashes during replay; cache sized to host memory; temp_store stays default deliberately: MEMORY would turn snapshot temp b-trees into unbounded RSS
       const memoryBudget = resolveSqliteMemoryBudget(totalmem());
       yield* sql`PRAGMA cache_size = ${sql.literal(String(memoryBudget.cacheSizePragma))};`;
       if (dbPath) {
-        // mmap serves large sequential reads (event replay, VACUUM INTO
-        // backups) through the OS page cache without double-buffering into
-        // the SQLite heap cache. In-memory databases have nothing to map.
-        // Accepted tradeoff: with mmap, a device I/O error or an external
-        // process truncating the file surfaces as a signal (SIGBUS) instead
-        // of a recoverable SQLite error. locking_mode=EXCLUSIVE plus the
-        // lifecycle lock make external mutation effectively impossible, and
-        // no internal path truncates the live database.
+        // mmap serves large sequential reads through the OS cache; tradeoff: external truncation surfaces as SIGBUS instead of a SQLite error — locking_mode=EXCLUSIVE + lifecycle lock make that effectively impossible
         yield* sql`PRAGMA mmap_size = ${sql.literal(String(memoryBudget.mmapSizeBytes))};`;
-        // Setting locking_mode changes connection policy; this transaction
-        // actually acquires and retains the database lock before startup
-        // continues, closing the window where another client could attach.
+        // this transaction acquires the lock before startup continues — closing the window where another client could attach
         yield* sql`BEGIN EXCLUSIVE;`;
         yield* sql`COMMIT;`;
       }
-      // A pending marker means an earlier startup was interrupted mid-migration.
-      // Resuming reuses that attempt's snapshot instead of taking a second one,
-      // so the fallback stays the last known-good database.
+      // a pending marker means an earlier startup was interrupted mid-migration — resuming reuses that attempt's snapshot so the fallback stays last-known-good
       const migrations = dbPath
         ? pendingRecovery
           ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations())
@@ -169,16 +139,10 @@ export const makeSqlitePersistenceLive = (
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-        // Ahead of the guard on purpose: a database that fails closed below
-        // never reaches the backup path, so this is the only opportunity to
-        // reclaim artifacts stranded by an earlier failed startup or restore.
+        // ahead of the guard on purpose — a database that fails closed never reaches the backup path, so this is the only chance to reclaim stranded artifacts
         yield* reclaimOrphanedMigrationArtifacts(dbPath);
         const pendingRecovery = yield* inspectPendingMigrationRecovery(dbPath);
-        // Set the mode before SQLite opens the database. Never reopen the
-        // database, WAL, or SHM merely to chmod them while this connection is
-        // live: closing any descriptor for the same inode releases POSIX
-        // process locks and can leave a mapped WAL index vulnerable to SIGBUS.
-        // SQLite creates its sidecars with the database's private mode.
+        // set mode before SQLite opens the file; never reopen to chmod while live — closing a descriptor releases POSIX locks and can leave a mapped WAL index vulnerable to SIGBUS
         yield* Effect.sync(() => ensurePrivateFileSync(dbPath));
         yield* repairSqliteFilePermissions(dbPath);
 

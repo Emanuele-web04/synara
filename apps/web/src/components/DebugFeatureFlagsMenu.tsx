@@ -1,7 +1,3 @@
-// FILE: DebugFeatureFlagsMenu.tsx
-// Purpose: Keeps local-only feature flag controls reusable without showing them in the product sidebar.
-// Exports: DebugFeatureFlagsMenu
-
 import { FlagIcon } from "~/lib/icons";
 import {
   FEATURE_FLAGS,

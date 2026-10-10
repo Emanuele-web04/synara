@@ -1,7 +1,3 @@
-// FILE: llms.mdx/docs/[[...slug]]/route.ts
-// Purpose: Serves every public documentation page as clean Markdown.
-// Layer: Internal App Router endpoint exposed through /docs*.md rewrites.
-
 import { notFound } from "next/navigation";
 import { docsSource } from "@/lib/docs";
 import { buildDocumentationMarkdown } from "@/lib/docsMarkdown";

@@ -1,8 +1,3 @@
-// FILE: composerImageBlobStore.ts
-// Purpose: Persists large composer image blobs outside localStorage.
-// Layer: Browser storage adapter
-// Depends on: IndexedDB structured-clone support for Blob values.
-
 import { awaitIdbRequest, openIndexedDbDatabase, waitForIdbTransaction } from "./indexedDb";
 
 const DATABASE_NAME = "synara-composer-images";
@@ -16,7 +11,6 @@ interface StoredComposerImageBlob {
   name: string;
   mimeType: string;
   lastModified: number;
-  // Write time. Records created before this field existed omit it and count as old.
   updatedAt?: number;
 }
 
@@ -126,8 +120,7 @@ export async function deleteOrphanedComposerImageBlobs(input: {
     );
     if (candidateKeys.length === 0) return 0;
 
-    // Age is checked inside the get handlers so the delete lands in the same
-    // transaction, before another session can refresh the record.
+    // age checked inside the get handlers so the delete lands in the same transaction before another session can refresh the record
     const transaction = database.transaction(IMAGE_STORE_NAME, "readwrite");
     const store = transaction.objectStore(IMAGE_STORE_NAME);
     let deleted = 0;

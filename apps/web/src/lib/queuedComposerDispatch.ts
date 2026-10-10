@@ -1,8 +1,3 @@
-// FILE: queuedComposerDispatch.ts
-// Purpose: Dispatch a snapshotted QueuedComposerTurn against a thread without ChatView.
-// Layer: Web orchestration helper
-// Exports: dispatchQueuedComposerTurnHeadless
-
 import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
 import { persistModelSelectionBeforeRuntimeMode } from "../components/ChatView.logic";

@@ -1,6 +1,3 @@
-// FILE: dispatchCommandNormalization.test.ts
-// Purpose: Verifies client command normalization for managed workspaces and uploads.
-
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,8 +34,7 @@ function projectCreateCommand(
   };
 }
 
-// Runs the normalized command's deferred `prepareWorkspaceRoot` effect (if any), mirroring
-// what the wsRpc dispatchCommand handler does after a successful `orchestrationEngine.dispatch`.
+// runs the deferred prepareWorkspaceRoot effect, mirroring what wsRpc does after a successful dispatch
 async function runPrepareWorkspaceRoot<E>(result: DispatchCommandNormalizerResult<E>) {
   if (result.prepareWorkspaceRoot) {
     await Effect.runPromise(result.prepareWorkspaceRoot);
@@ -62,13 +58,13 @@ describe("makeDispatchCommandNormalizer", () => {
 
     const result = await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
 
-    // Normalization alone must not have scaffolded anything yet.
+    // normalization alone must not have scaffolded anything yet
     expect(preparedRoots).toEqual([]);
     expect(result.prepareWorkspaceRoot).not.toBeNull();
 
     await runPrepareWorkspaceRoot(result);
 
-    // Only after the caller explicitly runs the deferred effect does scaffolding happen.
+    // only after the caller runs the deferred effect does scaffolding happen
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/2026-06-11/chat"]);
   });
 

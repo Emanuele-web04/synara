@@ -1,7 +1,3 @@
-// FILE: viteConfig.test.ts
-// Purpose: Verifies when Vite activates the React Compiler and retains React
-// Fast Refresh for the web development pipeline.
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveConfig, type InlineConfig } from "vite";
 
@@ -13,8 +9,7 @@ const REACT_FAST_REFRESH_PLUGIN = "vite:react-refresh";
 function inlineWebConfig(): InlineConfig {
   return {
     ...viteConfig,
-    // Resolve the imported config directly. Letting Vite discover the config
-    // file again would merge a second copy of every plugin into this test.
+    // Resolve the imported config directly. Letting Vite discover the config file again would merge a second copy of every plugin into this test.
     configFile: false,
     plugins: viteConfig.plugins ? [...viteConfig.plugins] : [],
   };

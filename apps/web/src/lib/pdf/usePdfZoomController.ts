@@ -1,11 +1,3 @@
-// FILE: usePdfZoomController.ts
-// Purpose: Own the PDF viewer's zoom state and the scale it resolves to for the
-//          current layout. Handles the +/- steppers, explicit percentages, and
-//          fit-width/fit-page modes, and re-anchors the reader's page after a
-//          zoom-driven rescale.
-// Layer: Web PDF rendering hook
-// Exports: usePdfZoomController, PdfZoomController
-
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -31,20 +23,17 @@ export interface PdfZoomController {
 export function usePdfZoomController(input: {
   firstPageSize: PdfPageIntrinsicSize | null;
   containerSize: PdfViewportSize | null;
-  /** The page to re-anchor to after a user-initiated zoom. */
   currentPage: number;
   scrollToPage: (pageNumber: number, behavior: ScrollBehavior) => void;
 }): PdfZoomController {
   const { firstPageSize, containerSize, currentPage, scrollToPage } = input;
   const [zoomMode, setZoomMode] = useState<PdfZoomMode>({ type: "fit-width" });
-  // When the user zooms we re-anchor to the page they were on so the content
-  // does not jump; resize-driven rescales intentionally leave this unset.
+  // When the user zooms we re-anchor to the page they were on so the content does not jump; resize-driven rescales intentionally leave this unset.
   const restorePageRef = useRef<number | null>(null);
 
   const scale = resolvePdfScale(zoomMode, firstPageSize, containerSize);
 
-  // After a zoom-driven rescale, restore the anchored page instantly. This is a
-  // one-way restore: it never feeds back into the scroll-position tracker.
+  // After a zoom-driven rescale, restore the anchored page instantly. This is a one-way restore: it never feeds back into the scroll-position tracker.
   useEffect(() => {
     if (restorePageRef.current != null) {
       scrollToPage(restorePageRef.current, "auto");

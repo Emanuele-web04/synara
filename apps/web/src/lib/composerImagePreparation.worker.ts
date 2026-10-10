@@ -1,7 +1,3 @@
-// FILE: composerImagePreparation.worker.ts
-// Purpose: Decode, resize, and encode oversized composer images away from the renderer UI thread.
-// Layer: Web worker
-
 interface OptimizeRequest {
   readonly file: File;
   readonly width: number;

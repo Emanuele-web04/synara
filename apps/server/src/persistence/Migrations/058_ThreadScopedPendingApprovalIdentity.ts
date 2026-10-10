@@ -3,14 +3,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { primaryKeyColumns, tableExists } from "./schemaHelpers.ts";
 
-/** Scope provider request ids to their owning thread without discarding legacy rows. */
+/** scope provider request ids to their owning thread without discarding legacy rows */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // Migration 62 retires this table into projection_pending_interactions, so a
-  // replay of the 54.. range finds no legacy table to rebuild. Guard on the
-  // pre-state — its absence, or an already thread-scoped key, means the rebuild
-  // has happened and re-running it would discard settled rows.
+  // migration 62 retires this table — on a 54.. replay there's no legacy table; guard on pre-state or a replay would discard settled rows
   if (!(yield* tableExists(sql, "projection_pending_approvals"))) {
     return;
   }

@@ -1,8 +1,3 @@
-// FILE: chatReferences.ts
-// Purpose: Build file/line references and canned prompts, and append them to a
-//          thread's composer draft so panels outside ChatView can talk to the chatbox.
-// Layer: Web UI utility
-
 import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS, type ThreadId } from "@synara/contracts";
 
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -15,29 +10,20 @@ export interface ChatFileReference {
   path: string;
   startLine?: number;
   endLine?: number;
-  // 1-based column of the first/last selected character. When present the
-  // reference narrows to the exact span (e.g. `line 21:5-12`) so highlighting a
-  // single word references just those characters, not the whole line.
+  // 1-based columns narrow the reference to the exact span (line 21:5-12) so a highlighted word doesn't reference the whole line
   startColumn?: number;
   endColumn?: number;
-  // Verbatim selected text, used by surfaces that cannot map a selection back
-  // to source lines (diff rows, whose split/unified views renumber): the quoted
-  // snippet itself becomes the precise reference. Ignored when line info is
-  // present.
+  // verbatim text for surfaces that can't map selections back to source lines (diff views renumber) — the snippet itself is the reference; ignored when line info is present
   snippet?: string;
 }
 
-// DataTransfer type used when dragging a file row toward the composer. The
-// payload is the already-formatted reference text (mention token).
 export const CHAT_FILE_REFERENCE_DRAG_TYPE = "application/x-synara-file-reference";
 
 export function formatLineRangeLabel(startLine: number, endLine: number): string {
   return endLine !== startLine ? `lines ${startLine}-${endLine}` : `line ${startLine}`;
 }
 
-// Wrap a snippet in a fenced block whose fence is longer than any backtick run
-// inside it (so selected code that itself contains ``` survives Markdown), after
-// normalizing newlines, trimming blank edges, and capping the length.
+// fence longer than any backtick run inside the snippet so selected code containing ``` survives markdown
 export function fenceCodeSnippet(snippet: string): string {
   const normalized = snippet.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "");
   const truncated =
@@ -51,10 +37,7 @@ export function fenceCodeSnippet(snippet: string): string {
   return `${fence}\n${truncated}\n${fence}`;
 }
 
-// Editor-style location label for a reference: `line 21`, `line 21:5-12`,
-// `lines 3-9`, or `lines 21:5-23:8`. Columns are appended only when both ends
-// are known, so a single highlighted word reads as `line 21:5-12` instead of
-// referencing the whole line. Returns null when there is no line info.
+// columns appended only when both ends are known, so a single word reads `line 21:5-12`; null when no line info
 export function formatSelectionLabel(reference: ChatFileReference): string | null {
   if (typeof reference.startLine !== "number") {
     return null;
@@ -71,11 +54,7 @@ export function formatSelectionLabel(reference: ChatFileReference): string | nul
   return `lines ${reference.startLine}:${startColumn}-${endLine}:${endColumn}`;
 }
 
-// `@path` mention token plus a parenthetical location suffix (e.g.
-// `@file (line 21:5-12)`). The range/columns live outside the mention token
-// itself so provider-side file resolution keeps working. References without
-// line info but with a snippet quote the selected text as a fenced block
-// instead — the snippet is the precise reference there.
+// range/columns live outside the mention token so provider file resolution keeps working; snippet-only reference when there's no line info
 export function formatChatFileReference(reference: ChatFileReference): string {
   const token = formatComposerMentionToken(reference.path);
   const label = formatSelectionLabel(reference);
@@ -92,8 +71,7 @@ export function buildWhyChangedPrompt(path: string): string {
   return `Why did we implement the changes in ${formatComposerMentionToken(path)}?`;
 }
 
-// "Why" prompt for an arbitrary file or line range. Providers run in the
-// workspace, so the prompt steers them toward git blame/history for evidence.
+// "Why" prompt for an arbitrary file or line range. Providers run in the workspace, so the prompt steers them toward git blame/history for evidence.
 export function buildWhyLinesPrompt(reference: ChatFileReference): string {
   const token = formatComposerMentionToken(reference.path);
   if (typeof reference.startLine !== "number") {
@@ -103,9 +81,7 @@ export function buildWhyLinesPrompt(reference: ChatFileReference): string {
   return `Why were ${formatLineRangeLabel(reference.startLine, endLine)} in ${token} implemented this way? Check git blame/history for the relevant commits and explain the reasoning.`;
 }
 
-// Mention token plus the highlighted diff snippet as a fenced block. Diff rows
-// have no stable file line numbers (split/unified views renumber), so the
-// quoted code itself is the precise reference.
+// diff rows have no stable source line numbers (split/unified renumber) — the quoted code itself is the precise reference
 export function buildDiffSelectionReference(path: string, snippet: string): string {
   return formatChatFileReference({ path, snippet });
 }
@@ -115,7 +91,6 @@ export function appendComposerPromptText(threadId: ThreadId, text: string): void
   const existingPrompt = store.draftsByThreadId[threadId]?.prompt ?? "";
   const needsSeparator = existingPrompt.length > 0 && !/\s$/.test(existingPrompt);
   store.setPrompt(threadId, `${existingPrompt}${needsSeparator ? " " : ""}${text} `);
-  // Pull the user's attention to the composer so the insert is visible.
   requestComposerFocus(threadId);
 }
 
@@ -123,11 +98,7 @@ export function appendChatFileReference(threadId: ThreadId, reference: ChatFileR
   appendComposerPromptText(threadId, formatChatFileReference(reference));
 }
 
-// Attach an inline "Local comment" (file + line range + request text) to the
-// thread's composer draft so it surfaces as a chip and is serialized into the
-// prompt on send. Returns false when the comment is empty/invalid. Focus is
-// pulled to the composer whenever a valid comment is submitted (even if it
-// dedupes against an existing one) so the resulting chip is visible.
+// attach as a composer chip serialized into the prompt on send; focus is pulled to the composer whenever a valid comment is submitted (even on dedupe) so the chip is visible
 export function addChatFileComment(threadId: ThreadId, comment: FileCommentSelection): boolean {
   const draft = createFileCommentDraft(comment);
   if (!draft) {
@@ -138,10 +109,7 @@ export function addChatFileComment(threadId: ThreadId, comment: FileCommentSelec
   return true;
 }
 
-// Attach a pull request context card ("Repair" / "Add to chat" from the PR menu) to the
-// thread's composer draft. The card renders above the editor and its prompt is serialized
-// into the message on send. Returns false when the card is empty. Focus moves to the
-// composer so the new bubble is visible.
+// card renders above the editor with its prompt serialized on send; focus moves to the composer so the new bubble is visible
 export function addChatPullRequestContext(
   threadId: ThreadId,
   context: PullRequestContextDraft,
@@ -163,13 +131,10 @@ function countNewlines(text: string): number {
   return count;
 }
 
-// Number of characters on the current line of `text` (everything after the last
-// newline), i.e. the 0-based column count at the end of `text`.
 function columnsOnLastLine(text: string): number {
   return text.length - (text.lastIndexOf("\n") + 1);
 }
 
-// Pure line-range math, separated from the DOM selection plumbing for testability.
 export function computeSelectionLineRange(
   prefixText: string,
   selectedText: string,
@@ -179,9 +144,7 @@ export function computeSelectionLineRange(
   return { startLine, endLine };
 }
 
-// Pure 1-based column math. `startColumn` is the column of the first selected
-// character; `endColumn` is the column of the last selected character (trailing
-// newlines are ignored so a line-spanning selection ends on real content).
+// trailing newlines ignored so a line-spanning selection ends on real content
 export function computeSelectionColumns(
   prefixText: string,
   selectedText: string,
@@ -199,11 +162,7 @@ export interface SelectionWithin {
   endColumn: number;
 }
 
-// Verbatim selection text ready to be quoted as a snippet reference: CRLF
-// collapsed to LF, blank edge lines and surrounding whitespace removed. Returns
-// null when nothing remains, so callers treat whitespace-only selections as
-// "no selection". Shared by every surface that references a selection by its
-// text rather than by source lines (diff rows, rendered markdown).
+// null when nothing remains — whitespace-only selections mean no selection; shared by surfaces that reference by text (diff rows, rendered markdown)
 export function normalizeSelectionSnippet(text: string): string | null {
   const normalized = text
     .replace(/\r\n/g, "\n")
@@ -212,8 +171,6 @@ export function normalizeSelectionSnippet(text: string): string | null {
   return normalized.length === 0 ? null : normalized;
 }
 
-// The current window selection scoped to `container`: null when collapsed,
-// reaching outside the container, or whitespace-only.
 function getSelectionRangeWithin(
   container: HTMLElement,
 ): { selection: Selection; range: Range; selectedText: string } | null {
@@ -232,10 +189,7 @@ function getSelectionRangeWithin(
   return { selection, range, selectedText };
 }
 
-// Resolve the 1-based line+column span of the current selection inside
-// `container`. Works for both plain <pre> contents and Shiki-highlighted markup
-// because both keep one "\n" of text content per rendered line. Returns null
-// when there is no actionable selection.
+// works for plain <pre> and Shiki markup because both keep one \n of text per rendered line
 export function getSelectionWithin(container: HTMLElement): SelectionWithin | null {
   const scoped = getSelectionRangeWithin(container);
   if (!scoped) {
@@ -251,18 +205,13 @@ export function getSelectionWithin(container: HTMLElement): SelectionWithin | nu
   };
 }
 
-// Snippet-only reference for the current selection inside `container`, for
-// surfaces whose DOM does not mirror the source lines 1:1 (rendered markdown):
-// the quoted text itself is the reference. Returns null when there is no
-// actionable selection.
+// for surfaces whose DOM doesn't mirror source lines 1:1 (rendered markdown) the quoted text itself is the reference
 export function getSelectionSnippetWithin(container: HTMLElement): { snippet: string } | null {
   const scoped = getSelectionRangeWithin(container);
   if (!scoped) {
     return null;
   }
-  // `Selection.toString()` yields the text as laid out (a line break between
-  // block elements such as list items); `Range.toString()` would concatenate
-  // their text content with no separator.
+  // Selection.toString yields laid-out text (line break between block elements); Range.toString concatenates with no separator
   const snippet = normalizeSelectionSnippet(scoped.selection.toString());
   return snippet === null ? null : { snippet };
 }

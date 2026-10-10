@@ -95,8 +95,7 @@ describe("runProcess", () => {
     controller.abort();
 
     await expect(running).rejects.toMatchObject({ name: "AbortError" });
-    // Cross the original deadline: the cleared timeout must not produce a second failure or keep
-    // the test process alive after the aborted child has closed.
+    // cross the original deadline — the cleared timeout must not produce a second failure or keep the test process alive
     await new Promise((resolve) => setTimeout(resolve, 150));
   });
 
@@ -128,8 +127,7 @@ describe("runProcess", () => {
   });
 });
 
-// The owned ChildProcess handle is sufficient for POSIX cancellation. A missing
-// ps executable must never turn a timeout/abort into a wait for natural exit.
+// the owned ChildProcess handle suffices for POSIX cancellation — a missing ps executable must never turn a timeout/abort into waiting for natural exit
 describe.skipIf(process.platform === "win32")("cancellation without ps on PATH", () => {
   it.each(["timeout", "abort"] as const)("terminates an owned child on %s", async (cause) => {
     const previousPath = process.env.PATH;

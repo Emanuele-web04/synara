@@ -1,11 +1,4 @@
-// FILE: markdownTaskList.ts
-// Purpose: Pure helper for interactive GFM task lists in rendered markdown
-//          previews: flip the `[ ]` / `[x]` marker on a known source line.
-// Layer: Web logic helpers
-// Exports: toggleMarkdownTaskMarker
-
-// A GFM task item line: optional blockquote markers and indentation, a list
-// bullet (`-`, `*`, `+`, or ordered `1.` / `1)`), then the checkbox marker.
+// A GFM task item line: optional blockquote markers and indentation, a list bullet (`-`, `*`, `+`, or ordered `1.` / `1)`), then the checkbox marker.
 const TASK_MARKER_PATTERN = /^((?:\s*>)*\s*(?:[-*+]|\d+[.)])\s+\[)[ xX](\])/;
 
 /**

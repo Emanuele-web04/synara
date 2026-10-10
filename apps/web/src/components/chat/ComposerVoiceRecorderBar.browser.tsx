@@ -1,8 +1,3 @@
-// FILE: ComposerVoiceRecorderBar.browser.tsx
-// Purpose: Verifies voice recording exposes cancel plus a send-styled primary stop action.
-// Layer: Browser UI test
-// Depends on: vitest browser rendering and ComposerVoiceRecorderBar.
-
 import "../../index.css";
 
 import { page } from "vitest/browser";

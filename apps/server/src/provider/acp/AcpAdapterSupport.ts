@@ -1,8 +1,3 @@
-/**
- * ACP adapter support - maps protocol errors and approval decisions into DP runtime shapes.
- *
- * @module AcpAdapterSupport
- */
 import {
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -20,10 +15,7 @@ import {
   shouldAllowSynaraComputerProviderTool,
 } from "../../agentGateway/computerToolPermission.ts";
 
-// Synara-internal ACP tool kind for provider-native subagent runs. ACP's ToolKind has
-// no subagent variant (Cursor sends `kind: "other"` + `rawInput._toolName: "task"`), so
-// the runtime model tags detected subagent calls with this kind to reach the shared
-// collab_agent_tool_call presentation (agent icon, prompt preview, subagent live meta).
+// ACP's ToolKind has no subagent variant (Cursor sends kind:"other" + rawInput._toolName:"task") — tag detected calls so they reach the collab_agent_tool_call presentation
 export const ACP_SUBAGENT_TOOL_KIND = "agent";
 
 export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
@@ -125,10 +117,7 @@ export function selectAcpPermissionOptionId(
 export function selectAcpFullAccessPermissionOptionId(
   options: ReadonlyArray<AcpPermissionOptionLike>,
 ): string | undefined {
-  // Prefer a request-scoped grant, but Full Access must remain operational for
-  // ACP agents that expose only the protocol's persistent allow option. Every
-  // supported adapter re-applies its native interaction mode before a turn, and
-  // Plan-mode reverse requests are still rejected by resolveAcpPermissionPolicy.
+  // prefer a request-scoped grant, but Full Access must work with agents offering only the persistent allow option — Plan-mode reverse requests still rejected by resolveAcpPermissionPolicy
   return selectAcpPermissionOptionId("accept", options);
 }
 
@@ -140,14 +129,7 @@ export function resolveAcpFullAccessPermissionOutcome(
   return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
 }
 
-/**
- * Applies Synara's turn-scoped permission precedence to ACP reverse requests.
- *
- * `interactionMode: undefined` means that no turn owns the request. Those
- * requests are cancelled so replay or late provider activity cannot inherit a
- * previous Plan turn or a future Full Access turn. Active adapters normalize
- * an omitted turn mode to `default` before dispatching the prompt.
- */
+// interactionMode:undefined means no turn owns the request — cancel so replay/late activity can't inherit a previous Plan or future Full Access turn
 export function resolveAcpPermissionPolicy(input: {
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode | undefined;
@@ -218,7 +200,6 @@ type AcpToolCallLike = {
   readonly title?: string | null;
 };
 
-// Converts provider-specific failed tool payloads into a stable turn failure message.
 export function readAcpFailedToolDetail(toolCall: AcpToolCallLike): string | undefined {
   if (toolCall.status !== "failed") {
     return undefined;

@@ -1,10 +1,3 @@
-// FILE: FileLineCommentBox.tsx
-// Purpose: Inline "Local comment" editor anchored under a file line in the
-//          read-only preview. Mirrors Codex's per-line comment box: a Synara
-//          badge header, the target line label, a borderless request field, and
-//          Cancel/Comment actions (Comment stays disabled until non-empty text).
-// Layer: Chat file-preview interaction UI
-
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { FILE_COMMENT_TEXT_MAX_CHARS, normalizeFileCommentText } from "~/lib/fileComments";
@@ -49,8 +42,7 @@ export function FileLineCommentBox(props: FileLineCommentBoxProps) {
       onCancel();
       return;
     }
-    // Cmd/Ctrl+Enter commits; a bare Enter inserts a newline so multi-line
-    // requests stay possible.
+    // Cmd/Ctrl+Enter commits; a bare Enter inserts a newline so multi-line requests stay possible.
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       submit();
@@ -61,8 +53,7 @@ export function FileLineCommentBox(props: FileLineCommentBoxProps) {
     <div
       className="editor-file-viewer__comment-box"
       style={{ top: props.top, left: props.left, width: props.width }}
-      // Keep clicks/selection inside the box from reaching the file surface
-      // (context menu, selection toolbar, the gutter affordance).
+      // Keep clicks/selection inside the box from reaching the file surface (context menu, selection toolbar, the gutter affordance).
       onMouseDown={(event) => event.stopPropagation()}
       onMouseUp={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}

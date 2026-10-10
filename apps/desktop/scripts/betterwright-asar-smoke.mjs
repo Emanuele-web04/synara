@@ -15,8 +15,6 @@ const asar = await import(pathToFileURL(asarPath).href);
 const home = await mkdtemp(path.join(tmpdir(), "synara-betterwright-asar-"));
 const stage = path.join(home, "stage");
 await mkdir(stage);
-// The CJS fixture is generated from the TypeScript smoke: bundling keeps the
-// probe identical to the unpackaged run while staying requireable from ASAR.
 const fixture = path.join(desktop, ".smoke/betterwright-smoke.cjs");
 await mkdir(path.dirname(fixture), { recursive: true });
 await execFileAsync("bun", [

@@ -1,8 +1,3 @@
-// FILE: ShortcutsDialog.tsx
-// Purpose: Render a context-aware keyboard shortcuts reference as a slim, app-style dialog with search.
-// Layer: Chat shell overlay
-// Depends on: shared dialog UI, shortcut label builder, and current project script metadata.
-
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -58,7 +53,6 @@ function ShortcutsDialogContent(props: {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Autofocus the search input so the user can type immediately after Mod+/.
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       inputRef.current?.focus();

@@ -1,20 +1,4 @@
-// FILE: threadDetailCatchupPolicy.ts
-// Purpose: Decide when a subscribed thread's periodic projection reconcile can be skipped.
-// Layer: Web subscription policy (pure)
-// Exports: ThreadDetailSyncEvidence, isThreadDetailVerifiedInSync
-// Why: The root route polls every subscribed running thread on a fixed cadence: a cheap
-//      `replayEvents` catch-up (returns the thread's events past the client cursor) and a
-//      full `getThreadDetailSnapshot` projection reconcile that re-ships and re-normalizes
-//      the entire transcript. The full reconcile exists to repair a client that silently
-//      fell out of sync, but with several threads running it became a steady load of
-//      multi-megabyte snapshot fetches (server read + JSON + schema decode + store merge)
-//      even when every thread was provably current. An empty replay that resolved with no
-//      detail event applied since is that proof for this thread: the server holds no
-//      detail event past the cursor, so a projection built from those same events cannot
-//      contain anything the client has not already applied. Verified threads let the
-//      reconcile back off instead of fetching; anything that marks the thread as needing
-//      repair (terminal fence, draft promotion, un-echoed dispatch) bypasses this policy,
-//      and the caller still bounds the worst case with a periodic authoritative resync.
+// a full reconcile re-ships multi-MB snapshots per poll even for provably-current threads — an empty replay resolving with no detail event since is that proof, so verified threads let the reconcile back off while a periodic authoritative resync bounds the worst case
 
 export interface ThreadDetailSyncEvidence {
   /**
@@ -23,7 +7,6 @@ export interface ThreadDetailSyncEvidence {
    * enough to order an applied event against the replay that should have proven it.
    */
   readonly appliedEventSerial: number;
-  /** `appliedEventSerial` observed when the latest replay resolved empty, or null if none. */
   readonly emptyReplayAtEventSerial: number | null;
 }
 

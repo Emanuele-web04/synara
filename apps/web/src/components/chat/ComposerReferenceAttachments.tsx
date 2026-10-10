@@ -1,8 +1,3 @@
-// FILE: ComposerReferenceAttachments.tsx
-// Purpose: Render assistant-selection, file-comment, pasted-text, pull-request-context,
-//   file, and image composer attachments in one reusable row.
-// Layer: Chat composer presentation
-
 import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,

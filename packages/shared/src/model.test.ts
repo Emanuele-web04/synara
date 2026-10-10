@@ -946,8 +946,7 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 
   it("does not restart for a non-max effort change", () => {
-    // Non-max effort rides in the flag-settings layer (`effortLevel`) and
-    // switches live via applyFlagSettings.
+    // non-max effort rides in the flag-settings layer and switches live via applyFlagSettings
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),
@@ -972,7 +971,7 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 
   it("does not restart when fast mode toggles", () => {
-    // fastMode is a Settings key applied live via applyFlagSettings.
+    // fastMode is a Settings key applied live via applyFlagSettings
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),

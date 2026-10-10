@@ -51,8 +51,7 @@ export function resolvePrStatePresentation(pr: {
   mergeability?: "mergeable" | "conflicting" | "unknown" | undefined;
 }): PrStatePresentation {
   if (pr.state === "open") {
-    // Draft outranks conflicts: a draft isn't heading for a merge yet, so its state stays
-    // "draft" (git semantics). Conflicts surface once the PR is actually mergeable work.
+    // draft outranks conflicts: a draft isn't heading for a merge yet (git semantics); conflicts surface once the PR is mergeable work
     if (pr.isDraft === true) {
       return {
         label: "PR draft",

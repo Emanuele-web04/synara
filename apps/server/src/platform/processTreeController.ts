@@ -17,18 +17,18 @@ export type ProcessIdentityMap = Map<number, CapturedProcess>;
 export interface CapturedProcess {
   readonly pid: number;
   readonly command: string;
-  /** POSIX lstart or Windows CIM CreationDate; rejects observed PID reuse. */
+  /** POSIX lstart or Windows CIM CreationDate; rejects observed PID reuse */
   readonly startedAt?: string;
 }
 
 export interface CapturedProcessTree {
   readonly descendants: CapturedProcess[];
-  /** False when the platform process snapshot failed and descendant absence is unproven. */
+  /** false when the process snapshot failed and descendant absence is unproven */
   readonly captureComplete?: boolean;
 }
 
 export interface CapturedProcessTreeInspection {
-  /** False when the process table could not be read, so exit cannot be proven. */
+  /** false when the process table couldn't be read — exit cannot be proven */
   readonly verified: boolean;
   readonly survivors: CapturedProcess[];
 }
@@ -42,11 +42,7 @@ export interface ProcessTreeKiller {
     readonly rootPid: number;
     readonly signal: TerminalKillSignal;
     readonly tree: CapturedProcessTree;
-    /**
-     * True only when `tree.descendants` were identity-verified immediately
-     * before this signal. This lets Windows use CIM CreationDate verification
-     * without falling back to POSIX `ps` before forced descendant cleanup.
-     */
+    /** true only when descendants were identity-verified immediately before the signal — lets Windows use CIM CreationDate without falling back to ps */
     readonly verifiedDescendants?: boolean | undefined;
     readonly includeRootTree?: boolean | undefined;
     readonly onError: (
@@ -124,7 +120,7 @@ export function collectDescendantProcesses(
 function captureProcessChildrenMapSync(): ProcessChildrenMap | null {
   try {
     const result = spawnProcessSync("ps", ["-eo", "pid=,ppid=,lstart=,command="], {
-      // lstart uses locale-dependent %c; the parser expects the C locale's five tokens.
+      // lstart uses locale-dependent %c; the parser expects the C locale's five tokens
       env: { ...process.env, LC_ALL: "C" },
       encoding: "utf8",
       maxBuffer: PROCESS_TREE_SCAN_MAX_BUFFER_BYTES,
@@ -152,7 +148,7 @@ function readCurrentProcesses(pids: readonly number[]): ProcessIdentityMap | nul
       },
     );
     if (result.error) return null;
-    // ps exits 1 when none of the requested PIDs exist; other errors are unknown.
+    // ps exits 1 when none of the PIDs exist; other errors are unknown
     if (result.status !== 0 && (result.status !== 1 || result.stderr.trim().length > 0))
       return null;
     return processesByPid(parseProcessChildrenMap(result.stdout, true));
@@ -335,13 +331,12 @@ function processesByPid(childrenByParentPid: ProcessChildrenMap): Map<number, Ca
 }
 
 function sameCapturedIdentity(expected: CapturedProcess, current: CapturedProcess): boolean {
-  // Start time adds evidence to the existing command check. POSIX lstart has
-  // second resolution: it must not authorize a different command on its own.
+  // lstart has second resolution — it must not authorize a different command on its own
   if (expected.command !== current.command) return false;
   return expected.startedAt === undefined || current.startedAt === expected.startedAt;
 }
 
-/** Capture descendants using the native platform observer. */
+/** capture descendants using the native platform observer */
 export async function captureProcessTree(
   rootPid: number,
   options: PlatformProcessTreeOptions = {},
@@ -363,7 +358,7 @@ export async function captureProcessTree(
   };
 }
 
-/** A fresh OS observation, independent of Node's potentially delayed exit notification. */
+/** fresh OS observation, independent of Node's potentially delayed exit notification */
 export async function isProcessRunning(
   rootPid: number,
   options: PlatformProcessTreeOptions = {},
@@ -381,15 +376,14 @@ export async function isProcessRunning(
       timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,
     });
     if (result.error || result.status !== 0) return false;
-    // kill(pid, 0) also succeeds for zombies. Accept only live POSIX process states;
-    // Z (zombie), X (dead), missing output, and unknown states cannot prove liveness.
+    // kill(pid,0) succeeds for zombies — accept only live POSIX states; Z/X/missing/unknown can't prove liveness
     return /^[RSDITUWt]/.test(result.stdout.trim());
   } catch {
     return false;
   }
 }
 
-/** Inspect the exact captured identities; snapshot failure is never interpreted as exit. */
+/** inspect exact captured identities; snapshot failure is never interpreted as exit */
 export async function inspectProcessTree(
   tree: CapturedProcessTree,
   options: PlatformProcessTreeOptions = {},
@@ -445,13 +439,7 @@ export function signalProcessTree(input: {
   });
 }
 
-/**
- * Signal one owned child the way the host platform can honor it. POSIX callers
- * keep Node's direct, synchronous `child.kill` (a stopped git or CLI must not
- * depend on `ps`/`pgrep` being installed); Windows routes through the tree
- * boundary because a `.cmd` shim runs under cmd.exe and only `taskkill /T`
- * reaches the real command behind it.
- */
+/** POSIX keeps direct child.kill (a stopped git must not depend on ps/pgrep); Windows routes through taskkill /T since a .cmd shim runs under cmd.exe */
 export function signalOwnedChildProcess(
   child: { readonly pid?: number | undefined; kill(signal?: NodeJS.Signals): unknown },
   signal: TerminalKillSignal,

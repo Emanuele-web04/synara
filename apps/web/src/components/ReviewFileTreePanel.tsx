@@ -1,11 +1,3 @@
-// FILE: ReviewFileTreePanel.tsx
-// Purpose: Compact, searchable file-tree side panel for the review/diff panel.
-//          Renders the changed files of the active diff as a nested, collapsible
-//          tree and navigates the diff on click. Reuses the diff path helpers,
-//          file-row chrome, file icons, and disclosure motion shared with the
-//          editor explorer instead of duplicating them.
-// Layer: Diff panel UI
-
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import {
   forwardRef,
@@ -31,8 +23,7 @@ import { IconButton } from "./ui/icon-button";
 import { SearchInput } from "./ui/search-input";
 import { Skeleton } from "./ui/skeleton";
 
-// Forwards its ref and spreads incoming props so directory rows can act as the
-// Collapsible trigger (Base UI injects onClick/aria/data + ref onto this element).
+// Forwards its ref and spreads incoming props so directory rows can act as the Collapsible trigger (Base UI injects onClick/aria/data + ref onto this element).
 const ReviewTreeRow = forwardRef<
   HTMLButtonElement,
   {
@@ -76,9 +67,7 @@ const ReviewFileTreeNodes = memo(function ReviewFileTreeNodes(props: {
       {props.nodes.map((node) => {
         if (node.kind === "file") {
           return (
-            // Namespace keys by kind: a diff that replaces a file with a
-            // same-named directory (delete `foo`, add `foo/bar`) yields sibling
-            // file and directory nodes sharing the same path.
+            // Namespace keys by kind: a diff that replaces a file with a same-named directory (delete `foo`, add `foo/bar`) yields sibling file and directory nodes sharing the same path.
             <ReviewTreeRow
               key={`file:${node.path}`}
               depth={props.depth}
@@ -161,10 +150,7 @@ export const ReviewFileTreePanel = function ReviewFileTreePanel(props: {
   onClose?: () => void;
 }) {
   const [query, setQuery] = useState("");
-  // Default fully expanded (the diff file set is known upfront and usually
-  // small), so we track which directories the user has *collapsed* rather than
-  // an expanded allow-list. While searching, collapse state is ignored so every
-  // match stays visible.
+  // track which directories the user *collapsed* (default fully expanded, diff file set is known upfront and small); while searching, collapse state is ignored so every match stays visible
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(() => new Set());
 
   // Rebuild only when the file set or query changes; collapse toggles and

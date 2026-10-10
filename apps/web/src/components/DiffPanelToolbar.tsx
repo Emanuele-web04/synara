@@ -1,9 +1,3 @@
-// FILE: DiffPanelToolbar.tsx
-// Purpose: Unified review toolbar for the diff panel — scope picker, stats, file jump,
-//          view options, git actions, and turn selection. Picker chrome matches the
-//          Environment panel (EnvironmentRow triggers + ComposerPickerMenuPopup menus).
-// Layer: Diff panel UI
-
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import type { ThreadId, TurnId } from "@synara/contracts";
 import { FaPlusMinus } from "react-icons/fa6";

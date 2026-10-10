@@ -1,11 +1,3 @@
-/**
- * providerCliOutput - Pure helpers for interpreting provider CLI probe output.
- *
- * Shared by the provider health checks in ProviderHealth: shapes captured
- * process output and walks arbitrary auth-status JSON for common markers.
- * No process spawning and no effect dependencies live here.
- */
-
 export const PROVIDER_COMMAND_TIMEOUT_DETAIL = "Timed out while running command.";
 
 export interface CommandResult {

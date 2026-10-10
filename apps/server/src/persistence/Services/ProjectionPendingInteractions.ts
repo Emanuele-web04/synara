@@ -1,4 +1,4 @@
-/** Durable settlement authority shared by approvals and structured user input. */
+/** durable settlement authority shared by approvals and structured user input */
 import {
   ApprovalRequestId,
   CommandId,
@@ -76,12 +76,7 @@ export interface ProjectionPendingInteractionRepositoryShape {
   readonly getByIdentity: (
     input: typeof GetProjectionPendingInteractionInput.Type,
   ) => Effect.Effect<Option.Option<ProjectionPendingInteraction>, ProjectionRepositoryError>;
-  /**
-   * Atomically assigns an unsettled interaction to exactly one response
-   * command. Claims `pending`/`retryable`/`uncertain` rows, plus `responding`
-   * rows whose claim is old enough to be considered orphaned — a permanently
-   * unclaimable row would strand its prompt with no way to answer or dismiss.
-   */
+  /** claims pending/retryable/uncertain rows plus `responding` rows old enough to be orphaned — a permanently unclaimable row would strand its prompt with no way to answer */
   readonly claimResponse: (
     input: typeof ClaimProjectionPendingInteractionResponseInput.Type,
   ) => Effect.Effect<boolean, ProjectionRepositoryError>;

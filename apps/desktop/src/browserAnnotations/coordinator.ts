@@ -142,8 +142,7 @@ export class BrowserAnnotationCoordinator {
       this.finishSession(existing, "replaced", true);
     }
 
-    // Starting the picker is an explicit human takeover. This interrupts any
-    // in-flight agent command before the guest becomes interactive.
+    // starting the picker is an explicit human takeover — interrupt any in-flight agent command before the guest goes interactive
     this.options.markHumanControl(input.threadId);
     const session: ActiveSession = {
       sessionId: Crypto.randomUUID(),
@@ -176,8 +175,7 @@ export class BrowserAnnotationCoordinator {
     const key = runtimeKey(input.threadId, input.tabId);
     const session = this.sessionsByRuntimeKey.get(key);
     if (!session) return;
-    // Resolve again so a stale renderer command cannot cancel a session after
-    // the logical tab has moved to another physical guest.
+    // re-resolve so a stale renderer command can't cancel a session after the logical tab moved to another physical guest
     const runtime = this.options.resolveVisibleRuntime(input);
     if (runtime.webContents.id !== session.runtime.webContents.id) return;
     this.finishSession(session, "user", true);

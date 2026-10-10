@@ -1,7 +1,3 @@
-// FILE: SidebarThreadRowContent.tsx
-// Purpose: Owns the shared identity and status content rendered by every Sidebar thread row.
-// Exports: SidebarThreadRowContent and its terminal-status presentation type.
-
 import { useMemo, type ReactNode } from "react";
 
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";

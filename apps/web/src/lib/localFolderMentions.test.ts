@@ -1,7 +1,3 @@
-// FILE: localFolderMentions.test.ts
-// Purpose: Cover the composer helpers that open and root the local-folder mention browser.
-// Layer: Web composer tests
-
 import { describe, expect, it } from "vitest";
 
 import {

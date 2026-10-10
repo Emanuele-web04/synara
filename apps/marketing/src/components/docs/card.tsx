@@ -1,8 +1,3 @@
-// FILE: components/docs/card.tsx
-// Purpose: MDX <Cards>/<Card> for docs pages, built on the shadcn Card
-//          primitives so docs surfaces match the rest of the design system.
-// Layer: server component (no client hooks).
-
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ArrowUpRight } from "lucide-react";

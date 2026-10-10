@@ -8,7 +8,7 @@ export const ClaudeCacheObservation = Schema.Struct({
   observedAt: IsoDateTime,
   contextTokens: Schema.optional(NonNegativeInt),
   lastResponseAt: Schema.optional(IsoDateTime),
-  // Earliest local observation of the API request that refreshed this prefix.
+  // earliest local observation of the API request that refreshed this prefix
   cacheReferenceAt: Schema.optional(IsoDateTime),
   // Longest observed native lifetime; expiry of the whole prefix requires it to elapse.
   ttlSeconds: Schema.optional(PositiveInt),

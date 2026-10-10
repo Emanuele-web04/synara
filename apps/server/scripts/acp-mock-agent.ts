@@ -1,8 +1,4 @@
 #!/usr/bin/env bun
-// FILE: acp-mock-agent.ts
-// Purpose: Provides a deterministic ACP subprocess for runtime integration tests.
-// Layer: Test fixture executable
-// Exports: none; communicates over JSON-RPC stdio.
 
 import { appendFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";

@@ -1,6 +1,3 @@
-// FILE: resolve-release-update-policy.ts
-// Purpose: Resolves release metadata for GitHub Actions from the checked-in lane policy.
-
 import { appendFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

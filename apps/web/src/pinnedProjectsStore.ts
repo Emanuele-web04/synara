@@ -1,8 +1,3 @@
-// FILE: pinnedProjectsStore.ts
-// Purpose: Persists sidebar project pin ids with the shared pin ordering cap.
-// Layer: UI state store
-// Exports: usePinnedProjectsStore
-
 import { MAX_PINNED_PROJECTS, type ProjectId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";

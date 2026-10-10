@@ -1,8 +1,3 @@
-// FILE: useRadioGroupKeyboardNav.ts
-// Purpose: Roving tabindex + arrow-key selection for custom `role="radio"` button groups.
-// Layer: Hooks
-// Exports: useRadioGroupKeyboardNav
-
 import { type KeyboardEvent, type Ref, useRef } from "react";
 
 const ARROW_KEY_DELTAS: Record<string, 1 | -1> = {
@@ -18,12 +13,7 @@ export type RadioGroupItemProps = {
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 };
 
-/**
- * Standard radio-group keyboard behavior for custom radio-style button groups
- * (SettingsSegmentedControl, ThemeModePicker): only the selected option is in the
- * tab order, and arrow keys move both selection and focus, wrapping at the ends.
- * Spread the returned props factory's result onto each `role="radio"` button.
- */
+// roving tabindex for custom radio groups: only the selected option is in the tab order, arrows move selection+focus wrapping at the ends
 export function useRadioGroupKeyboardNav<T extends string>({
   values,
   value,
@@ -39,7 +29,6 @@ export function useRadioGroupKeyboardNav<T extends string>({
     const delta = ARROW_KEY_DELTAS[event.key];
     if (!delta || values.length === 0) return;
     event.preventDefault();
-    // A missing selection (indexOf -1) starts navigation from the first option.
     const currentIndex = Math.max(0, values.indexOf(itemValue));
     const nextValue = values[(currentIndex + delta + values.length) % values.length];
     if (nextValue === undefined || nextValue === itemValue) return;

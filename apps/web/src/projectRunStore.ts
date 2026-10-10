@@ -1,24 +1,12 @@
-// FILE: projectRunStore.ts
-// Purpose: Client-side projection of the server-owned dev-server registry, keyed by project id.
-// Layer: Web UI state
-// Exports: useProjectRunStore plus helpers for syncing dev-server lifecycle events.
-
 import type { ProjectDevServer, ProjectId } from "@synara/contracts";
 
-/**
- * A tracked dev server as projected from the server. This mirrors the
- * `ProjectDevServer` contract exactly — the client no longer owns thread or
- * terminal identifiers, because dev servers are first-class server processes.
- */
+// the client no longer owns thread/terminal identifiers — dev servers are first-class server processes
 export type ProjectRunState = ProjectDevServer;
 
 interface ProjectRunStoreState {
   runsByProjectId: Record<ProjectId, ProjectRunState>;
-  /** Replace the entire registry from an authoritative server snapshot. */
   replaceAll: (servers: ReadonlyArray<ProjectDevServer>) => void;
-  /** Insert or update a single tracked dev server. */
   upsertRun: (server: ProjectDevServer) => void;
-  /** Drop a tracked dev server by project id. */
   removeRun: (projectId: ProjectId) => void;
 }
 

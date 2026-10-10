@@ -1,10 +1,4 @@
-// FILE: sidebarGlyphs.tsx
-// Purpose: Shared sidebar icon size scale and glyph renderer.
-// Layer: Sidebar UI primitive
-// Exports: SIDEBAR_GLYPH, SidebarGlyph, sidebarGlyphClass, type SidebarGlyphVariant
-// Why: The sidebar mixed size-3, size-3.5, size-[15px], and raw react-icons without a
-//      single optical scale. Tabler/Central vs react-icons/lu need different Tailwind
-//      sizes at the same semantic slot — this module is the one place to tune that.
+// the sidebar mixed size-3/3.5/15px and raw react-icons; Tabler/Central vs react-icons/lu need different sizes at the same semantic slot — the one place to tune that
 
 import type { ComponentType } from "react";
 import { cn } from "~/lib/utils";
@@ -29,14 +23,7 @@ export const SIDEBAR_GLYPH = {
 
 export type SidebarGlyphVariant = keyof typeof SIDEBAR_GLYPH;
 
-// Trailing thread-row icons (meta chips, pin, archive) share one optical size so the
-// right-side cluster reads as a uniform set. Tailwind can only scan literal class strings,
-// so the plain and slot-forced forms are spelled out here; keep their px values in step —
-// this is the single place to retune the trailing-icon size.
-//
-// The forced form targets BOTH `<svg>` glyphs (lucide / react-icons) and Central icons,
-// which render as a masked `<span data-slot=central-icon>` rather than an svg — without the
-// second selector those (e.g. the worktree glyph) keep their smaller base size and look off.
+// trailing icons share one optical size; Tailwind only scans literals so both forms are spelled out — the forced form targets Central's masked `<span>` too, not just <svg>
 export const SIDEBAR_TRAILING_ICON_CLASS = "size-[15px] shrink-0";
 export const SIDEBAR_TRAILING_ICON_FORCE_CLASS =
   "[&_svg]:size-[15px] [&_[data-slot=central-icon]]:size-[15px]";

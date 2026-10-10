@@ -1,9 +1,3 @@
-// FILE: ToolCallDetailsDialog.tsx
-// Purpose: Inline details content for command and file-change transcript rows.
-// Layer: Chat presentation component
-// Exports: ToolCallDetailsContent
-// Depends on: WorkLogEntry.toolDetails
-
 import type { ReactNode } from "react";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { cn } from "~/lib/utils";

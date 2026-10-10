@@ -1,7 +1,3 @@
-// FILE: ProfileUsageCoverage.tsx
-// Purpose: Disclose missing provider telemetry beside profile rankings and exports.
-// Layer: web profile feature.
-
 import type { ProviderKind } from "@synara/contracts";
 import { formatProviderLabel } from "./profileFormatting";
 

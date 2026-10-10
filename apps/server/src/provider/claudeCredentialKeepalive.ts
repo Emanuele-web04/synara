@@ -62,7 +62,6 @@ export function isClaudeCredentialKeepaliveEnabled(
   return platform === "darwin" && envFlagEnabled(env.SYNARA_CLAUDE_KEEPALIVE);
 }
 
-// Mirrors the Claude Agent adapter default while honoring persisted custom CLI paths.
 export function resolveClaudeCredentialKeepaliveBinaryPath(binaryPath: string | undefined): string {
   return binaryPath?.trim() || "claude";
 }
@@ -75,14 +74,7 @@ export function resolveClaudeCredentialKeepaliveIntervalMs(env: NodeJS.ProcessEn
   return Math.min(minutes * 60 * 1000, CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS);
 }
 
-// `claude auth status` validates the stored OAuth token and refreshes it via the refresh
-// token when at/near expiry, persisting the new token back to the Keychain. It is a cheap,
-// local operation that never consumes inference quota.
-//
-// Held under the shared lock (see claudeAuthStatusLock.ts): the refresh token this probe
-// may redeem is single-use, so it must never race another `claude auth status` invocation
-// (e.g. the provider-health check or a concurrent keepalive tick) started elsewhere in
-// this process.
+// `claude auth status` refreshes the Keychain token near expiry — held under the shared lock since the refresh token it may redeem is single-use
 async function nudgeClaudeTokenRefresh(
   binaryPath: string,
   homeDir: string | undefined,
@@ -191,8 +183,7 @@ export function startClaudeCredentialKeepalive(input?: {
     ((input) =>
       nudgeClaudeTokenRefresh(input.binaryPath, input.homeDir, input.signal, input.processEnv));
 
-  // Only run when explicitly enabled. The check touches Claude Code auth data, so
-  // Synara should not do it as background work merely because the app opened.
+  // opt-in only — touches Claude auth data, so it must not run just because the app opened
   if (!isClaudeCredentialKeepaliveEnabled({ platform, env })) {
     return { stop: async () => {} };
   }
@@ -215,8 +206,7 @@ export function startClaudeCredentialKeepalive(input?: {
     })
       .catch((cause) => {
         if (abortController.signal.aborted) return;
-        // Best-effort: a missing binary, a genuinely logged-out user, or a transient failure
-        // must never crash the server. Keep it quiet since it self-heals on the next tick.
+        // Best-effort: a missing binary, a genuinely logged-out user, or a transient failure must never crash the server. Keep it quiet since it self-heals on the next tick.
         log(
           `${logPrefix} token refresh nudge failed (non-fatal): ${
             cause instanceof Error ? cause.message : String(cause)
@@ -234,8 +224,6 @@ export function startClaudeCredentialKeepalive(input?: {
   if (typeof timer.unref === "function") {
     timer.unref();
   }
-  // Run once after opt-in so an already-stale token recovers promptly instead
-  // of waiting for the first interval tick.
   void tick();
   log(`${logPrefix} started (every ${intervalMs / 60_000}m, macOS)`);
   return {

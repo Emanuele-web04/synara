@@ -164,14 +164,12 @@ export function createDesktopPlatformBuildConfig(
         window: { width: 642, height: 406 },
         iconSize: 128,
         contents: [
-          // Omit path so electron-builder uses the packaged app and its actual filename.
+          // omit path so electron-builder uses the packaged app and its actual filename
           { x: 172, y: 135, type: "file" },
           { x: 514, y: 241, type: "link", path: "/Applications" },
         ],
         sign: input.signed === true,
-        // The signed release flow notarizes and staples the DMG after electron-builder exits.
-        // Do not emit a blockmap/update entry whose hashes would describe the pre-stapled image;
-        // macOS auto-updates use the separately finalized ZIP artifact.
+        // notarize+staple happen after electron-builder exits — no blockmap/update entry for the pre-stapled image
         writeUpdateInfo: false,
       },
       files: [
@@ -194,8 +192,7 @@ export function createDesktopPlatformBuildConfig(
           from: MAC_DEVICE_HELPER_STAGE_PATH,
           to: MAC_DEVICE_HELPER_RESOURCE_PATH,
         },
-        // electron-builder only knows how to place an ICNS; the compiled asset
-        // catalog has to be copied into Contents/Resources by hand.
+        // electron-builder only places an ICNS; the compiled asset catalog is copied into Resources by hand
         {
           from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
           to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
@@ -233,8 +230,7 @@ export function createDesktopPlatformBuildConfig(
 
   return {
     ...nativePackaging,
-    // Keep the Windows product registration stable while the public app ID changes.
-    // This lets NSIS updates replace the existing installation and own its uninstaller.
+    // keeps Windows product registration stable while the public app id changes, so NSIS updates own the uninstaller
     nsis: {
       guid: input.flavor === "beta" ? SYNARA_BETA_WINDOWS_INSTALLER_GUID : WINDOWS_INSTALLER_GUID,
     },

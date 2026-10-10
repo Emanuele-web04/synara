@@ -17,9 +17,7 @@ import { formatProviderModelOptionName, type ProviderOptions } from "~/providerM
 
 export interface ThreadModelSummary {
   provider: ProviderKind;
-  /** Display name of the selected model, e.g. "Sonnet 4.5". */
   modelLabel: string;
-  /** Reasoning effort / thinking label, e.g. "High"; null when the model has none. */
   statusLabel: string | null;
   fastMode: boolean;
 }
@@ -42,16 +40,13 @@ export function resolveThreadModelSummary(
   if (!modelSelection) {
     return null;
   }
-  // Deliberately the selection's provider, not `resolveThreadDisplayProvider`:
-  // the glyph and the model name must describe the same selection, and a live
-  // session can briefly report a different provider than the stored selection.
+  // deliberately the selection's provider not the live session's — glyph and model name must describe the same selection and a live session can briefly report a different provider
   const provider = modelSelection.provider;
   const modelLabel = formatProviderModelOptionName({ provider, slug: modelSelection.model });
   if (modelLabel.length === 0) {
     return null;
   }
-  // The prompt only matters for prompt-injected efforts (Claude's ultrathink),
-  // which a stored selection never carries, so an empty draft is correct here.
+  // The prompt only matters for prompt-injected efforts (Claude's ultrathink), which a stored selection never carries, so an empty draft is correct here.
   const traits = getComposerTraitSelection(
     provider,
     modelSelection.model,

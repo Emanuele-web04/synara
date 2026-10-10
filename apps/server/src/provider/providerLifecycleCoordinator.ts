@@ -7,19 +7,9 @@ import * as Semaphore from "effect/Semaphore";
 export interface ProviderLifecycleLease {
   readonly generation: string;
   readonly isCurrent: () => boolean;
-  /**
-   * Takes lasting ownership of {@link ProviderLifecycleLease.generation}.
-   *
-   * A run publishes its generation eagerly (runtime events emitted *while* a
-   * provider starts must not look stale), but that publication is provisional:
-   * it survives the run only if the run says it took ownership. Call this once
-   * the generation is observable outside the coordinator — i.e. a session was
-   * started with it or a binding was persisted with it.
-   */
+  // generation publication is provisional: it survives the run only if the run says it took ownership (a session started with it or a binding persisted with it)
   readonly commit: () => void;
-  /** Takes lasting ownership of an existing generation instead of this run's. */
   readonly adopt: (generation: string) => void;
-  /** Takes lasting ownership of "this thread has no provider generation". */
   readonly retire: () => void;
 }
 
@@ -33,13 +23,7 @@ export interface ProviderLifecycleCoordinator {
     threadId: ThreadId,
     operation: (generation: string | undefined) => Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
-  /**
-   * Control-plane variant of {@link ProviderLifecycleCoordinator.runCurrent}:
-   * waits a bounded time for the per-thread lock and then proceeds without it.
-   * A wedged lifecycle mutation (a provider start that never returns) must not
-   * be able to hold an interrupt hostage forever; the operation still validates
-   * the current generation, so a racing replacement is rejected downstream.
-   */
+  // control-plane variant: bounded wait for the thread lock then proceed without it — a wedged mutation must not hold an interrupt hostage; the op still validates generation downstream
   readonly runCurrentUrgent: <A, E, R>(
     threadId: ThreadId,
     operation: (generation: string | undefined) => Effect.Effect<A, E, R>,
@@ -48,7 +32,6 @@ export interface ProviderLifecycleCoordinator {
   readonly currentGeneration: (threadId: ThreadId) => string | undefined;
 }
 
-/** How long an urgent control-plane operation waits for the per-thread lock. */
 const URGENT_LOCK_WAIT = Duration.seconds(5);
 const URGENT_LOCK_POLL = Duration.millis(25);
 
@@ -95,9 +78,7 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
     Effect.suspend(() => {
       const entry = referenceEntry(threadId);
       const deadlineMs = Date.now() + Duration.toMillis(URGENT_LOCK_WAIT);
-      // Polling `withPermitsIfAvailable` instead of racing a timeout against a
-      // pending acquisition: a timed-out `take` can strand a permit and wedge
-      // the thread's lifecycle for the life of the process.
+      // poll withPermitsIfAvailable instead of racing a timeout against acquisition — a timed-out take strands a permit and wedges the thread's lifecycle forever
       const attempt: Effect.Effect<A, E, R> = Effect.suspend(() =>
         entry.semaphore
           .withPermitsIfAvailable(1)(effect)
@@ -128,14 +109,7 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
           const previousGeneration = currentGenerations.get(threadId);
           currentGenerations.set(threadId, generation);
           let ownedGeneration: string = generation;
-          // Ownership is opt-in. The eagerly published generation is rewound on
-          // exit unless the run explicitly committed/adopted/retired, so a run
-          // that ends without changing anything — a successful no-op early
-          // return, a failure, an interrupt before the provider was touched —
-          // leaves the still-live session's generation exactly as it found it.
-          // The inverse default is unsafe: an uncommitted generation nobody else
-          // knows about silently invalidates every runtime event and every
-          // generation-checked control call for that thread, forever.
+          // ownership is opt-in: an uncommitted generation rewinds on exit — the inverse default would let a generation nobody knows silently invalidate every event and control call for the thread forever
           let owned = false;
           const isCurrent = () => currentGenerations.get(threadId) === ownedGeneration;
           return operation({
@@ -159,8 +133,7 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
             },
           }).pipe(
             Effect.onExit(() =>
-              // `isCurrent` also guards against clobbering a newer owner: only
-              // rewind while this run's generation is still the published one.
+              // `isCurrent` also guards against clobbering a newer owner: only rewind while this run's generation is still the published one.
               owned || !isCurrent()
                 ? Effect.void
                 : Effect.sync(() => {

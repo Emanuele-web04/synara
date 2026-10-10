@@ -1,8 +1,3 @@
-// FILE: components/docs/media.tsx
-// Purpose: Safe, accessible media primitives for documentation screenshots,
-//          diagrams, galleries, and captioned product videos.
-// Layer: server components; no client-side media state or third-party embeds.
-
 import Image from "next/image";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";

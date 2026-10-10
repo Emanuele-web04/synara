@@ -1,8 +1,3 @@
-// FILE: ComposerExtrasPanel.browser.tsx
-// Purpose: Verifies the composer `+` panel exposes generic file uploads, quick mode toggles, and the AppSnap window picker.
-// Layer: Browser UI test
-// Depends on: vitest browser rendering helpers and the ComposerExtrasPanel component.
-
 import "../../index.css";
 
 import { page, userEvent } from "vitest/browser";

@@ -1,16 +1,6 @@
-// FILE: fileRowStyles.ts
-// Purpose: Shared visual chrome for file/entry rows (editor explorer, diff file
-//          lists, review file tree) so every file row matches without each
-//          surface re-declaring the same Tailwind classes and indent math.
-// Layer: Chat/shared UI
-
 import { cn } from "~/lib/utils";
 
-// Solid "active block" = the selection background token. The selected row paints
-// it directly; the keyboard-focused row re-applies the same token under
-// focus-visible, so arrow-key navigation looks exactly like moving the selection
-// (a solid block, not a ring). Tailwind's JIT only emits classes it can see as
-// full literals, so the focus-visible variant is spelled out rather than derived.
+// keyboard focus mirrors the selected block (solid, not a ring); Tailwind JIT only emits literal classes so focus-visible is spelled out
 const FILE_ROW_SELECTED_BLOCK_CLASS_NAME =
   "bg-[var(--color-background-button-secondary)] text-foreground";
 const FILE_ROW_FOCUS_BLOCK_CLASS_NAME =

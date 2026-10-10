@@ -1,9 +1,3 @@
-// FILE: useProviderStatusRefresh.ts
-// Purpose: Shared provider-status refresh hooks — focus/periodic version checks plus an
-//          imperative refresh callback for UI affordances (voice auth retry, banners).
-// Layer: Web hooks
-// Exports: useProviderStatusRefresh, useRefreshProviderStatusesNow
-
 import { useEffect } from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import type { ServerProviderStatus } from "@synara/contracts";
@@ -26,10 +20,6 @@ function writeProviderStatusesToConfigCache(
   return reconcileServerProviderStatuses(queryClient, providers);
 }
 
-/**
- * Imperative one-shot provider-status refresh: re-checks providers on the server
- * and folds the result into the cached server config. Surfaces failures as a toast.
- */
 export function useRefreshProviderStatusesNow(): RefreshProviderStatusesNow {
   const queryClient = useQueryClient();
   return async (options?: RefreshProviderStatusesOptions) => {
@@ -134,8 +124,7 @@ export function useProviderStatusRefresh(options: ProviderStatusRefreshOptions):
         return;
       }
       startupRefreshPending = true;
-      // A failed early focus refresh must not consume the throttle window and
-      // suppress the one scheduled startup attempt.
+      // A failed early focus refresh must not consume the throttle window and suppress the one scheduled startup attempt.
       await refreshProviderStatuses({ ignoreMinInterval: true });
     };
 

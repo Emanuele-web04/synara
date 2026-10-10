@@ -490,18 +490,14 @@ describe("Antigravity CLI integration helpers", () => {
     );
     const result = runCaptureCommand(
       command,
-      // Stay below platform pipe-buffer limits: spawnSync itself can deadlock
-      // while writing multi-megabyte stdin on macOS, which tests Node rather
-      // than the hook's simple drain-and-return behavior.
+      // stay below platform pipe-buffer limits: multi-megabyte spawnSync stdin can deadlock the test itself
       JSON.stringify({ payload: "x".repeat(32 * 1024) }),
       { SYNARA_ANTIGRAVITY_EVENTS: "" },
     );
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
-    // Neutral for PreToolUse means preserving the permission flow: Antigravity
-    // requires a `decision`, and an empty object is treated as a denial with
-    // an empty reason that blocks every tool call (#490).
+    // an empty PreToolUse object is treated as a denial that blocks every tool call (#490)
     expect(result.stdout.trim()).toBe('{"decision":"ask"}');
 
     const postToolResult = runCaptureCommand(
@@ -517,10 +513,7 @@ describe("Antigravity CLI integration helpers", () => {
     expect(postToolResult.status).toBe(0);
     expect(postToolResult.stdout.trim()).toBe("{}");
 
-    // PreInvocation gates the upcoming LLM invocation (the subagent's first
-    // model call when the agent spawns one): an empty object is treated as a
-    // denial that aborts the launch and makes the parent CLI exit with
-    // code 1, so the inactive hook must answer allow.
+    // PreInvocation gates the subagent's first model call: {} denies it and the parent CLI exits 1
     const preInvocationResult = runCaptureCommand(
       buildAntigravityCaptureCommand(
         "__synara_gui_must_not_launch__",
@@ -540,9 +533,6 @@ describe("Antigravity CLI integration helpers", () => {
     const scriptPath = path.join(directory, "capture.cjs");
     try {
       await fs.writeFile(scriptPath, hookScriptSource(), { mode: 0o700 });
-      // Invoke the script directly, bypassing the shell wrapper: its inactive
-      // fallback is defense in depth for a caller that runs the script without
-      // a capture target, and must answer PreToolUse with a decision too.
       const result = spawnSync(process.execPath, [scriptPath, "pre-tool"], {
         env: { ...process.env, SYNARA_ANTIGRAVITY_EVENTS: "" },
         input: JSON.stringify({ tool: "shell" }),
@@ -619,8 +609,6 @@ describe("Antigravity CLI integration helpers", () => {
       // `[char]34` so cmd echoes clean JSON.
       String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command Write-Output ^('{'+[char]34+'decision'+[char]34+':'+[char]34+'ask'+[char]34+'}'^)) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
     );
-    // PreInvocation gates the LLM invocation: answer allow so subagent
-    // launches are not denied (which would make the parent CLI exit 1).
     expect(
       buildAntigravityCaptureCommand(
         String.raw`C:\Users\test\AppData\Local\Programs\Synara\Synara.exe`,
@@ -832,10 +820,6 @@ describe("Antigravity CLI integration helpers", () => {
             Effect.forkChild,
           );
           child?.emit("close", 0, null);
-          // The close handler settles the turn asynchronously (gateway cancel,
-          // hook-file drain, run-dir cleanup) and clears activeProcess before
-          // emitting turn.completed. Wait for that event instead of a fixed
-          // sleep so stopSession cannot race the pid-less fake into teardown.
           const terminalEvents = Array.from(
             yield* Fiber.join(turnTerminalFiber).pipe(Effect.timeout("2 seconds")),
           );
@@ -922,9 +906,6 @@ describe("Antigravity CLI integration helpers", () => {
           });
           expect(eventFile).toBeTruthy();
 
-          // Matching step identities can be deduplicated without guessing across steps.
-          // Each real call must render once, without either duplicating the
-          // hook/transcript copy or collapsing the repeated tool name.
           yield* Effect.promise(() =>
             fs.appendFile(
               eventFile!,
@@ -1079,8 +1060,7 @@ describe("Antigravity CLI integration helpers", () => {
           });
           expect(eventFile).toBeTruthy();
 
-          // The subagent CLI inherits SYNARA_ANTIGRAVITY_EVENTS, so its hooks
-          // land in this session's stream with the subagent's conversation id.
+          // the subagent CLI inherits SYNARA_ANTIGRAVITY_EVENTS, so its hooks land here with the subagent's conversation id
           yield* Effect.promise(() =>
             fs.appendFile(
               eventFile!,
@@ -1169,9 +1149,6 @@ describe("Antigravity CLI integration helpers", () => {
                 event.providerRefs?.providerThreadId === "conv-child-1",
             ),
           ).toHaveLength(1);
-          // The parent thread must not be re-emitted for the subagent, and the
-          // session keeps its own conversation: its own tool events stay bound
-          // to conv-parent-1 without a parent ref.
           expect(
             events.filter(
               (event) =>
@@ -1781,9 +1758,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             Effect.forkChild,
           );
 
-          // The UI's Stop button dispatches thread.turn.interrupt, which lands
-          // on interruptTurn. It must settle the live turn terminal so the
-          // projection flips the session back to ready and the button clears.
           yield* adapter.interruptTurn(threadId, turn.turnId);
 
           const terminal = Array.from(
@@ -1927,7 +1901,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           });
 
           expect(eventFile).toBeTruthy();
-          // 1. Hook fires with learned transcriptPath
           yield* Effect.promise(() =>
             fs.appendFile(
               eventFile!,
@@ -1938,7 +1911,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             ),
           );
 
-          // 2. Transcript records a reasoning step (with tool_calls and thinking) + an assistant completion step
           yield* Effect.promise(() =>
             fs.appendFile(
               transcriptFile,
@@ -1968,7 +1940,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
           );
           expect(events).toHaveLength(8);
-          // Reasoning item: started -> delta -> completed
           expect(events[0]?.payload).toMatchObject({
             itemType: "reasoning",
             status: "inProgress",
@@ -1984,9 +1955,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
             title: "Reasoning",
             detail: "Analyzing problem requirements...",
           });
-          // Tool call from the transcript body surfaces as a tool lifecycle
-          // item even though no pre/post-tool hook event fired: reasoning ->
-          // run_command -> assistant. (#antigravity tool calls are displayed)
           expect(events[3]?.payload).toMatchObject({
             itemType: "command_execution",
             status: "inProgress",
@@ -2007,7 +1975,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               arguments: { CommandLine: "echo test" },
             },
           });
-          // Assistant message: started -> delta -> completed
           expect(events[5]?.payload).toMatchObject({
             itemType: "assistant_message",
             status: "inProgress",
@@ -2357,8 +2324,6 @@ describe("Antigravity background task helpers (#752)", () => {
           yield* Deferred.await(followupObserved).pipe(Effect.timeout("2 seconds"));
           expect(teardownCalls).toBe(0);
           yield* Effect.sync(() => {
-            // Anonymous starts need their transcript identities before either
-            // terminal can settle them and permit the final Stop to tear down.
             fsSync.appendFileSync(
               transcriptFile,
               [
@@ -2571,7 +2536,7 @@ describe("Antigravity background task helpers (#752)", () => {
 
         io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
         yield* io.waitUntil(() => io.counts.assistantMessages === 2);
-        // agy 1.2.2 sends post-tool only once the task finished: no re-registration.
+        // agy 1.2.2 sends post-tool only once the task finished: no re-registration
         io.hooks(
           `post-tool\t{"stepIdx":996,${toolCall},"toolOutput":${JSON.stringify(agyRunningStep(997).content)}}`,
           'stop\t{"stepIdx":1000}',
@@ -2583,7 +2548,6 @@ describe("Antigravity background task helpers (#752)", () => {
   it("ignores a late post-tool start for a task the transcript already settled", () =>
     runAgyBackgroundScenario("agy-background-late-post-tool", (io) =>
       Effect.gen(function* () {
-        // No pre-tool hook (lost or malformed), so no PendingTool carries the marker.
         io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
         io.hooks('stop	{"stepIdx":998}');
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
@@ -2634,7 +2598,6 @@ describe("Antigravity background task helpers (#752)", () => {
 
         io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
         yield* io.waitUntil(() => io.counts.assistantMessages === 2);
-        // The post-tool reports the background start without a task id.
         io.hooks(
           `post-tool	{"stepIdx":996,${toolCall},"toolOutput":"Command sent to the background"}`,
           'stop	{"stepIdx":1000}',
@@ -2668,9 +2631,6 @@ describe("Antigravity background task helpers (#752)", () => {
       Effect.gen(function* () {
         const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
         const toolCall = `"toolCall":{"name":"run_command","args":${args}}`;
-        // The command finished before the next poll: one hook batch holds the
-        // pre-tool, an id-less post-tool and the Stop, and the transcript already
-        // holds the background step, the wait message and the completion.
         io.hooks(
           `pre-tool	{"stepIdx":996,${toolCall}}`,
           `post-tool	{"stepIdx":996,${toolCall},"toolOutput":"Command sent to the background"}`,
@@ -2699,7 +2659,6 @@ describe("Antigravity background task helpers (#752)", () => {
         );
         io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-        // The backgrounded call reports first, out of issue order.
         io.hooks(
           `post-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${slow}},"toolOutput":"Command sent to the background"}`,
           `post-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${quick}},"toolOutput":"The command exited with code 0."}`,
@@ -2720,8 +2679,6 @@ describe("Antigravity background task helpers (#752)", () => {
       Effect.gen(function* () {
         const quickArgs = { CommandLine: '"adb devices"', WaitMsBeforeAsync: "5000" };
         const slowArgs = { CommandLine: `"${agyCommand}"`, WaitMsBeforeAsync: "5000" };
-        // The transcript surfaces both calls before any hook is read, so the
-        // late pre-tool hooks open no pending lifecycle.
         io.transcript(
           {
             step_index: 996,
@@ -3091,7 +3048,6 @@ describe("Antigravity background task helpers (#752)", () => {
           expect(io.counts.teardowns).toBe(0);
           expect(io.taskEvents).toEqual([]);
 
-          // Identifying the unrelated terminal still must not settle task-8.
           io.transcript(agyRunningStep(18, "session/task-18"), agyText(21, "Still waiting."));
           io.hooks('stop\t{"stepIdx":21}');
           yield* io.waitUntil(() => io.counts.assistantMessages === 2);

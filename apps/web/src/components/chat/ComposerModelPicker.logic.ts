@@ -39,8 +39,7 @@ export function isModelPickerShortcutScopeActive(): boolean {
 /** Rows beyond this index get no ⌘N hint. */
 export const MODEL_PICKER_SHORTCUT_ROW_LIMIT = 9;
 
-// Snapshot the traits a star should restore. Controls the model does not expose stay
-// `null` so applying the preset never invents an option the provider would reject.
+// controls the model doesn't expose stay null so applying the preset never invents an option the provider would reject
 export function resolveStarredTraits(
   selection: Pick<
     ComposerTraitSelection,
@@ -59,8 +58,7 @@ export function resolveStarredTraits(
   };
 }
 
-// Option patch that restores a preset's traits on its model. `selection` must be the
-// target model's trait selection so option ids and supported levels come from it.
+// Option patch that restores a preset's traits on its model. `selection` must be the target model's trait selection so option ids and supported levels come from it.
 export function buildStarredModelOptionsPatch(input: {
   provider: ProviderKind;
   selection: ComposerTraitSelection;

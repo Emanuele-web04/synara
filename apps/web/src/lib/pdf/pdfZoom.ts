@@ -1,33 +1,17 @@
-// FILE: pdfZoom.ts
-// Purpose: Pure zoom math for the PDF viewer — preset scales, fit-to-width /
-//          fit-to-page resolution against the scroll container, clamping, and
-//          percentage formatting. Kept side-effect free so it is unit-testable
-//          and shared by the toolbar + the page renderer.
-// Layer: Web PDF rendering utility
-// Exports: zoom presets, scale resolution + step helpers, percentage formatting
-
-/** Horizontal/vertical breathing room (CSS px) around a page inside the scroll area. */
 export const PDF_PAGE_MARGIN_PX = 24;
 
 export const PDF_MIN_SCALE = 0.25;
 export const PDF_MAX_SCALE = 5;
 
-/** Discrete zoom stops used by the +/- buttons and the dropdown percentages. */
 export const PDF_ZOOM_PRESETS: readonly number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 
-/**
- * How the viewer derives its render scale. `fit-width` / `fit-page` recompute on
- * container resize; `custom` pins an explicit scale chosen via the zoom controls.
- */
 export type PdfZoomMode =
   | { readonly type: "fit-width" }
   | { readonly type: "fit-page" }
   | { readonly type: "custom"; readonly scale: number };
 
 export interface PdfPageIntrinsicSize {
-  /** Page width in CSS px at scale 1 (i.e. PDF points). */
   readonly width: number;
-  /** Page height in CSS px at scale 1. */
   readonly height: number;
 }
 
@@ -59,7 +43,6 @@ function fitPageScale(page: PdfPageIntrinsicSize, container: PdfViewportSize): n
   return clampPdfScale(Math.min(fitWidthScale(page, container), usableHeight / page.height));
 }
 
-/** Resolves a zoom mode to the concrete render scale for the current layout. */
 export function resolvePdfScale(
   mode: PdfZoomMode,
   page: PdfPageIntrinsicSize | null,
@@ -74,7 +57,6 @@ export function resolvePdfScale(
   return mode.type === "fit-page" ? fitPageScale(page, container) : fitWidthScale(page, container);
 }
 
-/** Next preset strictly above `scale` (for the zoom-in button). */
 export function nextZoomScale(scale: number): number {
   for (const preset of PDF_ZOOM_PRESETS) {
     if (preset > scale + 0.001) {
@@ -84,7 +66,6 @@ export function nextZoomScale(scale: number): number {
   return clampPdfScale(PDF_MAX_SCALE);
 }
 
-/** Previous preset strictly below `scale` (for the zoom-out button). */
 export function previousZoomScale(scale: number): number {
   for (let index = PDF_ZOOM_PRESETS.length - 1; index >= 0; index -= 1) {
     const preset = PDF_ZOOM_PRESETS[index];

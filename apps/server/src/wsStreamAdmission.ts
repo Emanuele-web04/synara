@@ -15,10 +15,7 @@ export interface WsStreamSubscription {
 export interface WsStreamLease extends WsStreamSubscription {
   readonly clientId: number;
   readonly leaseId: string;
-  // Resolves when a same-key resubscribe evicts this lease. Guarded streams
-  // interrupt on it: removing the lease from the ledger alone would leave the
-  // evicted stream's live tap running until its scope happens to finalize,
-  // letting a resubscribing client hold more live streams than the caps allow.
+  // resolves when a same-key resubscribe evicts this lease — removing the lease alone would leave the evicted stream's live tap running until its scope finalizes, letting a resubscribing client exceed the caps
   readonly evicted: Deferred.Deferred<void>;
 }
 
@@ -94,13 +91,7 @@ export const makeWsStreamAdmission = (
           ledgerRef,
           (ledger): readonly [AdmissionOutcome, AdmissionLedger] => {
             const client = ledger.clients.get(clientId) ?? { leases: new Map() };
-            // Last subscription wins: a resubscribe for the same key evicts the
-            // prior lease instead of being rejected. Release timing of the old
-            // stream depends on async scope finalization (unsubscribeThread is a
-            // no-op), so rejecting duplicates made every fast resubscribe race
-            // the old stream's teardown. The evicted stream is torn down through
-            // its eviction latch below, and its own eventual release is a safe
-            // no-op because its leaseId is no longer in the ledger.
+            // last subscription wins — a resubscribe evicts the prior lease instead of being rejected; the old stream's release timing depends on async scope finalization so rejecting duplicates raced every fast resubscribe against teardown; the evicted stream tears down via its eviction latch and its eventual release is a safe no-op since its leaseId is gone
             const retainedLeases = new Map<string, WsStreamLease>();
             const evictedLeases: WsStreamLease[] = [];
             for (const [leaseId, lease] of client.leases) {
@@ -177,9 +168,7 @@ export const makeWsStreamAdmission = (
                 requestedThreadId: subscription.threadId ?? null,
               }),
             );
-            // Tear the replaced streams down now: capacity accounting already
-            // dropped them, so letting them keep streaming would break the
-            // invariant that the ledger bounds live taps.
+            // tear replaced streams down now — capacity already dropped them so letting them keep streaming would break the invariant that the ledger bounds live taps
             yield* Effect.forEach(
               outcome.evictedLeases,
               (evictedLease) => Deferred.succeed(evictedLease.evicted, undefined),
@@ -238,9 +227,7 @@ export const makeWsStreamAdmission = (
     ): Stream.Stream<A, E | WsRpcError, R> =>
       Stream.unwrap(
         Effect.acquireRelease(acquire(clientId, subscription), release).pipe(
-          // Eviction ends the stream gracefully (interruptWhen completes it on
-          // latch success); scope finalization then runs the lease's release,
-          // which is a no-op because the takeover already removed it.
+          // eviction completes the stream via interruptWhen; scope finalization then runs the lease's release — a no-op since the takeover already removed it
           Effect.map((lease) => stream.pipe(Stream.interruptWhen(Deferred.await(lease.evicted)))),
         ),
       );

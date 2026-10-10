@@ -1,8 +1,3 @@
-// FILE: appSnapAttach.ts
-// Purpose: Shared completion flow for an AppSnap capture once its target thread is known.
-// Layer: Web composer domain
-// Depends on: composer draft image intake, toast notifications, and optional bridge acknowledgement.
-
 import type { DesktopAppSnapCapture, ThreadId } from "@synara/contracts";
 
 import { insertAppSnapCaptureIntoDraft } from "~/appSnapIntake";

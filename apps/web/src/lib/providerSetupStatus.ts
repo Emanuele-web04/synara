@@ -9,8 +9,6 @@ export function providerSetupStatusLabel(input: {
   if (input.disabled) return "Disabled · enable to check setup";
   if (!input.reconciled || !input.status) return "Checking setup";
   const status = input.status;
-  // Missing CLIs and failed probes both report available=false. The server's
-  // message supplies the specific diagnosis alongside this label in Settings.
   if (!status.available) return "Unavailable";
   if (status.authStatus === "unauthenticated") return "Needs sign-in";
   if (status.status !== "ready") return "Needs attention";

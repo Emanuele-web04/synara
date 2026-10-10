@@ -1,8 +1,3 @@
-// FILE: ChatHeader.tsx
-// Purpose: Renders the chat top bar with project actions and panel toggles.
-// Layer: Chat shell header
-// Depends on: project action controls, git actions, and panel toggle callbacks
-
 import {
   type EditorId,
   type ProjectId,
@@ -93,9 +88,7 @@ interface ChatHeaderProps {
   threadTabs?: React.ReactNode;
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
-  // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project
-  // scripts, git/open-in) — the chat hasn't started yet — keeping only the sidebar
-  // cluster plus the Environment and right-panel toggles.
+  // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project scripts, git/open-in) — the chat hasn't started yet — keeping only the sidebar cluster plus the Environment and right-panel toggles.
   minimalChrome?: boolean;
   isGitRepo: boolean;
   openInTarget: string | null;
@@ -122,9 +115,7 @@ interface ChatHeaderProps {
   onToggleRightDock?: () => void;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
-  // When provided, the header collapses the
-  // Open-in-editor + git-actions + diff-toggle cluster into one Environment button that
-  // drives the Environment panel; otherwise the legacy cluster is rendered.
+  // When provided, the header collapses the Open-in-editor + git-actions + diff-toggle cluster into one Environment button that drives the Environment panel; otherwise the legacy cluster is rendered.
   environment?: EnvironmentToggleState | null;
   projectPanel?: SurfacePanelToggleState | null;
   libraryPanel?: SurfacePanelToggleState | null;
@@ -479,9 +470,7 @@ export function ChatHeader({
   const [compact, setCompact] = useState(false);
   const { additions: diffAdditions, deletions: diffDeletions, hasChanges } = diffTotals;
 
-  // Own the open-favorite editor shortcut here so it survives regardless of which editor UI
-  // is mounted (the legacy Open-in button, the Environment panel's Editor section, or
-  // neither while the panel is closed). The header is always present for a project thread.
+  // the header is always present for a project thread — owning the shortcut here survives whichever editor UI is mounted
   useOpenFavoriteEditorShortcut({
     keybindings,
     availableEditors,
@@ -515,9 +504,7 @@ export function ChatHeader({
     );
   };
 
-  // Single-chat surfaces use this as a true right-dock visibility toggle. Hosts
-  // without a multi-pane dock (split/editor surfaces) keep the legacy diff-only
-  // behavior until they gain their own launcher surface.
+  // Single-chat surfaces use this as a true right-dock visibility toggle. Hosts without a multi-pane dock (split/editor surfaces) keep the legacy diff-only behavior until they gain their own launcher surface.
   const togglesRightDock = onToggleRightDock !== undefined;
   const hasActionControls =
     !minimalChrome && (!hideHandoffControls || activeProjectScripts !== undefined);

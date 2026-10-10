@@ -3,7 +3,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  // No cascading parent FK: deletion must leave an explicit unavailable result.
+  // no cascading parent FK — deletion must leave an explicit unavailable result
   yield* sql`CREATE TABLE IF NOT EXISTS agent_gateway_completions (
     child_thread_id TEXT PRIMARY KEY,
     creator_thread_id TEXT NOT NULL,

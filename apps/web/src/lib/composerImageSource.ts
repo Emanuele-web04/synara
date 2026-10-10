@@ -1,7 +1,3 @@
-// FILE: composerImageSource.ts
-// Purpose: Describes provenance shown on composer image attachments.
-// Layer: Web composer domain
-
 export interface ComposerAppSnapSource {
   kind: "appsnap";
   captureId: string;
@@ -53,9 +49,7 @@ export function normalizeComposerImageSource(value: unknown): ComposerImageSourc
   };
 }
 
-// App icons are cached in IndexedDB by bundle identifier. Keeping the inline
-// PNG out of the persisted composer state prevents repeated captures of the
-// same app from consuming the much smaller localStorage quota.
+// app icons are cached in IndexedDB by bundle id; keeping the inline PNG out of persisted composer state prevents repeat captures eating the smaller localStorage quota
 export function toPersistedComposerImageSource(
   value: unknown,
 ): PersistedComposerAppSnapSource | undefined {

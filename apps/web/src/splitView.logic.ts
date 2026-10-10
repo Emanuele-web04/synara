@@ -1,8 +1,3 @@
-// FILE: splitView.logic.ts
-// Purpose: Pure helpers for the split-view pane tree (find/replace/collapse leaves, depth caps, panel resets).
-// Layer: UI state helpers
-// Exports: tree traversal/mutation utilities and migration helpers consumed by the store and route surfaces
-
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import type {
   LeafPane,
@@ -12,8 +7,6 @@ import type {
   SplitNode,
   SplitViewPanePanelState,
 } from "./splitViewStore";
-
-// --- pane lookup ---
 
 export function findPaneById(root: Pane, paneId: PaneId): Pane | null {
   if (root.id === paneId) {
@@ -35,7 +28,6 @@ export function findSplitNodeById(root: Pane, paneId: PaneId): SplitNode | null 
   return found?.kind === "split" ? found : null;
 }
 
-// Returns the SplitNode that directly contains the pane with paneId, or null if paneId is the root.
 export function findParentSplitNode(root: Pane, paneId: PaneId): SplitNode | null {
   if (root.kind === "leaf") {
     return null;
@@ -141,8 +133,7 @@ export interface RemoveLeafResult {
   removedLeafIds: PaneId[];
 }
 
-// Walks the tree, removing every leaf whose threadId matches. SplitNodes whose subtree
-// loses every leaf collapse to null; nodes with one surviving subtree collapse to that subtree.
+// a SplitNode whose subtree loses every leaf collapses to null; one surviving subtree collapses to that subtree
 export function removeLeafByThreadId(root: Pane, threadId: ThreadId): RemoveLeafResult {
   if (root.kind === "leaf") {
     if (root.threadId === threadId) {
@@ -174,8 +165,6 @@ export function removeLeafByThreadId(root: Pane, threadId: ThreadId): RemoveLeaf
   return { nextRoot: null, removedLeafIds };
 }
 
-// Removes exactly one leaf by pane id. SplitNodes whose subtree loses every leaf collapse to null;
-// nodes with one surviving subtree collapse to that subtree so the remaining panes resize naturally.
 export function removeLeafByPaneId(root: Pane, paneId: PaneId): RemoveLeafResult {
   if (root.kind === "leaf") {
     if (root.id === paneId) {
@@ -207,11 +196,7 @@ export function removeLeafByPaneId(root: Pane, paneId: PaneId): RemoveLeafResult
   return { nextRoot: null, removedLeafIds };
 }
 
-// --- structural rules ---
-
-// Returns true if a target leaf can be subdivided in the requested direction without exceeding
-// the depth-cap of 2 (root SplitNode + at most one perpendicular SplitNode under each side).
-// When parentDirection is null (root-level leaf), any direction is allowed.
+// depth-cap 2: root SplitNode + at most one perpendicular SplitNode per side; a root-level leaf allows any direction
 export function canSubdivide(
   parentDirection: SplitDirection | null,
   requestedDirection: SplitDirection,
@@ -238,13 +223,10 @@ export function canSubdividePane(
   return canSubdivide(parent?.direction ?? null, requestedDirection);
 }
 
-// Returns the first leaf id encountered in DFS order; falls back to root id when there are no leaves.
 export function resolveDefaultFocusLeafId(root: Pane): PaneId {
   const leaves = collectLeaves(root);
   return leaves[0]?.id ?? root.id;
 }
-
-// --- legacy split-view migration ---
 
 export interface LegacySplitViewLike {
   id: string;

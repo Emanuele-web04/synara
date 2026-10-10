@@ -1,8 +1,3 @@
-// FILE: localServerMonitor.test.ts
-// Purpose: Covers localhost listener parsing, dev-server filtering, and page-title enrichment.
-// Layer: Server unit tests for localServerMonitor.ts.
-// Depends on: Vitest and exported local server monitor helpers.
-
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -132,7 +127,7 @@ describe("localServerMonitor", () => {
     };
     expect(isIgnoredLocalServerProcess(discordRenderer)).toBe(true);
 
-    // Filtered by the helper name alone, even without the full Chromium arg list.
+    // filtered by helper name alone, even without the full Chromium arg list
     expect(
       isIgnoredLocalServerProcess({
         command: "Slack Helper (GPU)",
@@ -141,7 +136,7 @@ describe("localServerMonitor", () => {
       }),
     ).toBe(true);
 
-    // A real dev server on the same port range stays visible.
+    // a real dev server on the same port range stays visible
     expect(
       detectDevServerKindFromText({
         command: "node",

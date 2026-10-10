@@ -23,9 +23,7 @@ layer("038_ReconcileLegacySidechatSource", (it) => {
         VALUES (33, 'BackfillMissingLiveThreadProjects')
       `;
 
-      // The lineage reconciler spots the foreign row at ID 33 before the
-      // migrator runs, so Synara's 33 is replayed in the same pass instead of
-      // being skipped by the max-ID gate.
+      // the reconciler spots the foreign row at 33 before the migrator — our 33 replays in the same pass instead of being skipped
       yield* runMigrations({ toMigrationInclusive: 37 });
 
       const afterColumns = yield* projectionThreadsColumnNames(sql);

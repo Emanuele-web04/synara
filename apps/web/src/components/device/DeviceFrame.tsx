@@ -1,20 +1,4 @@
-// FILE: DeviceFrame.tsx
-// Purpose: SVG device chassis that frames every device-pane state, with working hardware buttons.
-// Layer: Device pane presentation primitive
-// Exports: DeviceScreen, DeviceFrame, DeviceSilhouette, deviceKindFor, screenGeometry
-// Depends on: device contracts for the button names.
-//
-// Drawn rather than composited from Apple's bezel artwork: those images are
-// licensed for marketing use, must be used unmodified, and explicitly may not
-// be turned into buttons — which is exactly what the side nubs below are — and
-// a fixed image is one device, while this pane frames anything from an iPhone
-// to a 13" iPad. The frame is an SVG of concentric squircle bands sized from
-// the device's own pixel dimensions, so one drawing fits every aspect.
-//
-// The chassis is also the pane's container rather than a decoration around the
-// video: setup checklists, boot spinners, and the live canvas all render on the
-// screen, so the pane reads as one object instead of a rectangle with chrome
-// stacked above and below it.
+// drawn rather than composited from Apple's bezel artwork: those images are licensed for marketing only and may not become buttons; one SVG of concentric squircle bands sized from device pixels fits every aspect — the chassis is also the pane's container (setup/boot/live canvas all render on the screen)
 
 import type { DeviceFamily, DeviceHardwareButton } from "@synara/contracts";
 import { memo, useId, useMemo, type CSSProperties, type ReactNode } from "react";
@@ -435,10 +419,7 @@ export const DeviceScreen = memo(function DeviceScreen({
   return (
     <div
       className={cn(
-        // No overflow clip: the chassis shadow reaches ~32px past the device,
-        // and clipping it left a hard horizontal cut where the control rail
-        // began. Padding keeps the device off the pane edges, and the sizing
-        // below already stops the frame itself from escaping the box.
+        // no overflow clip: the chassis shadow reaches ~32px past the device and clipping left a hard cut where the rail began
         "flex h-full min-h-0 items-center justify-center p-6 [container-type:size]",
         className,
       )}
@@ -446,9 +427,7 @@ export const DeviceScreen = memo(function DeviceScreen({
       <div
         className="relative"
         style={{
-          // Turned, the device's height runs across the pane, so the fit is
-          // measured against the transposed axis; without this the rotated
-          // device shrinks to whatever its untumbled height allowed.
+          // turned, the device's height runs across the pane — the fit is measured against the transposed axis or the rotated device shrinks to its untumbled height
           height: landscape
             ? `min(100cqw, calc(100cqh / ${geo.aspect}))`
             : `min(100cqh, calc(100cqw / ${geo.aspect}))`,
@@ -506,9 +485,7 @@ export const DeviceScreen = memo(function DeviceScreen({
                       style={style}
                     />
                   ) : (
-                    // Not a button: it has nothing to activate, so it takes no
-                    // tab stop and offers no press affordance — only the
-                    // tooltip that says why.
+                    // not a button: nothing to activate, so no tab stop, no press affordance — only the tooltip explaining why
                     <span
                       aria-label={action.label}
                       className="absolute cursor-default rounded-full"

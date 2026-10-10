@@ -1,8 +1,7 @@
 import { Schema } from "effect";
 import { MessageId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas";
 
-// These questions are transcript content. They have no pending JSON-RPC reply
-// and their answers are ordinary user messages, even after the turn completes.
+// transcript content — no pending JSON-RPC reply; answers are ordinary user messages even after the turn completes
 export const AsyncUserInputQuestion = Schema.Struct({
   title: TrimmedNonEmptyString,
   options: Schema.optional(Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1))),
@@ -21,7 +20,7 @@ export type AsyncUserInputResponse = typeof AsyncUserInputResponse.Type;
 export const AsyncUserInput = Schema.Struct({
   questions: AsyncUserInputQuestions,
   response: Schema.optional(AsyncUserInputResponse),
-  // Advances on answers and history removal, independently of message timestamps.
+  // advances on answers and history removal, independent of message timestamps
   responseSequence: Schema.optional(NonNegativeInt),
 });
 export type AsyncUserInput = typeof AsyncUserInput.Type;

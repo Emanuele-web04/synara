@@ -1,17 +1,9 @@
-// FILE: threadHierarchy.ts
-// Purpose: Parent/child traversal over subagent thread linkage shared by server and web.
-// Exports: collectSubagentDescendants
-
 interface HierarchyThread {
   readonly id: string;
   readonly parentThreadId?: string | null | undefined;
 }
 
-// Collects every thread reachable from `rootThreadId` through `parentThreadId`
-// links, breadth-first, excluding the root itself. Subagent threads are only
-// reachable through their parent thread, so lifecycle changes on a parent
-// (archive, restore, delete) apply to this whole subtree. Visited tracking keeps
-// corrupted self- or cyclic linkage from hanging the caller.
+// subagent threads are only reachable through their parent — lifecycle changes apply to the whole subtree; visited tracking keeps corrupted cyclic linkage from hanging the caller
 export function collectSubagentDescendants<T extends HierarchyThread>(
   threads: readonly T[],
   rootThreadId: T["id"],

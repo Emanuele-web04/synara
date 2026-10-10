@@ -1,7 +1,3 @@
-// FILE: devServerManager.test.ts
-// Purpose: Covers project dev-server registry helpers without starting PTYs.
-// Layer: Server unit tests for DevServerManager support logic.
-
 import { describe, expect, it } from "vitest";
 
 import { ProjectId, type ProjectDevServer, type ServerLocalServerProcess } from "@synara/contracts";

@@ -14,7 +14,6 @@ const METADATA_CONCURRENCY = 4;
 
 interface ClaudeProjectImportInput {
   readonly configDir?: string;
-  /** The injected reader must enumerate the same configDir; used by isolated fixtures. */
   readonly listSessions?: () => Promise<ReadonlyArray<SDKSessionInfo>>;
 }
 
@@ -108,7 +107,6 @@ async function* readTranscriptEntries(file: string, maxBytes?: number) {
       if (entry) yield entry;
     }
   } catch (error) {
-    // A source can disappear while the user is choosing projects.
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   } finally {
     stream.destroy();
@@ -116,8 +114,7 @@ async function* readTranscriptEntries(file: string, maxBytes?: number) {
 }
 
 async function readTranscriptMetadata(file: string): Promise<TranscriptMetadata> {
-  // The SDK's 64 KiB head read misses cwd after a large first user message.
-  // Bound both the scan and individual records while retaining only metadata.
+  // the SDK's 64KiB head read misses cwd after a large first message — bound both the scan and individual records
   let cwd: string | undefined;
   let createdAt: string | undefined;
   for await (const entry of readTranscriptEntries(file, MAX_METADATA_BYTES)) {
@@ -143,7 +140,6 @@ export async function findClaudeSessionTranscriptPath(input: {
   return files.get(input.sessionId);
 }
 
-/** Read dates from a frozen native copy; the SDK supplies its selected message chain. */
 export async function readClaudeImportMessageDates(input: {
   readonly sessionId: string;
   readonly configDir?: string;

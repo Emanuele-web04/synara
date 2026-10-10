@@ -1,14 +1,9 @@
-// FILE: runtimeDependencySmoke.ts
-// Purpose: Exercises lazy runtime imports inside the packaged app without starting provider sessions.
-// Layer: Release verification entrypoint
-
 import { strict as assert } from "node:assert";
 
 import { loadAcpSdk } from "./provider/acp/AcpSdk.ts";
 import { loadClaudeAgentSdk } from "./provider/claudeAgentSdk.ts";
 
-// Keep these imports external, just like the server. Running this entrypoint
-// from app.asar exposes missing peers that the development install can hide.
+// keep these imports external like the server — running from app.asar exposes missing peers the dev install can hide
 await loadAcpSdk();
 await loadClaudeAgentSdk();
 await import("@earendil-works/pi-coding-agent");

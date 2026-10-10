@@ -13,7 +13,7 @@ describe("frame socket client messages", () => {
   });
 
   it("ignores anything that is not a resync request rather than erroring", () => {
-    // A stray log line or a future message type must never kill a stream.
+    // a stray log line or future message type must never kill a stream
     expect(decodeResyncRequest("hello")).toBeNull();
     expect(decodeResyncRequest("{ not json")).toBeNull();
     expect(decodeResyncRequest(JSON.stringify({ type: "something.else" }))).toBeNull();
@@ -44,7 +44,7 @@ describe("frame socket sink", () => {
 
     sink.send(new Uint8Array(500));
 
-    // The transport reads this to decide whether the client is keeping up.
+    // the transport reads this to decide whether the client is keeping up
     expect(sink.bufferedAmount()).toBe(500);
     settle?.();
     await Promise.resolve();
@@ -62,8 +62,7 @@ describe("frame socket sink", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    // A rejected write must not leave phantom bytes that permanently mark the
-    // subscriber as slow.
+    // a rejected write must not leave phantom bytes permanently marking the subscriber as slow
     expect(sink.bufferedAmount()).toBe(0);
   });
 

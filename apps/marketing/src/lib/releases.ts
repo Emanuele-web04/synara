@@ -1,11 +1,4 @@
-// FILE: releases.ts
-// Purpose: Fetches the latest GitHub release and maps its assets to a per-platform
-//          download map (macOS arm64/x64, Windows, Linux) for the /install page.
-// Layer: Server utility
-// Depends on: GitHub Releases API, optional GITHUB_TOKEN
-// Note: The repo was renamed from its previous identity to synara. We hit the
-//       canonical "synara" slug
-//       directly so we don't depend on the API following GitHub's 301 redirect.
+// the repo was renamed — hit the canonical synara slug directly instead of depending on the API following GitHub's 301
 
 import "server-only";
 
@@ -17,7 +10,6 @@ const LATEST_RELEASE_API_URL = `https://api.github.com/repos/${REPO}/releases/la
 export const RELEASES_URL = `https://github.com/${REPO}/releases`;
 
 export type ReleaseDownloads = {
-  // Tag for the latest release (e.g. "v0.1.0"), or null when unknown.
   version: string | null;
   // Page that lists every asset — used as the universal fallback target.
   releasesUrl: string;
@@ -53,8 +45,7 @@ const FALLBACK: ReleaseDownloads = {
   linux: RELEASES_URL,
 };
 
-// Uses the checked-in snapshot before the generic releases page so installer
-// links remain direct even when GitHub's API blocks the production server.
+// the checked-in snapshot beats the generic releases page so installer links stay direct when GitHub's API blocks the production server
 function getFallbackDownloads(): ReleaseDownloads {
   return STORED_FALLBACK.version &&
     STORED_FALLBACK.mac?.arm64 &&
@@ -95,7 +86,6 @@ export async function getReleaseDownloads(): Promise<ReleaseDownloads> {
     const assets = release.assets ?? [];
     const releasesUrl = release.html_url ?? RELEASES_URL;
 
-    // First asset whose name matches wins; fall back to the listing page.
     const urlFor = (pattern: RegExp): string =>
       assets.find((asset) => asset.name && pattern.test(asset.name))?.browser_download_url ??
       releasesUrl;

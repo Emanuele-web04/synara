@@ -1,7 +1,3 @@
-// FILE: production-assets.ts
-// Purpose: Prune unreferenced production icons while retaining both visual variants.
-// Layer: Web build helper (not imported by the client)
-
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -29,8 +25,6 @@ export async function pruneProductionIcons(
   outputDirectory: string,
   sourceRoots: readonly string[],
 ): Promise<void> {
-  // Include shared contracts: persisted choices (for example Space icons) are
-  // dynamic at render time, but their allowed names are literals in the schema.
   const required = new Set<string>();
   const literal = /["'`]([a-z0-9][a-z0-9-]*)(?:\.svg)?["'`]/g;
   for (const root of sourceRoots) {
@@ -47,7 +41,6 @@ export async function pruneProductionIcons(
       .filter((file) => file.endsWith(".svg"))
       .map((file) => path.basename(file, ".svg"));
     const retained = new Set(available.filter((name) => required.has(name)));
-    // Fail conservatively when the source scan cannot identify this set.
     if (retained.size === 0) continue;
     let removed = 0;
     for (const name of available) {

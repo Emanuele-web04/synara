@@ -1,7 +1,3 @@
-// FILE: verify-release-source-provenance.ts
-// Purpose: Fail closed unless release version/ref/commit/lockfile identify one committed source.
-// Layer: Release preflight
-
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";

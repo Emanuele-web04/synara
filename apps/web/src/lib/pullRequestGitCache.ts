@@ -1,5 +1,3 @@
-// Synchronizes Git-backed PR badges and Environment snapshots with PR actions.
-// Remote identity reaches every cached worktree without touching unrelated repositories.
 import type {
   GitPullRequestSnapshotResult,
   GitStatusResult,
@@ -56,8 +54,7 @@ export function pullRequestGitQueryFilters(
     queryKey: ["git"],
     predicate: (query) => {
       const key = query.queryKey;
-      // Include the existing project-root PR invalidation in the same pass, avoiding
-      // duplicate refetches when the open Environment belongs to that root.
+      // Include the existing project-root PR invalidation in the same pass, avoiding duplicate refetches when the open Environment belongs to that root.
       if (workspaceRoot !== undefined && key[1] === "pull-request" && key[2] === workspaceRoot) {
         return true;
       }

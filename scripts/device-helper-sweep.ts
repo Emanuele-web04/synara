@@ -1,15 +1,5 @@
-// FILE: device-helper-sweep.ts
-// Purpose: Run the device helper smoke check against every locally installed Xcode.
-// Layer: Release/CI smoke check (macOS only; not part of normal CI).
-// Depends on: scripts/device-helper-smoke.ts.
-//
-// The helper dlopen's private CoreSimulator/SimulatorKit symbols, which move
-// between Xcode releases. Testing against the one toolchain a developer happens
-// to have selected is how a broken symbol reaches users; this sweeps every
-// Xcode on the machine by pointing DEVELOPER_DIR at each in turn.
-//
-// Probe-only by default: compile plus preflight is the symbol tripwire and
-// needs no simulator runtime. Pass --full to boot a simulator per toolchain.
+// private CoreSimulator/SimulatorKit symbols move between Xcode releases; sweeping every Xcode via DEVELOPER_DIR catches what one toolchain misses
+// probe-only by default (compile+preflight is the symbol tripwire); --full boots a simulator per toolchain
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
@@ -39,14 +29,7 @@ function log(message: string): void {
   console.log(`[device-sweep] ${message}`);
 }
 
-/**
- * Every Xcode this machine can build against.
- *
- * `/Applications/Xcode*.app` is the conventional install location and covers
- * the common case of several versions side by side. `xcodes installed` is
- * consulted when present because it is the usual way people keep more than one
- * Xcode around, and it can report installs outside /Applications.
- */
+/** every Xcode this machine can build against: /Applications/Xcode*.app plus whatever `xcodes installed` reports */
 function discoverToolchains(): Toolchain[] {
   const developerDirs = new Set<string>();
 
@@ -62,15 +45,14 @@ function discoverToolchains(): Toolchain[] {
       stdio: ["ignore", "pipe", "ignore"],
     });
     for (const line of listed.split("\n")) {
-      // Lines look like: `26.2 (17C52)  /Applications/Xcode.app`
+      // lines look like: `26.2 (17C52)  /Applications/Xcode.app`
       const match = /(\/.*\.app)\s*$/u.exec(line.trim());
       if (!match) continue;
       const developerDir = join(match[1]!, "Contents/Developer");
       if (existsSync(developerDir)) developerDirs.add(developerDir);
     }
   } catch {
-    // No xcodes CLI, or it failed: the /Applications scan already covers the
-    // standard layout, so this is not worth reporting as an error.
+    // no xcodes CLI or it failed — the /Applications scan already covers the standard layout
   }
 
   return [...developerDirs].sort().map((developerDir) => ({
@@ -99,8 +81,7 @@ function runSmoke(toolchain: Toolchain, probeOnly: boolean): SweepResult {
     cwd: repoRoot,
     encoding: "utf8",
     env: { ...process.env, DEVELOPER_DIR: toolchain.developerDir },
-    // Inherited so a long full run shows progress instead of going silent; the
-    // per-toolchain verdict comes from the exit status rather than the output.
+    // stdout inherited so a long run shows progress; the verdict comes from exit status
     stdio: ["ignore", "inherit", "inherit"],
     timeout: probeOnly ? 10 * 60_000 : 30 * 60_000,
   });

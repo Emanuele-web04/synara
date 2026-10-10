@@ -1,4 +1,4 @@
-// Upgrade coverage: preserve source history and capture only recoverable usage.
+// preserve source history; capture only recoverable usage
 import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";

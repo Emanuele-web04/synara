@@ -1,6 +1,3 @@
-// FILE: desktopIdentity.ts
-// Purpose: Defines the canonical desktop application identity across packaging and runtime.
-
 export const SYNARA_DESKTOP_SCHEME = "synara";
 export const SYNARA_DESKTOP_ORIGIN = `${SYNARA_DESKTOP_SCHEME}://app`;
 export const SYNARA_DESKTOP_ENTRY_URL = `${SYNARA_DESKTOP_ORIGIN}/index.html`;

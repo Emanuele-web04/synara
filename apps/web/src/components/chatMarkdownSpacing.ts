@@ -1,15 +1,4 @@
-// FILE: chatMarkdownSpacing.ts
-// Purpose: Single source of truth for ChatMarkdown block vertical-rhythm overrides on
-// compact (non-body) surfaces. ChatMarkdown owns the block element set (p / ul / ol / li /
-// pre); centralizing these density variants stops the selector set and the first/last
-// paragraph edge reset from drifting across the recap panel, queued follow-up previews,
-// and any future compact surface.
-// Layer: Web chat presentation styling
-// Exports: COMPACT_CHAT_MARKDOWN_COZY_CLASS_NAME, COMPACT_CHAT_MARKDOWN_TIGHT_CLASS_NAME
-
-// Tailwind only emits an arbitrary-variant utility when the full token (e.g. `[&_p]:my-1.5`)
-// appears as a literal in source, so each density spells out its values instead of building
-// them from interpolated parts — a value-parameterized helper would silently drop the CSS.
+// Tailwind only emits arbitrary-variant utilities written as full literals, so each density spells out values — a parameterized helper would silently drop the CSS
 
 /** Cozy rhythm: roomier blocks for short read-only bodies (e.g. the environment recap). */
 export const COMPACT_CHAT_MARKDOWN_COZY_CLASS_NAME = [

@@ -85,15 +85,10 @@ export function negotiateWsCompatibility(
   });
 }
 
-// The HTTP negotiate endpoint carries the same input as bootstrap.negotiate,
-// flattened into query params so the request stays a cacheable-free plain GET
-// with no body to decode before the compatibility gate runs.
-// Decimal digits only. `Number()` would accept "0x1" and "1e0", which the RPC
-// path's Schema.Int rejects — the two transports must decode identically or
-// "one negotiation, two transports" is only true for well-formed clients.
+// the HTTP negotiate endpoint flattens the input into query params so it stays a body-free plain GET before the compatibility gate runs
+// decimal digits only — Number() would accept "0x1"/"1e0" which Schema.Int rejects; the two transports must decode identically
 function parseDecimalInteger(raw: string | null): number | null {
-  // No trimming: surrounding whitespace (including a `+` that decodes to a
-  // space) is not a well-formed integer on either transport.
+  // no trimming — surrounding whitespace (incl. a `+` decoded to space) isn't a well-formed integer on either transport
   if (raw === null || !/^\d+$/.test(raw)) return null;
   const parsed = Number(raw);
   return Number.isSafeInteger(parsed) ? parsed : null;

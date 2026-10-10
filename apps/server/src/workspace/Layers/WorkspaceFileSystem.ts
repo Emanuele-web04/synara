@@ -139,8 +139,7 @@ async function writeFileAtomically(
     null;
 
   try {
-    // O_EXCL prevents a pre-existing link at the temporary name. O_NOFOLLOW is
-    // an additional POSIX safeguard; Windows does not implement it reliably.
+    // O_EXCL prevents a pre-existing link at the temp name; O_NOFOLLOW is a POSIX extra Windows doesn't implement reliably
     const noFollow = process.platform === "win32" ? 0 : NodeFsConstants.O_NOFOLLOW;
     handle = await NodeFs.open(
       temporaryPath,
@@ -165,9 +164,7 @@ async function writeFileAtomically(
     }
     temporaryIdentity = { dev: temporaryHandleStat.dev, ino: temporaryHandleStat.ino };
     if (targetStat !== null) {
-      // open(2) always filters its requested mode through the process umask.
-      // Replacement writes must restore the existing file's exact permission
-      // bits through the already-validated descriptor before it is renamed.
+      // open(2) filters the requested mode through umask — replacement writes must restore exact permission bits before rename
       await handle.chmod(mode);
     }
     await handle.writeFile(contents);
@@ -175,11 +172,7 @@ async function writeFileAtomically(
     await handle.close();
     handle = undefined;
 
-    // Node does not expose portable openat/renameat APIs. Re-check the parent
-    // immediately before rename to narrow the remaining directory-swap race.
-    // Eliminating that final path-based rename race would require a native
-    // descriptor-relative rename primitive; do not weaken these checks as a
-    // substitute for one.
+    // no portable openat/renameat — re-check the parent right before rename to narrow the dir-swap race; don't weaken this as a substitute
     const realParent = await resolveRealPathWithinRoot(realRoot, NodePath.dirname(filePath));
     const realTemporaryPathBeforeRename = await resolveRealPathWithinRoot(realRoot, temporaryPath);
     const temporaryPathStatBeforeRename = await NodeFs.stat(temporaryPath);
@@ -232,10 +225,7 @@ async function writeFileAtomically(
   }
 }
 
-// Outcome of canonicalizing a requested path against the workspace root:
-// "resolved" means the file exists inside the root, "outside" means it exists
-// but escapes the root (rejected), and "missing" means it does not exist (so a
-// bare/partial reference can fall back to the workspace index).
+// resolved = inside root; outside = exists but escapes (rejected); missing = not found (index fallback)
 type RealPathResolution =
   | { readonly status: "resolved"; readonly realPath: string }
   | { readonly status: "outside" }
@@ -246,9 +236,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
   const workspacePaths = yield* WorkspacePaths;
   const workspaceEntries = yield* WorkspaceEntries;
 
-  // Canonicalize a workspace-relative path and classify the outcome. ENOENT is
-  // surfaced as "missing" (not a hard failure) so callers can attempt the
-  // bare/partial-reference fallback; other realpath failures still error.
+  // ENOENT surfaces as "missing" so callers can try the bare/partial fallback; other realpath failures still error
   const resolveInRootRealPath = (relativePath: string, absolutePath: string, cwd: string) =>
     Effect.tryPromise({
       try: async (): Promise<RealPathResolution> => {
@@ -327,11 +315,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           input.cwd,
         );
 
-        // References often carry only a file's basename or a partial tail (e.g.
-        // `chatReferences.test.ts` for `apps/web/src/lib/chatReferences.test.ts`),
-        // which resolves to a non-existent path under the root. Fall back to a
-        // unique match in the tracked workspace index so the in-app viewer can
-        // still open it; ambiguous names stay unresolved and surface the error.
+        // refs often carry only a basename/tail — fall back to a unique match in the tracked index; ambiguous names stay unresolved
         if (resolution.status === "missing") {
           const fallbackRelativePath = yield* workspaceEntries
             .resolveFileBySuffix({ cwd: input.cwd, relativePath: input.relativePath })
@@ -381,8 +365,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         realPath = resolution.realPath;
       }
 
-      // The requested path (not its resolved target) decides whether the file
-      // is a symlink, so editors can refuse to write through the link.
+      // the requested path (not its resolved target) decides symlink-ness so editors can refuse to write through links
       const symlink = yield* Effect.promise(() =>
         NodeFs.lstat(target.absolutePath).then(
           (stat) => stat.isSymbolicLink(),
@@ -390,8 +373,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         ),
       );
 
-      // Stat through the open handle so the size and the bytes come from the
-      // same file even if the path is swapped between the two calls.
+      // stat through the open handle so size and bytes come from the same file even if the path is swapped
       const { bytes, fileSize } = yield* Effect.tryPromise({
         try: async () => {
           const handle = await NodeFs.open(realPath, "r");
@@ -479,8 +461,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
     });
 
     const guardedWrite = input.expectedVersion !== undefined;
-    // Any save that knows the file's format re-encodes with it, so an
-    // unguarded overwrite keeps CRLF/BOM files in their original shape too.
+    // saves that know the format re-encode, so unguarded overwrite keeps CRLF/BOM shape
     const textFormat =
       input.encoding !== undefined && input.lineEnding !== undefined && input.lineEnding !== "mixed"
         ? { encoding: input.encoding, lineEnding: input.lineEnding }
@@ -524,8 +505,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           return "outside" as const;
         }
 
-        // Re-resolve after parent creation so existing targets and any links
-        // introduced concurrently are canonicalized before replacement.
+        // re-resolve after parent creation so concurrently introduced links get canonicalized
         const finalRealTarget = await resolveRealPathForCreateWithinRoot(
           input.cwd,
           target.absolutePath,

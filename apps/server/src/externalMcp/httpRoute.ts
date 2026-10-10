@@ -25,9 +25,7 @@ import {
 } from "./runtimeProof.ts";
 
 export const EXTERNAL_MCP_PATH = "/mcp/external";
-// A maximal 100k-character prompt still fits when every character needs JSON
-// escaping. Larger JSON-RPC batches receive 413 instead of consuming memory
-// without bound; only a small number of authenticated bodies may buffer at once.
+// a 100k-char prompt still fits fully escaped; larger batches get 413 instead of unbounded buffering
 export const EXTERNAL_MCP_MAX_BODY_BYTES = 1024 * 1024;
 export const EXTERNAL_MCP_BODY_READ_TIMEOUT_MS = 10_000;
 const EXTERNAL_MCP_BODY_BUFFER_SLOTS = 4;

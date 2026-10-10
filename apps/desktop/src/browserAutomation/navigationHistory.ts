@@ -53,10 +53,6 @@ function missingHistoryEntry(runtime: BrowserAutomationVisibleRuntime): never {
   });
 }
 
-/**
- * Drive the exact renderer tab's Chromium history. The host keeps this call
- * under the same per-tab lock and human-control guard as all other actions.
- */
 export const navigateBrowserHistory = async (
   runtime: BrowserAutomationVisibleRuntime,
   direction: BrowserHistoryDirection,
@@ -67,10 +63,6 @@ export const navigateBrowserHistory = async (
   const tracker = await getBrowserNavigationTracker(runtime, signal);
   const mark = tracker.mark();
   if (direction === "reload") {
-    // Electron acknowledges CDP Page.reload on an embedded <webview> without
-    // reliably initiating a navigation. Drive the exact adopted guest through
-    // WebContents instead; the shared CDP tracker below remains the source of
-    // truth for commit/load/network-idle confirmation and redirect metadata.
     if ("ignoreCache" in input && input.ignoreCache) runtime.webContents.reloadIgnoringCache();
     else runtime.webContents.reload();
   } else {

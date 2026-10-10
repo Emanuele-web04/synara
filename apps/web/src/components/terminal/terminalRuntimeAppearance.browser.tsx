@@ -1,7 +1,3 @@
-// FILE: terminalRuntimeAppearance.browser.ts
-// Purpose: Verifies terminal theme colors resolve from live browser CSS variables.
-// Layer: Browser rendering tests for terminal runtime appearance
-
 import { afterEach, describe, expect, it } from "vitest";
 
 import {

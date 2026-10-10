@@ -1,8 +1,3 @@
-// FILE: voiceUploadAdmission.ts
-// Purpose: Bounds voice uploads before request bodies are buffered in server memory.
-// Layer: Server transport utility
-// Exports: VoiceUploadAdmissionGate, voiceUploadAdmissionGate
-
 import { Effect } from "effect";
 
 const MAX_CONCURRENT_VOICE_UPLOADS = 2;

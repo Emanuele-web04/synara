@@ -102,7 +102,7 @@ export const ProviderForkThreadInput = Schema.Struct({
   sourceThreadId: ThreadId,
   threadId: ThreadId,
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
-  /** External imports must pin a completed native transcript boundary. */
+  /** external imports must pin a completed native transcript boundary */
   requireCompletedSource: Schema.optional(Schema.Boolean),
   providerInstanceId: Schema.optional(ProviderInstanceId),
   sourceResumeCursor: Schema.optional(Schema.Unknown),

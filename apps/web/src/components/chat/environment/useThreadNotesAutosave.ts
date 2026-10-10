@@ -1,8 +1,3 @@
-// FILE: useThreadNotesAutosave.ts
-// Purpose: Own the notepad debounce/save/reconcile lifecycle for one thread instance.
-// Layer: Environment panel hook
-// Exports: useThreadNotesAutosave
-
 import { useCallback, useEffect, useRef, useState, type ChangeEventHandler } from "react";
 import type { ThreadId } from "@synara/contracts";
 
@@ -82,10 +77,7 @@ export function useThreadNotesAutosave({
     }
     saveInFlightRef.current = true;
     let saved = false;
-    // Promise chain instead of async/try-finally: React Compiler does not yet
-    // support try/finally, and it would skip optimizing this whole hook. The
-    // .finally keeps the exact same run-always semantics, including rejection
-    // propagation to the caller's .catch.
+    // promise chain instead of async/try-finally: React Compiler doesn't support try/finally and would skip optimizing the hook
     return Promise.resolve(onChangeRef.current(threadIdRef.current, next))
       .then(() => {
         saved = true;

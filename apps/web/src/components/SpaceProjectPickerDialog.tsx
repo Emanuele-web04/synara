@@ -1,6 +1,3 @@
-// FILE: SpaceProjectPickerDialog.tsx
-// Purpose: Searchable bulk assignment flow for populating an empty Space.
-
 import type { ProjectId } from "@synara/contracts";
 import { useEffect, useMemo, useState } from "react";
 

@@ -1,7 +1,3 @@
-// FILE: useDesktopAppIcon.ts
-// Purpose: Keep the persisted app-icon preference applied to the native desktop shell.
-// Layer: Web-to-desktop lifecycle bridge
-
 import { useEffect, useRef } from "react";
 
 import type { DesktopAppIcon } from "@synara/contracts";

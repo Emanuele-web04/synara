@@ -13,9 +13,7 @@ describe("canApplyThreadSnapshot", () => {
   });
 
   it("drops a snapshot whose lease was released while it was in flight", () => {
-    // Retention eviction refreshes a thread, then its lease drops before the
-    // refreshed snapshot lands. Applying it would restore detail that neither a
-    // lease nor a retention entry owns, so nothing could ever free it again.
+    // Retention eviction refreshes a thread, then its lease drops before the refreshed snapshot lands. Applying it would restore detail that neither a lease nor a retention entry owns, so nothing could ever free it again.
     expect(
       canApplyThreadSnapshot({ threadId: threadId("released"), leasedThreadIds: new Set() }),
     ).toBe(false);
@@ -33,8 +31,7 @@ describe("selectOrphanedThreadDetailIds", () => {
   });
 
   it("keeps threads the caller is about to re-lease", () => {
-    // Reconnect and effect teardown drop every lease at once and immediately
-    // re-lease the visible ones. Freeing those would blank the open chat.
+    // Reconnect and effect teardown drop every lease at once and immediately re-lease the visible ones. Freeing those would blank the open chat.
     expect(
       selectOrphanedThreadDetailIds({
         releasedThreadIds: [threadId("visible"), threadId("background")],

@@ -334,7 +334,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         updatedAt: "2026-02-28T19:31:01.000Z",
       });
 
-      // A later streaming update omits the origin; it must not be cleared.
+      // a later streaming update omits the origin — it must not be cleared
       yield* repository.upsert({
         messageId,
         threadId,
@@ -375,8 +375,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
           updatedAt: "2026-02-28T19:32:01.000Z",
         });
 
-        // A human edit-and-resend replays through the decider, which stamps an
-        // explicit "user" origin; the row must stop being labeled automation.
+        // an edit-and-resend replays through the decider stamping explicit "user" origin — the row must stop being labeled automation
         yield* repository.upsert({
           messageId,
           threadId,

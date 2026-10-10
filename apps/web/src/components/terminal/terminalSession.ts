@@ -9,12 +9,7 @@
 
 import { type NativeApi } from "@synara/contracts";
 
-// The terminal runtime pulls in xterm and its addons (~223 KB gzip). Importing
-// the registry statically anchored the whole terminal stack into the eager
-// router graph via this module's callers, so every page load paid for it.
-// Closing a terminal is a rare user action and the chunk is already resident
-// whenever a terminal is actually on screen, so this resolves from the module
-// cache in practice.
+// the terminal runtime pulls in xterm + addons (~223 KB gzip); a static import anchored the whole stack into the eager router graph — dynamic import resolves from the module cache in practice
 async function disposeTerminalRuntime(threadId: string, terminalId: string): Promise<void> {
   try {
     const { terminalRuntimeRegistry } = await import("./terminalRuntimeRegistry");

@@ -1,7 +1,3 @@
-// FILE: WorkspaceFilePreview.relocation.browser.tsx
-// Purpose: Browser regressions for out-of-root preview relocation and revalidation.
-// Layer: Focused component integration tests
-
 import "../index.css";
 
 import type { NativeApi } from "@synara/contracts";

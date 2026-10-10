@@ -122,8 +122,7 @@ export function useComposerVoiceController(
     ...DEFAULT_FAILURE_COPY,
     ...failureCopyOverrides,
   };
-  // A transcription can resolve immediately after navigation commits, so stamp
-  // its identity before passive effects and browser events can observe it.
+  // a transcription can resolve right after navigation commits — stamp its identity before passive effects and browser events observe it
   useLayoutEffect(() => {
     voiceThreadIdRef.current = threadId;
     voiceProviderRef.current = selectedProvider;
@@ -145,8 +144,7 @@ export function useComposerVoiceController(
     const invalidatedRequestId = voiceTranscriptionRequestIdRef.current + 1;
     voiceTranscriptionRequestIdRef.current = invalidatedRequestId;
     voiceRecordingStartedAtRef.current = null;
-    // The spinner reset rides the cancel promise so no state is written
-    // synchronously inside the effect (keeps the hook compiler-eligible).
+    // the spinner reset rides the cancel promise so no state is written synchronously inside the effect (keeps the hook compiler-eligible)
     void cancelVoiceRecording().finally(() => {
       if (voiceTranscriptionRequestIdRef.current === invalidatedRequestId) {
         setIsVoiceTranscribing(false);
@@ -296,8 +294,7 @@ export function useComposerVoiceController(
       composerProviderInstanceRef.current === requestProviderInstanceId &&
       voiceProviderInstanceRef.current === requestVoiceProviderInstanceId;
 
-    // Promise chain instead of async/try-catch-finally: React Compiler does
-    // not yet support try/finally, and it would skip optimizing this hook.
+    // promise chain instead of async/try-finally: React Compiler doesn't support try/finally and would skip optimizing this hook
     return stopVoiceRecording()
       .then((payload): Promise<boolean> | boolean => {
         if (!isCurrentVoiceRequest()) {

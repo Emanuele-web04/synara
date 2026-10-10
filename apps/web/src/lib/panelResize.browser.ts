@@ -1,8 +1,3 @@
-// FILE: panelResize.browser.ts
-// Purpose: Browser-layout regression tests for panel resize composer probes.
-// Layer: Web DOM behavior tests
-// Depends on: panelResize, chatPaneScope
-
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SINGLE_CHAT_PANE_SCOPE_ID, dockSidechatPaneScopeId } from "./chatPaneScope";

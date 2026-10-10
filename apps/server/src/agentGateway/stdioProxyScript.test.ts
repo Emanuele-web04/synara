@@ -141,9 +141,7 @@ describe("agent gateway stdio proxy", () => {
         })}\n`,
       );
       await withTimeout(slowStarted.promise);
-      // A duplicate id must not steal the proxy's cancellation route from the
-      // first call. This test intentionally leaves the duplicate open so
-      // targeting the wrong fetch is visible.
+      // a duplicate id must not steal the cancellation route — left open so the wrong fetch is visible
       child.stdin.write(
         `${JSON.stringify({
           jsonrpc: "2.0",
@@ -258,9 +256,7 @@ describe("agent gateway stdio proxy", () => {
         }
       });
 
-      // The exchange is eager: by the time a provider command descendant can
-      // run, it inherits no real bearer and the ambient one-shot credential is
-      // already spent.
+      // by the time a provider descendant can run, it inherits no bearer and the one-shot credential is spent
       await withTimeout(bootstrapStarted.promise);
       const runProviderDescendant = async (): Promise<unknown> => {
         const descendant = spawn(
@@ -280,8 +276,7 @@ describe("agent gateway stdio proxy", () => {
         await withTimeout(new Promise<void>((resolve) => descendant.once("exit", () => resolve())));
         return JSON.parse(output) as unknown;
       };
-      // Before the first MCP initialize/ping message, the proxy has already
-      // consumed the bootstrap and a peer descendant cannot win the race.
+      // before the first MCP message the proxy has consumed the bootstrap — a peer descendant can't win the race
       expect(await runProviderDescendant()).toEqual({ status: 401, bearer: null });
 
       for (const id of ["first", "second"]) {
@@ -295,7 +290,7 @@ describe("agent gateway stdio proxy", () => {
         });
       }
 
-      // Replay remains impossible after normal MCP traffic as well.
+      // replay remains impossible after normal MCP traffic
       expect(await runProviderDescendant()).toEqual({ status: 401, bearer: null });
 
       expect(bootstrapExchanges).toBe(3);
@@ -318,7 +313,7 @@ describe("agent gateway stdio proxy", () => {
     try {
       server = createServer((request) => {
         if (request.url === "/mcp/bootstrap") bootstrapStarted.resolve(undefined);
-        // Intentionally never respond. Closing stdin must still stop the proxy.
+        // intentionally never responds — closing stdin must still stop the proxy
       });
       await new Promise<void>((resolve, reject) => {
         const onError = (error: Error) => reject(error);

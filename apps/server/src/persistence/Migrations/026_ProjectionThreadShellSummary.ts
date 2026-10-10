@@ -1,6 +1,4 @@
-// FILE: 026_ProjectionThreadShellSummary.ts
-// Purpose: Adds denormalized shell-summary columns to projection_threads for cheap sidebar snapshots.
-// Layer: Persistence migration
+// denormalized shell-summary columns for cheap sidebar snapshots
 
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";

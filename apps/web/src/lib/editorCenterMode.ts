@@ -15,7 +15,6 @@ export interface EditorActivityBarSelection {
   centerFamily: EditorCenterModeFamily;
 }
 
-/** True when the item already owns the visible sidebar, so selecting it hides the sidebar. */
 export function isEditorActivityBarItemActive(selection: EditorActivityBarSelection): boolean {
   return (
     selection.sidebarVisible &&

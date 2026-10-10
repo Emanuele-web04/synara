@@ -1,5 +1,4 @@
-// Purpose: Converts the old automatic-retention delete lifecycle into the reversible
-//          archive lifecycle, preserving manual deletions and event-replay consistency.
+// converts the old retention delete lifecycle into the reversible archive lifecycle; convert the authoritative event too so a replay produces the same archived state
 
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -9,9 +8,7 @@ const RETENTION_COMMAND_ID_PATTERN = "thread-retention:%";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // Retention deletes were deliberately kept in projection_threads, so they can be
-  // recovered without reconstructing message data. Convert the authoritative event too:
-  // a later projection replay must produce the same archived state as the repaired row.
+  // retention deletes were kept in projection_threads so they're recoverable — convert the event too so replay reproduces the same state
   yield* sql`
     UPDATE orchestration_events
     SET event_type = 'thread.archived',

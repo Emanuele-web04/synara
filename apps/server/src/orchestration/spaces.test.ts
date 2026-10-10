@@ -1,6 +1,3 @@
-// FILE: spaces.test.ts
-// Purpose: Covers the durable Space lifecycle and project reassignment invariants.
-
 import { CommandId, ProjectId, SpaceId, type OrchestrationCommand } from "@synara/contracts";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -285,7 +282,7 @@ describe("Spaces", () => {
       createdAt,
     }));
 
-    // The editor always resends both fields; identical values must not become an event.
+    // the editor always resends both fields — identical values must not become an event
     await expect(
       Effect.runPromise(
         decideOrchestrationCommand({
@@ -332,8 +329,7 @@ describe("Spaces", () => {
       icon: "bag",
       createdAt,
     }));
-    // Legacy containers predate the "chat" kind: an ordinary-looking project row named
-    // "Home" whose root is the home directory.
+    // legacy containers predate the "chat" kind — an ordinary-looking row named "Home" on the home dir
     ({ readModel } = await dispatch(readModel, {
       type: "project.create",
       commandId: CommandId.makeUnsafe("cmd-create-legacy-home"),
@@ -366,8 +362,7 @@ describe("Spaces", () => {
       ),
     ).rejects.toThrow(/chats container/i);
 
-    // Keep the legacy discriminator stable: ordinary projects may legitimately own these
-    // roots, so the old Home row cannot be allowed to shed its canonical title.
+    // ordinary projects may legitimately own these roots — the old Home row can't shed its canonical title
     await expect(
       Effect.runPromise(
         decideOrchestrationCommand({
@@ -399,7 +394,6 @@ describe("Spaces", () => {
       ),
     ).rejects.toThrow(/workspace root cannot be changed/i);
 
-    // An ordinary project named anything else files normally under the same paths.
     const assigned = await Effect.runPromise(
       decideOrchestrationCommand({
         command: {
@@ -484,9 +478,7 @@ describe("Spaces", () => {
       icon: "bag",
       createdAt,
     }));
-    // A legacy row may already have been renamed before the invariant existed. Its root
-    // remains the user's home directory, so restoring the canonical title would make it
-    // the Home container again without changing spaceId.
+    // a legacy row may have been renamed before the invariant existed — restoring the canonical title makes it the Home container again without changing spaceId
     ({ readModel } = await dispatch(readModel, {
       type: "project.create",
       commandId: CommandId.makeUnsafe("cmd-create-renamed-legacy-home"),
@@ -553,7 +545,6 @@ describe("Spaces", () => {
       spaceId,
     }));
 
-    // Already-assigned projects are settled and produce no event; the rest move.
     const batch = await dispatch(readModel, {
       type: "space.projects.assign",
       commandId: CommandId.makeUnsafe("cmd-batch-assign"),
@@ -568,7 +559,7 @@ describe("Spaces", () => {
       [settledProjectId, spaceId],
     ]);
 
-    // A batch where nothing needs to move is rejected rather than emitting no events.
+    // a batch where nothing needs to move is rejected rather than emitting no events
     await expect(
       Effect.runPromise(
         decideOrchestrationCommand({
@@ -608,7 +599,7 @@ describe("Spaces", () => {
     }));
     expect(readModel.projects.find((p) => p.id === "project-filed")?.spaceId).toBe(spaceId);
 
-    // Creation never fails on an unusable target: a dangling space degrades to Void…
+    // creation never fails on an unusable target — a dangling space degrades to Void
     ({ readModel } = await dispatch(readModel, {
       type: "project.create",
       commandId: CommandId.makeUnsafe("cmd-create-dangling"),
@@ -620,7 +611,7 @@ describe("Spaces", () => {
     }));
     expect(readModel.projects.find((p) => p.id === "project-dangling")?.spaceId).toBeNull();
 
-    // …and non-ordinary kinds ignore the field entirely.
+    // non-ordinary kinds ignore the field entirely
     ({ readModel } = await dispatch(readModel, {
       type: "project.create",
       commandId: CommandId.makeUnsafe("cmd-create-chat-kind"),

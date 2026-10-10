@@ -1,8 +1,3 @@
-// FILE: terminalVisualIdentity.ts
-// Purpose: Centralizes terminal icon/title/activity view-model rules for every web surface.
-// Layer: UI state logic
-// Exports: terminal identity map resolution plus representative-terminal selection.
-
 import {
   type ResolvedTerminalVisualIdentity,
   resolveTerminalVisualIdentity,
@@ -75,7 +70,6 @@ export function resolveTerminalVisualIdentityMap(input: {
   );
 }
 
-// Picks the terminal identity to represent a multi-terminal group or thread.
 export function selectRepresentativeTerminalVisualIdentity(input: {
   activeTerminalId?: string | null | undefined;
   terminalIds: readonly string[];

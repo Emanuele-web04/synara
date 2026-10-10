@@ -403,7 +403,6 @@ async function optimizeOversizedComposerImage(file: File, maxDimension?: number)
   });
 }
 
-/** Leaves provider-safe images untouched; oversized raster images are bounded and normalized. */
 export async function prepareComposerImageFile(file: File): Promise<File> {
   if (!file.type.startsWith("image/")) {
     throw new ComposerImagePreparationError(`'${imageName(file)}' is not an image file.`);

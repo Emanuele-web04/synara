@@ -1,7 +1,3 @@
-// FILE: lib/releaseDates.ts
-// Purpose: Converts short changelog date labels into stable ISO dates for SEO.
-// Layer: shared utility for sitemaps and structured data.
-
 const DEFAULT_RELEASE_YEAR = 2026;
 
 const MONTHS: Record<string, string> = {

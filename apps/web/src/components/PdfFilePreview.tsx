@@ -1,16 +1,3 @@
-// FILE: PdfFilePreview.tsx
-// Purpose: In-app PDF viewer surface. Renders our own toolbar (file name, page
-//          navigation, zoom) over a continuously-scrolling, centered stack of
-//          pdf.js-rendered pages — replacing the browser's built-in PDF iframe so
-//          the chrome matches the rest of Synara. Modeled on how Codex vendors a
-//          custom pdf.js viewer (canvas + text layer + clickable links).
-//          This component is the orchestrator: document load, container
-//          measurement, page navigation, and zoom each live in their own hook
-//          (usePdfDocument / useContainerSize / usePdfPageNavigation /
-//          usePdfZoomController) and are composed here.
-// Layer: Web chat/editor file-preview component
-// Exports: PdfFilePreview
-
 import { useEffect, useState } from "react";
 
 import { basenameOfPath } from "~/file-icons";

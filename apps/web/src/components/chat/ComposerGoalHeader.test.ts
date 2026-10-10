@@ -1,7 +1,3 @@
-// FILE: ComposerGoalHeader.test.ts
-// Purpose: Covers the goal pursuit clock: live elapsed time, the frozen clock
-// while paused, and the hidden timer for legacy goals without a start stamp.
-
 import { describe, expect, it } from "vitest";
 
 import { goalElapsedMs } from "./ComposerGoalHeader";

@@ -1,7 +1,4 @@
 import * as Effect from "effect/Effect";
 
-// Migration 54 was briefly registered by private development builds as
-// `DurableProviderCommandDelivery`. Keep the tracker identity reserved so those
-// databases remain on the canonical lineage, but do not activate delivery at
-// this historical point. The production cutover owns migration 64.
+// private dev builds briefly registered 54 as DurableProviderCommandDelivery — keep the identity reserved so those DBs stay on canonical lineage, but don't activate delivery here; production cutover is migration 64
 export default Effect.void;

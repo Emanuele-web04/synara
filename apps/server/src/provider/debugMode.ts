@@ -1,7 +1,3 @@
-// FILE: debugMode.ts
-// Purpose: Applies Synara's provider-independent evidence-first Debug instructions.
-// Layer: Provider prompt policy
-
 import type { ProviderInteractionMode } from "@synara/contracts";
 
 export const PROVIDER_DEBUG_MODE_PROMPT_PREFIX = `<synara_debug_mode>

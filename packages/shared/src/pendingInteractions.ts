@@ -1,15 +1,10 @@
-// FILE: pendingInteractions.ts
-// Purpose: Shared policy for claiming responses and recognizing invalidated approval/user-input callbacks.
-// Layer: Cross-package orchestration utility
-// Exports: stale-callback matcher, reclaim timing, and response-status predicates.
-
 import type {
   OrchestrationPendingInteraction,
   OrchestrationThreadActivity,
 } from "@synara/contracts";
 import { isStalePendingRequestFailureDetail, pendingRequestInstanceKey } from "./threadSummary";
 
-/** Index explicit callback invalidations without mixing runtime and orchestration sequences. */
+/** index invalidations without mixing runtime and orchestration sequences */
 export function createStalePendingInteractionMatcher(
   activities: ReadonlyArray<Pick<OrchestrationThreadActivity, "kind" | "payload" | "createdAt">>,
 ): (
@@ -64,8 +59,7 @@ export function createStalePendingInteractionMatcher(
     const legacyStaleAt = staleAtByInstance.get(
       keyOf(interaction.interactionKind, interaction.requestId),
     );
-    // A legacy marker cannot identify a generation, so it only closes requests
-    // that existed when the callback was invalidated, not later request-ID reuse.
+    // a legacy marker can't identify a generation — it only closes requests that existed when the callback was invalidated
     return legacyStaleAt !== undefined && legacyStaleAt >= interaction.createdAt;
   };
 }

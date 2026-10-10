@@ -1,9 +1,4 @@
-/**
- * Codex config helpers.
- *
- * Parses the small subset of `CODEX_HOME/config.toml` we need for provider
- * discovery without pulling in a full TOML dependency.
- */
+/** parses the subset of CODEX_HOME/config.toml needed for discovery without a TOML dependency */
 import OS from "node:os";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";

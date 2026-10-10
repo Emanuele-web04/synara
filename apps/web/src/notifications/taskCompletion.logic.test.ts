@@ -799,9 +799,7 @@ describe("collectCompletedThreadCandidates", () => {
   );
 
   it("keeps the dedup key stable when a checkpoint diff rewrites the turn's completedAt", () => {
-    // thread.turn-diff-completed rebuilds latestTurn with the checkpoint's own
-    // timestamp, so the same turn can re-settle under a different completedAt
-    // than the one originally notified. The key must not depend on it.
+    // turn-diff-completed rebuilds latestTurn with the checkpoint's own timestamp — the key must not depend on completedAt
     const settledTurnAt = (completedAt: string) =>
       ({
         turnId: TurnId.makeUnsafe("turn-1"),

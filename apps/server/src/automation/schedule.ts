@@ -134,8 +134,7 @@ function timezoneOffsetMs(date: Date, timezone: string): number {
   return asUtc - date.getTime();
 }
 
-// Resolve a local wall-clock slot in an IANA timezone to UTC. We verify the round-trip
-// so DST gaps are skipped instead of scheduling at a surprising nearby instant.
+// verify the round-trip so DST gaps are skipped instead of scheduling at a surprising nearby instant
 function zonedWallClockToUtc(input: {
   readonly timezone: string;
   readonly year: number;
@@ -196,7 +195,7 @@ function computeNextZonedWallClockRunAt(
     }
 
     if (schedule.type === "weekdays") {
-      // Advance day-by-day until the slot is in the future and lands on a weekday (Mon-Fri).
+      // advance day-by-day until the slot is future and lands on a weekday
       while (
         candidate.getTime() <= from.getTime() ||
         candidate.getUTCDay() === 0 ||
@@ -307,7 +306,7 @@ function parseCronField(
     if (!Number.isInteger(step) || step <= 0) {
       throw new Error(`Invalid cron ${name}: bad step`);
     }
-    // Only a literal `*` is unrestricted for DOM/DOW cron semantics; `*/2` is still a filter.
+    // only a literal `*` is unrestricted for DOM/DOW cron semantics; `*/2` is still a filter
     if (rangePart === "*" && stepPart === undefined) {
       isWildcard = true;
     }
@@ -377,8 +376,7 @@ function computeNextCronRunAt(
   const hours = sortedCronValues(cron.hour);
   const minutes = sortedCronValues(cron.minute);
 
-  // Search by local calendar slots instead of UTC minutes. Sparse cron expressions can be
-  // months away, so minute-by-minute timezone formatting would block validation for seconds.
+  // search local calendar slots — sparse crons can be months away, minute-by-minute tz formatting would block for seconds
   for (let dayOffset = 0; dayOffset <= MAX_CRON_SEARCH_DAYS; dayOffset += 1) {
     const localDate = addLocalDays(localStart, dayOffset);
     if (!cron.month.values.has(localDate.month) || !cronDayMatches(cron, localDate)) {
@@ -427,9 +425,7 @@ export function computeNextAutomationRunAt(
     return new Date(from.getTime() + schedule.everySeconds * 1000).toISOString();
   }
 
-  // Search on the original schedule phase, not from the previously jittered
-  // occurrence. Otherwise an offset longer than a dense cron cadence advances
-  // the base cursor into the following slot and silently skips executions.
+  // search from the original schedule phase, not the jittered occurrence — a long offset would silently skip slots
   const jitterMilliseconds = scheduleJitterMilliseconds(schedule, jitterContext);
   const baseFrom = new Date(from.getTime() - jitterMilliseconds);
   if (schedule.type === "cron") {
@@ -442,12 +438,7 @@ export function computeNextAutomationRunAt(
   );
 }
 
-/**
- * Compute the next run that is strictly after `notBeforeIso`, coalescing any missed
- * occurrences after downtime into a single future slot instead of replaying every one.
- * For interval schedules this fast-forwards past all elapsed intervals; daily/weekly
- * schedules are naturally coalesced because they resolve to the next wall-clock slot.
- */
+/** next run strictly after notBeforeIso; missed occurrences coalesce into one future slot instead of replaying every one */
 export function computeNextAutomationRunAtAfter(
   schedule: AutomationSchedule,
   fromIso: string,
@@ -469,7 +460,7 @@ export function computeNextAutomationRunAtAfter(
     const stepMs = schedule.everySeconds * 1000;
     let next = from.getTime() + stepMs;
     if (next <= floor) {
-      // Jump straight to the first slot after the floor rather than looping per interval.
+      // jump straight to the first slot after the floor rather than looping per interval
       const missed = Math.ceil((floor - next + 1) / stepMs);
       next += missed * stepMs;
     }
@@ -479,10 +470,7 @@ export function computeNextAutomationRunAtAfter(
   return computeNextAutomationRunAt(schedule, notBeforeIso, jitterContext);
 }
 
-/**
- * Estimate the spacing between the next two occurrences from a fixed point. This is used
- * for policy validation, not for dispatch, so one-shot/manual schedules return null.
- */
+/** spacing between the next two occurrences; for policy validation, not dispatch — one-shot/manual return null */
 export function computeAutomationScheduleSpacingSeconds(
   schedule: AutomationSchedule,
   fromIso: string,

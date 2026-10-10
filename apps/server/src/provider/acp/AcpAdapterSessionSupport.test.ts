@@ -263,9 +263,6 @@ describe("ACP adapter session support", () => {
         pollMs: 1,
       }),
     );
-    // Simulate the notification consumer handling queued events asynchronously,
-    // as happens across two consecutive turns whose trailing updates are still
-    // in flight when the prompt response resolves.
     setTimeout(() => {
       processed = 3;
     }, 10);

@@ -4,19 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // Capacity is derived entirely from durable state so admission survives a
-  // server restart and does not depend on an in-memory semaphore. A creation
-  // saga owns one slot until dispatch fails or compensation becomes terminal.
-  // Compensating operations remain claims even when task registration failed,
-  // so cleanup can never briefly release capacity before a task row exists.
-  // Once a task is planned, missing thread/turn projections are treated as
-  // pending: projectors may lag the committed creation result and must never
-  // briefly free capacity.
-  // Failed task rows also retain capacity while compensation is non-terminal or
-  // a projected turn is still live. UNION (rather than UNION ALL) prevents the
-  // hand-off between durable operation and task records from consuming two slots.
-  // Recreate the view if an unreleased development build installed an older
-  // definition before migration 75 was registered.
+  // capacity derived entirely from durable state so admission survives a restart; a creation saga owns a slot until dispatch fails or compensation terminalizes; compensating ops remain claims even when registration failed; missing projections conservatively pending; UNION (not ALL) prevents the handoff consuming two slots; recreate if a dev build installed the older definition
   yield* sql`DROP VIEW IF EXISTS external_mcp_active_capacity_claims`;
   yield* sql`
     CREATE VIEW external_mcp_active_capacity_claims AS

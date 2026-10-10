@@ -1,8 +1,3 @@
-// FILE: useProfileAvatarColor.ts
-// Purpose: Locally-persisted accent color for the Profile avatar (the green circle behind the
-// initials). Backs the avatar "edit" affordance in the Edit-profile dialog. Local-only, no I/O.
-// Layer: web profile feature.
-
 import { Schema } from "effect";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 
@@ -10,14 +5,14 @@ const PROFILE_AVATAR_COLOR_STORAGE_KEY = "synara:profile:avatarColor:v1";
 
 // A compact palette of solid avatar accents. The first entry is the default.
 export const PROFILE_AVATAR_COLORS: readonly string[] = [
-  "#22c55e", // emerald (default)
-  "#3b82f6", // blue
-  "#8b5cf6", // violet
-  "#ec4899", // pink
-  "#f59e0b", // amber
-  "#ef4444", // red
-  "#14b8a6", // teal
-  "#64748b", // slate
+  "#22c55e",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+  "#f59e0b",
+  "#ef4444",
+  "#14b8a6",
+  "#64748b",
 ];
 
 const DEFAULT_AVATAR_COLOR = PROFILE_AVATAR_COLORS[0]!;

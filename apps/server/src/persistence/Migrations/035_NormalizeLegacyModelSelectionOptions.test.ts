@@ -1,7 +1,3 @@
-// FILE: 035_NormalizeLegacyModelSelectionOptions.test.ts
-// Purpose: Verifies legacy array-shaped modelSelection options are repaired before strict decode.
-// Layer: Persistence migration test
-
 import { ModelSelection } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";

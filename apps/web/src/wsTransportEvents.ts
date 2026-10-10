@@ -74,7 +74,6 @@ export function emitWsTransportState(state: WsTransportState): void {
   );
 }
 
-// Subscribes to the shared transport state event. Returns an idempotent cleanup.
 export function addWsTransportStateListener(
   listener: (state: WsTransportState) => void,
   options?: { readonly replayCurrent?: boolean },

@@ -1,9 +1,3 @@
-// FILE: codexGeneratedImages.ts
-// Purpose: Normalizes Codex generated-image events into durable local-file references.
-// Layer: Server provider utilities
-// Exports: Codex image path, payload sanitization, and markdown helpers
-// Depends on: node path/os, image MIME allowlist, provider runtime artifact contract
-
 import path from "node:path";
 
 import {
@@ -238,7 +232,7 @@ export function predictedCodexGeneratedImagePath(input: {
   return path.join(resolveCodexGeneratedImagesRoot(input.codexHome), threadId, `${callId}.png`);
 }
 
-// Mirrors Remodex relay behavior: keep metadata, drop bulky inline image data.
+// mirrors Remodex relay behavior: keep metadata, drop bulky inline image data
 export function annotateCodexGeneratedImagePayload(input: {
   readonly value: unknown;
   readonly threadId: ThreadId | string | undefined;
@@ -373,10 +367,6 @@ export function generatedImageMarkdown(filePath: string): string {
   return `![Generated image](${markdownImagePath(filePath)})`;
 }
 
-/**
- * Returns the local file path of a Codex-generated image carried by an
- * `item.completed` runtime event, or `undefined` for any other event shape.
- */
 export function generatedImagePathFromRuntimeEvent(
   event: ProviderRuntimeEvent,
 ): string | undefined {

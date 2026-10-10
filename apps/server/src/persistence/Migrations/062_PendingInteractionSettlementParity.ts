@@ -3,13 +3,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { tableExists } from "./schemaHelpers.ts";
 
-/** Consolidate approvals and user input under one kind-scoped settlement authority. */
+/** consolidate approvals and user input under one kind-scoped settlement authority */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  // The consolidation consumes projection_pending_approvals, so its absence is
-  // the post-state marker. Replaying the rebuild would rename a freshly created
-  // staging table over the live projection_pending_interactions table and lose
-  // every user-input interaction recorded since the consolidation.
+  // the consolidation consumes projection_pending_approvals — its absence is the post-state marker; replaying would rename a fresh staging table over the live table and lose every user-input interaction since
   if (!(yield* tableExists(sql, "projection_pending_approvals"))) {
     return;
   }

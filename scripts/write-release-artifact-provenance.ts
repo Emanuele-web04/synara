@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// FILE: write-release-artifact-provenance.ts
-// Purpose: CLI entrypoint for post-build release asset trust proof.
-// Layer: Release verification script
 
 import {
   type ReleaseArtifactPlatform,

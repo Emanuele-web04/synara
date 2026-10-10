@@ -1,7 +1,3 @@
-// FILE: MigrationReplay.test.ts
-// Purpose: Proves the replayed migration range is re-runnable against its own post-state.
-// Layer: SQLite migration test
-
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -9,26 +5,12 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { migrationEntries, runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-/**
- * A released migration id was renumbered once (54 shipped as
- * `ProjectPullRequestPins`, then became `DurableProviderCommandDelivery`).
- * Lineage reconciliation answers a divergence by forgetting every tracker row
- * from that point onward, which makes the migrator replay the range over a
- * schema that already contains it — migration 56 died on
- * `duplicate column name: fingerprint_version` and the backend never booted.
- *
- * These tests reproduce that post-reconcile state directly, by tracker rows
- * rather than through `Migrations.ts`, so they keep asserting the property the
- * migrations themselves own — every migration at or after this id survives
- * being applied a second time — independently of how reconciliation decides to
- * classify any particular lineage.
- */
+/** a released migration id was renumbered once — reconciliation forgets tracker rows from the divergence so the migrator replays over a schema that already contains it (56 died on `duplicate column name`); these tests reproduce that post-reconcile state by tracker rows so they assert "every migration at/after this id survives a second application" independent of lineage classification */
 const REPLAY_FROM_MIGRATION_ID = 54;
 
 const replayedEntries = migrationEntries
   .filter(([id]) => id >= REPLAY_FROM_MIGRATION_ID)
-  // `migrationEntries` is `as const`, so an unannotated map widens each pair into an array of
-  // the literal union rather than a tuple. Name the tuple so the comparison stays typed.
+  // migrationEntries is `as const` — an unannotated map widens each pair into a literal-union array; name the tuple so the comparison stays typed
   .map(([id, name]): readonly [id: number, name: string] => [id, name]);
 
 const schemaObjects = (sql: SqlClient.SqlClient) =>
@@ -43,13 +25,13 @@ const schemaObjects = (sql: SqlClient.SqlClient) =>
     ORDER BY type, name
   `;
 
-/** Reproduces exactly what a lineage reconciliation leaves behind. */
+/** reproduces exactly what a lineage reconciliation leaves behind */
 const forgetMigrationsFromReplayPoint = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= ${REPLAY_FROM_MIGRATION_ID}`;
 });
 
-/** Durable rows owned by tables the replayed range rebuilds, drops, or backfills. */
+/** durable rows owned by tables the replayed range rebuilds, drops, or backfills */
 const seedDurableState = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`
@@ -70,8 +52,7 @@ const seedDurableState = Effect.gen(function* () {
       'full-access', 'default', 'local'
     )
   `;
-  // A sequence with no surviving orchestration event: a replayed backfill must
-  // not reset it to NULL.
+  // a sequence with no surviving event — a replayed backfill must not reset it to NULL
   yield* sql`
     INSERT INTO projection_thread_messages (
       message_id, thread_id, role, text, is_streaming, sequence, created_at, updated_at
@@ -80,7 +61,7 @@ const seedDurableState = Effect.gen(function* () {
       '2026-07-24T10:00:01.000Z', '2026-07-24T10:00:01.000Z'
     )
   `;
-  // Only representable after migration 62 consolidated approvals and user input.
+  // only representable after 62 consolidated approvals and user input
   yield* sql`
     INSERT INTO projection_pending_interactions (
       interaction_kind, request_id, thread_id, status, created_at

@@ -1,17 +1,8 @@
-// FILE: changelog/[version]/page.tsx
-// Purpose: Shareable per-release deep link — /changelog/v0.1.1. Renders only
-//          the targeted release so canonical URL, metadata, and visible content
-//          all describe the same page.
-// Layer: App Router dynamic page (statically generated per release).
-// Note: The [version] segment is the slug "v0.1.1" (see toVersionSlug); we strip
-//       the leading "v" to look the release up in CHANGELOG_ENTRIES.
-
 import { notFound } from "next/navigation";
 import ChangelogContent from "@/components/ChangelogContent";
 import { breadcrumbJsonLd, jsonLdScript, pageMetadata, releaseJsonLd } from "@/lib/seo";
 import { findRelease, fromVersionSlug, getSortedReleases, toVersionSlug } from "@/lib/changelog";
 
-// Pre-render one static page per release: /changelog/v0.1.1, v0.1.0, …
 export function generateStaticParams() {
   return getSortedReleases().map((entry) => ({
     version: toVersionSlug(entry.version),

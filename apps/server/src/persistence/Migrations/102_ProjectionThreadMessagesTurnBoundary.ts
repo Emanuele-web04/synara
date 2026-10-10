@@ -1,8 +1,4 @@
-/**
- * Persists the effective turn-boundary decision for user messages. Requested
- * steer mode alone is insufficient: providers without native steering promote
- * the message into a separate queued turn.
- */
+/** persists the effective turn-boundary decision — requested steer mode alone is insufficient: providers without native steering promote the message into a queued turn */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

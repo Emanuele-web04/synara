@@ -1,8 +1,3 @@
-// FILE: siteFavicon.test.ts
-// Purpose: Verifies hostname extraction and that the favicon proxy URL is keyed by
-//          host, so every link on a site dedupes onto one cacheable request.
-// Layer: Web utility tests
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { extractHostname, resolveSiteFaviconUrl } from "./siteFavicon";

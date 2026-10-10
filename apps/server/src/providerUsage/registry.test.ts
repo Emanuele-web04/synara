@@ -1,6 +1,3 @@
-// FILE: providerUsage/registry.test.ts
-// Purpose: Every usage-capable provider in shared metadata has a live fetcher.
-
 import { describe, expect, it } from "vitest";
 
 import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";

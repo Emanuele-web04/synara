@@ -77,7 +77,6 @@ it("passes a listed live model with its real capacities to a fresh session, incl
       const result = yield* adapter.listModels!({ provider: "pi", cwd: dir, agentDir: dir });
       const model = result.models.find((model) => model.slug === "openrouter/vendor/new-model");
       expect(model?.supportedReasoningEfforts?.length).toBeGreaterThan(0);
-      // Session starts with a new SDK runtime; failed network must retain catalog metadata.
       request.mockRejectedValue(new Error("offline"));
       request.mockClear();
       yield* Effect.exit(

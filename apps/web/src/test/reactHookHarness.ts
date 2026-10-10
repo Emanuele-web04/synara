@@ -1,13 +1,4 @@
-// FILE: reactHookHarness.ts
-// Purpose: Minimal React hook runtime for unit-testing hooks in node without a renderer.
-// Layer: Test helper
-// Exports: reactHookHarness (render lifecycle controls), reactHookHarnessMock (the module
-// shape for vi.mock("react")). One harness instance per test file (vitest isolates modules
-// per file), so state never leaks across suites.
-// Usage:
-//   vi.mock("react", async () => (await import("../test/reactHookHarness")).reactHookHarnessMock);
-//   import { reactHookHarness } from "../test/reactHookHarness";
-//   Call beginRender() before each hook invocation, reset() in beforeEach, unmount() to run cleanups.
+// one harness instance per test file (vitest isolates modules per file) — state never leaks across files; mock via vi.mock("react", ...) → reactHookHarness(), beginRender() per call, reset() in beforeEach
 
 interface HookSlot {
   value?: unknown;

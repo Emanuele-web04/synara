@@ -1,11 +1,3 @@
-// FILE: ComposerLiveChangesHeader.tsx
-// Purpose: Live file-changes strip stacked flush onto the top of the composer
-// while a turn is running, mirroring the queued follow-up header. The caller
-// supplies turn-scoped diff totals (or a null count before they land) and the
-// Review action target.
-// Layer: Chat composer UI
-// Exports: ComposerLiveChangesHeader
-
 import { pluralize } from "@synara/shared/text";
 
 import { ChangesIcon } from "~/lib/icons";
@@ -23,8 +15,7 @@ interface ComposerLiveChangesHeaderProps {
   fileCount: number | null;
   additions: number;
   deletions: number;
-  // Explicit `| undefined` (not just `?`) so callers can pass a conditionally-absent
-  // handler under exactOptionalPropertyTypes; the Review button is hidden when omitted.
+  // Explicit `| undefined` (not just `?`) so callers can pass a conditionally-absent handler under exactOptionalPropertyTypes; the Review button is hidden when omitted.
   onReview?: (() => void) | undefined;
   attachedToPrevious?: boolean;
 }

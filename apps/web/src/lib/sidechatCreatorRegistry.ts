@@ -1,12 +1,4 @@
-// FILE: sidechatCreatorRegistry.ts
-// Purpose: Bridge the composer's /side creation logic to the right-dock "+" button.
-// Layer: Chat capability registry
-// Exports: register/get for a per-host-thread sidechat creator.
-//
-// The composer (inside ChatView) owns the full sidechat-creation flow, including the
-// user's currently selected model. The right dock lives outside ChatView, so instead
-// of duplicating that flow we let the composer publish its creator keyed by host
-// thread id and have the dock invoke it. Only threads that can offer /side register.
+// the composer owns the full sidechat flow incl. the selected model; the dock lives outside ChatView so the composer publishes its creator keyed by host thread id — only threads that can offer /side register
 
 import type { ThreadId } from "@synara/contracts";
 
@@ -36,9 +28,7 @@ export function getSidechatCreator(threadId: ThreadId): SidechatCreator | undefi
   return creatorsByThreadId.get(threadId);
 }
 
-// The dock can render one commit before its nested composer publishes the
-// creator. Wait briefly for that normal mount ordering instead of presenting a
-// flaky "unavailable" action to the user.
+// the dock can render one commit before the nested composer publishes — wait briefly for that normal mount ordering instead of a flaky "unavailable"
 export function waitForSidechatCreator(
   threadId: ThreadId,
   timeoutMs = 500,

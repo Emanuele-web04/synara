@@ -19,22 +19,10 @@ export interface CachedGitStatus {
 
 export const REMOTE_STATUS_CACHE_TTL_MS = 30_000;
 
-/**
- * Upper bound on cached working directories.
- *
- * Synara creates a git worktree per thread, so `cwd` keys are effectively
- * thread-scoped and unbounded over a long-lived server. The cache is a pure
- * optimization behind a 30 s TTL — a miss just re-runs git — so evicting the least
- * recently written directory is always safe, and it keeps the copy-on-write update
- * below O(limit) instead of O(directories ever seen).
- */
+/** thread-scoped worktrees make cwd keys unbounded; a miss just re-runs git so least-recently-written eviction is safe and keeps the copy-on-write update below O(limit) */
 export const GIT_STATUS_CACHE_MAX_ENTRIES = 64;
 
-/**
- * Copy-on-write insert with least-recently-written eviction. Re-inserting the key
- * moves it to the end of `Map` iteration order, so the first key is always the
- * coldest entry.
- */
+/** copy-on-write insert; re-inserting moves the key to the end so the first key is always the coldest */
 export function setCachedGitStatus(
   cache: ReadonlyMap<string, CachedGitStatus>,
   cwd: string,
@@ -103,13 +91,7 @@ export function splitRemoteStatusDetails(
   };
 }
 
-/**
- * The half of the reuse decision that depends only on the cache.
- *
- * Callers check this *before* fetching fresh status details: when the cached remote
- * metadata is absent or expired the details can never be reused, so probing git for
- * them would only be thrown away and repeated by the full status load.
- */
+/** check before fetching: absent/expired remote metadata means details can never be reused — probing git for them would only be thrown away and re-run by the full load */
 export function isCachedRemoteStatusFresh(input: {
   readonly cached: CachedGitStatus;
   readonly now?: number;

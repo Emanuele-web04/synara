@@ -1,9 +1,3 @@
-// FILE: PrStateChip.tsx
-// Purpose: Compact PR chip (state icon + #number, hover title) shared by the
-//          kanban card meta row and the sidebar Activity rows.
-// Layer: UI component (pure)
-// Exports: PrStateChip
-
 import type { OrchestrationThreadPullRequest } from "@synara/contracts";
 import type { MouseEvent } from "react";
 
@@ -34,8 +28,7 @@ export function PrStateChip({
       // Middle-click follows browser link semantics: open on GitHub.
       onAuxClick={onOpen}
       className={cn(
-        // The PR type scale, not a pixel: this chip is the same fine print as every other PR
-        // surface, so it tracks the user's font-size setting with them.
+        // a type scale, not a pixel: same fine print as every other PR surface, tracks the user's font-size setting
         PR_FINE_TEXT_CLASS_NAME,
         "flex shrink-0 items-center gap-0.5",
         presentation.colorClass,

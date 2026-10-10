@@ -1,9 +1,3 @@
-// FILE: settingsSearchIndex.ts
-// Purpose: Declarative, searchable index of settings rows/sections so the sidebar can
-//          surface matches by title/description the same way the editor file search does.
-// Layer: Route/UI support
-// Exports: entry type, the index, section label lookup, and the ranking helper
-
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
 import {
   settingRowAnchorId,
@@ -53,11 +47,8 @@ export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | 
   return entry.target === undefined ? settingRowAnchorId(entry.title) : entry.target;
 }
 
-// Mirrors row titles/descriptions rendered in settings panels. Panels stay mounted but render
-// null while inactive, so the sidebar cannot read every row at runtime; keep this list in sync
-// when rows are added, renamed, hidden conditionally, or represented as panel-level results.
+// panels stay mounted but render null while inactive, so the sidebar can't read rows at runtime — keep this in sync when rows change
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
-  // ── General ────────────────────────────────────────────────────────────────
   {
     id: "general:default-provider",
     section: "general",
@@ -183,7 +174,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show the per-thread notepad in the Environment panel.",
   },
 
-  // ── Appearance ───────────────────────────────────────────────────────────────
   {
     id: "appearance:theme",
     section: "appearance",
@@ -260,7 +250,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "System default follows your browser or OS clock preference. timestamp 12-hour 24-hour locale",
   },
 
-  // ── Notifications ─────────────────────────────────────────────────────────────
   {
     id: "notifications:activity-toasts",
     section: "notifications",
@@ -283,7 +272,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Alert once the agent and all of its background subagents have finished. Turn this off to be alerted each time the agent or one of its subagents stops. alerts notification",
   },
 
-  // ── AppSnap ───────────────────────────────────────────────────────────────────
   {
     id: "appsnap:enable",
     section: "appsnap",
@@ -316,7 +304,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Permission status",
     keywords:
       "Input Monitoring and Screen Recording permissions for AppSnap in macOS System Settings. privacy security recheck grant",
-    // Renders only in the macOS desktop app, so no stable anchor on other platforms.
     target: null,
   },
 
@@ -467,7 +454,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
-  // ── Keybindings ───────────────────────────────────────────────────────────────
   {
     id: "shortcuts:keyboard-shortcuts",
     section: "shortcuts",
@@ -477,7 +463,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
-  // ── Worktrees ─────────────────────────────────────────────────────────────────
   {
     id: "worktrees:managed-worktrees",
     section: "worktrees",
@@ -486,7 +471,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
-  // ── Archived ──────────────────────────────────────────────────────────────────
   {
     id: "archived:archived-threads",
     section: "archived",
@@ -495,7 +479,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
-  // ── Models ────────────────────────────────────────────────────────────────────
   {
     id: "models:source-control-writing-style",
     section: "models",
@@ -516,7 +499,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Add custom model slugs for supported providers. custom model",
   },
 
-  // ── Providers ─────────────────────────────────────────────────────────────────
   {
     id: "providers:cpu-priority",
     section: "providers",
@@ -558,7 +540,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Review provider versions and update tools. binary overrides path install",
   },
 
-  // ── Skills ────────────────────────────────────────────────────────────────────
   {
     id: "skills:skills",
     section: "skills",
@@ -567,7 +548,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
-  // ── Usage ─────────────────────────────────────────────────────────────────────
   {
     id: "usage:usage",
     section: "usage",
@@ -637,11 +617,7 @@ export function settingsSectionLabel(section: SettingsSectionId): string {
   return SETTINGS_SECTION_LABEL_BY_ID.get(section) ?? section;
 }
 
-/**
- * Fuzzy-rank settings rows for the sidebar search. Title carries the strongest intent;
- * the description/synonym keywords and the owning section label match more loosely so a
- * query like "appearance" or "wrap" still surfaces the right rows.
- */
+// title carries strongest intent; description/synonyms/section label match loosely so "appearance" or "wrap" still surface the right rows
 export function rankSettingsSearchEntries(
   query: string,
   limit: number,

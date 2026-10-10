@@ -1,6 +1,3 @@
-// FILE: voiceUploadAdmission.test.ts
-// Purpose: Verifies bounded, leak-free admission for buffered voice uploads.
-
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 

@@ -32,7 +32,7 @@ import {
   type UiTreeTargetSpec,
 } from "@synara/shared/uiTreeTargeting";
 
-/** What the caller asked for. At least a label; role narrows an ambiguous one. */
+/** at least a label; role narrows an ambiguous one */
 export interface DeviceUiTarget {
   readonly label: string;
   readonly role?: string | undefined;
@@ -41,27 +41,18 @@ export interface DeviceUiTarget {
 export interface DeviceUiTargetMatch {
   readonly point: DeviceUiPoint;
   readonly node: DeviceUiNode;
-  /** False when the match is in the tree but scrolled out of the display. */
+  /** false when the match is in the tree but scrolled out of the display */
   readonly onScreen: boolean;
 }
 
 export class DeviceUiTargetError extends Error {
-  /** Candidate descriptions, so the agent can retry with a real label. */
+  /** candidate descriptions, so the agent can retry with a real label */
   readonly candidates: readonly string[];
-  /**
-   * True when nothing matched the label at all.
-   *
-   * Distinguished from an ambiguous or off-screen match because long lists are
-   * virtualized: UIKit only materializes the rows near the viewport, so a row
-   * further down is genuinely absent from the tree until scrolling reaches it.
-   * A scroll loop must keep looking; an ambiguity must not be retried.
-   */
+  /** distinguished from ambiguous/off-screen because long lists are virtualized — a row further down is genuinely absent until scrolled near; a scroll loop must keep looking, an ambiguity must not be retried */
   readonly notFound: boolean;
 
   constructor(message: string, candidates: readonly string[] = [], notFound = false) {
-    // Candidates go in the message, not just a field: every transport between
-    // here and the agent (MCP tool errors, WsRpcError) carries only the
-    // message, and a "no such label" with no list of real ones is a dead end.
+    // candidates go in the message, not just a field — every transport to the agent carries only the message
     const listed =
       candidates.length === 0
         ? message
@@ -73,7 +64,7 @@ export class DeviceUiTargetError extends Error {
   }
 }
 
-/** How many near-misses to name; a whole screen of labels is noise, not help. */
+/** how many near-misses to name — a whole screen of labels is noise */
 const MAX_REPORTED_CANDIDATES = 12;
 
 const childrenOf = (node: DeviceUiNode): readonly DeviceUiNode[] => node.children;
@@ -85,7 +76,7 @@ function labelledNodes(root: DeviceUiNode): readonly DeviceUiNode[] {
   );
 }
 
-/** Every label currently rendered, used to tell a moving list from a stuck one. */
+/** every label currently rendered — tells a moving list from a stuck one */
 export function visibleLabels(root: DeviceUiNode): string[] {
   return labelledNodes(root).map((node) => node.label as string);
 }
@@ -106,7 +97,7 @@ function matchesRole(node: DeviceUiNode, role: string): boolean {
   );
 }
 
-/** A node is on screen when the point we would tap is inside the root's frame. */
+/** on screen when the point we'd tap is inside the root's frame */
 function isOnScreen(node: DeviceUiNode, root: DeviceUiNode): boolean {
   const point = tapPointForNode(node);
   return (
@@ -123,17 +114,7 @@ function describe(node: DeviceUiNode): string {
   return `${role} ${JSON.stringify(node.label ?? "")}${value}`;
 }
 
-/**
- * Locate the one node a label refers to, whether or not it is on screen.
- *
- * Exact label matches win outright: a screen with both "Developer" and
- * "Developer Mode" must not be ambiguous when the caller said "Developer".
- * Only when nothing matches exactly does this fall back to substring.
- *
- * Ambiguity is judged among visible matches first. A list that repeats a
- * label down its length would otherwise be unresolvable, when in practice the
- * one on screen is the one meant.
- */
+/** exact matches win outright — "Developer" must not be ambiguous when "Developer Mode" also exists; falls back to substring only when nothing matches exactly; ambiguity judged among visible matches first */
 export function findTarget(root: DeviceUiNode, target: DeviceUiTarget): DeviceUiTargetMatch {
   if (normalize(target.label).length === 0) {
     throw new DeviceUiTargetError("A tap target needs a non-empty label.");
@@ -175,20 +156,13 @@ function deviceTargetSpec(
   };
 }
 
-/**
- * The band a target must land in to count as usable.
- *
- * Not the whole screen: a row sitting under the status bar or behind a home
- * indicator is technically visible and practically untappable, and a row at
- * the very edge tends to be half-clipped. The inset is a fraction of screen
- * height so it scales across devices.
- */
+/** not the whole screen — a row under the status bar or behind the home indicator is technically visible, practically untappable; fraction of height so it scales across devices */
 const SAFE_BAND_INSET_FRACTION = 0.12;
 
-/** One swipe covers most of a screen, but not so much that it overshoots. */
+/** one swipe covers most of a screen without overshooting */
 const SCROLL_INCREMENT_FRACTION = 0.6;
 
-/** Long enough to read as a drag rather than a flick, which would coast past. */
+/** long enough to read as a drag rather than a flick that coasts past */
 export const SCROLL_SWIPE_DURATION_MS = 400;
 
 export interface DeviceScrollStep {
@@ -199,14 +173,7 @@ export interface DeviceScrollStep {
   readonly durationMs: number;
 }
 
-/**
- * The swipe that moves a target toward the safe band, or null when it is
- * already there.
- *
- * Content moves opposite to the finger: to bring up something below the fold
- * the finger travels up, so the gesture always starts at the far side of the
- * screen from where it is heading.
- */
+/** content moves opposite to the finger — to bring up something below the fold the finger travels up, starting at the far side */
 export function planScrollStep(node: DeviceUiNode, root: DeviceUiNode): DeviceScrollStep | null {
   const inset = root.frame.height * SAFE_BAND_INSET_FRACTION;
   const bandTop = root.frame.y + inset;
@@ -218,8 +185,7 @@ export function planScrollStep(node: DeviceUiNode, root: DeviceUiNode): DeviceSc
   const increment = root.frame.height * SCROLL_INCREMENT_FRACTION;
   const midX = root.frame.x + root.frame.width / 2;
   const screenCentre = root.frame.y + root.frame.height / 2;
-  // Never swipe further than the gap: a target just past the band should not
-  // be flung to the other side of the screen and need a correcting swipe back.
+  // never swipe further than the gap — a target just past the band shouldn't be flung to the other side
   const distance = Math.min(increment, Math.abs(centre - screenCentre));
   const from = centre > bandBottom ? screenCentre + distance / 2 : screenCentre - distance / 2;
   const to = centre > bandBottom ? from - distance : from + distance;
@@ -227,16 +193,12 @@ export function planScrollStep(node: DeviceUiNode, root: DeviceUiNode): DeviceSc
   return { fromX: midX, fromY: from, toX: midX, toY: to, durationMs: SCROLL_SWIPE_DURATION_MS };
 }
 
-/** The two shapes a tap request can take, once validated. */
+/** the two shapes a tap request can take, once validated */
 export type DeviceTapRequest =
   | { readonly kind: "point"; readonly x: number; readonly y: number }
   | { readonly kind: "element"; readonly target: DeviceUiTarget };
 
-/**
- * Decide whether a tap names a point or an element, rejecting the shapes that
- * are neither. The schema cannot express "x and y together, or label" on its
- * own, so the either/or lives here and both callers share it.
- */
+/** the schema can't express "x and y together, or label" — the either/or lives here and both callers share it */
 export function readTapRequest(input: {
   readonly x?: number | undefined;
   readonly y?: number | undefined;

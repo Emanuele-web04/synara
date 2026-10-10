@@ -1,6 +1,3 @@
-// FILE: providerUsage/providers/opencode.test.ts
-// Purpose: Covers OpenCode Go auth discovery on Windows XDG paths and the /zen/go/v1/usage parser.
-
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";

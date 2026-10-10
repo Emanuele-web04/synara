@@ -1,7 +1,3 @@
-// FILE: windowsProcessSnapshot.ts
-// Purpose: Maintains one bounded Windows process-table observer shared by runtime owners.
-// Layer: Server Windows platform runtime
-
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 
@@ -21,9 +17,7 @@ const SNAPSHOT_START_MARKER = "@snapshot";
 const SNAPSHOT_END_MARKER = "@end";
 const SNAPSHOT_ERROR_MARKER = "@error";
 
-// EncodedCommand leaves stdin available for the request loop. CreationDate is
-// included so delayed teardown never mistakes a reused Windows PID for the
-// provider child that was originally captured.
+// CreationDate included so delayed teardown never mistakes a reused Windows PID for the captured child
 const WINDOWS_PROCESS_SNAPSHOT_SCRIPT = `
 $ErrorActionPreference = 'Stop'
 while (($request = [Console]::In.ReadLine()) -ne $null) {
@@ -126,7 +120,7 @@ function decodeSnapshotCommand(encodedCommand: string): string | null {
   }
 }
 
-/** Parses one base64-delimited worker row without trusting command-line contents as separators. */
+/** parses one base64-delimited worker row without trusting command-line contents as separators */
 export function parseWindowsProcessSnapshotLine(
   line: string,
 ): { pid: number; ppid: number; command: string; startedAt?: string } | null {
@@ -138,8 +132,7 @@ export function parseWindowsProcessSnapshotLine(
   if (!encodedCommand) return null;
   const pid = Number(pidRaw);
   const ppid = Number(ppidRaw);
-  // Win32_Process includes the System Idle Process as PID 0. Root process-tree
-  // APIs still require a positive PID, but rejecting this row invalidates every snapshot.
+  // Win32_Process includes System Idle as PID 0 — root APIs need a positive PID, but rejecting the row invalidates every snapshot
   if (!Number.isInteger(pid) || pid < 0 || !Number.isInteger(ppid) || ppid < 0) return null;
   const command = decodeSnapshotCommand(encodedCommand);
   if (command === null) return null;
@@ -360,7 +353,7 @@ export function createWindowsProcessSnapshotObserver(
   };
 }
 
-/** Keeps teardown recovery inside its short proof windows without spawning fallback probes. */
+/** keeps teardown recovery inside its short proof windows without spawning fallback probes */
 export function createWindowsTeardownProcessSnapshotObserver(
   options: WindowsTeardownProcessSnapshotObserverOptions = {},
 ): TeardownProcessChildrenSnapshotObserver {
@@ -414,7 +407,7 @@ export function createWindowsTeardownProcessSnapshotObserver(
   };
 }
 
-/** One-shot fallback for callers that do not own a shared observer. */
+/** one-shot fallback for callers that don't own a shared observer */
 export async function captureWindowsProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
   const observer = createWindowsProcessSnapshotObserver();
   try {

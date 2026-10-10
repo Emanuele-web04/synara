@@ -96,9 +96,7 @@ describe("EditorWorkspaceView", () => {
       <EditorWorkspaceView {...makeEditorBaseProps()} selectedFilePath="docs/spec.pdf" />,
     );
 
-    // The custom viewer renders its own surface (here the initial loading state
-    // since document fetch runs in an effect) rather than the browser iframe or
-    // the text preview.
+    // The custom viewer renders its own surface (here the initial loading state since document fetch runs in an effect) rather than the browser iframe or the text preview.
     expect(markup).toContain('aria-label="Loading PDF..."');
     expect(markup).not.toContain("<iframe");
     expect(markup).not.toContain("editor-file-viewer__plain");

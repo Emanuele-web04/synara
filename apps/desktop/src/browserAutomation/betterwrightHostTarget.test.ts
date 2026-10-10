@@ -97,7 +97,6 @@ describe("synaraHostTarget", () => {
     expect(leased.closed).toBe(false);
     await leased.close();
     expect(leased.closed).toBe(true);
-    // Lease rotation drains gracefully; abort paths cancel via revokeAll(true).
     expect(conn.recordedClose).toHaveBeenCalledWith(false);
   });
 

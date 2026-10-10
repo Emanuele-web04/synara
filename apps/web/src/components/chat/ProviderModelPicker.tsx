@@ -121,11 +121,7 @@ function isUnsupportedProviderInstanceStatus(status: ServerProviderStatus): bool
 
 export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
 
-// Removes user-hidden providers from a provider option list while always
-// preserving any providers the caller marks as protected (the active and
-// locked provider for the current thread). Without that carve-out, hiding the
-// provider you're already using would erase the entry that lets you switch
-// away from it.
+// always preserve protected providers (active + locked) — hiding the provider in use would erase the entry that lets you switch away
 function filterProviderOptionsByVisibility<T extends { value: ProviderKind }>(
   options: ReadonlyArray<T>,
   hiddenProviders: ReadonlySet<ProviderKind>,
@@ -139,8 +135,7 @@ function filterProviderOptionsByVisibility<T extends { value: ProviderKind }>(
   );
 }
 
-// Providers the picker may offer: installed ones in the user's order, minus hidden
-// providers, always keeping the active/locked provider reachable.
+// Providers the picker may offer: installed ones in the user's order, minus hidden providers, always keeping the active/locked provider reachable.
 export function resolveVisibleProviderOptions(input: {
   provider: ProviderKind;
   lockedProvider: ProviderKind | null;
@@ -319,9 +314,7 @@ type ProviderModelMenuItemsProps = {
   onAfterSelection?: () => void;
 };
 
-// Renders only the popup body of the provider/model picker. Designed to be
-// dropped into any shared picker popup or submenu so the same selection logic can
-// be reused by the standalone picker and the combined composer trait picker.
+// Renders only the popup body of the provider/model picker. Designed to be dropped into any shared picker popup or submenu so the same selection logic can be reused by the standalone picker and the combined composer trait picker.
 export const ProviderModelMenuItems = function ProviderModelMenuItems(
   props: ProviderModelMenuItemsProps,
 ) {

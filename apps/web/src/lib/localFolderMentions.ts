@@ -1,8 +1,3 @@
-// FILE: localFolderMentions.ts
-// Purpose: Centralize the composer rules for entering local-folder mention browsing.
-// Layer: Web composer helper
-// Exports: local mention constants plus query/root helpers used by ChatView and command menus.
-
 export const LOCAL_FOLDER_MENTION_NAME = "local";
 
 const UNC_SHARE_ROOT_PATTERN = /^(\\\\[^\\/]+[\\/][^\\/]+)(?:[\\/]|$)/;
@@ -54,11 +49,6 @@ export function getLocalFolderBrowseRootPath(
   return normalizedHomeDir;
 }
 
-/**
- * Expand a leading `~` / `~/` / `~\` into the configured home directory.
- * Returns the input unchanged when the path does not start with `~` or when
- * homeDir is missing (so the caller can surface "unavailable" states).
- */
 export function expandLocalFolderPath(value: string, homeDir: string | null | undefined): string {
   if (!value) return value;
   const normalizedHomeDir = homeDir?.trim() ?? "";
