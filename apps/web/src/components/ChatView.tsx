@@ -1903,34 +1903,36 @@ export default function ChatView({
             latestTurn: serverThread.latestTurn,
           })
     : null;
+  const subagentRole = serverThread?.subagentRole ?? null;
+  const subagentModelLabel = formatSubagentModelLabel(serverThread?.modelSelection.model) ?? null;
+  const subagentProvider = serverThread?.modelSelection.provider ?? null;
+  const subagentEndedAt =
+    subagentThreadRunRow?.endedAtMs != null
+      ? new Date(subagentThreadRunRow.endedAtMs).toISOString()
+      : (serverThread?.latestTurn?.completedAt ?? null);
   const subagentThread = useMemo<SubagentThreadPresentation | null>(
     () =>
-      serverThread?.parentThreadId && subagentParentThreadId
+      subagentParentThreadId && subagentProvider
         ? {
             parentThreadId: subagentParentThreadId,
             parentTitle: subagentParentTitle ?? "the parent thread",
-            role: serverThread.subagentRole ?? null,
-            modelLabel: formatSubagentModelLabel(serverThread.modelSelection.model) ?? null,
-            provider: serverThread.modelSelection.provider,
+            role: subagentRole,
+            modelLabel: subagentModelLabel,
+            provider: subagentProvider,
             statusKind: subagentStatusKind,
             startedAt: subagentStartedAt,
-            endedAt:
-              subagentThreadRunRow?.endedAtMs != null
-                ? new Date(subagentThreadRunRow.endedAtMs).toISOString()
-                : (serverThread.latestTurn?.completedAt ?? null),
+            endedAt: subagentEndedAt,
           }
         : null,
     [
-      serverThread?.latestTurn?.completedAt,
-      serverThread?.modelSelection.model,
-      serverThread?.modelSelection.provider,
-      serverThread?.parentThreadId,
-      serverThread?.subagentRole,
+      subagentEndedAt,
+      subagentModelLabel,
       subagentParentThreadId,
       subagentParentTitle,
+      subagentProvider,
+      subagentRole,
       subagentStartedAt,
       subagentStatusKind,
-      subagentThreadRunRow?.endedAtMs,
     ],
   );
   const resolvedCrossTaskOrigin = useMemo(

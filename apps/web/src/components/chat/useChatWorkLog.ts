@@ -280,20 +280,20 @@ export function useChatWorkLog({
   // own. Their launcher reports the same authoritative outcome the card uses.
   const subagentThreadRunRow = useMemo(
     () =>
-      activeThread?.parentThreadId
+      stripParentThreadId && activeThreadId
         ? findLatestSubagentThreadRun({
             entries: foldSubagentRunWorkEntries(stripWorkLogEntries),
             threads: stripRelevantWorkLogThreads,
             parentThreadId: stripSourceThreadId,
             liveTurnId: stripLiveTurnId,
-            childThreadId: activeThread.id,
+            childThreadId: activeThreadId,
             taskEndByToolUseId: subagentTaskEnds,
             backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
           })
         : null,
     [
-      activeThread?.id,
-      activeThread?.parentThreadId,
+      activeThreadId,
+      stripParentThreadId,
       stripWorkLogEntries,
       stripRelevantWorkLogThreads,
       stripSourceThreadId,
