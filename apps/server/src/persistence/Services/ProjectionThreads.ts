@@ -11,11 +11,13 @@ import {
   ModelSelection,
   NonNegativeInt,
   OrchestrationThreadPullRequest,
+  PendingClaudeCacheReview,
   ThreadNotes,
   ThreadGoal,
   ThreadGoalAchievements,
   ThreadPinnedMessages,
   ThreadHandoff,
+  ThreadSidechatContext,
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
@@ -74,6 +76,8 @@ export const ProjectionThread = Schema.Struct({
   subagentRole: Schema.optional(Schema.NullOr(Schema.String)),
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   sidechatSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Standalone sidechats only (see ThreadSidechatContext); null for every other thread.
+  sidechatContext: Schema.optional(Schema.NullOr(ThreadSidechatContext)),
   sidechatLastActivityAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -83,6 +87,9 @@ export const ProjectionThread = Schema.Struct({
   lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
   latestTurnId: Schema.NullOr(TurnId),
   handoff: Schema.NullOr(ThreadHandoff),
+  // Omission preserves an existing review during legacy whole-row upserts;
+  // null explicitly clears it.
+  claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   pinnedMessages: Schema.NullOr(ThreadPinnedMessages),
   notes: Schema.NullOr(ThreadNotes),
   goal: Schema.NullOr(ThreadGoal),
@@ -96,6 +103,7 @@ export const ProjectionThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
+  latestHumanMessageAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
@@ -105,6 +113,12 @@ export const ProjectionThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   settledAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  snoozeReminderAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   deletedAt: Schema.NullOr(IsoDateTime),

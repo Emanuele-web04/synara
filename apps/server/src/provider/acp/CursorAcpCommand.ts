@@ -9,7 +9,11 @@
 import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 
-import { executableCandidates, executableNameCandidates } from "@synara/shared/executable";
+import {
+  executableCandidates,
+  executableNameCandidates,
+  windowsPathExtensions,
+} from "@synara/shared/executable";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import {
   commandExistsOnPath,
@@ -251,9 +255,14 @@ export function resolveCursorAgentBinaryPath(
   if (commandExistsOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)) {
     return DEFAULT_CURSOR_AGENT_BINARY;
   }
+  // Cursor's native installer also ships PowerShell shims. These are launched
+  // through wrapPowerShellCommand rather than native process creation.
+  const env = options.env ?? process.env;
   return (
-    resolveWindowsLocalAppDataBinary(WINDOWS_CURSOR_AGENT_RELATIVE_PATHS, options) ??
-    DEFAULT_CURSOR_AGENT_BINARY
+    resolveWindowsLocalAppDataBinary(WINDOWS_CURSOR_AGENT_RELATIVE_PATHS, {
+      ...options,
+      env: { ...env, PATHEXT: [...windowsPathExtensions(env), ".PS1"].join(";") },
+    }) ?? DEFAULT_CURSOR_AGENT_BINARY
   );
 }
 
@@ -269,7 +278,7 @@ export function buildCursorAgentCommand(
     pathExists: options.pathExists ?? existsSync,
     realpath: options.realpath ?? realpathSync.native,
   };
-  const command = resolveCursorAgentBinaryPath(binaryPath, commandOptions);
+  const command = resolveCursorAgentBinaryPath(binaryPath, options);
   const editorLauncher = resolveCursorEditorLauncherCommand(command, commandOptions);
   const resolvedCommand = editorLauncher
     ? { command: editorLauncher.command, args: [...editorLauncher.args, ...args] }

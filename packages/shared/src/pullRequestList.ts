@@ -71,7 +71,7 @@ function mergeProjectContexts(
 }
 
 function preferredProjectContext(
-  entry: Pick<PullRequestListEntry, "headBranch">,
+  entry: { readonly headBranch?: string | undefined },
   contexts: readonly PullRequestProjectContext[],
   preferredProjectId: ProjectId | undefined,
 ): PullRequestProjectContext {
@@ -80,22 +80,31 @@ function preferredProjectContext(
     : undefined;
   if (explicitlyPreferred) return explicitlyPreferred;
 
-  const normalizedHeadBranch = entry.headBranch.trim().toLowerCase();
+  // A worktree project named after the PR branch is the natural place to open it. Issues have no
+  // head branch and fall back to the first project in title order.
+  const normalizedHeadBranch = entry.headBranch?.trim().toLowerCase();
   return (
-    contexts.find(
-      (context) => context.projectTitle.trim().toLowerCase() === normalizedHeadBranch,
-    ) ?? contexts[0]!
+    (normalizedHeadBranch
+      ? contexts.find(
+          (context) => context.projectTitle.trim().toLowerCase() === normalizedHeadBranch,
+        )
+      : undefined) ?? contexts[0]!
   );
 }
 
-/** Collapse project/worktree fan-out into one visible row per GitHub PR while retaining every
- * local project association. The chosen top-level project is only the context used to open the
- * detail panel; remote identity and aggregate pin state remain repository-level. */
-export function coalescePullRequestListEntries(
-  entries: readonly PullRequestListEntry[],
+type CoalescibleListEntry = ProjectAwarePullRequestEntry & {
+  readonly projectTitle: string;
+  readonly viewerReviewRequested?: boolean;
+};
+
+/** Collapse project/worktree fan-out into one visible row per GitHub PR or issue while retaining
+ * every local project association. The chosen top-level project is only the context used to open
+ * the detail panel; remote identity and aggregate pin state remain repository-level. */
+export function coalescePullRequestListEntries<T extends CoalescibleListEntry>(
+  entries: readonly T[],
   options: { readonly preferredProjectId?: ProjectId | undefined } = {},
-): PullRequestListEntry[] {
-  const entriesByIdentity = new Map<string, PullRequestListEntry[]>();
+): T[] {
+  const entriesByIdentity = new Map<string, T[]>();
   for (const entry of entries) {
     const identity = pullRequestListRepositoryIdentity(entry);
     const group = entriesByIdentity.get(identity);
@@ -113,8 +122,10 @@ export function coalescePullRequestListEntries(
       projectTitle: preferred.projectTitle,
       projectContexts: contexts,
       isPinned: contexts.some((context) => context.isPinned),
-      viewerReviewRequested: group.some((entry) => entry.viewerReviewRequested),
-    };
+      ...(first.viewerReviewRequested === undefined
+        ? {}
+        : { viewerReviewRequested: group.some((entry) => entry.viewerReviewRequested === true) }),
+    } as T;
   });
 }
 

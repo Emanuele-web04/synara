@@ -1,0 +1,186 @@
+# Claude cache recovery
+
+Synara retains Claude Code's native cache behavior. Saved conversation history is durable; the
+provider's prompt cache has a limited lifetime. A process restart does not necessarily invalidate a
+warm prefix, and a process left running does not refresh an idle prefix.
+
+## Evidence and policy
+
+The Claude adapter keeps optional cache observations with the native resume cursor. It accepts
+native SessionStart metadata and request usage, with session and generation checks. Usage is
+deduplicated by API message ID; repeated assistant blocks do not count as separate requests.
+Main-conversation observations exclude subagent usage.
+
+The lifetime comes from native cache-creation usage, when available. The estimate uses the earliest
+local observation of the request, so streaming a long answer does not keep moving the expiry time.
+Mixed five-minute and one-hour prefixes retain both lifetimes, including when later requests read
+the longer-lived prefix and append a shorter-lived tail. Between those expiry boundaries, overall
+warmth is unknown: partial expiry does not establish a full-context cache miss or require a choice.
+The context meter displays the observed lifetime range. New native response evidence replaces
+older request timing; its request start and lifetime remain unknown until usage supplies them.
+Metadata for the same response retains its known request start, allowing genuine expiry during a
+long response to remain visible.
+An explicit expired observation takes precedence over a local warm estimate. Missing values, old
+sessions without timing evidence, and invalid clocks remain unknown.
+
+Before sending a user message, the orchestration layer obtains a bounded local observation without
+queueing the prompt. A context larger than 100,000 tokens with evidence of an expired cache requires
+a choice. This applies to a resumed process and a long pause in the same process. Unknown evidence
+does not block ordinary use. There is no periodic inference to maintain or inspect the cache.
+
+The displayed input, cache-read, and cache-write counts describe requests. They are not percentages
+of an Anthropic subscription allowance. A warm estimate does not guarantee a hit if the provider
+changes the prefix or configuration.
+
+## Durable choices
+
+The original message and attachments use the existing conversation journal. A nullable projection
+field stores the pending review, its message and source event, assessment, status, and optional
+compaction turn identity. The review appears in full, detail, and shell snapshots.
+
+| Choice                     | Behavior                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------- |
+| Continue with full context | Revalidate the saved assessment and deliver the held message once through ordinary orchestration. |
+| Compact, then send         | Run a separate native `/compact` operation; deliver the held message only after verified success. |
+| Cancel this send           | Clear the pending send while retaining the conversation message.                                  |
+
+Once a choice is accepted, the review panel hides and progress moves to the transcript: the Claude
+adapter publishes a "Compacting context" row when native compaction starts (explicit `/compact` or a
+native `compacting` status), resolves it at the compact boundary, and marks it failed if the turn ends
+without one. The panel returns only for a failed or uncertain review.
+
+Waiting for a choice releases the delivery lock. Other tasks continue normally; queue promotion in
+the affected task waits. A response identifies the review and message, and stale or duplicate
+responses cannot authorize a different send. Relevant session, model, or context changes require
+revalidation. Archive, stop, and delete revoke pending authorization.
+Accepted choices also release the ordered delivery source after acquiring a durable claim. A scoped
+worker owns compaction preparation and the subsequent send, without the ordinary two-minute command
+deadline. Slow compaction or a slow follow-up therefore does not become an uncertain delivery merely
+because time elapsed, and other tasks can still send. Advancing the source cursor is only admission;
+the delivery stays inflight until its actual result is persisted. Startup recovers unfinished cache
+responses even when their sequence is behind that cursor, without replaying an ambiguous send.
+Recovery registers the same cancellation state while awaiting an earlier owner's inflight claim,
+so a claim that becomes safely retryable still observes later cancellation. Lease expiry alone
+continues to leave ambiguous saved-message delivery uncertain; cancellation does not prove rejection.
+Stop and other cancellation commands can interrupt a pending follow-up; an interrupted send whose
+acceptance cannot be proven still requires reconciliation rather than automatic replay.
+Continue checks the cancellation journal before starting its worker and immediately before enqueue,
+including interrupts, rollback, and edited resends that arrived before live cancellation registration.
+Same-thread model and runtime changes remain projected but defer session reconfiguration while the
+cache worker owns it. An explicit handoff reports failure until that saved operation finishes or is
+cancelled, preserving its reviewed session and providing a settled handoff outcome.
+An operator-authorized safe retry uses the same reactor-owned worker. Reconciliation waits for its
+receipt outside the ordered source lock, so a slow retry does not block other tasks or inherit the
+ordinary command deadline.
+Installing a hold and marking the session ready happen in one command. Admission checks the
+conversation journal for cancellation after the source request, including cancellation during a
+cache observation, so a delayed hold cannot revive a stopped task.
+
+The provider may accept a prompt before Synara persists the acknowledgement. This is not an
+exactly-once external API. An ambiguous delivery remains uncertain instead of being blindly
+replayed. Cancelling a held send preserves its text for copying; it does not promise that the
+existing edit-and-resend action is available for a message with no provider turn yet.
+
+## Native compaction
+
+Command discovery is local and bounded. Unsupported runtimes leave compaction unavailable. The
+adapter allows up to five seconds for command discovery, including fresh or resumed processes,
+so initialization does not hold the ordered provider dispatch source for a minute. A timeout reports
+a retryable discovery failure rather than claiming the runtime does not support compaction; the
+same runtime can finish initializing before a retry. A UI stop, interrupt, archive, or delete cancels
+active discovery through a separate local signal, so it does not wait behind discovery in the
+ordered delivery queue. Conversation rollback and edit-and-resend use the same signal before
+changing history.
+The compaction response owns its signal before the provider handoff. Startup replay checks the
+durable journal for cancellations after that response, so an old choice cannot dispatch after an
+interrupt and a later retry remains valid. The signal stays active through preparation until prompt
+enqueue. Direct `/compact` turns use the same request-owned signal before session startup and
+cache preflight, pass it through local dispatch options to the adapter, and fence startup replay
+against later cancellations. The signal is never serialized into provider input or saved history.
+Steered `/compact` requests retain the same signal when a live turn settles during preparation.
+Direct and cache-review compaction also cancel pending session startup and cache preflight, waiting for startup
+cleanup and preserving unproven-exit failures instead of reporting them as safe rejections.
+All native compaction entry points preserve the established model, settings, and permission mode;
+pending selection, access-mode, and Computer profile changes apply to the next ordinary prompt.
+Native compaction does not admit a new Computer intent. Compaction does not wait on model or
+settings control requests or persist an unapplied selection as the active runtime model. Spawn-fixed
+choices are also deferred before session preparation, so native compaction does not restart to apply
+them or change the established session's access mode. The journal fence is refreshed at provider dispatch to cover a delayed live subscriber; the
+adapter checks the signal and enqueues native compaction in one synchronous admission step.
+Cancelled direct compaction defers queue promotion until the ordered cancelling control settles.
+Its optimistic session status is restored from the runtime before interrupt handling, preserving
+an established idle session for retry. Rollback keeps its existing queue policy and does not trigger
+an additional cancellation-recovery drain.
+Session teardown and native interrupts still run in their original order. Compaction reuses its validated command list rather
+than issuing another lookup after turn admission. Cancellation or dispatch interruption during
+runtime-event publication settles the local reservation without dispatching the prompt. An
+adapter-owned producer retains the ordered start, progress, and cancelled terminal events until
+the bounded event queue can accept them. Further dispatch and reconfiguration wait for that
+publication, keeping it bounded. Ordinary sends wait for that producer rather than being rejected;
+another native compaction remains a retryable rejection until publication settles. Stopping the
+session also ends discovery and publication waits immediately.
+The adapter treats discovery failures as pre-dispatch rejections, so they leave the saved send retryable. The
+adapter requires an idle session with no pending interactions or tasks that share the context, and
+rechecks that condition after asynchronous preparation. It preserves the current model, permission
+mode, and settings. Plan and Ultrathink prompt prefixes must not be prepended to a native command.
+
+A successful result alone is insufficient: the operation must observe the corresponding native
+compaction boundary as well. A failed, interrupted, or unrelated operation cannot release the held
+message. The original message must not be bound to the temporary compaction turn.
+Release also waits for the compaction dispatch to settle and for runtime ingestion to acknowledge
+the terminal event. This prevents delayed compaction lifecycle events from consuming the restored
+pending-message binding. Claude's live turn state is settled before the adapter publishes completion,
+so a released send does not encounter the just-finished compaction as active work. A matching
+uncertain review completes through one atomic internal command.
+That verified completion also authorizes sending with the reduced context in the same native
+session, generation, and model, even if the remaining history exceeds 100,000 tokens and the cache
+observation still reports expiry. Increased context or changed session identity requires a fresh
+review. An unexpected invariant failure while releasing the message leaves an actionable failed
+review and is reported instead of silently leaving compaction in progress.
+At startup, that task's domain failure does not block recovery of other tasks. Infrastructure
+failures and cancellation still propagate. If a native compaction has neither a recorded terminal
+event nor a matching live turn, its uncertain control delivery is abandoned without retrying it.
+The saved message stays held for a fresh choice. Uncertainty about delivery of the user's message
+after compaction remains quarantined and requires separate reconciliation.
+
+Stopping or archiving remains available while delivery is uncertain. Revoking the send review does
+not discard the persisted compaction execution evidence: matching late terminal events can settle
+the control delivery without restoring consent, sending the cancelled message, or replaying later
+sends that were blocked during quarantine. Startup uses the
+same evidence when the visible review has already been cleared.
+
+The standalone compact action retains its exact command in browser session storage until acceptance
+is confirmed by the RPC response or observed in the conversation. Retrying after a lost acknowledgement reuses the command receipt,
+including after route changes or a page reload. A proven server rejection releases that identity;
+a timeout or transport error does not create a new compaction.
+
+Compaction after cache expiry still reads the old history once. Its benefit is the smaller history
+on subsequent requests. Synara does not remove old screenshots from the Claude transcript, rewrite
+the JSONL, force a cache lifetime, or change the user's model or automatic-compaction threshold.
+
+## Verification boundaries
+
+Automated checks cover cache lifetimes, missing metadata, clock skew, repeated usage, callback
+ordering, durable review persistence, duplicate choices, queue isolation, stale authorization, and
+compaction correlation. Browser fixtures exercise the review controls and native command action.
+These fixtures do not demonstrate actual Anthropic billing or cache reuse.
+
+A local protocol probe with SDK 0.3.259 and Claude Code 2.1.272 initialized an isolated session
+without sending a prompt. It verified native command discovery and context-summary access.
+SessionStart did not arrive before a prompt in that probe, which is why saved observations are
+needed. This is evidence about the tested runtime, not a capability guarantee for every version.
+
+Live CLI/SDK/Synara cache parity remains a separate validation gate. Compare the same runtime,
+account, model, effort, settings, directory, tools, and prompt prefix with small synthetic sessions
+and an explicit inference budget. Measure warm resume, cold resume, restart, and image retention
+separately. Do not use a large customer transcript as the workload or equate simulated timestamps
+with real server expiry. No percentage saving or subscription-quota reduction follows from the
+offline tests.
+
+## Provider references
+
+- [Claude Code prompt caching](https://code.claude.com/docs/en/prompt-caching)
+- [SessionStart metadata](https://code.claude.com/docs/en/hooks#sessionstart-input)
+- [Resume from a summary](https://code.claude.com/docs/en/sessions#resume-from-a-summary)
+- [Agent SDK native compaction](https://code.claude.com/docs/en/agent-sdk/slash-commands#compact-history-with-compact)
+- [Anthropic cache diagnostics](https://platform.claude.com/docs/en/build-with-claude/cache-diagnostics)

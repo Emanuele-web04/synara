@@ -1,35 +1,13 @@
 import type {
+  GitHubViewerInvolvement,
   PullRequestActor,
-  PullRequestInvolvement,
   PullRequestListEntry,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
-  PullRequestState,
 } from "@synara/contracts";
 
-import type { GitHubPullRequestListItem } from "./git/Services/GitHubCli.ts";
+import type { GitHubInboxPullRequest } from "./git/Services/GitHubCli.ts";
 export { isValidGitHubRepositoryNameWithOwner } from "@synara/shared/githubRepository";
-
-export function pullRequestListCacheKey(
-  repository: string,
-  state: PullRequestState,
-  involvement: PullRequestInvolvement,
-  viewer: string,
-): string {
-  return `${repository.trim().toLowerCase()}:${state}:${involvement}:${viewer.trim().toLowerCase()}`;
-}
-
-/** A force refresh invalidates every sibling involvement cache for the same repository/state.
- * The caller still decides which involvement queries are actually needed for the response. */
-export function pullRequestListForceRefreshCacheKeys(input: {
-  repository: string;
-  state: PullRequestState;
-  viewer: string;
-}): string[] {
-  return (["all", "authored", "reviewing"] as const).map((involvement) =>
-    pullRequestListCacheKey(input.repository, input.state, involvement, input.viewer),
-  );
-}
 
 /** Repository-wide PR identity used to coalesce the same remote lookup across local projects. */
 export function repositoryPullRequestIdentityKey(input: {
@@ -87,13 +65,14 @@ export function selectRecoverablePullRequestPins<
   });
 }
 
-/** One mapping from a gh list item to the wire entry, shared by the capped batch path and the
- * individual pinned-PR recovery path so the two can never drift. */
+/** One mapping from an inbox pull request to the wire entry, shared by the snapshot path and the
+ * individual pinned-item recovery path so the two can never drift. */
 export function buildPullRequestListEntry(input: {
   project: { id: PullRequestListEntry["projectId"]; title: string };
   repository: string;
-  pullRequest: GitHubPullRequestListItem;
+  pullRequest: GitHubInboxPullRequest;
   viewerReviewRequested: boolean;
+  viewerInvolvement: GitHubViewerInvolvement;
   isPinned: boolean;
 }): PullRequestListEntry {
   const { pullRequest } = input;
@@ -126,17 +105,20 @@ export function buildPullRequestListEntry(input: {
     mergeability: pullRequest.mergeability,
     stack: pullRequest.stack,
     labels: pullRequest.labels,
+    commentCount: pullRequest.commentCount,
+    assignees: pullRequest.assignees,
+    viewerInvolvement: input.viewerInvolvement,
   };
 }
 
 /** Pinned work is the first thing the user sees; each section otherwise retains the existing
  * newest-updated-first ordering. */
-export function orderPullRequestListEntries(
-  entries: readonly PullRequestListEntry[],
-): PullRequestListEntry[] {
+export function orderPullRequestListEntries<
+  T extends { readonly isPinned?: boolean | undefined; readonly updatedAt: string },
+>(entries: readonly T[]): T[] {
   return [...entries].toSorted(
     (left, right) =>
-      Number(right.isPinned) - Number(left.isPinned) ||
+      Number(right.isPinned === true) - Number(left.isPinned === true) ||
       right.updatedAt.localeCompare(left.updatedAt),
   );
 }
@@ -153,36 +135,6 @@ export function isViewerReviewRequested(
     (matchedReviewingQuery ||
       reviewRequestLogins.some((login) => login.trim().toLowerCase() === normalizedViewer))
   );
-}
-
-/** Whether one exact PR belongs in an involvement-filtered result. `matchedReviewingQuery` carries
- * GitHub's authoritative search result when it is available, including team review requests that
- * cannot be inferred from the individual PR's user-only review-request logins. */
-export function pullRequestMatchesInvolvement(
-  pullRequest: Pick<GitHubPullRequestListItem, "author" | "reviewRequestLogins">,
-  involvement: PullRequestInvolvement,
-  viewer: string,
-  matchedReviewingQuery = false,
-): boolean {
-  if (involvement === "all") return true;
-  if (involvement === "reviewing") {
-    return isViewerReviewRequested(
-      pullRequest.author,
-      pullRequest.reviewRequestLogins,
-      viewer,
-      matchedReviewingQuery,
-    );
-  }
-  return pullRequest.author?.login.trim().toLowerCase() === viewer.trim().toLowerCase();
-}
-
-/** Closed and merged PRs cannot have an active review request, so the companion query only adds
- * information to the open all-involvement list. */
-export function shouldLoadReviewingCompanion(
-  state: PullRequestState,
-  involvement: PullRequestInvolvement,
-): boolean {
-  return state === "open" && involvement === "all";
 }
 
 export function isPullRequestMergeMethodAllowed(

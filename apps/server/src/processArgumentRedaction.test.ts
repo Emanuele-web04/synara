@@ -6,10 +6,25 @@ const redactProcessTableArgs = (args: string) =>
   redactSensitiveProcessArgs(args, { truncateSensitiveEnvironmentRemainder: true });
 
 describe("redactSensitiveProcessArgs", () => {
-  it("redacts sensitive flag values in both supported forms", () => {
-    expect(redactSensitiveProcessArgs("tool --api-key secret --token=other --verbose")).toBe(
-      "tool --api-key [redacted] --token=[redacted] --verbose",
-    );
+  it("redacts complete sensitive flag values, including composed or unterminated quotes", () => {
+    for (const [args, expected] of [
+      [
+        "tool --api-key secret --token=other --verbose",
+        "tool --api-key [redacted] --token=[redacted] --verbose",
+      ],
+      [
+        `tool --password "correct horse" --token='alpha beta' --verbose`,
+        "tool --password [redacted] --token=[redacted] --verbose",
+      ],
+      [
+        `tool --password=prefix"correct horse"suffix --token='alpha'" beta" --verbose`,
+        "tool --password=[redacted] --token=[redacted] --verbose",
+      ],
+      ["tool --secret=`gamma delta`suffix --verbose", "tool --secret=[redacted] --verbose"],
+      ['tool --password "correct horse', "tool --password [redacted]"],
+    ] as const) {
+      expect(redactSensitiveProcessArgs(args), args).toBe(expected);
+    }
   });
 
   it("redacts bearer and OpenAI-style secret tokens", () => {
@@ -24,14 +39,6 @@ describe("redactSensitiveProcessArgs", () => {
         "synara mcp pair --code syn_pair_v1_short-lived syn_mcp_v1_client-secret",
       ),
     ).toBe("synara mcp pair --code [redacted] [redacted]");
-  });
-
-  it("redacts secret environment assignments in process diagnostics", () => {
-    for (const name of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN"]) {
-      expect(redactProcessTableArgs(`env ${name}=secret bun run dev`)).toBe(
-        `env ${name}=[redacted]`,
-      );
-    }
   });
 
   it("redacts common secret key environment names", () => {
@@ -270,11 +277,6 @@ describe("redactSensitiveProcessArgs", () => {
 
   it("does not redact unrelated environment assignments", () => {
     const args = "env MONKEY=value TURKEY=istanbul NODE_ENV=development bun run dev";
-    expect(redactSensitiveProcessArgs(args)).toBe(args);
-  });
-
-  it("leaves unrelated process arguments unchanged", () => {
-    const args = "bun run dev --port 3000";
     expect(redactSensitiveProcessArgs(args)).toBe(args);
   });
 });

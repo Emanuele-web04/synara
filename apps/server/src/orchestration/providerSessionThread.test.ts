@@ -1,4 +1,4 @@
-import type { OrchestrationThread, ThreadId } from "@synara/contracts";
+import type { OrchestrationThreadShell, ThreadId } from "@synara/contracts";
 import { Deferred, Effect, Fiber, Option } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -11,17 +11,17 @@ describe("resolveProviderSessionThread", () => {
   it("propagates lookup failure, then recovers onto the parent lease key", async () => {
     const parentId = "thread-parent" as ThreadId;
     const childId = "subagent:thread-parent:child" as ThreadId;
-    const parent = { id: parentId, parentThreadId: null } as OrchestrationThread;
-    const child = { id: childId, parentThreadId: parentId } as OrchestrationThread;
+    const parent = { id: parentId, parentThreadId: null } as OrchestrationThreadShell;
+    const child = { id: childId, parentThreadId: parentId } as OrchestrationThreadShell;
     let childLookups = 0;
-    const getThreadDetailById = vi.fn((threadId: ThreadId) => {
+    const getThreadShellById = vi.fn((threadId: ThreadId) => {
       if (threadId === childId && childLookups++ === 0) {
         return Effect.fail(new Error("transient projection failure"));
       }
       return Effect.succeed(Option.some(threadId === childId ? child : parent));
     });
     const projectionSnapshotQuery = {
-      getThreadDetailById,
+      getThreadShellById,
       findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
     } as unknown as ProjectionSnapshotQueryShape;
 
@@ -71,6 +71,6 @@ describe("resolveProviderSessionThread", () => {
     );
 
     expect(childMutationStarted).toBe(true);
-    expect(getThreadDetailById).toHaveBeenCalledWith(parentId);
+    expect(getThreadShellById).toHaveBeenCalledWith(parentId);
   });
 });

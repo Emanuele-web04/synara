@@ -1,6 +1,6 @@
 // FILE: PullRequestContextCard.tsx
-// Purpose: Attachment-style cards for pull request context (the "Repair" / "Add to chat"
-//   bubbles): the composer card (remove) and the transcript card (click to reveal the
+// Purpose: Attachment-style cards for GitHub item context (the "Repair" / "Add to chat"
+//   bubbles, and the inbox's Send to agent / Ask cards for pull requests and issues): the composer card (remove) and the transcript card (click to reveal the
 //   prompt the card carried). Both share the AttachmentCard shell so they read like the
 //   file and pasted-text attachments beside them.
 // Layer: Chat composer/transcript presentation
@@ -13,8 +13,12 @@ import {
   GitMergeConflictIcon,
   GitPullRequestIcon,
   HammerIcon,
+  IssueOpenedIcon,
 } from "~/lib/icons";
-import { type PullRequestContextScope } from "~/lib/pullRequestContext";
+import {
+  type PullRequestContextItemKind,
+  type PullRequestContextScope,
+} from "~/lib/pullRequestContext";
 import { cn } from "~/lib/utils";
 import { AttachmentCard } from "./AttachmentCard";
 
@@ -28,6 +32,8 @@ const SCOPE_ICONS: Record<PullRequestContextScope, ComponentType<{ className?: s
 
 interface PullRequestContextCardShellProps {
   scope: PullRequestContextScope;
+  /** Absent means a pull request. An issue card always shows the issue glyph. */
+  itemKind?: PullRequestContextItemKind | undefined;
   title: string;
   subtitle: string;
   onRemove?: () => void;
@@ -36,12 +42,13 @@ interface PullRequestContextCardShellProps {
 
 function PullRequestContextCardShell({
   scope,
+  itemKind,
   title,
   subtitle,
   onRemove,
   className,
 }: PullRequestContextCardShellProps) {
-  const Icon = SCOPE_ICONS[scope];
+  const Icon = itemKind === "issue" ? IssueOpenedIcon : SCOPE_ICONS[scope];
   return (
     <AttachmentCard
       size="md"
@@ -57,6 +64,7 @@ function PullRequestContextCardShell({
 
 interface ComposerPullRequestContextCardProps {
   scope: PullRequestContextScope;
+  itemKind?: PullRequestContextItemKind | undefined;
   title: string;
   subtitle: string;
   onRemove: () => void;
@@ -70,6 +78,7 @@ export function ComposerPullRequestContextCard(props: ComposerPullRequestContext
 
 interface UserMessagePullRequestContextCardProps {
   scope: PullRequestContextScope;
+  itemKind?: PullRequestContextItemKind | undefined;
   title: string;
   subtitle: string;
   text: string;
@@ -79,6 +88,7 @@ interface UserMessagePullRequestContextCardProps {
 // user can audit what "Repair" asked for.
 export function UserMessagePullRequestContextCard({
   scope,
+  itemKind,
   title,
   subtitle,
   text,
@@ -93,10 +103,15 @@ export function UserMessagePullRequestContextCard({
         className="cursor-pointer rounded-xl text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onClick={() => setExpanded((value) => !value)}
       >
-        <PullRequestContextCardShell scope={scope} title={title} subtitle={subtitle} />
+        <PullRequestContextCardShell
+          scope={scope}
+          itemKind={itemKind}
+          title={title}
+          subtitle={subtitle}
+        />
       </button>
       {expanded ? (
-        <pre className="max-h-80 w-full max-w-full overflow-auto rounded-md border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] p-2 font-mono text-[11px] leading-snug whitespace-pre-wrap break-words text-foreground">
+        <pre className="max-h-80 w-full max-w-full overflow-auto rounded-md border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] p-2 font-mono text-ui-sm leading-snug whitespace-pre-wrap break-words text-foreground">
           {text}
         </pre>
       ) : null}

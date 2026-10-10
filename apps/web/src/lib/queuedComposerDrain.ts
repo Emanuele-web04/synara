@@ -5,7 +5,7 @@
 // Exports: drain gates, bounded retry state, exclusive per-thread send lock,
 //          locked-dispatch helper, steer-gate sharing, ChatView claim/release, watcher start
 
-import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
+import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
 import {
   createLocalDispatchSnapshot,
@@ -21,6 +21,7 @@ import { useStore, type AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import type { SessionPhase } from "../types";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
+import { newMessageId } from "./utils";
 
 export interface QueuedComposerAutoDispatchGates {
   hasQueueableLiveTurn: boolean;
@@ -30,6 +31,7 @@ export interface QueuedComposerAutoDispatchGates {
   isAwaitingTurnStart: boolean;
   steerGate: QueuedSteerGate | null;
   hasPendingApproval: boolean;
+  hasPendingCacheReview?: boolean;
   hasPendingProgress: boolean;
   pendingUserInputCount: number;
   queuedTurnCount: number;
@@ -46,6 +48,7 @@ export function shouldAutoDispatchQueuedComposerTurn(
     gates.isAwaitingTurnStart ||
     gates.steerGate !== null ||
     gates.hasPendingApproval ||
+    gates.hasPendingCacheReview ||
     gates.hasPendingProgress ||
     gates.pendingUserInputCount > 0 ||
     gates.queuedTurnCount === 0
@@ -57,6 +60,7 @@ type QueuedComposerDispatchFn = (input: {
   queuedTurn: QueuedComposerTurn;
   dispatchMode: "queue" | "steer";
   assistantDeliveryMode: AssistantDeliveryMode;
+  messageId?: MessageId;
 }) => Promise<boolean>;
 
 const claimedThreadIds = new Set<ThreadId>();
@@ -315,6 +319,8 @@ function threadDrainSignal(state: AppState, threadId: ThreadId): string {
     thread.error ?? "",
     pendingApprovalCount,
     pendingUserInputCount,
+    thread.claudeCacheReview?.reviewId ?? "",
+    thread.claudeCacheReview?.status ?? "",
   ].join("|");
 }
 
@@ -331,8 +337,13 @@ function resetRetriesForRelevantThreadChanges(current: AppState, previous: AppSt
   for (const threadId of retryStateByThreadId.keys()) {
     // ChatView owns relevant state transitions while claimed. Let it consume
     // the same bounded retry budget instead of treating its own error reset as
-    // a fresh background-drain attempt.
-    if (claimedThreadIds.has(threadId)) {
+    // a fresh background-drain attempt. Cache review transitions release a held
+    // queue rather than retrying a failed send, so they reset the budget either way.
+    if (
+      claimedThreadIds.has(threadId) &&
+      (getThreadFromState(current, threadId)?.claudeCacheReview != null) ===
+        (getThreadFromState(previous, threadId)?.claudeCacheReview != null)
+    ) {
       continue;
     }
     if (threadDrainSignal(current, threadId) !== threadDrainSignal(previous, threadId)) {
@@ -370,6 +381,7 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
     isAwaitingTurnStart: awaitingTurnStartsByThreadId.has(threadId),
     steerGate: getQueuedComposerSteerGate(threadId),
     hasPendingApproval: pendingApprovals.length > 0,
+    hasPendingCacheReview: thread?.claudeCacheReview != null,
     hasPendingProgress: pendingUserInputs.length > 0,
     pendingUserInputCount: pendingUserInputs.length,
     queuedTurnCount: draft?.queuedTurns.length ?? 0,
@@ -405,6 +417,7 @@ function advanceAwaitingTurnStarts(): number | null {
         session: thread?.session ?? null,
         hasPendingApproval: pendingApprovals.length > 0,
         hasPendingUserInput: pendingUserInputs.length > 0,
+        claudeCacheReview: thread?.claudeCacheReview,
         threadError: thread?.error,
         now,
       })
@@ -543,8 +556,9 @@ function runQueuedComposerDrainPass(): void {
       continue;
     }
     const thread = getThreadFromState(useStore.getState(), threadId);
+    const messageId = newMessageId();
     const localDispatch = {
-      ...createLocalDispatchSnapshot(thread),
+      ...createLocalDispatchSnapshot(thread, { expectedUserMessageId: messageId }),
       startedAt: new Date(nowMs()).toISOString(),
     };
     void runLockedQueuedComposerAutoDispatch({
@@ -555,14 +569,18 @@ function runQueuedComposerDrainPass(): void {
           queuedTurn: nextQueuedTurn,
           dispatchMode: "queue",
           assistantDeliveryMode,
+          messageId,
         });
-        if (succeeded) {
+        const acceptedReview = getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview;
+        if (succeeded || acceptedReview?.messageId === messageId) {
           retryStateByThreadId.delete(threadId);
           awaitingTurnStartsByThreadId.set(threadId, localDispatch);
           useComposerDraftStore.getState().removeQueuedTurn(threadId, nextQueuedTurn.id);
           return;
         }
-        recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
+        if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
+          recordQueuedComposerAutoDispatchFailure(threadId, nextQueuedTurn.id);
+        }
       },
     });
   }

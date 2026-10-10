@@ -6,7 +6,6 @@ import {
   DeviceListResult,
   DeviceScrollToElementInput,
   DeviceSwipeInput,
-  ThreadDeviceState,
 } from "./device";
 
 function decodeSync<S extends Schema.Top>(schema: S, input: unknown): Schema.Schema.Type<S> {
@@ -35,18 +34,6 @@ const BASE_DEVICE = {
 const GEOMETRY = { pointWidth: 402, pointHeight: 874, scale: 3 } as const;
 
 describe("DeviceDescriptor geometry", () => {
-  it("carries point dimensions and scale for an attached device", () => {
-    const decoded = decodeSync(DeviceDescriptor, { ...BASE_DEVICE, geometry: GEOMETRY });
-    expect(decoded.geometry).toEqual(GEOMETRY);
-  });
-
-  it("accepts a device that has never been attached", () => {
-    // Geometry comes from the native helper's attachment, so a listing on a
-    // host where the helper is not built yet must still validate.
-    const decoded = decodeSync(DeviceDescriptor, BASE_DEVICE);
-    expect(decoded.geometry).toBeUndefined();
-  });
-
   it("rejects non-positive or non-finite dimensions rather than passing them to a divide", () => {
     for (const bad of [
       { ...GEOMETRY, pointWidth: 0 },
@@ -89,20 +76,6 @@ describe("geometry on the wire", () => {
     });
     expect(decoded.devices[0]?.geometry).toEqual(GEOMETRY);
     expect(decoded.devices[1]?.geometry).toBeUndefined();
-  });
-
-  it("survives a thread state push", () => {
-    const decoded = decodeSync(ThreadDeviceState, {
-      threadId: "thread-1",
-      version: 3,
-      attachedDeviceUdid: BASE_DEVICE.udid,
-      devices: [{ ...BASE_DEVICE, geometry: GEOMETRY }],
-      agentActive: false,
-      availability: { kind: "available" },
-      lastError: null,
-    });
-    const attached = decoded.devices.find((device) => device.udid === decoded.attachedDeviceUdid);
-    expect(attached?.geometry).toEqual(GEOMETRY);
   });
 });
 

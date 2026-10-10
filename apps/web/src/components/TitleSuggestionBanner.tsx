@@ -32,27 +32,22 @@ export function TitleSuggestionBanner({
       role="status"
     >
       <div className="min-w-0 flex-1">
-        <p className="text-[length:var(--app-font-size-ui,12px)] leading-5 font-medium text-foreground/95">
-          Suggested title
-        </p>
-        <p
-          className="mt-0.5 truncate text-[length:var(--app-font-size-ui-sm,11px)] leading-5 text-muted-foreground"
-          title={candidate}
-        >
+        <p className="text-ui leading-5 font-medium text-foreground/95">Suggested title</p>
+        <p className="mt-0.5 truncate text-ui-sm leading-5 text-muted-foreground" title={candidate}>
           {candidate}
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <button
           type="button"
-          className="rounded-md px-2.5 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="rounded-md px-2.5 py-1 text-ui-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
           onClick={onDismiss}
         >
           Dismiss
         </button>
         <button
           type="button"
-          className="rounded-md bg-primary px-2.5 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-primary-foreground hover:bg-primary/90"
+          className="rounded-md bg-primary px-2.5 py-1 text-ui-sm font-medium text-primary-foreground hover:bg-primary/90"
           onClick={onAccept}
         >
           Use title

@@ -36,11 +36,27 @@ describe("threadTitleRefreshContext", () => {
 
   it("redacts credential-like patterns", () => {
     const context = buildThreadTitleRefreshContext({
-      currentTitle: "Auth",
-      recentUserIntents: ["api_key: sk-abcdef1234567890 rotate bearer: xyz"],
-      compactSummary: null,
+      currentTitle: "Auth Authorization: Basic SYNTHETIC_BASIC_VALUE",
+      recentUserIntents: [
+        "api_key: sk-abcdef1234567890 rotate bearer: xyz",
+        "Fix callback Authorization: Bearer SYNTHETIC_ACCESS_VALUE",
+        "Rotate bearer SYNTHETIC_BEARER_VALUE",
+        "Reset password='SYNTHETIC QUOTED PASSWORD'",
+      ],
+      compactSummary: "password=SYNTHETIC_PASSWORD_VALUE",
     });
-    expect(context).not.toContain("sk-abcdef1234567890");
+    for (const credential of [
+      "sk-abcdef1234567890",
+      "xyz",
+      "SYNTHETIC_BASIC_VALUE",
+      "SYNTHETIC_ACCESS_VALUE",
+      "SYNTHETIC_BEARER_VALUE",
+      "SYNTHETIC QUOTED PASSWORD",
+      "SYNTHETIC_PASSWORD_VALUE",
+    ]) {
+      expect(context).not.toContain(credential);
+    }
+    expect(context).toContain("Fix callback");
     expect(context).toContain("[redacted]");
   });
 

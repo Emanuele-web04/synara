@@ -111,11 +111,6 @@ export function RunningChatsQuitCoordinator() {
 
     return subscribe((request) => {
       const running = listRunningChatsFromDesktopStore(useStore.getState());
-      if (running.length === 0) {
-        reply({ requestId: request.requestId, phase: "decision", allow: true });
-        return;
-      }
-
       reply({
         requestId: request.requestId,
         phase: "ready",

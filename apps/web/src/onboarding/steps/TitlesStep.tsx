@@ -56,10 +56,8 @@ export function TitlesStep() {
               )}
             />
             <span className="min-w-0">
-              <span className="block text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground">
-                {option.label}
-              </span>
-              <span className="mt-0.5 block text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/80">
+              <span className="block text-ui font-medium text-foreground">{option.label}</span>
+              <span className="mt-0.5 block text-ui-sm text-muted-foreground/80">
                 {option.hint}
               </span>
             </span>

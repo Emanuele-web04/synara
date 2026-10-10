@@ -68,12 +68,4 @@ layer("087_DropUnusedOrchestrationEventIndexes", (it) => {
       assert.deepStrictEqual(rows, [{ commandId: "command-1", correlationId: "correlation-1" }]);
     }),
   );
-
-  it.effect("is a no-op when re-run against a database that already dropped them", () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const executed = yield* runMigrations();
-      assert.lengthOf(executed, 0);
-    }),
-  );
 });

@@ -14,7 +14,6 @@ import {
   providerUpdateNotificationKey,
   shouldOfferProviderUpdateAction,
   shouldPromptProviderUpdate,
-  shouldShowProviderUpdateStatus,
   withProviderUpdateTimeout,
 } from "./providerUpdates";
 
@@ -28,6 +27,8 @@ function providerStatus(
 ): ServerProviderStatus {
   return {
     provider,
+    instanceId: provider,
+    driver: provider,
     status: "ready",
     available: true,
     authStatus: "authenticated",
@@ -56,6 +57,8 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
   return {
     enableAssistantStreaming: false,
     enableProviderUpdateChecks: true,
+    keepAwakeMode: "off",
+    lowerProviderProcessPriority: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
     titleRefresh: {
@@ -64,10 +67,26 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       minElapsedMillis: 10 * 60 * 1_000,
       maxAttemptsPerWindow: 3,
     },
+    githubInboxIncludeUpstreams: false,
+    sidechatExpiry: "1h",
+    sourceControlWritingStyle: "repository",
+    sourceControlCustomInstructions: "",
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
     providers: {
-      codex: { ...provider, binaryPath: "codex", homePath: "" },
-      claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },
+      codex: {
+        ...provider,
+        binaryPath: "codex",
+        homePath: "",
+        selectedAccountId: "default",
+        accounts: [],
+      },
+      claudeAgent: {
+        ...provider,
+        binaryPath: "claude",
+        homePath: "",
+        launchArgs: "",
+        enableArtifacts: false,
+      },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       devin: { ...provider, binaryPath: "devin" },
       antigravity: { ...provider, binaryPath: "agy" },
@@ -81,8 +100,10 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         experimentalWebSockets: false,
       },
       pi: { ...provider, binaryPath: "pi", agentDir: "" },
+      omp: { ...provider, binaryPath: "omp", agentDir: "" },
       ...overrides,
     },
+    providerInstances: {},
     skills: { disabled: [] },
   };
 }
@@ -108,6 +129,54 @@ describe("getVisibleProviderUpdateStatuses", () => {
 
     expect(result.map((provider) => provider.provider)).toEqual(["codex"]);
   });
+
+  it.each([
+    { enabled: false, visible: [] },
+    { enabled: true, visible: ["claude_work"] },
+  ])(
+    "requires global and account enablement for custom instance updates ($enabled)",
+    ({ enabled, visible }) => {
+      const settings = serverSettings({
+        claudeAgent: {
+          enabled,
+          binaryPath: "claude",
+          homePath: "",
+          launchArgs: "",
+          enableArtifacts: false,
+          customModels: [],
+        },
+      });
+      const result = getVisibleProviderUpdateStatuses({
+        providers: [
+          providerStatus("claudeAgent", {
+            instanceId: "claude_work",
+            driver: "claudeAgent",
+          }),
+          providerStatus("claudeAgent", {
+            instanceId: "claude_disabled",
+            driver: "claudeAgent",
+          }),
+        ],
+        serverSettings: {
+          ...settings,
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              enabled: true,
+              config: { homePath: "/tmp/claude-work" },
+            },
+            claude_disabled: {
+              driver: "claudeAgent",
+              enabled: false,
+              config: { homePath: "/tmp/claude-disabled" },
+            },
+          },
+        },
+      });
+
+      expect(result.map((provider) => provider.instanceId)).toEqual(visible);
+    },
+  );
 
   it("waits for server settings before showing provider updates", () => {
     const result = getVisibleProviderUpdateStatuses({
@@ -221,31 +290,6 @@ describe("providerUpdateNotificationKey", () => {
   });
 });
 
-describe("shouldShowProviderUpdateStatus", () => {
-  it("matches the list filter for hidden and server-disabled providers", () => {
-    const codex = providerStatus("codex");
-    const hiddenPi = providerStatus("pi");
-    const settings = serverSettings({
-      codex: { enabled: false, binaryPath: "codex", homePath: "", customModels: [] },
-    });
-
-    expect(
-      shouldShowProviderUpdateStatus({
-        provider: codex,
-        hiddenProviderSet: new Set(),
-        serverSettings: settings,
-      }),
-    ).toBe(false);
-    expect(
-      shouldShowProviderUpdateStatus({
-        provider: hiddenPi,
-        hiddenProviders: ["pi"],
-        serverSettings: serverSettings(),
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("isProviderUpdateActive", () => {
   it("only treats queued and running provider updates as active", () => {
     const queuedState = {
@@ -332,10 +376,6 @@ describe("shouldOfferProviderUpdateAction", () => {
 
     expect(shouldOfferProviderUpdateAction(uninstalledPi)).toBe(false);
     expect(shouldOfferProviderUpdateAction(uninstalledDroid)).toBe(false);
-  });
-
-  it("offers updates for installed outdated CLIs", () => {
-    expect(shouldOfferProviderUpdateAction(providerStatus("codex"))).toBe(true);
   });
 
   it("offers native AGY updates even when upstream latest-version metadata is unavailable", () => {

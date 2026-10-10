@@ -1,22 +1,12 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { installSignedBuild, isUsableCachedBuild, run } from "./native-build-cache.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptsDirectory = dirname(scriptPath);
@@ -32,7 +22,13 @@ export const defaultAppSnapHelperPath = join(
 
 const frameworkArguments = [
   "-framework",
+  "AVFoundation",
+  "-framework",
   "AppKit",
+  "-framework",
+  "CoreServices",
+  "-framework",
+  "CoreAudio",
   "-framework",
   "CoreGraphics",
   "-framework",
@@ -61,26 +57,6 @@ export function swiftTargetsForArch(arch) {
   }
 }
 
-function run(command, arguments_, options = {}) {
-  const result = spawnSync(command, arguments_, {
-    cwd: desktopDirectory,
-    encoding: "utf8",
-    env: options.env ?? process.env,
-  });
-  if (result.status === 0) {
-    return;
-  }
-
-  const details = [result.stdout, result.stderr]
-    .filter((value) => typeof value === "string" && value.trim().length > 0)
-    .join("\n")
-    .trim();
-  const suffix = details ? `\n${details}` : "";
-  throw new Error(
-    `AppSnap helper command failed (${command} ${arguments_.join(" ")}): ${result.status ?? "unknown"}${suffix}`,
-  );
-}
-
 function buildFingerprint({ arch, release, sources, targets }) {
   const hash = createHash("sha256");
   hash.update("synara-appsnap-helper-build-v1\0");
@@ -100,24 +76,6 @@ function buildFingerprint({ arch, release, sources, targets }) {
     hash.update(readFileSync(source));
   }
   return hash.digest("hex");
-}
-
-function isUsableCachedBuild(outputPath, metadataPath, fingerprint) {
-  if (!existsSync(outputPath) || !existsSync(metadataPath)) {
-    return false;
-  }
-  try {
-    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
-    if (metadata.fingerprint !== fingerprint) {
-      return false;
-    }
-    const verification = spawnSync("codesign", ["--verify", "--strict", outputPath], {
-      encoding: "utf8",
-    });
-    return verification.status === 0;
-  } catch {
-    return false;
-  }
 }
 
 export function buildAppSnapHelper({
@@ -190,23 +148,13 @@ export function buildAppSnapHelper({
       run("xcrun", ["lipo", "-create", ...thinBinaries, "-output", unsignedBinary]);
     }
 
-    // Dev helpers are ad-hoc signed. electron-builder replaces this signature
-    // with the release identity because the packaged path is listed in mac.binaries.
-    run("codesign", ["--force", "--sign", "-", "--timestamp=none", unsignedBinary]);
-
-    mkdirSync(dirname(resolvedOutputPath), { recursive: true });
-    const pendingOutputPath = `${resolvedOutputPath}.tmp-${process.pid}`;
-    rmSync(pendingOutputPath, { force: true });
-    copyFileSync(unsignedBinary, pendingOutputPath);
-    chmodSync(pendingOutputPath, 0o755);
-    rmSync(resolvedOutputPath, { force: true });
-    renameSync(pendingOutputPath, resolvedOutputPath);
-
-    const pendingMetadataPath = `${metadataPath}.tmp-${process.pid}`;
-    rmSync(pendingMetadataPath, { force: true });
-    writeFileSync(pendingMetadataPath, `${JSON.stringify({ fingerprint })}\n`, { mode: 0o600 });
-    rmSync(metadataPath, { force: true });
-    renameSync(pendingMetadataPath, metadataPath);
+    installSignedBuild({
+      builtPath: unsignedBinary,
+      outputPath: resolvedOutputPath,
+      metadataPath,
+      fingerprint,
+      mode: 0o755,
+    });
 
     if (!quiet) {
       console.error(

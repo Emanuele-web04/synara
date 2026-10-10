@@ -2,6 +2,7 @@ import { DEFAULT_GIT_RECENT_COMMIT_LIMIT } from "@synara/contracts";
 import type {
   GitHandoffThreadInput,
   GitReadWorkingTreeDiffInput,
+  GitRemoveWorktreeInput,
   GitStackedAction,
   ModelSelection,
   NativeApi,
@@ -509,6 +510,7 @@ export function gitBranchesQueryOptions(cwd: string | null) {
 export function gitResolvePullRequestQueryOptions(input: {
   cwd: string | null;
   reference: string | null;
+  pollIntervalMs?: number;
 }) {
   return queryOptions({
     queryKey: [...gitQueryKeys.pullRequest(input.cwd), input.reference] as const,
@@ -521,6 +523,11 @@ export function gitResolvePullRequestQueryOptions(input: {
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: 30_000,
+    // A merged pull request is final; polling it forever only burns GitHub rate limit.
+    refetchInterval: (query) =>
+      input.pollIntervalMs === undefined || query.state.data?.pullRequest.state === "merged"
+        ? false
+        : input.pollIntervalMs,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
@@ -907,12 +914,18 @@ export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: Q
 
 export function gitRemoveWorktreeMutationOptions(input: { queryClient: QueryClient }) {
   return mutationOptions({
-    mutationFn: async ({ cwd, path, force }: { cwd: string; path: string; force?: boolean }) => {
+    mutationFn: async ({
+      cwd,
+      path,
+      force,
+      archiveCleanup,
+      reclaimTemporaryBranch = true,
+    }: GitRemoveWorktreeInput) => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git worktree removal is unavailable.");
       // Every UI removal retires a thread-scoped managed worktree, so its
       // temporary synara/* branch (if any) is reclaimed with it.
-      return api.git.removeWorktree({ cwd, path, force, reclaimTemporaryBranch: true });
+      return api.git.removeWorktree({ cwd, path, force, reclaimTemporaryBranch, archiveCleanup });
     },
     mutationKey: ["git", "mutation", "remove-worktree"] as const,
     onSettled: async () => {
@@ -926,15 +939,20 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
   queryClient: QueryClient;
 }) {
   return makeGitMutationOptions<
-    { reference: string; mode: "local" | "worktree" },
+    // `cwd` targets another checkout of the same repository (a second project on one repo);
+    // the prepare step invalidates every git query, so the cache stays correct either way.
+    { reference: string; mode: "local" | "worktree"; cwd?: string | undefined },
     Awaited<ReturnType<NativeApi["git"]["preparePullRequestThread"]>>
   >({
     cwd: input.cwd,
     queryClient: input.queryClient,
     mutationKey: gitMutationKeys.preparePullRequestThread(input.cwd),
     unavailableMessage: "Pull request thread preparation is unavailable.",
-    run: (api, cwd, { reference, mode }) =>
-      api.git.preparePullRequestThread({ cwd, reference, mode }),
+    // The result already identifies the prepared checkout. Opening its draft must not
+    // wait for status/diff refreshes in every cached project and worktree.
+    awaitInvalidation: false,
+    run: (api, cwd, { reference, mode, cwd: targetCwd }) =>
+      api.git.preparePullRequestThread({ cwd: targetCwd ?? cwd, reference, mode }),
   });
 }
 

@@ -49,6 +49,19 @@ test("workspace search shortcuts and destination behavior are documented", () =>
   assert.ok(organize.includes("right-dock file pane"));
 });
 
+test("new chat actions and side chat shortcut are documented", () => {
+  const shortcuts = read("content/docs/reference/keyboard-shortcuts.mdx");
+
+  for (const shortcut of [
+    "`mod+alt+s`",
+    "`mod+alt+shift+a`",
+    "`mod+alt+shift+s`",
+    "`mod+alt+shift+u`",
+  ]) {
+    assert.ok(shortcuts.includes(shortcut), `keyboard reference is missing ${shortcut}`);
+  }
+});
+
 test("the feature map links to the durable v0.7.2 guides", () => {
   const links = extractInternalLinks(read("content/docs/features/overview.mdx"));
 
@@ -168,4 +181,31 @@ test("v0.8.4 documents selection actions and exact automation target limitations
   assert.ok(automations.includes("Heartbeat automations continue an existing task session"));
   assert.ok(automations.includes("its provider is fixed"));
   assert.ok(automations.includes("omitting the target preserves the saved selection"));
+});
+
+test("v0.9.0 guides keep platform, source preservation and interruption boundaries explicit", () => {
+  const meta = JSON.parse(read("content/docs/features/meta.json"));
+  const overview = extractInternalLinks(read("content/docs/features/overview.mdx"));
+  for (const slug of ["computer-use", "project-import"]) {
+    assert.ok(meta.pages.includes(slug));
+    assert.ok(overview.includes(`/docs/features/${slug}`));
+    assert.equal(parseFrontmatter(read(`content/docs/features/${slug}.mdx`)).error, undefined);
+  }
+  const computer = read("content/docs/features/computer-use.mdx");
+  for (const text of [
+    "in beta",
+    "macOS only",
+    "Linux is coming soon",
+    "/computer-use",
+    "Input Monitoring",
+    "Closing the preview only hides it",
+    "Escape interrupts the current action",
+  ]) {
+    assert.ok(computer.includes(text), `missing Computer boundary: ${text}`);
+  }
+  assert.ok(
+    read("content/docs/features/project-import.mdx").includes("Source history is preserved"),
+  );
+  assert.ok(read("content/docs/providers/codex.mdx").includes("10% or less remaining"));
+  assert.ok(read("content/docs/providers/claude-code.mdx").includes("Compact, then send"));
 });

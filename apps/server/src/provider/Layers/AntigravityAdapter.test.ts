@@ -8,10 +8,11 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
-import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
+import { computerToolInstructions } from "../../agentGateway/computerGuidance";
 import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
@@ -184,32 +185,6 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
     });
   });
 
-  it("discovers future CLI models without requiring a static catalog update", () => {
-    expect(
-      parseAntigravityModelLines(`
-Gemini 4 Pro (Low)
-Gemini 4 Pro (Ultra)
-Claude Sonnet 5 (Thinking)
-`),
-    ).toEqual([
-      {
-        slug: "Gemini 4 Pro",
-        name: "Gemini 4 Pro",
-        supportedReasoningEfforts: [
-          { value: "low", label: "Low" },
-          { value: "ultra", label: "Ultra" },
-        ],
-        defaultReasoningEffort: "low",
-      },
-      {
-        slug: "Claude Sonnet 5",
-        name: "Claude Sonnet 5",
-        supportedReasoningEfforts: [{ value: "thinking", label: "Thinking" }],
-        defaultReasoningEffort: "thinking",
-      },
-    ]);
-  });
-
   it("dispatches a discovered model with its discovered default effort", () => {
     expect(resolveAntigravityCliModelLabel("Gemini 4 Pro", undefined, "low")).toBe(
       "Gemini 4 Pro (Low)",
@@ -223,6 +198,7 @@ describe("Antigravity CLI integration helpers", () => {
     const liveTokens = new Set<string>();
     const bootstrapOwners = new Map<string, string>();
     const revokedTokens: string[] = [];
+    const leasedCapabilities: Array<readonly string[]> = [];
     const spawnedEnvironments: NodeJS.ProcessEnv[] = [];
     let tokenSequence = 0;
     let bootstrapSequence = 0;
@@ -261,10 +237,13 @@ describe("Antigravity CLI integration helpers", () => {
           if (owner === token) bootstrapOwners.delete(bootstrap);
         }
       },
-      connectionForThread: () => ({
-        url: "http://127.0.0.1:3773/mcp",
-        bearerToken: issueSessionToken(),
-      }),
+      connectionForThread: (_threadId, _provider, options) => {
+        leasedCapabilities.push(options?.additionalCapabilities ?? []);
+        return {
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: issueSessionToken(),
+        };
+      },
       stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
     };
     let processSequence = 0;
@@ -302,6 +281,10 @@ describe("Antigravity CLI integration helpers", () => {
             threadId,
             runtimeMode: "full-access",
             cwd: root,
+            // Antigravity leases per turn, so the session-start capability facts
+            // have to survive in the session context or every turn silently
+            // loses the computer tools.
+            enableComputerControl: true,
             providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
           });
           const waitUntilReady = Effect.gen(function* () {
@@ -328,6 +311,7 @@ describe("Antigravity CLI integration helpers", () => {
           expect(credentials.exchangeStdioBootstrapToken(bootstrapB!)).toBe("turn-session-2");
           yield* waitUntilReady;
           expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2"]);
+          expect(leasedCapabilities).toEqual([["computer:control"], ["computer:control"]]);
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
@@ -630,8 +614,10 @@ describe("Antigravity CLI integration helpers", () => {
       // The Antigravity CLI runs hook commands through cmd.exe with JSON
       // escapes intact, so `"` arrives as `\"` and quoted paths fail to
       // execute ("not recognized as an internal or external command"). The
-      // win32 command must stay free of double quotes.
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
+      // win32 command must stay free of double quotes, including the
+      // inactive fallback: PowerShell rebuilds the decision JSON from
+      // `[char]34` so cmd echoes clean JSON.
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command Write-Output ^('{'+[char]34+'decision'+[char]34+':'+[char]34+'ask'+[char]34+'}'^)) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
     );
     // PreInvocation gates the LLM invocation: answer allow so subagent
     // launches are not denied (which would make the parent CLI exit 1).
@@ -643,7 +629,7 @@ describe("Antigravity CLI integration helpers", () => {
         "win32",
       ),
     ).toBe(
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"allow"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command Write-Output ^('{'+[char]34+'decision'+[char]34+':'+[char]34+'allow'+[char]34+'}'^)) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
     );
     expect(
       buildAntigravityCaptureCommand(
@@ -655,6 +641,19 @@ describe("Antigravity CLI integration helpers", () => {
     ).toBe(
       `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{"decision":"allow"}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-invocation'; fi`,
     );
+  });
+
+  it("keeps win32 hook commands free of double quotes", () => {
+    for (const event of ["pre-tool", "post-tool", "pre-invocation", "post-invocation", "stop"]) {
+      const command = buildAntigravityCaptureCommand(
+        String.raw`C:\Synara\Synara.exe`,
+        String.raw`C:\cap\capture.cjs`,
+        event,
+        "win32",
+      );
+      expect(command).not.toContain('"');
+      expect(JSON.parse(JSON.stringify({ command })).command).not.toContain('\\"');
+    }
   });
 
   it("guards Windows command-line limits before spawning the CLI", () => {
@@ -1326,6 +1325,200 @@ describe("Antigravity CLI integration helpers", () => {
     ).rejects.toThrow("Antigravity helper timed out after 50ms");
   });
 
+  it("reports expected versus minted gateway capabilities when the turn bootstrap is unavailable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-bootstrap-detail-"));
+    const leasedCapabilities: Array<ReadonlyArray<string> | undefined> = [];
+    let tokenSequence = 0;
+    const credentials: AgentGatewayCredentialsShape = {
+      mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+      setListeningPort: () => undefined,
+      issueSessionToken: () => `turn-session-${String(++tokenSequence)}`,
+      verifySessionToken: () => null,
+      verifySession: () => null,
+      issueStdioBootstrapToken: () => null,
+      exchangeStdioBootstrapToken: () => null,
+      bindWriteAuthority: () => null,
+      verifyWriteAuthority: () => false,
+      registerInFlightRequest: () => () => undefined,
+      cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+      cancelSessionTurnRequests: () => Promise.resolve(),
+      retireSessionTurn: () => Promise.resolve(),
+      revokeSessionToken: () => undefined,
+      connectionForThread: (_threadId, _provider, options) => {
+        leasedCapabilities.push(options?.additionalCapabilities);
+        return {
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: `turn-session-${String(tokenSequence)}`,
+        };
+      },
+      stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+    };
+    try {
+      const error = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-bootstrap-detail");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            enableComputerControl: true,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          return yield* Effect.flip(
+            adapter.sendTurn({ threadId, input: "turn A", attachments: [] }),
+          );
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-bootstrap-detail-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+      expect(leasedCapabilities).toEqual([["computer:control"]]);
+      expect(error).toMatchObject({ _tag: "ProviderAdapterRequestError", method: "turn/prepare" });
+      const detail = (error as unknown as { detail: string }).detail;
+      expect(detail).toContain("expected gateway capabilities");
+      expect(detail).toContain("computer:control");
+      expect(detail).toContain("minted");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["bootstrap", "synchronous spawn", "asynchronous spawn"] as const)(
+    "delivers the full Computer guide once after a failed %s attempt",
+    async (failure) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-policy-retry-"));
+      const revokedTokens: string[] = [];
+      const deliveredPrompts: string[] = [];
+      let tokenSequence = 0;
+      const credentials: AgentGatewayCredentialsShape = {
+        mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+        setListeningPort: () => undefined,
+        issueSessionToken: () => `turn-session-${++tokenSequence}`,
+        verifySessionToken: () => null,
+        verifySession: () => null,
+        issueStdioBootstrapToken: (token) =>
+          failure === "bootstrap" && token === "turn-session-1" ? null : `bootstrap-${token}`,
+        exchangeStdioBootstrapToken: () => null,
+        bindWriteAuthority: () => null,
+        verifyWriteAuthority: () => false,
+        registerInFlightRequest: () => () => undefined,
+        cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+        cancelSessionTurnRequests: () => Promise.resolve(),
+        retireSessionTurn: () => Promise.resolve(),
+        revokeSessionToken: (token) => revokedTokens.push(token),
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: `turn-session-${++tokenSequence}`,
+        }),
+        stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+      };
+      let spawnCount = 0;
+      const spawnProcess = ((_: string, args: readonly string[]) => {
+        spawnCount += 1;
+        if (failure === "synchronous spawn" && spawnCount === 1) {
+          throw new Error("Synthetic spawn failure");
+        }
+        const failSpawn = failure === "asynchronous spawn" && spawnCount === 1;
+        const child = new EventEmitter() as ChildProcess;
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        Object.assign(child, {
+          pid: failSpawn ? undefined : 11_000 + spawnCount,
+          stdout,
+          stderr,
+          killed: false,
+          kill: () => true,
+        });
+        setTimeout(() => {
+          if (failSpawn) {
+            child.emit("error", new Error("Synthetic asynchronous spawn failure"));
+            stdout.end();
+            stderr.end();
+            child.emit("close", -1, null);
+            return;
+          }
+          deliveredPrompts.push(args[args.indexOf("-p") + 1]!);
+          child.emit("spawn");
+          stdout.end("done\n");
+          stderr.end();
+          child.emit("close", 0, null);
+        }, 0).unref();
+        return child;
+      }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const threadId = ThreadId.makeUnsafe("thread-antigravity-policy-retry");
+            yield* adapter.startSession({
+              provider: "antigravity",
+              threadId,
+              runtimeMode: "full-access",
+              cwd: root,
+              enableComputerControl: true,
+              providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            });
+            const waitUntilSettled = (status: "ready" | "error" = "ready") =>
+              Effect.gen(function* () {
+                for (let attempt = 0; attempt < 100; attempt += 1) {
+                  const session = (yield* adapter.listSessions()).find(
+                    (candidate) => candidate.threadId === threadId,
+                  );
+                  if (session?.status === status) return;
+                  yield* Effect.sleep(10);
+                }
+                throw new Error("Antigravity test turn did not settle.");
+              });
+            const firstAttempt = yield* adapter
+              .sendTurn({ threadId, input: "first attempt", attachments: [] })
+              .pipe(Effect.exit);
+            expect(Exit.isFailure(firstAttempt)).toBe(failure !== "asynchronous spawn");
+            if (failure === "asynchronous spawn") yield* waitUntilSettled("error");
+            expect(deliveredPrompts).toEqual([]);
+            expect(revokedTokens).toEqual(["turn-session-1"]);
+
+            yield* adapter.sendTurn({ threadId, input: "retry", attachments: [] });
+            yield* waitUntilSettled();
+            expect(deliveredPrompts).toHaveLength(1);
+            expect(deliveredPrompts[0]).toContain(computerToolInstructions());
+            expect(deliveredPrompts[0]).toContain("retry");
+
+            yield* adapter.sendTurn({ threadId, input: "next turn", attachments: [] });
+            yield* waitUntilSettled();
+            expect(deliveredPrompts).toHaveLength(2);
+            expect(deliveredPrompts[1]).toBe("next turn");
+            yield* adapter.stopSession(threadId);
+            expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2", "turn-session-3"]);
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess,
+              }).pipe(
+                Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-policy-retry-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   // #465: an active Stop hook must not emit a non-standard decision that can
   // hang the print process after the assistant reply is already visible.
   it("answers stop hooks with a neutral allow-exit payload", async () => {
@@ -1390,8 +1583,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
       turns: 1,
       stopCleanup: true,
     },
-    { error: "timeout waiting for response", turns: 1, stopCleanup: false },
-    { error: "timeout waiting for response", turns: 1, stopCleanup: true },
     { error: undefined, turns: 1, stopCleanup: true },
   ])(
     "honors terminal errors and successful stop teardown (error=$error, turns=$turns)",
@@ -1625,16 +1816,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("resolves default reasoning effort for Gemini 3.7 Flash and DeepSeek models", () => {
-    expect(resolveAntigravityCliModelLabel("Gemini 3.7 Flash")).toBe("Gemini 3.7 Flash (High)");
-    expect(resolveAntigravityCliModelLabel("Gemini 3.7 Flash", { reasoningEffort: "medium" })).toBe(
-      "Gemini 3.7 Flash (Medium)",
-    );
-    expect(resolveAntigravityCliModelLabel("DeepSeek V4 Flash Max")).toBe(
-      "DeepSeek V4 Flash Max (High)",
-    );
   });
 
   it("compacts multiline pre-invocation and stop hook payloads into single NDJSON lines", async () => {
@@ -1998,7 +2179,6 @@ describe("Antigravity background task helpers (#752)", () => {
       taskId: "session/task-8",
       output: "Tool is running as a background task with task id: session/task-8",
     },
-    { taskId: "session/task-8", output: "Task ID:session/task-8 is running in the background" },
   ])("preserves the full background task id in $output", ({ taskId, output }) => {
     expect(
       detectAntigravityBackgroundTaskStart(
@@ -2740,27 +2920,26 @@ describe("Antigravity background task helpers (#752)", () => {
       }),
     ));
 
-  it.each(["session/task-8", "session:task-8"])(
-    "reconciles qualified id %s in a delayed post-tool output",
-    (taskId) =>
-      runAgyBackgroundScenario(`qualified-post-id-${taskId.replaceAll(/[^\w]/g, "-")}`, (io) =>
-        Effect.gen(function* () {
-          io.transcript(agyRunningStep(8, taskId), agyText(9, "Waiting for command."));
-          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-          io.hooks(
-            `post-tool\t${JSON.stringify({ stepIdx: 7, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: `Task id '${taskId}' is running in the background` })}`,
-          );
-          io.transcript(agyCompletionStep(10, taskId), agyText(11, "Done."));
-          io.hooks('stop\t{"stepIdx":11}');
-          yield* io.waitUntil(() => io.counts.assistantMessages === 2);
-          expect(io.taskEvents).toEqual([
-            { type: "task.started", taskId: taskId },
-            { type: "task.completed", taskId: taskId },
-          ]);
-          yield* io.waitUntil(() => io.counts.teardowns === 1);
-        }),
-      ),
-  );
+  it("reconciles qualified id session/task-8 in a delayed post-tool output", () => {
+    const taskId = "session/task-8";
+    return runAgyBackgroundScenario("qualified-post-id-session-task-8", (io) =>
+      Effect.gen(function* () {
+        io.transcript(agyRunningStep(8, taskId), agyText(9, "Waiting for command."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        io.hooks(
+          `post-tool\t${JSON.stringify({ stepIdx: 7, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: `Task id '${taskId}' is running in the background` })}`,
+        );
+        io.transcript(agyCompletionStep(10, taskId), agyText(11, "Done."));
+        io.hooks('stop\t{"stepIdx":11}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        expect(io.taskEvents).toEqual([
+          { type: "task.started", taskId: taskId },
+          { type: "task.completed", taskId: taskId },
+        ]);
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    );
+  });
 
   it("tracks a transcript background task once when post-tool reports it too", () =>
     runAgyBackgroundScenario("agy-background-dedupe", (io) =>

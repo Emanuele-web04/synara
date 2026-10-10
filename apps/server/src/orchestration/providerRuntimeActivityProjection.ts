@@ -10,12 +10,18 @@ import {
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
 import {
+  isSensitiveKey,
+  REDACTED_SENSITIVE_VALUE,
+  redactSensitiveJsonFields,
+} from "../sensitiveKeys.ts";
+import {
   sanitizeUnmappedProviderData,
   sanitizeUnmappedProviderDetail,
 } from "../provider/unmappedProviderEvents.ts";
 
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
+const MAX_REASONING_DETAIL_CHARS = 8_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 64;
 const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
@@ -269,16 +275,10 @@ function truncateJsonValue(
     return String(value);
   }
 
-  const entries = Object.entries(value)
-    .filter(
-      ([, entry]) =>
-        entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
-    )
-    .toSorted((left, right) => {
-      const byRank = activityPayloadKeyRank(left[0]) - activityPayloadKeyRank(right[0]);
-      return byRank !== 0 ? byRank : left[0].localeCompare(right[0]);
-    });
-  const retainedEntries = entries.slice(0, options.objectKeys);
+  const entries = Object.entries(value).filter(
+    ([, entry]) => entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
+  );
+  const retainedEntries = selectLeadingActivityPayloadEntries(entries, options.objectKeys);
   const result: Record<string, unknown> = {};
   for (const [key, entry] of retainedEntries) {
     result[key] = truncateJsonValue(entry, { ...options, depth: options.depth - 1 });
@@ -346,7 +346,9 @@ function buildToolProgressActivityPayload(
   return toActivityPayload({
     itemType: "mcp_tool_call" as const,
     title: "MCP tool call",
-    ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
+    ...(event.payload.summary
+      ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
+      : {}),
     data: {
       ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
       ...(event.payload.toolName ? { toolName: event.payload.toolName } : {}),
@@ -508,11 +510,16 @@ export function runtimeTurnState(
 
 function requestKindFromCanonicalRequestType(
   requestType: string | undefined,
-): "command" | "file-read" | "file-change" | "permissions" | undefined {
+): "command" | "file-read" | "file-change" | "permissions" | "tool" | undefined {
   if (requestType === "command_execution_approval" || requestType === "exec_command_approval")
     return "command";
   if (requestType === "file_read_approval") return "file-read";
   if (requestType === "permissions_approval") return "permissions";
+  if (requestType === "tool_approval") return "tool";
+  // Legacy Claude classification: generic/MCP tool approvals were labelled with the
+  // item type instead of the canonical "tool_approval". Kept so persisted events
+  // still resolve to a renderable kind.
+  if (requestType === "dynamic_tool_call") return "tool";
   return requestType === "file_change_approval" || requestType === "apply_patch_approval"
     ? "file-change"
     : undefined;
@@ -540,6 +547,108 @@ function sessionApprovalAvailable(
     : undefined;
 }
 
+// Approval cards render `toolParamsDisplay` entries as name/value rows, so a raw
+// tool-input object has to be flattened into that shape.
+function toolParamsDisplayFromToolInput(
+  input: Record<string, unknown> | undefined,
+): ReadonlyArray<{ readonly name: string; readonly value: unknown }> | undefined {
+  if (!input) {
+    return undefined;
+  }
+  const entries = Object.entries(input).map(([name, value]) => ({ name, value }));
+  return entries.length > 0 ? entries : undefined;
+}
+
+// Values are stringified rather than passed through as nested JSON: the card
+// prints one compact line per parameter, and pre-formatting keeps the persisted
+// payload small. Approval cards are persisted and replayed, so a credential-named
+// parameter, or a credential nested inside one, is redacted before it gets there.
+function toolParamDisplayValue(names: ReadonlyArray<string | undefined>, value: unknown): string {
+  if (names.some((name) => name !== undefined && isSensitiveKey(name))) {
+    return REDACTED_SENSITIVE_VALUE;
+  }
+  if (typeof value === "string") {
+    return redactStructuredToolParamString(value);
+  }
+  // No unredacted fallback serializer: a value JSON cannot encode is shown as
+  // its string form instead.
+  return safeStringifyToolParamValue(value) ?? String(value);
+}
+
+// Codex can supply already-formatted parameter strings. Inspect a complete JSON
+// object or array, but leave ordinary strings and JSON without secrets unchanged.
+function redactStructuredToolParamString(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return value;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== "object") {
+      return value;
+    }
+    let redacted = false;
+    const serialized = JSON.stringify(parsed, (key, entry: unknown) => {
+      if (isSensitiveKey(key)) {
+        redacted = true;
+      }
+      return redactSensitiveJsonFields(key, entry);
+    });
+    return redacted ? serialized : value;
+  } catch {
+    return value;
+  }
+}
+
+function safeStringifyToolParamValue(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value, redactSensitiveJsonFields);
+  } catch {
+    return undefined;
+  }
+}
+
+function requestedMcpToolCallPresentation(
+  event: Extract<ProviderRuntimeEvent, { type: "request.opened" }>,
+): { title?: string; toolName?: string; toolParamsDisplay?: unknown } {
+  // "dynamic_tool_call" is the legacy Claude request type for the same approval.
+  if (
+    event.payload.requestType !== "tool_approval" &&
+    event.payload.requestType !== "dynamic_tool_call"
+  ) {
+    return {};
+  }
+  const args = asObject(event.payload.args);
+  // Codex ships presentation through MCP elicitation `_meta`; Claude's canUseTool
+  // request carries the tool name and the raw tool input instead.
+  const metadata = asObject(args?._meta);
+  const title = asString(metadata?.tool_title);
+  const toolName = asString(metadata?.tool_name) ?? asString(args?.toolName);
+  const rawParams = Array.isArray(metadata?.tool_params_display)
+    ? metadata.tool_params_display
+    : toolParamsDisplayFromToolInput(asObject(args?.input));
+  // Preserve the array shape consumed by approval cards even for large inputs.
+  const toolParamsDisplay = rawParams?.slice(0, 12).map((entry) => {
+    const row = asObject(entry);
+    const name = asString(row?.name);
+    const displayName = asString(row?.display_name);
+    return {
+      ...(displayName ? { display_name: truncateJsonString(displayName, 128) } : {}),
+      name: truncateJsonString(name ?? "argument", 128),
+      value: truncateJsonString(toolParamDisplayValue([name, displayName], row?.value), 900),
+    };
+  });
+  return {
+    ...(title ? { title: truncateJsonString(title, 128) } : {}),
+    ...(toolName ? { toolName } : {}),
+    ...(toolParamsDisplay !== undefined ? { toolParamsDisplay } : {}),
+  };
+}
+
+function boundActivityDataOrUndefined(value: unknown): unknown {
+  return value === undefined ? undefined : boundActivityData(value);
+}
+
 export function projectProviderRuntimeActivities(
   event: ProviderRuntimeEvent,
   sessionSequence?: number,
@@ -550,13 +659,13 @@ export function projectProviderRuntimeActivities(
     typeof sessionSequence === "number" && Number.isInteger(sessionSequence) && sessionSequence >= 0
       ? { sequence: sessionSequence }
       : {};
-  // Codex and Antigravity only render completed reasoning items with a readable summary.
-  // Empty starts/completions are private/encrypted reasoning boundaries, not
-  // transcript rows. Waiting for the authoritative completion also avoids
-  // per-token activity writes and transcript height churn.
+  // Claude previews are coalesced by ingestion; other providers publish their
+  // readable reasoning only at completion. Empty/encrypted boundaries stay hidden.
   if (
-    (event.provider === "codex" || event.provider === "antigravity") &&
-    event.type === "item.completed" &&
+    (((event.provider === "codex" || event.provider === "antigravity") &&
+      event.type === "item.completed") ||
+      (event.provider === "claudeAgent" &&
+        (event.type === "item.updated" || event.type === "item.completed"))) &&
     event.payload.itemType === "reasoning" &&
     event.itemId !== undefined &&
     readableReasoningDetail(event.payload.detail) !== undefined
@@ -572,7 +681,12 @@ export function projectProviderRuntimeActivities(
         summary: "Reasoning trace",
         payload: toActivityPayload({
           ...(event.payload.status ? { status: event.payload.status } : {}),
-          detail: truncateDetail(reasoningDetail, MAX_ACTIVITY_DATA_STRING_CHARS),
+          detail: truncateDetail(
+            reasoningDetail,
+            event.provider === "claudeAgent"
+              ? MAX_REASONING_DETAIL_CHARS
+              : MAX_ACTIVITY_DATA_STRING_CHARS,
+          ),
           data: { toolCallId: reasoningItemId },
         }),
         turnId: toTurnId(event.turnId) ?? null,
@@ -611,6 +725,8 @@ export function projectProviderRuntimeActivities(
         event.type === "request.opened" ? requestedPermissionProfile(event) : undefined;
       const canApproveForSession =
         event.type === "request.opened" ? sessionApprovalAvailable(event) : undefined;
+      const toolCallPresentation =
+        event.type === "request.opened" ? requestedMcpToolCallPresentation(event) : {};
       const requestId = nonEmptyTrimmed(event.requestId);
       return [
         {
@@ -629,7 +745,9 @@ export function projectProviderRuntimeActivities(
                     ? "File-change approval requested"
                     : requestKind === "permissions"
                       ? "Permission approval requested"
-                      : "Approval requested",
+                      : requestKind === "tool"
+                        ? "Tool approval requested"
+                        : "Approval requested",
           payload: toActivityPayload({
             // Omitted, never `undefined`: `Schema.Json` rejects a member that is
             // explicitly present and undefined.
@@ -640,9 +758,10 @@ export function projectProviderRuntimeActivities(
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.type === "request.opened" && event.payload.detail
-              ? { detail: truncateDetail(event.payload.detail) }
+              ? { detail: truncateDetail(event.payload.detail, MAX_ACTIVITY_DATA_STRING_CHARS) }
               : {}),
             ...(permissionProfile ? { permissionProfile } : {}),
+            ...toolCallPresentation,
             ...(canApproveForSession !== undefined
               ? { sessionApprovalAvailable: canApproveForSession }
               : {}),
@@ -673,6 +792,7 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             message: truncateDetail(message, 500),
             ...(errorClass ? { class: errorClass } : {}),
+            ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -688,11 +808,17 @@ export function projectProviderRuntimeActivities(
       // line ("Moved to background: <work>"), not as a runtime warning.
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
+      const isClaudeRetry = event.provider === "claudeAgent" && detailSubtype === "api_retry";
+      const willRetry =
+        event.payload.willRetry === true || asObject(event.payload.detail)?.willRetry === true;
       const isPiInfoNotification =
         event.provider === "pi" &&
         raw?.method === "extension/ui/notify" &&
         asObject(event.payload.detail)?.type === "info";
-      const message = truncateDetail(event.payload.message);
+      // The row already clips the notice to one line via CSS; the hover card can
+      // only reveal what the server stored, so keep the full message (bounded by
+      // the shared activity-data cap) instead of pre-truncating it to fit the row.
+      const message = truncateDetail(event.payload.message, MAX_ACTIVITY_DATA_STRING_CHARS);
       return [
         {
           id: event.eventId,
@@ -701,17 +827,22 @@ export function projectProviderRuntimeActivities(
           kind: "runtime.warning",
           summary: isPiInfoNotification
             ? "Pi extension"
-            : isBackgroundMove
-              ? "Moved to background"
-              : event.provider === "opencode" &&
-                  (nativeType === "session.next.retried" || nativeType === "session.status")
-                ? "OpenCode retrying"
-                : "Runtime warning",
+            : willRetry
+              ? "Provider retrying"
+              : isClaudeRetry
+                ? message
+                : isBackgroundMove
+                  ? "Moved to background"
+                  : event.provider === "opencode" &&
+                      (nativeType === "session.next.retried" || nativeType === "session.status")
+                    ? "OpenCode retrying"
+                    : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,
             detail: message,
-            ...(isBackgroundMove
+            ...(willRetry ? { willRetry: true } : {}),
+            ...(isBackgroundMove || isClaudeRetry
               ? { nativeEventType: detailSubtype }
               : nativeType
                 ? { nativeEventType: nativeType }
@@ -875,7 +1006,9 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             status: event.payload.status,
-            ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
+            ...(event.payload.summary
+              ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
+              : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
@@ -912,7 +1045,9 @@ export function projectProviderRuntimeActivities(
               ? { isBackgrounded: event.payload.isBackgrounded }
               : {}),
             ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
-            ...(event.payload.error ? { detail: truncateDetail(event.payload.error) } : {}),
+            ...(event.payload.error
+              ? { detail: truncateDetail(event.payload.error, MAX_ACTIVITY_DATA_STRING_CHARS) }
+              : {}),
             ...(event.payload.workflowTaskId
               ? { workflowTaskId: event.payload.workflowTaskId }
               : {}),
@@ -1056,6 +1191,60 @@ export function projectProviderRuntimeActivities(
       ];
     }
 
+    case "tool.summary": {
+      if (event.provider !== "claudeAgent") return [];
+      const summary = nonEmptyTrimmed(event.payload.summary);
+      if (!summary) return [];
+      const precedingToolUseIds = event.payload.precedingToolUseIds;
+      const lastToolUseId = precedingToolUseIds?.at(-1);
+      return [
+        {
+          id: lastToolUseId
+            ? EventId.makeUnsafe(
+                `provider-tool-summary:${event.provider}:${event.threadId}:${event.turnId ?? "session"}:${lastToolUseId}`,
+              )
+            : event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "tool.summary",
+          summary: "Tool summary",
+          payload: toActivityPayload({
+            detail: truncateDetail(summary, MAX_REASONING_DETAIL_CHARS),
+            ...(precedingToolUseIds ? { data: { precedingToolUseIds } } : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "auth.status": {
+      if (event.provider !== "claudeAgent") return [];
+      const failed = Boolean(nonEmptyTrimmed(event.payload.error));
+      if (!failed && event.payload.isAuthenticating === undefined) return [];
+      // Login output and errors can contain credentials or one-time URLs. Only
+      // project the state; raw provider output stays out of the transcript.
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: failed ? "error" : "info",
+          kind: "auth.status",
+          summary: failed
+            ? "Claude authentication needs attention."
+            : event.payload.isAuthenticating
+              ? "Claude authentication started"
+              : "Claude authentication finished",
+          payload: toActivityPayload({
+            provider: event.provider,
+            ...(failed ? { detail: "Check your Claude account in Settings." } : {}),
+          }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "tool.progress": {
       return [
         {
@@ -1106,6 +1295,7 @@ export function projectProviderRuntimeActivities(
               ? { cumulativeCostUsd: event.payload.cumulativeCostUsd }
               : {}),
             ...(errorMessage ? { errorMessage } : {}),
+            ...(event.payload.errorCode ? { errorCode: event.payload.errorCode } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1307,6 +1497,13 @@ export function providerActivityUpdateDedupeKey(
 
   const payload = asObject(activity.payload);
   if (activity.kind === "task.progress") {
+    if (
+      (event.type === "item.updated" || event.type === "item.completed") &&
+      event.payload.itemType === "reasoning" &&
+      event.itemId
+    ) {
+      return `${prefix}:reasoning:${event.itemId}`;
+    }
     const taskId = asString(payload?.taskId);
     return taskId ? `${prefix}:${taskId}` : undefined;
   }
@@ -1331,4 +1528,55 @@ export function providerActivityUpdateFingerprint(activity: OrchestrationThreadA
     payload: activity.payload,
     turnId: activity.turnId,
   });
+}
+
+function compareActivityPayloadEntries(
+  left: readonly [string, unknown],
+  right: readonly [string, unknown],
+): number {
+  const byRank = activityPayloadKeyRank(left[0]) - activityPayloadKeyRank(right[0]);
+  return byRank !== 0 ? byRank : left[0].localeCompare(right[0]);
+}
+
+/**
+ * The first `limit` entries in rank/name order, without sorting the whole
+ * object first. Payloads are untrusted and can be arbitrarily wide, so a full
+ * sort just to keep a handful of keys made truncation itself the expensive
+ * step. Keys are unique, so the comparator never ties and the selection is
+ * exactly `toSorted(...).slice(0, limit)`.
+ */
+function selectLeadingActivityPayloadEntries(
+  entries: ReadonlyArray<[string, unknown]>,
+  limit: number,
+): Array<[string, unknown]> {
+  if (limit <= 0) {
+    return [];
+  }
+  if (entries.length <= limit) {
+    return entries.toSorted(compareActivityPayloadEntries);
+  }
+  const leading: Array<[string, unknown]> = [];
+  for (const entry of entries) {
+    if (
+      leading.length === limit &&
+      compareActivityPayloadEntries(entry, leading[leading.length - 1]!) >= 0
+    ) {
+      continue;
+    }
+    let low = 0;
+    let high = leading.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (compareActivityPayloadEntries(leading[middle]!, entry) <= 0) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    leading.splice(low, 0, entry);
+    if (leading.length > limit) {
+      leading.pop();
+    }
+  }
+  return leading;
 }

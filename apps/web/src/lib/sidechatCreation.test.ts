@@ -7,6 +7,7 @@ import {
   clearSidechatPaneRetention,
   createOrJoinSidechat,
   createSidechatThread,
+  createStandaloneSidechat,
   getSidechatPaneRetentionVersion,
   sendSidechatPrompt,
   sidechatPaneRetentionRemainingMs,
@@ -63,32 +64,25 @@ describe("createSidechatThread", () => {
     clearSidechatPaneRetention(ThreadId.makeUnsafe("sidechat-thread"));
   });
 
-  it.each([
-    "codex",
-    "claudeAgent",
-    "opencode",
-    "cursor",
-    "devin",
-    "antigravity",
-    "grok",
-    "pi",
-    "droid",
-  ] as const)("inherits Full access for a %s fork and its first prompt", async (provider) => {
-    const dispatchCommand = vi.fn().mockResolvedValue(undefined);
-    await createSidechatThread({
-      api: makeApi({ dispatchCommand }),
-      project,
-      sourceThread,
-      selectedModelSelection: { provider, model: "test-model" },
-      initialPrompt: "Investigate this",
-      openSidechat: vi.fn(),
-      syncServerShellSnapshot: vi.fn(),
-    });
-    expect(dispatchCommand.mock.calls.map(([command]) => command.runtimeMode)).toEqual([
-      "full-access",
-      "full-access",
-    ]);
-  });
+  it.each(["codex", "claudeAgent"] as const)(
+    "inherits Full access for a %s fork and its first prompt",
+    async (provider) => {
+      const dispatchCommand = vi.fn().mockResolvedValue(undefined);
+      await createSidechatThread({
+        api: makeApi({ dispatchCommand }),
+        project,
+        sourceThread,
+        selectedModelSelection: { provider, model: "test-model" },
+        initialPrompt: "Investigate this",
+        openSidechat: vi.fn(),
+        syncServerShellSnapshot: vi.fn(),
+      });
+      expect(dispatchCommand.mock.calls.map(([command]) => command.runtimeMode)).toEqual([
+        "full-access",
+        "full-access",
+      ]);
+    },
+  );
 
   it.each([
     [{ provider: "codex", model: "test-model" }, "auto"],
@@ -98,7 +92,6 @@ describe("createSidechatThread", () => {
       "approval-required",
     ],
     [{ provider: "claudeAgent", model: "test-model" }, "approval-required"],
-    [{ provider: "cursor", model: "test-model" }, "approval-required"],
   ] satisfies [ModelSelection, string][])(
     "normalizes inherited Auto for %j to %s",
     async (modelSelection, expectedRuntimeMode) => {
@@ -291,21 +284,107 @@ describe("createSidechatThread", () => {
   });
 });
 
+describe("createStandaloneSidechat", () => {
+  const context = {
+    kind: "github-item",
+    itemKind: "issue",
+    repository: "octo/repo",
+    number: 42,
+    url: "https://github.com/octo/repo/issues/42",
+  } as const;
+
+  it("creates a source-less sidechat in the project's checkout and opens it before syncing", async () => {
+    const order: string[] = [];
+    const dispatchCreate = vi.fn(async (_command: Record<string, unknown>) => {
+      order.push("create");
+    });
+    const openSidechat = vi.fn(() => order.push("open"));
+    const getShellSnapshot = vi.fn(async () => {
+      order.push("snapshot");
+      return {} as OrchestrationShellSnapshot;
+    });
+    const result = await createStandaloneSidechat({
+      api: makeApi({ getShellSnapshot }),
+      projectId: project.id,
+      context,
+      itemTitle: "Crash on launch",
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+      runtimeMode: "auto",
+      dispatchCreate,
+      openSidechat,
+      syncServerShellSnapshot: vi.fn(),
+    });
+
+    expect(dispatchCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "thread.create",
+        threadId: "sidechat-thread",
+        projectId: project.id,
+        title: "Sidechat: Crash on launch",
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        sidechatContext: context,
+        interactionMode: "default",
+      }),
+    );
+    const command = dispatchCreate.mock.calls[0]?.[0];
+    expect(command).not.toHaveProperty("sourceThreadId");
+    expect(command).not.toHaveProperty("parentThreadId");
+    expect(openSidechat).toHaveBeenCalledWith("sidechat-thread");
+    expect(order).toEqual(["create", "open", "snapshot"]);
+    expect(result).toEqual({ threadId: "sidechat-thread", promptError: null, snapshotError: null });
+  });
+
+  it("downgrades Auto where the chosen provider cannot run it", async () => {
+    const dispatchCreate = vi.fn().mockResolvedValue(undefined);
+    await createStandaloneSidechat({
+      api: makeApi(),
+      projectId: project.id,
+      context,
+      itemTitle: "Crash on launch",
+      modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+      runtimeMode: "auto",
+      dispatchCreate,
+      openSidechat: vi.fn(),
+      syncServerShellSnapshot: vi.fn(),
+    });
+    expect(dispatchCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeMode: "approval-required" }),
+    );
+  });
+
+  it("does not open a pane when the create is rejected", async () => {
+    const openSidechat = vi.fn();
+    await expect(
+      createStandaloneSidechat({
+        api: makeApi(),
+        projectId: project.id,
+        context,
+        itemTitle: "Crash on launch",
+        modelSelection: selectedModelSelection,
+        runtimeMode: "approval-required",
+        dispatchCreate: vi.fn().mockRejectedValue(new Error("create failed")),
+        openSidechat,
+        syncServerShellSnapshot: vi.fn(),
+      }),
+    ).rejects.toThrow("create failed");
+    expect(openSidechat).not.toHaveBeenCalled();
+  });
+});
+
 describe("sendSidechatPrompt", () => {
-  it.each(["full-access", "auto", "approval-required"] as const)(
-    "preserves %s for a queued prompt",
-    async (runtimeMode) => {
-      const dispatchCommand = vi.fn().mockResolvedValue(undefined);
-      await sendSidechatPrompt({
-        api: makeApi({ dispatchCommand }),
-        threadId: sourceThread.id,
-        selectedModelSelection,
-        runtimeMode,
-        prompt: "Follow up",
-      });
-      expect(dispatchCommand).toHaveBeenCalledWith(expect.objectContaining({ runtimeMode }));
-    },
-  );
+  it.each(["auto"] as const)("preserves %s for a queued prompt", async (runtimeMode) => {
+    const dispatchCommand = vi.fn().mockResolvedValue(undefined);
+    await sendSidechatPrompt({
+      api: makeApi({ dispatchCommand }),
+      threadId: sourceThread.id,
+      selectedModelSelection,
+      runtimeMode,
+      prompt: "Follow up",
+    });
+    expect(dispatchCommand).toHaveBeenCalledWith(expect.objectContaining({ runtimeMode }));
+  });
 });
 
 describe("sidechat pane retention", () => {
@@ -329,14 +408,13 @@ describe("createOrJoinSidechat", () => {
   function run(input: {
     flights: Map<string, SidechatCreationFlight>;
     sourceThreadId: ThreadId;
-    targetProvider?: string;
     initialPrompt?: string | undefined;
     startCreation: (initialPrompt?: string | undefined) => Promise<SidechatCreationResult>;
     sendQueuedPrompt: (threadId: ThreadId, prompt: string) => Promise<void>;
   }): Promise<true> {
     return createOrJoinSidechat({
       inFlightByKey: input.flights,
-      flightKey: `${input.sourceThreadId}:${input.targetProvider ?? "codex"}`,
+      flightKey: `${input.sourceThreadId}:codex`,
       initialPrompt: input.initialPrompt,
       startCreation: input.startCreation,
       sendQueuedPrompt: input.sendQueuedPrompt,
@@ -435,35 +513,5 @@ describe("createOrJoinSidechat", () => {
 
     expect(startFirst).toHaveBeenCalledOnce();
     expect(startSecond).toHaveBeenCalledOnce();
-  });
-
-  it("creates separate in-flight sidechats for different target providers", async () => {
-    const flights = new Map<string, SidechatCreationFlight>();
-    const sourceThreadId = ThreadId.makeUnsafe("source-a");
-    const startCodex = vi.fn().mockResolvedValue(result);
-    const startCursor = vi.fn().mockResolvedValue({
-      ...result,
-      threadId: ThreadId.makeUnsafe("cursor-sidechat"),
-    });
-
-    await Promise.all([
-      run({
-        flights,
-        sourceThreadId,
-        targetProvider: "codex",
-        startCreation: startCodex,
-        sendQueuedPrompt: vi.fn().mockResolvedValue(undefined),
-      }),
-      run({
-        flights,
-        sourceThreadId,
-        targetProvider: "cursor",
-        startCreation: startCursor,
-        sendQueuedPrompt: vi.fn().mockResolvedValue(undefined),
-      }),
-    ]);
-
-    expect(startCodex).toHaveBeenCalledOnce();
-    expect(startCursor).toHaveBeenCalledOnce();
   });
 });

@@ -27,6 +27,8 @@ import type { ManagedAttachmentPrincipal } from "../../managedAttachmentPrincipa
 
 export interface OrchestrationDispatchContext {
   readonly attachmentPrincipal?: ManagedAttachmentPrincipal;
+  /** Resolve an uncertain turn start, durably rejecting it if it has not committed. Never execute it. */
+  readonly settleOnly?: boolean;
 }
 
 export interface OrchestrationProjectionCatchUpStatus {
@@ -54,13 +56,13 @@ export interface OrchestrationEngineShape {
   /** Reject new normal mutations while retaining reserved lifecycle progress. */
   readonly quiesce: Effect.Effect<void>;
 
-  /** Resolve after every command admitted before the current idle fence settles. */
+  /** Resolve after admitted commands finish their hot commit and ordered publication. */
   readonly drain: Effect.Effect<void>;
 
-  /** Reject all admission, drain queued commands, and stop the command worker. */
+  /** Reject all admission, finish admitted commands, then stop the command workers. */
   readonly stop: Effect.Effect<void>;
 
-  /** Current deferred-projection recovery state for health and diagnostics. */
+  /** Current supervised projection-recovery state for health and diagnostics. */
   readonly getProjectionCatchUpStatus: Effect.Effect<OrchestrationProjectionCatchUpStatus>;
 
   /**
@@ -73,10 +75,11 @@ export interface OrchestrationEngineShape {
     fromSequenceExclusive: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
-  /** Read a durable, inclusive high-water-fenced event range for transport catch-up. */
+  /** Read a durable inclusive range; an optional limit bounds SQL fetches and eager decoding. */
   readonly readEventsThrough: (
     fromSequenceExclusive: number,
     throughSequenceInclusive: number,
+    limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
   /** Replay one thread's persisted events from an exclusive global cursor. */
@@ -86,18 +89,19 @@ export interface OrchestrationEngineShape {
     eventTypes?: ReadonlyArray<string>,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
-  /** Read one thread's inclusive high-water-fenced event range. */
+  /** Read one thread's inclusive range, filtering event types before the optional SQL limit. */
   readonly readThreadEventsThrough: (
     threadId: string,
     fromSequenceExclusive: number,
     throughSequenceInclusive: number,
     eventTypes?: ReadonlyArray<string>,
+    limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
   /** Capture the durable orchestration event-log high-water sequence. */
   readonly getEventHighWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
 
-  /** Capture the latest durable event sequence that assigned one thread's title. */
+  /** Capture the latest durable sequence affecting one thread's title or refresh policy. */
   readonly getThreadTitleHighWaterSequence: (
     threadId: string,
   ) => Effect.Effect<number, OrchestrationEventStoreError>;
@@ -125,8 +129,10 @@ export interface OrchestrationEngineShape {
    * @param command - Valid orchestration command.
    * @returns Effect containing the sequence of the persisted event.
    *
-   * Dispatch is serialized through an internal queue and deduplicated via
-   * command receipts.
+   * Dispatch preserves FIFO within each thread/project/space aggregate and
+   * bounds concurrency across independent aggregates. Receipts deduplicate
+   * retries. Success follows the atomic event/receipt/hot-projection commit and
+   * ordered publication. `drain` waits for admitted command work to settle.
    */
   readonly dispatch: (
     command: OrchestrationCommand,

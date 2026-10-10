@@ -8,7 +8,7 @@ import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../../appSet
 
 // index.css shares composer corner smoothing; keep the radius as the browser fallback.
 export const USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME =
-  "chat-user-message-bubble rounded-[var(--radius-user-message)]";
+  "chat-user-message-bubble squircle rounded-[var(--radius-user-message)]";
 export const USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME = "py-2.5";
 export const USER_MESSAGE_BUBBLE_SHELL_HORIZONTAL_PADDING_CLASS_NAME = "px-3.5";
 export const USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME = [
@@ -29,6 +29,17 @@ const USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME = [
 const USER_MESSAGE_BUBBLE_PLAIN_BORDER_CLASS_NAME = [
   USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
   "border-transparent",
+].join(" ");
+
+// Answered agent questions wear a neutral dashed outline on both bubbles: they are
+// part of the agent's run, not ordinary chat turns. Neutral, not primary, so they
+// never read as the temporary-chat outline above.
+export const USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME = [
+  USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+  USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+  USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
+  "border-dashed border-[color:var(--color-border)]",
+  "w-max max-w-[85%] min-w-0",
 ].join(" ");
 
 export function userMessageBubbleBorderClassName(isTemporaryThread: boolean): string {

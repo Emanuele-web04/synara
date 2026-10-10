@@ -6,11 +6,7 @@ import {
   type ProviderRequestKind,
   type ProviderUserInputAnswers,
 } from "@synara/contracts";
-import {
-  APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
-  collectErrorMessages,
-  describeErrorMessage,
-} from "@synara/shared/errorMessages";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 import { respondingInteractionReclaimAt } from "@synara/shared/pendingInteractions";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import type { Dispatch, RefObject, SetStateAction } from "react";
@@ -23,7 +19,6 @@ import {
   expandCollapsedComposerCursor,
   type ComposerTrigger,
 } from "../../composer-logic";
-import { useComposerDraftStore } from "../../composerDraftStore";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -41,7 +36,7 @@ import {
   clearThreadDetailResumeCursor,
 } from "../../threadDetailResumeCursors";
 import { type Thread } from "../../types";
-import { resolveRuntimeModeAfterApprovalDecision } from "../ChatView.logic";
+import { respondToThreadApproval } from "./respondToThreadApproval";
 import { usePendingUserInputDrafts } from "./usePendingUserInputDrafts";
 const EMPTY_ACTIVITIES: Thread["activities"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -69,7 +64,6 @@ export function useChatPendingInteractions({
   const activeThreadId = activeThread?.id ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const setStoreThreadError = useStore((store) => store.setError);
-  const setComposerDraftRuntimeMode = useComposerDraftStore((state) => state.setRuntimeMode);
   const [respondingRequestKeys, setRespondingRequestKeys] = useState<string[]>([]);
   const [respondingUserInputRequestKeys, setRespondingUserInputRequestKeys] = useState<string[]>(
     [],
@@ -139,7 +133,7 @@ export function useChatPendingInteractions({
     answersRef: pendingUserInputAnswersByRequestIdRef,
     setAnswers: setPendingUserInputAnswersByRequestId,
     drafts: pendingUserInputDrafts,
-  } = usePendingUserInputDrafts(threadId, pendingUserInputs, activeThread?.pendingInteractions);
+  } = usePendingUserInputDrafts(threadId, pendingUserInputs, threadActivities);
   const expiredQuestionDrafts = useMemo(
     () => expiredUserInputDrafts(pendingUserInputDrafts, threadActivities),
     [pendingUserInputDrafts, threadActivities],
@@ -251,56 +245,20 @@ export function useChatPendingInteractions({
       setRespondingRequestKeys((existing) =>
         existing.includes(requestKey) ? existing : [...existing, requestKey],
       );
-      // Persist supervised "always allow" client-side so the next turn (after an
-      // idle-stop or runtime restart) uses full access. Auto remains the durable
-      // thread policy; its server-side override applies only to the live session.
-      const durableRuntimeMode = resolveRuntimeModeAfterApprovalDecision(
-        runtimeMode,
+      await respondToThreadApproval({
+        threadId: activeThreadId,
+        requestId,
         decision,
+        lifecycleGeneration,
         requestKind,
-      );
-      if (durableRuntimeMode) {
-        setComposerDraftRuntimeMode(activeThreadId, durableRuntimeMode);
-      }
-      await api.orchestration
-        .dispatchCommand({
-          type: "thread.approval.respond",
-          commandId: newCommandId(),
-          threadId: activeThreadId,
-          requestId,
-          decision,
-          ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
-          createdAt: new Date().toISOString(),
-        })
-        .catch(async (err: unknown) => {
-          if (
-            collectErrorMessages(err).some((message) =>
-              message.includes(APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER),
-            )
-          ) {
-            // The authoritative response won the race. Force a full detail
-            // snapshot so a stale local card cannot immediately submit again.
-            clearThreadDetailResumeCursor(activeThreadId);
-            await api.orchestration
-              .subscribeThread(buildThreadSubscribeInput(activeThreadId))
-              .catch(() => {
-                setStoreThreadError(
-                  activeThreadId,
-                  "Approval was already recorded, but the conversation could not be refreshed.",
-                );
-              });
-            return;
-          }
-          setStoreThreadError(
-            activeThreadId,
-            describeErrorMessage(err, "Failed to submit approval decision."),
-          );
-          setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
-          throw err;
-        });
+        runtimeMode,
+      }).catch((err: unknown) => {
+        setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
+        throw err;
+      });
       setRespondingRequestKeys((existing) => existing.filter((key) => key !== requestKey));
     },
-    [activeThreadId, runtimeMode, setComposerDraftRuntimeMode, setStoreThreadError],
+    [activeThreadId, runtimeMode],
   );
 
   const userInputSubmissionsRef = useRef(new Set<string>());

@@ -21,7 +21,7 @@ export function TitleRefreshModePicker({
 }) {
   return (
     <div>
-      <p className="text-[11px] font-medium text-muted-foreground">Automatic titles</p>
+      <p className="text-ui-sm font-medium text-muted-foreground">Automatic titles</p>
       <div
         className="mt-1.5 flex flex-wrap gap-1.5"
         role="radiogroup"
@@ -34,7 +34,7 @@ export function TitleRefreshModePicker({
             role="radio"
             aria-checked={value === option.value}
             className={cn(
-              "rounded-md border px-2 py-1 text-[11px] font-medium",
+              "rounded-md border px-2 py-1 text-ui-sm font-medium",
               value === option.value
                 ? "border-primary bg-primary/10 text-foreground"
                 : "border-border text-muted-foreground hover:text-foreground",

@@ -1,12 +1,13 @@
 // FILE: PullRequestsUnavailableState.tsx
 // Purpose: Actionable empty state for the pull requests surface when the GitHub CLI is missing,
-//          unauthenticated, or a request otherwise failed — each case gets a short explanation
-//          and a copyable terminal command instead of a dead end.
+//          unauthenticated, rate-limited, or a request otherwise failed — each case gets a short
+//          explanation and a copyable terminal command or reset time instead of a dead end.
 // Layer: Pull request presentation
 // Exports: PullRequestsUnavailableState, isPullRequestsUnavailableError
 
 import { useEffect, useRef, useState } from "react";
 
+import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import {
@@ -21,11 +22,15 @@ import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { CheckIcon, CopyIcon, GitPullRequestIcon, TriangleAlertIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
+import { formatShortTimestamp } from "~/timestampFormat";
 import { PR_FINE_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
 
-export function isPullRequestsUnavailableError(
-  error: unknown,
-): error is { _tag: "PullRequestsUnavailableError"; reason: string; message: string } {
+export function isPullRequestsUnavailableError(error: unknown): error is {
+  _tag: "PullRequestsUnavailableError";
+  reason: string;
+  message: string;
+  retryAt?: string;
+} {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -110,14 +115,24 @@ function CommandLine({ command }: { command: string }) {
 export function PullRequestsUnavailableState({
   error,
   onRetry,
+  subject: subjectProp,
 }: {
   error: unknown;
   /** Optional refetch hook so "Retry" re-runs the failed query instead of reloading the app. */
   onRetry?: () => void;
+  /** What failed to load, as a plural noun for the title ("Pull requests are unavailable"). */
+  subject?: string;
 }) {
+  const subject = subjectProp ?? "Pull requests";
+  const { settings } = useAppSettings();
   const unavailable = isPullRequestsUnavailableError(error) ? error : null;
   const notInstalled = unavailable?.reason === "gh-not-installed";
   const notAuthenticated = unavailable?.reason === "gh-not-authenticated";
+  const rateLimited = unavailable?.reason === "rate-limited";
+  const resetTime =
+    rateLimited && unavailable?.retryAt
+      ? formatShortTimestamp(unavailable.retryAt, settings.timestampFormat)
+      : null;
   const installCommand =
     notInstalled && typeof navigator !== "undefined"
       ? githubCliInstallCommand(navigator.platform)
@@ -134,16 +149,22 @@ export function PullRequestsUnavailableState({
             ? "GitHub CLI is required"
             : notAuthenticated
               ? "Sign in to GitHub CLI"
-              : "Pull requests are unavailable"}
+              : rateLimited
+                ? "GitHub rate limit reached"
+                : `${subject} are unavailable`}
         </EmptyTitle>
         <EmptyDescription>
           {notInstalled
             ? "Synara reads GitHub data only through the gh CLI. Install it, then reopen this view."
             : notAuthenticated
               ? "Authenticate the GitHub CLI in a terminal, then retry."
-              : error instanceof Error
-                ? error.message
-                : "The pull request request failed."}
+              : rateLimited
+                ? resetTime
+                  ? `Synara pauses GitHub requests until the limit resets at ${resetTime}.`
+                  : "Synara pauses GitHub requests until the limit resets."
+                : error instanceof Error
+                  ? error.message
+                  : "The request to GitHub failed."}
         </EmptyDescription>
       </EmptyHeader>
       {notInstalled || notAuthenticated ? (
@@ -182,7 +203,11 @@ export function PullRequestsUnavailableState({
             )}
           >
             <TriangleAlertIcon className="size-3.5" />
-            <span>Check your connection and try again.</span>
+            <span>
+              {rateLimited
+                ? "The list refreshes on its own once the limit resets."
+                : "Check your connection and try again."}
+            </span>
           </div>
           {onRetry ? (
             <Button variant="outline" size="sm" onClick={onRetry}>

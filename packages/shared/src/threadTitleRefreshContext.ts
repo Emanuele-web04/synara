@@ -1,8 +1,8 @@
 // FILE: threadTitleRefreshContext.ts
 // Purpose: Bounded redacted input assembler for automatic title refresh (#1041).
 // Layer: Shared pure utility. Only title + recent user intent + compact summary enter.
-// Never accepts tool output, hidden prompts, attachments, or secrets; patterns that
-// look credential-like are replaced with [redacted]. Output hard-capped.
+// Callers exclude tool output, hidden prompts, and attachments. Recognized
+// credential patterns are replaced with [redacted]. Output hard-capped.
 
 export const THREAD_TITLE_REFRESH_CONTEXT_MAX_CHARS = 2_000;
 export const THREAD_TITLE_REFRESH_MAX_INTENTS = 5;
@@ -19,7 +19,15 @@ function normalize(value: string): string {
 
 function redactCredentials(value: string): string {
   return value
-    .replace(/\b(api[_-]?key|secret|bearer|authorization)\b\s*[:=]\s*\S+/gi, "$1: [redacted]")
+    .replace(
+      /\bauthorization\s*[:=]\s*(?:(?:bearer|basic|token)\s+)?\S+/gi,
+      "Authorization: [redacted]",
+    )
+    .replace(/\bbearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(
+      /\b(api[_-]?key|secret|password|bearer)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi,
+      "$1: [redacted]",
+    )
     .replace(/\b(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})\b/g, "[redacted]");
 }
 

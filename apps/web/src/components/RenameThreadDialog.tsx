@@ -36,7 +36,7 @@ export function RenameThreadDialog({
         onRefreshModeChange && onPinChange ? (
           <div className="space-y-2.5 border-t border-border/60 pt-3">
             <TitleRefreshModePicker value={refreshMode ?? null} onChange={onRefreshModeChange} />
-            <label className="flex cursor-pointer items-center gap-2 text-[11px] text-muted-foreground">
+            <label className="flex cursor-pointer items-center gap-2 text-ui-sm text-muted-foreground">
               <input
                 type="checkbox"
                 className="size-3.5 accent-primary"
