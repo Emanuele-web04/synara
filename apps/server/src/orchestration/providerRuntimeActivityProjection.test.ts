@@ -1085,24 +1085,30 @@ describe("provider runtime activity projection", () => {
       },
     });
 
-    const [cursorResumedUsage] = projectProviderRuntimeActivities(
-      runtimeEvent({
-        type: "thread.token-usage.updated",
-        eventId: "cursor-resumed-usage",
-        provider: "cursor",
-        lifecycleGeneration: "generation-after-restart",
-        providerRefs: { providerThreadId: "cursor-native-session" },
-        payload: { usage: { usedTokens: 0, totalProcessedTokens: 4_200 } },
-      }),
-    );
-    expect(cursorResumedUsage).toMatchObject({
-      kind: "context-window.updated",
-      payload: {
-        provider: "cursor",
-        totalProcessedTokens: 4_200,
-        usageSessionId: "cursor-native-session",
-      },
-    });
+    for (const [provider, usageSessionId] of [
+      ["cursor", "native-session"],
+      ["codex", "native-session"],
+      ["antigravity", "native-session:generation-after-restart"],
+    ] as const) {
+      const [resumedUsage] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "thread.token-usage.updated",
+          eventId: `${provider}-resumed-usage`,
+          provider,
+          lifecycleGeneration: "generation-after-restart",
+          providerRefs: { providerThreadId: "native-session" },
+          payload: { usage: { usedTokens: 0, totalProcessedTokens: 4_200 } },
+        }),
+      );
+      expect(resumedUsage).toMatchObject({
+        kind: "context-window.updated",
+        payload: {
+          provider,
+          totalProcessedTokens: 4_200,
+          usageSessionId,
+        },
+      });
+    }
 
     const [configured] = projectProviderRuntimeActivities(
       runtimeEvent({

@@ -398,7 +398,7 @@ function buildContextWindowActivityPayload(
   const usageSessionId =
     providerThreadId === undefined
       ? undefined
-      : event.provider === "cursor"
+      : event.provider === "cursor" || event.provider === "codex"
         ? providerThreadId
         : `${providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`;
   return toActivityPayload({

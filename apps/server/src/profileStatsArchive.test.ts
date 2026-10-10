@@ -321,6 +321,51 @@ describe("ProfileStatsArchive", () => {
     expect(rows.map((row) => row.tokens)).toEqual([100_000, 5_000, 10_000]);
   });
 
+  it("preserves independent native usage counters and legacy fallback through purge", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const stats = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
+        yield* sql`DELETE FROM projection_thread_activities`;
+        const samples = [
+          { totalProcessedTokens: 1_000 },
+          { usageSessionId: "", totalProcessedTokens: 1_500 },
+          { usageSessionId: "a:generation-1", usedTokens: 900 },
+          { usageSessionId: "a:generation-1", totalProcessedTokens: 1_000 },
+          { usageSessionId: "a:generation-1", totalProcessedTokens: 1_500 },
+          { usageSessionId: "b", totalProcessedTokens: 1_500 },
+          { usageSessionId: "b", totalProcessedTokens: 2_000 },
+          { usageSessionId: "a:generation-2", totalProcessedTokens: 2_000 },
+          { usageSessionId: "c", usedTokens: 800 },
+          { usageSessionId: "c", usedTokens: 1_000 },
+        ];
+        for (const [index, sample] of samples.entries()) {
+          yield* sql`
+            INSERT INTO projection_thread_activities (
+              activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+            ) VALUES (
+              ${`native-session-${index}`}, 'thread-purge', 'turn-purge-1', 'info',
+              'context-window.updated', 'tokens',
+              ${JSON.stringify({ provider: "codex", ...sample })}, ${index + 1},
+              ${`2026-06-13T12:${String(index).padStart(2, "0")}:00.000Z`}
+            )
+          `;
+        }
+        const before = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        // Legacy 1,500 + session A 2,000 + session B 2,000 + used-only C 1,000.
+        expect(before.lifetimeTotalTokens).toBe(6_500);
+        expect(yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" })).toBe(
+          true,
+        );
+        const after = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(after).toEqual(before);
+      }),
+    );
+  });
+
   it("archives usedTokens-only model groups even when another group has cumulative telemetry", () => {
     const rows = aggregateThreadTokenRows([
       {
