@@ -1315,6 +1315,28 @@ export function projectProviderRuntimeActivities(
       ];
     }
 
+    case "turn.started": {
+      // A quiet lifecycle record of the model the provider ran the turn on, so
+      // transcripts can mark where the model changed between turns. Clients
+      // never render it as a work row.
+      const model = nonEmptyTrimmed(event.payload.model);
+      if (!model) {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "turn.started",
+          summary: "Turn started",
+          payload: toActivityPayload({ model, provider: event.provider }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "turn.completed": {
       const state = runtimeTurnState(event);
       const modelUsage = compactTurnModelUsage(event.payload.modelUsage);

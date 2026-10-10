@@ -1,10 +1,12 @@
 // FILE: ComposerSubagentStrip.logic.ts
-// Purpose: Derives the subagent rows shown in the composer strip from enriched work
-// log entries, mirroring the active-task-list scoping (live turn wins; a prior set
-// stays visible only while some subagent is still working).
-// Layer: Chat composer logic
-// Exports: deriveComposerSubagentStripItems, collectSubagentStripItems (unscoped,
-// shared with the Environment panel roster), and the strip row types
+// Purpose: Derives subagent rows (identity, status, task-control handle) from
+// enriched work log entries. The thread-level set mirrors the active-task-list
+// scoping (live turn wins; a prior set stays only while some subagent still
+// works) and drives Stop all, Ctrl+B and the "N running" chip; the transcript
+// card builds its rows from the same row items.
+// Layer: Chat logic
+// Exports: deriveComposerSubagentStripItems, toSubagentStripItem,
+// mergeSubagentSnapshots, and the row types
 
 import { ThreadId, type TurnId } from "@synara/contracts";
 
@@ -55,7 +57,10 @@ function subagentKey(subagent: WorkLogSubagent): string {
 
 // Later snapshots carry the freshest status, but may omit identity fields the spawn
 // snapshot had; keep identity via fallback while taking the status fields verbatim.
-function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent): WorkLogSubagent {
+export function mergeSubagentSnapshots(
+  previous: WorkLogSubagent,
+  next: WorkLogSubagent,
+): WorkLogSubagent {
   return {
     threadId: next.threadId ?? previous.threadId,
     providerThreadId: next.providerThreadId ?? previous.providerThreadId,
@@ -89,7 +94,7 @@ function anonymousSubagentLabel(statusKind: SubagentStatusKind | null): string {
   }
 }
 
-function toStripItem(
+export function toSubagentStripItem(
   key: string,
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
@@ -129,10 +134,10 @@ function toStripItem(
     isViewed: viewedThreadId !== null && threadId === viewedThreadId,
     // Confirmed patches key by the Task tool_use_id — the same handle the
     // background command dispatches with — which can differ from the row key.
+    accentColor: presentation.accentColor,
     isBackground:
       subagent.background === true ||
       backgroundedThreadIds.has(subagent.providerThreadId ?? subagent.threadId),
-    accentColor: presentation.accentColor,
   };
 }
 
@@ -152,7 +157,7 @@ export function collectSubagentStripItems(
     }
   }
   return [...subagentByKey.entries()].map(([key, subagent]) =>
-    toStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
+    toSubagentStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
   );
 }
 

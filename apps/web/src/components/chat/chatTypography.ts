@@ -6,6 +6,11 @@
 import type { CSSProperties } from "react";
 import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../../appSettings";
 
+// Inline mono chip for a command quoted inside a work-row sentence ("Ran `ls`"),
+// matching inline code in chat markdown.
+export const INLINE_COMMAND_CHIP_CLASS_NAME =
+  "rounded-[0.4rem] bg-[var(--app-user-message-background)] px-[0.35rem] py-[0.05rem] font-chat-code text-chat-code text-foreground/80";
+
 // index.css shares composer corner smoothing; keep the radius as the browser fallback.
 export const USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME =
   "chat-user-message-bubble squircle rounded-[var(--radius-user-message)]";

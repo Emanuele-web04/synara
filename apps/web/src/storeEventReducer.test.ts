@@ -616,6 +616,7 @@ describe("store event reducer", () => {
 
     const next = applyOrchestrationEvents(initialState, [
       makeDomainEvent("thread.turn-interrupt-requested", {
+        requestedBy: "user",
         threadId: ThreadId.makeUnsafe("thread-1"),
         turnId: TurnId.makeUnsafe("turn-running"),
         createdAt: "2026-02-27T00:02:00.000Z",
@@ -630,7 +631,26 @@ describe("store event reducer", () => {
       completedAt: null,
       assistantMessageId: MessageId.makeUnsafe("assistant-running"),
     });
+    expect(threadsOf(next)[0]?.activities).toMatchObject([
+      { kind: "turn.stop-requested", turnId: "turn-running", payload: { requestedBy: "user" } },
+    ]);
   });
+
+  it.each([undefined, "agent", "system"] as const)(
+    "keeps interrupt intent neutral without a user actor: %s",
+    (requestedBy) => {
+      const initialState = makeState(makeThread());
+      const next = applyOrchestrationEvents(initialState, [
+        makeDomainEvent("thread.turn-interrupt-requested", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          turnId: TurnId.makeUnsafe("turn-running"),
+          ...(requestedBy ? { requestedBy } : {}),
+          createdAt: "2026-02-27T00:02:00.000Z",
+        }),
+      ]);
+      expect(threadsOf(next)[0]?.activities).toHaveLength(0);
+    },
+  );
 
   it("keeps pending proposed-plan linkage across live turn updates", () => {
     const sourceProposedPlan = {

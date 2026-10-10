@@ -56,6 +56,7 @@ export function useSubagentRunControls(stripSourceThreadId: ThreadId | null) {
       try {
         await api.orchestration.dispatchCommand({
           type: "thread.turn.interrupt",
+          requestedBy: "user",
           commandId: newCommandId(),
           threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
           createdAt: new Date().toISOString(),
