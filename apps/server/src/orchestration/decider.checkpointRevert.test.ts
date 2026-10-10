@@ -99,7 +99,7 @@ function makeLatestTurn(state: OrchestrationLatestTurn["state"]): OrchestrationL
 }
 
 describe("checkpoint revert decider", () => {
-  it("preserves ready session state after a follow-up turn request is committed", async () => {
+  it("rejects revert after a follow-up turn request without downgrading the ready session", async () => {
     let readModel = makeReadModel({
       session: makeSession({ status: "ready" }),
       latestTurn: makeLatestTurn("completed"),
@@ -141,6 +141,20 @@ describe("checkpoint revert decider", () => {
     expect(readModel.threads[0]?.session).toMatchObject({
       status: "ready",
       activeTurnId: null,
+    });
+
+    const error = await Effect.runPromise(
+      Effect.flip(
+        decideOrchestrationCommand({
+          command: checkpointRevertCommand(),
+          readModel,
+        }),
+      ),
+    );
+    expect(error).toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      commandType: "thread.checkpoint.revert",
+      detail: ACTIVE_TURN_ERROR,
     });
   });
 

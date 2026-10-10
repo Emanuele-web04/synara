@@ -719,31 +719,22 @@ describe("CheckpointReactor", () => {
     },
   );
 
-  it("does not revert checkpoints while a committed turn start is awaiting provider activation", async () => {
+  it("does not revert checkpoints while a pending turn start is ahead of the read model", async () => {
     const harness = await createHarness({ startReactor: false });
     const threadId = ThreadId.makeUnsafe("thread-1");
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("turn-start-awaiting-provider"),
-        threadId,
-        message: {
-          messageId: MessageId.makeUnsafe("turn-start-awaiting-provider-message"),
-          role: "user",
-          text: "start work",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: new Date().toISOString(),
+    await runtime!.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const now = new Date().toISOString();
+        yield* sql`INSERT INTO projection_turns (thread_id, pending_message_id, state, requested_at, checkpoint_files_json)
+          VALUES (${threadId}, ${MessageId.makeUnsafe("pending-start-ahead-of-read-model")}, 'pending', ${now}, '[]')`;
       }),
     );
-    await Effect.runPromise(harness.engine.drain);
 
     const restore = vi.spyOn(harness.checkpointStore, "restoreCheckpoint");
     const reverse = vi.spyOn(harness.checkpointStore, "reverseCheckpointDiff");
     await Effect.runPromise(
-      harness.sourceEngine.dispatch({
+      harness.engine.dispatch({
         type: "thread.checkpoint.revert",
         commandId: CommandId.makeUnsafe("revert-during-pending-turn-start"),
         threadId,
