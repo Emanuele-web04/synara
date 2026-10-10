@@ -125,6 +125,7 @@ describe("external MCP gateway stdio flow", () => {
     const details = new Map<string, OrchestrationThread>();
     const dispatched: OrchestrationCommand[] = [];
     const worktreeCreates: Array<{ readonly path?: string }> = [];
+    const discoveryCalls: Array<{ readonly provider: string; readonly instanceId?: string }> = [];
 
     const snapshotLayer = Layer.succeed(ProjectionSnapshotQuery, {
       getShellSnapshot: () =>
@@ -276,11 +277,19 @@ describe("external MCP gateway stdio flow", () => {
     } as never);
 
     const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
-      listModels: ({ provider }: { readonly provider: string }) =>
-        Effect.succeed({
+      listModels: ({
+        provider,
+        instanceId,
+      }: {
+        readonly provider: string;
+        readonly instanceId?: string;
+      }) => {
+        discoveryCalls.push({ provider, ...(instanceId ? { instanceId } : {}) });
+        return Effect.succeed({
           models: provider === "codex" ? [{ slug: "gpt-5.5", name: "GPT-5.5" }] : [],
           source: "test",
-        }),
+        });
+      },
     } as never);
     const providerStatuses: ReadonlyArray<ServerProviderStatus> = [
       "codex",
@@ -291,15 +300,29 @@ describe("external MCP gateway stdio flow", () => {
       "droid",
       "opencode",
       "pi",
-    ].map((provider) => ({
-      provider: provider as ServerProviderStatus["provider"],
-      instanceId: provider as ServerProviderStatus["instanceId"],
-      driver: provider as ServerProviderStatus["driver"],
-      status: "ready",
-      available: true,
-      authStatus: "authenticated",
-      checkedAt: NOW,
-    }));
+    ]
+      .map(
+        (provider) =>
+          ({
+            provider: provider as ServerProviderStatus["provider"],
+            instanceId: provider as ServerProviderStatus["instanceId"],
+            driver: provider as ServerProviderStatus["driver"],
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: NOW,
+          }) as ServerProviderStatus,
+      )
+      .concat({
+        provider: "codex",
+        instanceId: "codex_work",
+        driver: "codex",
+        displayName: "Work Codex",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        checkedAt: NOW,
+      });
     const providerHealthLayer = Layer.succeed(ProviderHealth, {
       getStatuses: Effect.succeed(providerStatuses),
       refresh: Effect.succeed(providerStatuses),
@@ -336,7 +359,18 @@ describe("external MCP gateway stdio flow", () => {
       Layer.provide(gitLayer),
       Layer.provide(providerDiscoveryLayer),
       Layer.provide(providerHealthLayer),
-      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(
+        ServerSettingsService.layerTest({
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              displayName: "Work Codex",
+              enabled: true,
+              config: {},
+            },
+          },
+        }),
+      ),
       Layer.provide(projectionTurnsLayer),
       Layer.provide(operationLayer),
       Layer.provide(configLayer),
@@ -453,6 +487,44 @@ describe("external MCP gateway stdio flow", () => {
         });
         expect(readTaskProperties?.messageId).toMatchObject({ type: "string" });
         expect(readTaskProperties?.messageVersion).toMatchObject({ type: "string" });
+        expect(
+          listedTools.find((tool) => tool.name === "synara_create_task")?.inputSchema.properties
+            ?.instanceId,
+        ).toMatchObject({
+          type: "string",
+          description: expect.stringContaining("providers[].instances[].instanceId"),
+        });
+
+        const capabilities = yield* gateway.handlePost({
+          authorizationHeader: "Bearer syn_mcp_v1_e2e-client-generated-secret",
+          body: {
+            jsonrpc: "2.0",
+            id: "capabilities",
+            method: "tools/call",
+            params: {
+              name: "synara_capabilities",
+              arguments: { projectId: PROJECT_ID },
+            },
+          },
+        });
+        const capabilityPayload = toolPayload(capabilities.body as Record<string, unknown>);
+        const codexCatalog = (
+          capabilityPayload.providers as Array<{
+            provider: string;
+            instances?: Array<{
+              instanceId: string;
+              displayName: string;
+              isDefault: boolean;
+              enabled: boolean;
+            }>;
+          }>
+        ).find((provider) => provider.provider === "codex");
+        expect(codexCatalog?.instances).toContainEqual({
+          instanceId: "codex_work",
+          displayName: "Work Codex",
+          isDefault: false,
+          enabled: true,
+        });
 
         const prompt = "Implement the external MCP end-to-end proof.";
         stdin.write(
@@ -466,6 +538,7 @@ describe("external MCP gateway stdio flow", () => {
                 requestId: "external-e2e-request",
                 projectId: PROJECT_ID,
                 provider: "codex",
+                instanceId: "codex_work",
                 model: "gpt-5.5",
                 prompt,
               },
@@ -487,9 +560,15 @@ describe("external MCP gateway stdio flow", () => {
           creationSource: "external_mcp",
           envMode: "worktree",
           runtimeMode: "approval-required",
+          modelSelection: {
+            provider: "codex",
+            instanceId: "codex_work",
+            model: "gpt-5.5",
+          },
         });
         expect(createCommand).not.toHaveProperty("sourceThreadId");
         expect(createCommand).not.toHaveProperty("sourceTurnId");
+        expect(discoveryCalls).toContainEqual({ provider: "codex", instanceId: "codex_work" });
 
         stdin.write(
           `${JSON.stringify({
@@ -764,7 +843,7 @@ describe("external MCP gateway stdio flow", () => {
           FROM external_mcp_audit_log
           ORDER BY created_at ASC, audit_id ASC
         `;
-        expect(auditRows).toHaveLength(16);
+        expect(auditRows).toHaveLength(17);
         expect(
           auditRows
             .filter((row) => row.requestId === "followup-e2e")
