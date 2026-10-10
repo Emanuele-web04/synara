@@ -339,20 +339,16 @@ function bindPendingTurnStartMessage(
   const pendingMessageId = thread.pendingTurnStartMessageId;
   if (
     pendingMessageId === null ||
+    pendingMessageId === undefined ||
     thread.claudeCacheReview?.status === "compacting" ||
     thread.claudeCacheReview?.compactionTurnId === session.activeTurnId
   ) {
     return null;
   }
-  // Without a recorded request (the detail stream can attach after the first
-  // send's request), fall back to the one unanswered request at the tail.
-  const messageIndex =
-    pendingMessageId !== undefined
-      ? thread.messages.findLastIndex((message) => message.id === pendingMessageId)
-      : soleUnansweredRequestIndex(thread.messages);
-  if (pendingMessageId === undefined && messageIndex < 0) {
-    return null;
-  }
+  // A cancelled prompt can remain unanswered after a cold reload. Only an
+  // observed request owns a new turn; late-attached clients get accepted links
+  // from the authoritative detail snapshot's projection_turns mapping.
+  const messageIndex = thread.messages.findLastIndex((message) => message.id === pendingMessageId);
   const rest = { ...thread, pendingTurnStartMessageId: null };
   const message = messageIndex >= 0 ? thread.messages[messageIndex] : undefined;
   const turnId = session.activeTurnId;
@@ -364,7 +360,7 @@ function bindPendingTurnStartMessage(
     thread.messages.some((candidate) => candidate.turnId === turnId) ||
     thread.activities.some((activity) => activity.turnId === turnId)
   ) {
-    return pendingMessageId === undefined ? null : rest;
+    return rest;
   }
   return { ...rest, messages: thread.messages.with(messageIndex, { ...message, turnId }) };
 }
@@ -375,20 +371,6 @@ function isUnboundTurnRequest(message: Thread["messages"][number]): boolean {
     message.startsNewTurn !== false &&
     (message.turnId === undefined || message.turnId === null)
   );
-}
-
-function soleUnansweredRequestIndex(messages: Thread["messages"]): number {
-  let found = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (message.role === "assistant" || (message.turnId !== undefined && message.turnId !== null)) {
-      break;
-    }
-    if (!isUnboundTurnRequest(message)) continue;
-    if (found >= 0) return -1;
-    found = index;
-  }
-  return found;
 }
 
 function reconcileLatestTurnFromSession(
