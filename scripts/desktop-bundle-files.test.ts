@@ -41,11 +41,12 @@ describe("desktop bundle file selection", () => {
 
   it("retains dependency source maps and sources in diagnostic builds", () => {
     for (const name of [
+      "SYNARA_DESKTOP_DEPENDENCY_SOURCES",
       "SYNARA_WEB_SOURCEMAP",
       "SYNARA_SERVER_SOURCEMAP",
       "SYNARA_DESKTOP_SOURCEMAP",
     ]) {
-      for (const value of ["1", " true ", "HIDDEN"]) {
+      for (const value of ["1", " true ", "HIDDEN", "yes", "on"]) {
         const diagnostics = preserveDependencyDiagnostics({ [name]: value });
         expect(diagnostics).toBe(true);
         const patterns = createDesktopBundleFilePatterns("linux", { diagnostics });
@@ -55,6 +56,9 @@ describe("desktop bundle file selection", () => {
     }
     expect(preserveDependencyDiagnostics({})).toBe(false);
     expect(preserveDependencyDiagnostics({ SYNARA_SERVER_SOURCEMAP: "false" })).toBe(false);
+    expect(excluded("node_modules/zod/src/index.ts", createDesktopBundleFilePatterns("linux"))).toBe(
+      true,
+    );
   });
 
   it("retains vendored licenses and non-TypeScript source assets", () => {

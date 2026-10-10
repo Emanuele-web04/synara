@@ -1,0 +1,43 @@
+name: Inspect bundle dependency entrypoints
+on:
+  push:
+    branches: [perf/production-bundle-size-audit]
+    paths: [.github/workflows/bundle-dependency-inspection.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile --ignore-scripts --linker hoisted
+      - name: Retain pinned package sources and manifests for read-only analysis
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/dependency-inspection"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const root = path.join(process.env.RUNNER_TEMP, 'dependency-inspection');
+          const packages = ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/sdk', '@earendil-works/pi-coding-agent', '@earendil-works/pi-ai', '@google/genai', 'effect', '@effect/platform-node', '@effect/platform-node-shared', 'openai', 'zod', 'node-pty', 'tsdown', 'rolldown', 'electron-builder', 'app-builder-lib'];
+          for (const name of packages) {
+            const source = path.join('node_modules', name);
+            fs.cpSync(source, path.join(root, name), { recursive: true, dereference: true, filter: (file) => !file.includes('/node_modules/', 13) && !/\.(node|png|jpg|gif|wasm|map)$/.test(file) });
+          }
+          JS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-dependency-entrypoints
+          path: ${{ runner.temp }}/dependency-inspection
+          retention-days: 7

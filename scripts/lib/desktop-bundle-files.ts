@@ -12,11 +12,17 @@ const DIAGNOSTIC_FILES = [
   "!node_modules/@effect/{platform-node,platform-node-shared,sql-sqlite-bun}/src/**/*.ts",
   "!node_modules/openai/src/**/*.ts",
   "!node_modules/@anthropic-ai/sdk/src/**/*.ts",
+  "!node_modules/zod/src/**/*.ts",
 ] as const;
 
 export function preserveDependencyDiagnostics(env: NodeJS.ProcessEnv): boolean {
-  return [env.SYNARA_WEB_SOURCEMAP, env.SYNARA_SERVER_SOURCEMAP, env.SYNARA_DESKTOP_SOURCEMAP].some(
-    (value) => ["1", "true", "hidden"].includes(value?.trim().toLowerCase() ?? ""),
+  return [
+    env.SYNARA_DESKTOP_DEPENDENCY_SOURCES,
+    env.SYNARA_WEB_SOURCEMAP,
+    env.SYNARA_SERVER_SOURCEMAP,
+    env.SYNARA_DESKTOP_SOURCEMAP,
+  ].some((value) =>
+    ["1", "true", "hidden", "yes", "on"].includes(value?.trim().toLowerCase() ?? ""),
   );
 }
 
@@ -43,7 +49,7 @@ export function createDesktopBundleFilePatterns(
   // dock-icon-beta.png while other platforms drop it; the beta linux/windows
   // picker files follow their flavor-neutral siblings below.
   const resources = "!apps/desktop/prod-resources/";
-  files.push(`${resources}entitlements.mac*.plist`);
+  files.push(`${resources}{entitlements.mac*.plist,icon.icns}`);
   if (platform !== "mac") {
     files.push(
       `${resources}app-icon-macos.png`,

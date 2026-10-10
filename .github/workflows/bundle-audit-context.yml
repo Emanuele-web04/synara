@@ -1,0 +1,50 @@
+name: Bundle dependency inspection
+on:
+  push:
+    branches: [perf/production-bundle-size-audit]
+    paths: [.github/workflows/bundle-audit-context.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile --ignore-scripts --linker hoisted
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Collect installed entry points and audit tools
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/bundle-inspection/node_modules" "$RUNNER_TEMP/bundle-inspection/tools"
+          node --input-type=module <<'NODE'
+          import { cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+          import { join } from 'node:path';
+          const output = join(process.env.RUNNER_TEMP, 'bundle-inspection');
+          const packages = ['@anthropic-ai/claude-agent-sdk', 'effect', '@effect/platform-node', '@effect/platform-node-shared', '@effect/sql-sqlite-bun', 'openai', '@anthropic-ai/sdk', '@earendil-works/pi-coding-agent', '@earendil-works/pi-ai', '@earendil-works/pi-agent-core', '@earendil-works/pi-tui', '@google/genai', '@pierre/diffs', 'web-streams-polyfill', 'node-pty', 'open', 'zod', '@agentclientprotocol/sdk', 'betterwright', 'tldts', 'tldts-experimental', 'tsdown', 'rolldown', 'oxfmt'];
+          for (const name of packages) {
+            const source = join('node_modules', name);
+            if (!existsSync(source)) throw new Error(`Missing ${source}`);
+            const destination = join(output, 'node_modules', name);
+            mkdirSync(destination, {recursive:true});
+            cpSync(source, destination, {recursive:true, dereference:true, filter: (path) => !path.slice(source.length).includes('/node_modules/')});
+          }
+          const oxfmt = readdirSync('node_modules/@oxfmt').find(name => name.includes('linux-x64-gnu'));
+          if (oxfmt) cpSync(join('node_modules/@oxfmt', oxfmt), join(output, 'node_modules/@oxfmt', oxfmt), {recursive:true, dereference:true});
+          cpSync(process.execPath, join(output, 'tools/node'));
+          NODE
+          tar -czf "$RUNNER_TEMP/bundle-inspection.tar.gz" -C "$RUNNER_TEMP/bundle-inspection" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-dependency-inspection
+          path: ${{ runner.temp }}/bundle-inspection.tar.gz
+          retention-days: 7

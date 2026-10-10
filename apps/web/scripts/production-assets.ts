@@ -5,7 +5,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"]);
+const SOURCE_EXTENSIONS = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mts",
+  ".cts",
+  ".css",
+  ".html",
+  ".json",
+]);
 export const CENTRAL_ICON_DIRECTORIES = ["central-icons-reversed", "central-icons-fill"] as const;
 
 export async function listFiles(root: string): Promise<string[]> {
@@ -33,10 +43,15 @@ export async function pruneProductionIcons(
   // dynamic at render time, but their allowed names are literals in the schema.
   const required = new Set<string>();
   const literal = /["'`]([a-z0-9][a-z0-9-]*)(?:\.svg)?["'`]/g;
+  const directUrl = /\/central-icons-(?:reversed|fill)\/([a-z0-9][a-z0-9-]*)\.svg/g;
   for (const root of sourceRoots) {
     for (const file of await listFiles(root)) {
       if (!SOURCE_EXTENSIONS.has(path.extname(file))) continue;
-      for (const match of (await fs.readFile(file, "utf8")).matchAll(literal)) {
+      const source = await fs.readFile(file, "utf8");
+      for (const match of source.matchAll(literal)) {
+        if (match[1]) required.add(match[1]);
+      }
+      for (const match of source.matchAll(directUrl)) {
         if (match[1]) required.add(match[1]);
       }
     }
