@@ -105,24 +105,27 @@ describe("AcpAdapterSupport", () => {
     ).toEqual({ outcome: "selected", optionId: "implement-once" });
   });
 
-  it("surfaces Default prompts only for active approval-required turns", () => {
-    const options = [{ kind: "allow_once", optionId: "allow" }] as const;
+  it.each(["approval-required", "auto-local"] as const)(
+    "surfaces Default prompts only for active %s turns",
+    (runtimeMode) => {
+      const options = [{ kind: "allow_once", optionId: "allow" }] as const;
 
-    expect(
-      resolveAcpPermissionPolicy({
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        options,
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveAcpPermissionPolicy({
-        runtimeMode: "full-access",
-        interactionMode: undefined,
-        options,
-      }),
-    ).toEqual({ outcome: "cancelled" });
-  });
+      expect(
+        resolveAcpPermissionPolicy({
+          runtimeMode,
+          interactionMode: "default",
+          options,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveAcpPermissionPolicy({
+          runtimeMode: "full-access",
+          interactionMode: undefined,
+          options,
+        }),
+      ).toEqual({ outcome: "cancelled" });
+    },
+  );
 
   it("selects only allow-once for active Synara Computer calls in approval-required mode", () => {
     const options = [

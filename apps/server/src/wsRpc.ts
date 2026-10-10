@@ -1,6 +1,7 @@
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
+import { LocalAuto } from "./localAuto/LocalAuto";
 import { execFile } from "node:child_process";
 
 import {
@@ -522,6 +523,7 @@ const makeWsRpcHandlersLayer = () =>
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
+      const localAuto = yield* LocalAuto;
       const providerService = yield* ProviderService;
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const runtimeStartup = yield* ServerRuntimeStartup;
@@ -2242,6 +2244,11 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to refresh providers",
           ),
         [WS_METHODS.serverUpdateProvider]: (input) => providerHealth.updateProvider(input),
+        [WS_METHODS.serverLocalAuto]: (input) =>
+          rpcEffect(
+            requireOwner.pipe(Effect.andThen(localAuto.manage(input))),
+            "Local Auto operation failed",
+          ),
         [WS_METHODS.serverListExternalMcpIntegrations]: () =>
           rpcEffect(
             requireOwner.pipe(Effect.andThen(externalMcp.listIntegrations())),

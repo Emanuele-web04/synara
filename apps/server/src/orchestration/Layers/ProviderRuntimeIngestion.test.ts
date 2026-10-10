@@ -22,6 +22,7 @@ import {
   ProjectId,
   ProviderItemId,
   RuntimeItemId,
+  RuntimeRequestId,
   RuntimeTaskId,
   ThreadId,
   TurnId,
@@ -73,6 +74,7 @@ import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { LocalAuto, type LocalAutoDecision } from "../../localAuto/LocalAuto.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -402,6 +404,8 @@ describe("ProviderRuntimeIngestion", () => {
     readonly startIngestion?: boolean;
     readonly persistedStream?: boolean;
     readonly computerManager?: ComputerManager;
+    readonly runtimeMode?: OrchestrationThread["runtimeMode"];
+    readonly classify?: (text: string) => Effect.Effect<LocalAutoDecision>;
   }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
@@ -418,6 +422,14 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provide(
+        options?.classify
+          ? Layer.succeed(LocalAuto, {
+              classify: options.classify,
+              manage: () => Effect.die("Local Auto management is not used by ingestion tests"),
+            })
+          : Layer.empty,
+      ),
       Layer.provideMerge(
         options?.computerManager
           ? Layer.succeed(ComputerService, {
@@ -497,7 +509,7 @@ describe("ProviderRuntimeIngestion", () => {
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
+        runtimeMode: options?.runtimeMode ?? "approval-required",
         branch: null,
         worktreePath: null,
         createdAt,
@@ -512,7 +524,7 @@ describe("ProviderRuntimeIngestion", () => {
           threadId: ThreadId.makeUnsafe("thread-1"),
           status: "ready",
           providerName: "codex",
-          runtimeMode: "approval-required",
+          runtimeMode: options?.runtimeMode ?? "approval-required",
           activeTurnId: null,
           updatedAt: createdAt,
           lastError: null,
@@ -523,7 +535,7 @@ describe("ProviderRuntimeIngestion", () => {
     provider.setSession({
       provider: "codex",
       status: "ready",
-      runtimeMode: "approval-required",
+      runtimeMode: options?.runtimeMode ?? "approval-required",
       threadId: ThreadId.makeUnsafe("thread-1"),
       createdAt,
       updatedAt: createdAt,
@@ -548,6 +560,77 @@ describe("ProviderRuntimeIngestion", () => {
       readProjectedThread,
     };
   }
+
+  it("reviews local Auto once after its approval is durably projected", async () => {
+    const classify = vi.fn((_text: string) =>
+      Effect.succeed({ decision: "approve" as const, pDeny: 0.01 }),
+    );
+    const harness = await createHarness({ runtimeMode: "auto-local", classify });
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-local-auto");
+    const requestId = RuntimeRequestId.makeUnsafe("approval-local-auto");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-local-auto-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("request-local-auto"),
+          role: "user",
+          text: "Print the working directory.",
+          attachments: [],
+        },
+        runtimeMode: "auto-local",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await harness.drain();
+    const base = {
+      provider: "codex" as const,
+      threadId,
+      turnId,
+      lifecycleGeneration: "local-auto-generation",
+      createdAt: new Date().toISOString(),
+    };
+    harness.emit({
+      ...base,
+      type: "turn.started",
+      eventId: asEventId("local-auto-started"),
+      payload: {},
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+    const request: ProviderRuntimeEvent = {
+      ...base,
+      type: "request.opened",
+      eventId: asEventId("local-auto-request"),
+      requestId,
+      payload: { requestType: "command_execution_approval", args: { command: "pwd" } },
+    };
+    harness.emit(request);
+    const thread = await waitForProjectedThread(
+      harness.readProjectedThread,
+      (entry) => pendingInteractionStatus(entry, requestId) === "responding",
+    );
+    harness.emit(request);
+    await harness.drain();
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(classify.mock.calls[0]![0]).toContain("Print the working directory.");
+    expect(
+      thread.pendingInteractions?.find(
+        (entry) => entry.requestId === ApprovalRequestId.makeUnsafe(requestId),
+      ),
+    ).toMatchObject({
+      decision: "accept",
+      lifecycleGeneration: "local-auto-generation",
+    });
+    expect(
+      thread.activities.filter((activity) => activity.kind === "approval.requested"),
+    ).toHaveLength(1);
+    expect(
+      thread.activities.filter((activity) => activity.kind === "local-auto.reviewed"),
+    ).toHaveLength(1);
+  });
 
   it.each(["replay", "live"] as const)(
     "preserves workflow phase agents and poll snapshots during %s ingestion",

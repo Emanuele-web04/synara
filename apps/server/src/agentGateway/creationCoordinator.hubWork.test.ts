@@ -229,19 +229,24 @@ const layer = it.layer(
 );
 
 layer("Hub work creation saga", (it) => {
-  for (const explicit of [undefined, "approval-required"] as const) {
-    it.effect(`uses ${explicit ?? "inherited Auto"} approval for Hub workers`, () =>
+  for (const [runtimeMode, explicit] of [
+    ["auto", undefined],
+    ["auto", "approval-required"],
+    ["auto-local", undefined],
+    ["auto-local", "approval-required"],
+  ] as const) {
+    it.effect(`uses ${explicit ?? `inherited ${runtimeMode}`} approval for Hub workers`, () =>
       Effect.gen(function* () {
-        const fixture = yield* makeFixture(`mode-${explicit}`, "auto");
+        const fixture = yield* makeFixture(`mode-${runtimeMode}-${explicit}`, runtimeMode);
         const result = yield* fixture.handler(
           {
             ...INPUT,
             threads: [{ ...INPUT.threads[0]!, ...(explicit ? { runtimeMode: explicit } : {}) }],
           },
-          { ...fixture.context, inheritedRuntimeMode: "auto" } as GatewayCreationContext,
+          { ...fixture.context, inheritedRuntimeMode: runtimeMode } as GatewayCreationContext,
         );
         assert.notEqual(result.isError, true);
-        const expected = explicit ?? "auto";
+        const expected = explicit ?? runtimeMode;
         const create = fixture.commands.find((command) => command.type === "thread.create");
         const start = fixture.commands.find((command) => command.type === "thread.turn.start");
         assert.equal(create?.runtimeMode, expected);
@@ -250,20 +255,22 @@ layer("Hub work creation saga", (it) => {
     );
   }
 
-  it.effect("keeps approval-required as the default outside Hub work for an Auto caller", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture("non-hub-mode", "auto");
-      const result = yield* fixture.handler(INPUT, {
-        kind: "provider-session",
-        callerThreadId: CALLER_ID,
-        callerTurnId: "ordinary-turn",
-        assertAuthority: () => Effect.void,
-      });
-      assert.notEqual(result.isError, true);
-      const create = fixture.commands.find((command) => command.type === "thread.create");
-      assert.equal(create?.runtimeMode, "approval-required");
-    }),
-  );
+  for (const runtimeMode of ["auto", "auto-local"] as const) {
+    it.effect(`keeps approval-required as the default outside Hub work for ${runtimeMode}`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture(`non-hub-mode-${runtimeMode}`, runtimeMode);
+        const result = yield* fixture.handler(INPUT, {
+          kind: "provider-session",
+          callerThreadId: CALLER_ID,
+          callerTurnId: `ordinary-turn-${runtimeMode}`,
+          assertAuthority: () => Effect.void,
+        });
+        assert.notEqual(result.isError, true);
+        const create = fixture.commands.find((command) => command.type === "thread.create");
+        assert.equal(create?.runtimeMode, "approval-required");
+      }),
+    );
+  }
 
   it.effect(
     "creates from a durable Hub task without a provider turn and replays the committed worker link",

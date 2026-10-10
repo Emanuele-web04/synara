@@ -1,4 +1,5 @@
 import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
+import { ToolApprovalGate } from "../toolApprovalGate.ts";
 import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -15,7 +16,12 @@ import type {
   ExtensionUIContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type {
+  AgentToolResult,
+  ThinkingLevel,
+  BeforeToolCallContext,
+  BeforeToolCallResult,
+} from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import { resetApiProviders } from "@earendil-works/pi-ai/compat";
 import {
@@ -397,6 +403,8 @@ const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
 );
 
 interface PiSessionContext {
+  readonly toolApprovals: ToolApprovalGate;
+  closing?: boolean;
   harnessPolicyDelivered?: boolean;
   readonly enableComputerControl?: boolean;
   /**
@@ -2884,6 +2892,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     });
 
     const abortSessionTurn = (context: PiSessionContext) => {
+      context.toolApprovals.cancel(context.activeTurnId);
       // Otherwise the SDK can start a queued continuation after aborting backoff.
       context.runtime.session.clearQueue();
       return context.runtime.session.abort();
@@ -2908,6 +2917,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     };
 
     const disposeSessionContext = async (context: PiSessionContext) => {
+      context.closing = true;
+      context.toolApprovals.cancel();
       try {
         // Stop retry and queued continuation before waiting for gateway drainage.
         context.runtime.session.clearQueue();
@@ -3256,6 +3267,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       thinkingLevel?: ThinkingLevel;
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
+      reviewTool?: (
+        session: PiAgentSession,
+        call: BeforeToolCallContext,
+        signal?: AbortSignal,
+      ) => Promise<BeforeToolCallResult | undefined>;
       signal?: AbortSignal;
       noExtensions?: boolean;
     }) => {
@@ -3300,24 +3316,35 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const shellPath = services.settingsManager.getShellPath();
         const commandPrefix = services.settingsManager.getShellCommandPrefix();
         input.processSupervisor.setShellPath(shellPath);
+        const created = await input.sdk.createAgentSessionFromServices({
+          services,
+          sessionManager,
+          ...(sessionStartEvent ? { sessionStartEvent } : {}),
+          ...(model ? { model } : {}),
+          thinkingLevel: input.thinkingLevel ?? DEFAULT_PI_THINKING_LEVEL,
+          customTools: [
+            input.sdk.defineTool(
+              input.sdk.createBashToolDefinition(cwd, {
+                operations: input.processSupervisor.operations,
+                ...(commandPrefix === undefined ? {} : { commandPrefix }),
+                ...(shellPath === undefined ? {} : { shellPath }),
+              }),
+            ),
+            ...(input.gatewayTools ?? []),
+          ],
+        });
+        if (input.reviewTool) {
+          const nativeHook = created.session.agent.beforeToolCall;
+          // Preserve extension vetoes; the host gate also covers built-ins,
+          // custom tools, and new sessions created by runtime reload/switch.
+          created.session.agent.beforeToolCall = async (call, signal) => {
+            const nativeResult = await nativeHook?.(call, signal);
+            if (nativeResult?.block) return nativeResult;
+            return input.reviewTool!(created.session, call, signal);
+          };
+        }
         return {
-          ...(await input.sdk.createAgentSessionFromServices({
-            services,
-            sessionManager,
-            ...(sessionStartEvent ? { sessionStartEvent } : {}),
-            ...(model ? { model } : {}),
-            thinkingLevel: input.thinkingLevel ?? DEFAULT_PI_THINKING_LEVEL,
-            customTools: [
-              input.sdk.defineTool(
-                input.sdk.createBashToolDefinition(cwd, {
-                  operations: input.processSupervisor.operations,
-                  ...(commandPrefix === undefined ? {} : { commandPrefix }),
-                  ...(shellPath === undefined ? {} : { shellPath }),
-                }),
-              ),
-              ...(input.gatewayTools ?? []),
-            ],
-          })),
+          ...created,
           services,
           diagnostics: services.diagnostics,
         };
@@ -3469,6 +3496,50 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 ...(modelId ? { modelId } : {}),
                 ...(thinkingLevel ? { thinkingLevel } : {}),
                 processSupervisor,
+                ...(input.runtimeMode === "auto-local"
+                  ? {
+                      reviewTool: async (
+                        piSession: PiAgentSession,
+                        call: BeforeToolCallContext,
+                        signal?: AbortSignal,
+                      ): Promise<BeforeToolCallResult | undefined> => {
+                        const current = sessions.get(input.threadId);
+                        if (
+                          !current ||
+                          current.stopped ||
+                          current.closing ||
+                          !current.activeTurnId ||
+                          current.runtime.session !== piSession ||
+                          signal?.aborted
+                        )
+                          return {
+                            block: true,
+                            reason: "This tool call no longer belongs to an active Synara turn.",
+                            terminate: true,
+                          };
+                        const turnId = current.activeTurnId;
+                        const decision = await current.toolApprovals.request({
+                          turnId,
+                          toolName: call.toolCall.name,
+                          input: call.args,
+                          itemId: RuntimeItemId.makeUnsafe(`pi-tool-${call.toolCall.id}`),
+                          cwd: current.session.cwd,
+                          signal,
+                        });
+                        return !current.stopped &&
+                          !current.closing &&
+                          current.activeTurnId === turnId &&
+                          !signal?.aborted &&
+                          (decision === "accept" || decision === "acceptForSession")
+                          ? undefined
+                          : {
+                              block: true,
+                              reason: "Synara did not approve this tool call.",
+                              terminate: true,
+                            };
+                      },
+                    }
+                  : {}),
                 ...(gatewayControlAvailable ? { gatewayTools } : {}),
               }),
             catch: (cause) =>
@@ -3506,6 +3577,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const context: PiSessionContext = {
           enableComputerControl: input.enableComputerControl === true,
           gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
+          toolApprovals: new ToolApprovalGate({
+            provider: PROVIDER,
+            threadId: input.threadId,
+            lifecycleGeneration: input.lifecycleGeneration,
+            emit: offerRuntimeEvent,
+          }),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
@@ -4244,7 +4321,16 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       sendTurn,
       steerTurn,
       interruptTurn,
-      respondToRequest: (threadId) => respondUnsupported(threadId, "request/respond"),
+      respondToRequest: (threadId, requestId, decision) =>
+        Effect.gen(function* () {
+          const context = yield* requireSession(threadId);
+          if (!context.toolApprovals.respond(requestId, decision))
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "request/respond",
+              detail: `Unknown pending tool approval: ${requestId}`,
+            });
+        }),
       respondToUserInput,
       stopSession,
       listSessions,

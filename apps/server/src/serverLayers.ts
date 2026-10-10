@@ -3,6 +3,7 @@ import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/
 import { QueuedTurnPromotionRepositoryLive } from "./persistence/Layers/QueuedTurnPromotions";
 import { HubWorkRepositoryLive } from "./persistence/Layers/HubWorkRepository";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
+import { LocalAutoLive } from "./localAuto/LocalAuto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 
@@ -118,6 +119,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeServicesLayer),
   );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
+    Layer.provideMerge(LocalAutoLive),
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(ComputerServiceLive),
   );

@@ -710,7 +710,7 @@ describe("Antigravity CLI integration helpers", () => {
         PreToolUse: [
           {
             matcher: "*",
-            hooks: [{ type: "command", command: "capture pre-tool" }],
+            hooks: [{ type: "command", command: "capture pre-tool", timeout: 610 }],
           },
         ],
         PostToolUse: [
@@ -864,7 +864,6 @@ describe("Antigravity CLI integration helpers", () => {
                 arguments: { content: "super-secret-content" },
                 input: { content: "super-secret-content" },
                 rawInput: { content: "super-secret-content" },
-                rawOutput: "",
               },
             },
             {

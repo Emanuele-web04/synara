@@ -704,6 +704,7 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly sandbox: CodexSandboxMode;
 } {
   switch (runtimeMode) {
+    case "auto-local":
     case "approval-required":
       return {
         approvalPolicy: "untrusted",
@@ -810,6 +811,7 @@ function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   readonly sandboxPolicy: CodexTurnSandboxPolicy;
 } {
   switch (runtimeMode) {
+    case "auto-local":
     case "approval-required":
       return {
         approvalPolicy: "untrusted",

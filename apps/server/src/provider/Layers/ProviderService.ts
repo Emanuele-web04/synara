@@ -46,7 +46,9 @@ import {
 } from "@synara/shared/providerInstances";
 import {
   providerSupportsAutoRuntimeMode,
+  providerSupportsLocalAutoRuntimeMode,
   unsupportedAutoRuntimeModeMessage,
+  unsupportedLocalAutoRuntimeModeMessage,
 } from "@synara/shared/runtimeMode";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -170,6 +172,19 @@ function validateAutoRuntimeMode(
   provider: ProviderSession["provider"],
   runtimeMode: ProviderSession["runtimeMode"],
 ) {
+  if (
+    runtimeMode === "auto-local" &&
+    (!Schema.is(ProviderKind)(provider) || !providerSupportsLocalAutoRuntimeMode(provider))
+  ) {
+    return Effect.fail(
+      new ProviderValidationError({
+        operation,
+        issue: Schema.is(ProviderKind)(provider)
+          ? unsupportedLocalAutoRuntimeModeMessage(provider)
+          : `Provider '${provider}' does not support local Auto tool approvals.`,
+      }),
+    );
+  }
   return runtimeMode !== "auto" ||
     (Schema.is(ProviderKind)(provider) && providerSupportsAutoRuntimeMode(provider))
     ? Effect.void

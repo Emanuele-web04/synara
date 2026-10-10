@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -81,7 +81,14 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "tool" | "until-abort";
+type ResponseKind =
+  | "success"
+  | "error"
+  | "overflow"
+  | "partial-error"
+  | "tool"
+  | "write-tool"
+  | "until-abort";
 function responses(...kinds: ResponseKind[]) {
   let calls = 0;
   captured.stream = (model, context, options) => {
@@ -107,7 +114,18 @@ function responses(...kinds: ResponseKind[]) {
       timestamp: Date.now(),
     };
     stream.push({ type: "start", partial: message });
-    if (kind === "error" || kind === "overflow") {
+    if (kind === "write-tool") {
+      message.content = [
+        {
+          type: "toolCall",
+          id: "write-auto",
+          name: "write",
+          arguments: { path: "approved.txt", content: "reviewed content\n" },
+        },
+      ];
+      message.stopReason = "toolUse";
+      stream.push({ type: "done", reason: "toolUse", message });
+    } else if (kind === "error" || kind === "overflow") {
       message.stopReason = "error";
       message.errorMessage =
         kind === "overflow"
@@ -163,7 +181,10 @@ async function withAdapter(
   run: (adapter: PiAdapterShape, events: ProviderRuntimeEvent[], cwd: string) => Promise<void>,
   delayMs = 100,
   credentials?: AgentGatewayCredentialsShape,
-  startSessionOverrides?: { readonly enableComputerControl?: boolean },
+  startSessionOverrides?: {
+    readonly enableComputerControl?: boolean;
+    readonly runtimeMode?: "full-access" | "auto-local";
+  },
   gatewayFetchOverride?: AgentGatewayMcpFetch,
 ) {
   vi.stubEnv("PI_OFFLINE", "1");
@@ -224,7 +245,7 @@ async function withAdapter(
       yield* adapter.startSession({
         threadId,
         cwd,
-        runtimeMode: "full-access",
+        runtimeMode: startSessionOverrides?.runtimeMode ?? "full-access",
         providerOptions: { pi: { agentDir: cwd } },
         modelSelection: { provider: "pi", model: "openai/gpt-4o" },
         ...(startSessionOverrides?.enableComputerControl !== undefined
@@ -1372,4 +1393,88 @@ it("separates assistant and reasoning messages across a real SDK tool loop", asy
       }
     }
   });
+});
+
+it.each(["accept", "decline", "cancel"] as const)(
+  "local Auto pauses real Pi tool execution until %s",
+  async (decision) => {
+    responses("write-tool", "success");
+    await withAdapter(
+      async (adapter, events, cwd) => {
+        await send(adapter);
+        await waitFor(() =>
+          expect(events.some((event) => event.type === "request.opened")).toBe(true),
+        );
+        const approval = events.find((event) => event.type === "request.opened")!;
+        expect(approval).toMatchObject({
+          payload: {
+            args: {
+              toolName: "write",
+              input: { path: "approved.txt", content: "reviewed content\n" },
+            },
+          },
+        });
+        expect(existsSync(path.join(cwd, "approved.txt"))).toBe(false);
+        await Effect.runPromise(
+          adapter.respondToRequest(
+            threadId,
+            ApprovalRequestId.makeUnsafe(approval.requestId!),
+            decision,
+          ),
+        );
+        await waitFor(() => expect(completions(events)).toHaveLength(1));
+        expect(existsSync(path.join(cwd, "approved.txt"))).toBe(decision === "accept");
+        if (decision === "accept")
+          expect(readFileSync(path.join(cwd, "approved.txt"), "utf8")).toBe("reviewed content\n");
+        expect(events.filter((event) => event.type === "request.resolved")).toHaveLength(1);
+      },
+      100,
+      undefined,
+      { runtimeMode: "auto-local" },
+    );
+  },
+);
+it("local Auto cancels Pi approvals on interrupt and rejects late answers", async () => {
+  responses("write-tool", "success");
+  await withAdapter(
+    async (adapter, events, cwd) => {
+      const turn = await send(adapter);
+      await waitFor(() =>
+        expect(events.some((event) => event.type === "request.opened")).toBe(true),
+      );
+      const approval = events.find((event) => event.type === "request.opened")!;
+      await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+      await waitFor(() => expect(completions(events)).toHaveLength(1));
+      expect(existsSync(path.join(cwd, "approved.txt"))).toBe(false);
+      await expect(
+        Effect.runPromise(
+          adapter.respondToRequest(
+            threadId,
+            ApprovalRequestId.makeUnsafe(approval.requestId!),
+            "accept",
+          ),
+        ),
+      ).rejects.toMatchObject({ _tag: "ProviderAdapterRequestError" });
+    },
+    100,
+    undefined,
+    { runtimeMode: "auto-local" },
+  );
+});
+it("local Auto preserves Pi extension vetoes before asking the classifier", async () => {
+  captured.extensions.push((pi) => {
+    pi.on("tool_call", async () => ({ block: true, reason: "Extension veto" }));
+  });
+  responses("write-tool", "success");
+  await withAdapter(
+    async (adapter, events, cwd) => {
+      await send(adapter);
+      await waitFor(() => expect(completions(events)).toHaveLength(1));
+      expect(events.filter((event) => event.type === "request.opened")).toHaveLength(0);
+      expect(existsSync(path.join(cwd, "approved.txt"))).toBe(false);
+    },
+    100,
+    undefined,
+    { runtimeMode: "auto-local" },
+  );
 });
