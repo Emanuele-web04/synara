@@ -612,8 +612,7 @@ describe("wsNativeApi", () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce({ integration: { integrationId: "integration-1" } })
       .mockResolvedValueOnce({ revoked: true })
-      .mockResolvedValueOnce({ integration: { integrationId: "integration-1" } })
-      .mockResolvedValueOnce({ integrationId: "integration-1", concurrencyLimit: null });
+      .mockResolvedValueOnce({ integration: { integrationId: "integration-1" } });
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -628,10 +627,6 @@ describe("wsNativeApi", () => {
     await api.server.createExternalMcpIntegration(createInput);
     await api.server.revokeExternalMcpIntegration({ integrationId: "integration-1" });
     await api.server.refreshExternalMcpPairing({ integrationId: "integration-1" });
-    await api.server.updateExternalMcpIntegration({
-      integrationId: "integration-1",
-      concurrencyLimit: null,
-    });
 
     expect(requestMock).toHaveBeenNthCalledWith(1, WS_METHODS.serverListExternalMcpIntegrations);
     expect(requestMock).toHaveBeenNthCalledWith(
@@ -644,10 +639,6 @@ describe("wsNativeApi", () => {
     });
     expect(requestMock).toHaveBeenNthCalledWith(4, WS_METHODS.serverRefreshExternalMcpPairing, {
       integrationId: "integration-1",
-    });
-    expect(requestMock).toHaveBeenNthCalledWith(5, WS_METHODS.serverUpdateExternalMcpIntegration, {
-      integrationId: "integration-1",
-      concurrencyLimit: null,
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
