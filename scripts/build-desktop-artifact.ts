@@ -8,7 +8,8 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
@@ -45,6 +46,7 @@ import {
   RELEASE_WORKSPACE_MANIFEST_PATHS,
 } from "./lib/release-workspace-manifests.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { parseLinuxPackageTargets } from "./lib/linux-package-targets.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -69,6 +71,13 @@ const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 const BuildFlavor = Schema.Literals(SYNARA_PACKAGED_DESKTOP_FLAVORS);
 const requireFromScriptsWorkspace = createRequire(new URL("./package.json", import.meta.url));
+
+// Reuse the public feedback contact already routed by the marketing site.
+// electron-builder requires both fields for Debian control metadata.
+export const DESKTOP_PACKAGE_METADATA = {
+  author: { name: "Emanuele Di Pietro", email: "feedback@trysynara.com" },
+  homepage: "https://www.trysynara.com",
+} as const;
 
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
@@ -240,7 +249,9 @@ interface StagePackageJson {
   readonly synaraWindowsPublisherSubject: string | null;
   readonly private: true;
   readonly description: string;
-  readonly author: string;
+  readonly author: { readonly name: string; readonly email: string };
+  readonly homepage: string;
+  readonly license: string;
   readonly main: string;
   readonly build: Record<string, unknown>;
   readonly dependencies: Record<string, unknown>;
@@ -319,7 +330,21 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     });
   }
 
-  const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
+  const requestedTarget = mergeOptions(
+    input.target,
+    env.target,
+    PLATFORM_CONFIG[platform].defaultTarget,
+  );
+  const target = yield* Effect.try({
+    try: () => {
+      if (platform === "linux") return parseLinuxPackageTargets(requestedTarget).join(",");
+      if (!requestedTarget.trim() || requestedTarget.includes(",")) {
+        throw new Error("Multiple artifact targets are supported only for Linux AppImage,deb.");
+      }
+      return requestedTarget.trim();
+    },
+    catch: (cause) => new BuildScriptError({ message: String(cause), cause }),
+  });
   // Flavor is deliberately a build flag, never inherited from a source
   // launcher's SYNARA_DESKTOP_FLAVOR environment variable.
   const flavor = Option.getOrElse(input.flavor, () => "production" as const);
@@ -888,7 +913,7 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
   yield* fs.remove(path.join(stageAppDir, RELEASE_PATCHES_PATH), { recursive: true });
 });
 
-const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
   artifactIdentity: ReturnType<typeof createDesktopArtifactIdentity>,
@@ -936,7 +961,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   const platformBuildConfigInput = {
     platform,
-    target,
+    target: platform === "linux" ? parseLinuxPackageTargets(target)[0]! : target,
     signed,
     adHocSign: artifactIdentity.identity.usesScriptedUpdates && !signed,
     flavor,
@@ -944,6 +969,17 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   } as const;
 
   Object.assign(buildConfig, createDesktopPlatformBuildConfig(platformBuildConfigInput));
+  if (platform === "linux") {
+    const targets = parseLinuxPackageTargets(target);
+    buildConfig.linux = { ...(buildConfig.linux as Record<string, unknown>), target: [...targets] };
+    if (targets.includes("deb")) {
+      // FpmTarget otherwise contributes .deb entries to latest-linux.yml.
+      // Its target-level publish:null excludes those events from update metadata,
+      // while the AppImage retains the existing global publish configuration.
+      buildConfig.deb = { publish: null };
+    }
+    if (!targets.includes("AppImage")) buildConfig.publish = null;
+  }
   if (platform === "linux" && artifactIdentity.identity.flavor !== "production") {
     const linux = buildConfig.linux as Record<string, unknown>;
     buildConfig.linux = {
@@ -1326,7 +1362,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     synaraWindowsPublisherSubject: resolvedBuildConfig.windowsPublisherSubject,
     private: true,
     description: "Synara desktop build",
-    author: "Emanuele Di Pietro",
+    ...DESKTOP_PACKAGE_METADATA,
+    license: rootPackageJson.license,
     main: "apps/desktop/dist-electron/main.js",
     build: resolvedBuildConfig.buildConfig,
     dependencies: {
@@ -1514,7 +1551,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   target: Flag.string("target").pipe(
     Flag.withDescription(
-      "Artifact target, for example dmg/AppImage/nsis (env: SYNARA_DESKTOP_TARGET).",
+      "Artifact target: dmg/zip, AppImage/deb/AppImage,deb, or nsis (env: SYNARA_DESKTOP_TARGET).",
     ),
     Flag.optional,
   ),
@@ -1577,8 +1614,10 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
 
 const cliRuntimeLayer = Layer.mergeAll(Logger.layer([Logger.consolePretty()]), NodeServices.layer);
 
-Command.run(buildDesktopArtifactCli, { version: "0.0.0" }).pipe(
-  Effect.scoped,
-  Effect.provide(cliRuntimeLayer),
-  NodeRuntime.runMain,
-);
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  Command.run(buildDesktopArtifactCli, { version: "0.0.0" }).pipe(
+    Effect.scoped,
+    Effect.provide(cliRuntimeLayer),
+    NodeRuntime.runMain,
+  );
+}
