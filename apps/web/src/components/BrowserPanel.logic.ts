@@ -8,6 +8,7 @@ import {
   BROWSER_BLANK_URL,
   BROWSER_SEARCH_URL_PREFIX,
   FLOATING_BROWSER_CHROME_PARTITION,
+  resolveFloatingBrowserGuestLayout,
   normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput,
 } from "@synara/shared/browserSession";
