@@ -114,19 +114,25 @@ it("requests only the resolved preview file for gutters and refreshes it on file
       </QueryClientProvider>,
     );
     await vi.waitFor(() => expect(readWorkingTreeDiff).toHaveBeenCalledTimes(1));
-    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith({
-      cwd: WORKSPACE_ROOT,
-      scope: "workingTree",
-      filePath: resolvedPath,
-    });
+    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith(
+      {
+        cwd: WORKSPACE_ROOT,
+        scope: "workingTree",
+        filePath: resolvedPath,
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     subscription.listener?.({ type: "changed", relativePath: resolvedPath, mtimeMs: Date.now() });
     await vi.waitFor(() => expect(readWorkingTreeDiff).toHaveBeenCalledTimes(2));
-    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith({
-      cwd: WORKSPACE_ROOT,
-      scope: "workingTree",
-      filePath: resolvedPath,
-    });
+    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith(
+      {
+        cwd: WORKSPACE_ROOT,
+        scope: "workingTree",
+        filePath: resolvedPath,
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     await view.unmount();
   } finally {
     restoreNativeApi();
@@ -191,7 +197,7 @@ it("refreshes mounted unstaged changes after a save and after watched file event
     await vi.waitFor(() => expect(unstagedCalls()).toBe(1));
     await vi.waitFor(() => expect(onFileChange).toHaveBeenCalledTimes(1));
     // Editable files never request the read-only change gutter.
-    expect(readWorkingTreeDiff).not.toHaveBeenCalledWith(
+    expect(readWorkingTreeDiff.mock.calls.map(([input]) => input)).not.toContainEqual(
       expect.objectContaining({ scope: "workingTree" }),
     );
 
@@ -199,10 +205,10 @@ it("refreshes mounted unstaged changes after a save and after watched file event
     pressKeyboardSave(editor.element());
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(unstagedCalls()).toBe(2));
-    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith({
-      cwd: WORKSPACE_ROOT,
-      scope: "unstaged",
-    });
+    expect(readWorkingTreeDiff).toHaveBeenLastCalledWith(
+      { cwd: WORKSPACE_ROOT, scope: "unstaged" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
 
     // An external write to the open file must refresh the pane as well, not
     // merely mark it stale until the window regains focus.
