@@ -1,3 +1,5 @@
+import { useWorkItemsCapability, useWorkItemsAvailability } from "../lib/workItemReactQuery";
+import { WorkItemPickerDialog } from "./chat/WorkItemPickerDialog";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -642,6 +644,8 @@ export default function ChatView({
   const createWorktreeMutation = useMutation(
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
+  const workItemsAvailable = useWorkItemsCapability();
+  const [workItemPickerOpen, setWorkItemPickerOpen] = useState(false);
   const isEditorRail = presentationMode === "editor";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const {
@@ -655,6 +659,7 @@ export default function ChatView({
     composerTerminalContexts,
     composerPastedTexts,
     composerPullRequestContexts,
+    composerWorkItems,
     composerSkills,
     composerMentions,
     queuedComposerTurns,
@@ -719,6 +724,8 @@ export default function ChatView({
     removeComposerPastedTextFromDraft,
     addComposerPullRequestContextsToDraft,
     removeComposerPullRequestContextFromDraft,
+    removeComposerWorkItemFromDraft,
+    addComposerWorkItemToDraft,
     removeComposerBrowserAnnotationFromDraft,
     showComposerPastedTextInField,
   } = useChatComposerDraft({ threadId });
@@ -2125,6 +2132,13 @@ export default function ChatView({
         workingDirectory: resolvedThreadWorkingDirectory,
       })
     : null;
+  const workItemsAvailability = useWorkItemsAvailability(
+    workItemsAvailable && isComposerExtrasPanelOpen ? threadWorkspaceCwd : null,
+  );
+  const canAttachWorkItems =
+    workItemsAvailable &&
+    threadWorkspaceCwd !== null &&
+    workItemsAvailability.data?.status !== "no-repository";
   const threadArtifactWorkspaceRoot = resolveThreadArtifactWorkspaceRoot({
     isGroupContainer,
     projectCwd: activeProject?.cwd ?? null,
@@ -4261,6 +4275,7 @@ export default function ChatView({
     addComposerTerminalContextsToDraft,
     addComposerPastedTextsToDraft,
     addComposerPullRequestContextsToDraft,
+    addComposerWorkItemToDraft,
     updateSelectedComposerSkills,
     updateSelectedComposerMentions,
     setRestoredQueuedSourceProposedPlan,
@@ -4395,6 +4410,7 @@ export default function ChatView({
     composerTerminalContexts,
     composerPastedTexts,
     composerPullRequestContexts,
+    composerWorkItems,
     restoredQueuedSourceProposedPlanRef,
     enqueueQueuedComposerTurn,
     setComposerDraftPrompt,
@@ -6066,6 +6082,9 @@ export default function ChatView({
                   <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
                     {composerExtrasPanelOpen ? (
                       <ComposerExtrasPanel
+                        onAttachWorkItems={
+                          canAttachWorkItems ? () => setWorkItemPickerOpen(true) : undefined
+                        }
                         panelId={COMPOSER_EXTRAS_PANEL_ID}
                         interactionMode={interactionMode}
                         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
@@ -6126,6 +6145,7 @@ export default function ChatView({
                     composerFileComments.length > 0 ||
                     composerPastedTexts.length > 0 ||
                     composerPullRequestContexts.length > 0 ||
+                    composerWorkItems.length > 0 ||
                     composerFiles.length > 0 ||
                     composerImages.length > 0) && (
                     <ComposerReferenceAttachments
@@ -6134,6 +6154,8 @@ export default function ChatView({
                       fileComments={composerFileComments}
                       pastedTexts={composerPastedTexts}
                       pullRequestContexts={composerPullRequestContexts}
+                      workItems={composerWorkItems}
+                      onRemoveWorkItem={removeComposerWorkItemFromDraft}
                       files={composerFiles}
                       images={composerImages}
                       nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
@@ -6876,6 +6898,14 @@ export default function ChatView({
       </div>
       {/* end horizontal flex container */}
 
+      <WorkItemPickerDialog
+        open={workItemPickerOpen && workItemsAvailable}
+        onOpenChange={setWorkItemPickerOpen}
+        cwd={threadWorkspaceCwd ?? null}
+        selectedItems={composerWorkItems}
+        onSelect={(item) => addComposerWorkItemToDraft({ ...item, id: crypto.randomUUID() })}
+        onRemove={removeComposerWorkItemFromDraft}
+      />
       <ComposerSlashStatusDialog
         open={isSlashStatusDialogOpen}
         onOpenChange={setIsSlashStatusDialogOpen}

@@ -172,6 +172,7 @@ export interface ChatTurnSubmissionInput {
   composerPullRequestContexts: ReturnType<
     typeof useChatComposerDraft
   >["composerPullRequestContexts"];
+  composerWorkItems: ReturnType<typeof useChatComposerDraft>["composerWorkItems"];
   restoredQueuedSourceProposedPlanRef: ReturnType<
     typeof useChatComposerDraft
   >["restoredQueuedSourceProposedPlanRef"];
@@ -211,6 +212,7 @@ export interface ChatTurnSubmissionInput {
   composerPullRequestContextsRef: ReturnType<
     typeof useChatComposerDraft
   >["composerPullRequestContextsRef"];
+
   setPrompt: ReturnType<typeof useChatComposerDraft>["setPrompt"];
   addComposerImagesToDraft: ReturnType<typeof useChatComposerDraft>["addComposerImagesToDraft"];
   addComposerFilesToDraft: ReturnType<typeof useChatComposerDraft>["addComposerFilesToDraft"];

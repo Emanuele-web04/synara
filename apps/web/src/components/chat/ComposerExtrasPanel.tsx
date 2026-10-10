@@ -72,6 +72,7 @@ export function ComposerExtrasPanel(props: {
   /** Turns the draft into a `/goal` command so the goal chip flow is the same as typing it. */
   onInsertGoal: () => void;
   onClose: () => void;
+  onAttachWorkItems?: (() => void) | undefined;
   panelId: string;
 }) {
   const inputId = useId();
@@ -127,6 +128,15 @@ export function ComposerExtrasPanel(props: {
                 icon: <PaperclipIcon className={GLYPH} />,
                 title: "Files and folders",
               },
+              ...(props.onAttachWorkItems
+                ? [
+                    {
+                      id: "extras:work-items",
+                      icon: <ListTodoIcon className={GLYPH} />,
+                      title: "Issue or pull request",
+                    },
+                  ]
+                : []),
               ...(appSnap.available
                 ? [
                     frontmostWindow
@@ -206,6 +216,11 @@ export function ComposerExtrasPanel(props: {
       : (selectableRowIds[0] ?? null);
 
   const selectRow = (rowId: string) => {
+    if (rowId === "extras:work-items") {
+      props.onClose();
+      props.onAttachWorkItems?.();
+      return;
+    }
     if (rowId === ROW_FILES) {
       fileInputRef.current?.click();
       return;

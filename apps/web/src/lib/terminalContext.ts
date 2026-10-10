@@ -1,4 +1,4 @@
-import { type MessageId, type ThreadId } from "@synara/contracts";
+import { type MessageId, type ThreadId, type WorkItemAttachment } from "@synara/contracts";
 import {
   extractTrailingAssistantSelections,
   type ParsedAssistantSelectionEntry,
@@ -14,6 +14,7 @@ import {
   extractTrailingPullRequestContexts,
   type ParsedPullRequestContextEntry,
 } from "./pullRequestContext";
+import { extractTrailingWorkItems } from "./composerWorkItems";
 
 export interface TerminalContextSelection {
   terminalId: string;
@@ -46,6 +47,7 @@ export interface DisplayedUserMessageState {
   fileComments: ParsedFileCommentEntry[];
   pastedTexts: ParsedPastedTextEntry[];
   pullRequestContexts: ParsedPullRequestContextEntry[];
+  workItems: WorkItemAttachment[];
   browserAnnotations: BrowserAnnotationDraft[];
 }
 
@@ -64,6 +66,7 @@ const TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN =
 const TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS = [
   /\n*(<pull_request_context>\n[\s\S]*?\n<\/pull_request_context>)\s*$/u,
   /\n*(<pasted_text>\n[\s\S]*?\n<\/pasted_text>)\s*$/u,
+  /\n*(<attached_work_items>\n[\s\S]*?\n<\/attached_work_items>)\s*$/u,
   /\n*(<file_comments>\n[\s\S]*?\n<\/file_comments>)\s*$/u,
   /\n*(<terminal_context>\n[\s\S]*?\n<\/terminal_context>)\s*$/u,
   /\n*(<assistant_selection>\n[\s\S]*?\n<\/assistant_selection>)\s*$/u,
@@ -304,15 +307,15 @@ export function deriveDisplayedUserMessageState(
   options: DisplayedUserMessageOptions,
 ): DisplayedUserMessageState {
   // Trailing blocks are serialized in order: assistant selections, terminal
-  // contexts, file comments, pasted text, pull request contexts, then browser
-  // annotations (outermost). Strip them in reverse so each extractor sees its
-  // block at the end.
+  // Strip transport blocks in reverse send order: browser, work items, PR contexts,
+  // pasted text, file comments, then terminal selections.
   const extractedBrowserAnnotations =
     options.messageId === undefined
       ? { promptText: prompt, annotations: [] }
       : extractTrailingBrowserAnnotations(prompt, options.messageId);
+  const extractedWorkItems = extractTrailingWorkItems(extractedBrowserAnnotations.promptText);
   const extractedPullRequestContexts = extractTrailingPullRequestContexts(
-    extractedBrowserAnnotations.promptText,
+    extractedWorkItems.promptText,
   );
   const extractedPastedTexts = extractTrailingPastedTexts(extractedPullRequestContexts.promptText);
   const extractedFileComments = extractTrailingFileComments(extractedPastedTexts.promptText);
@@ -337,6 +340,7 @@ export function deriveDisplayedUserMessageState(
     fileComments: extractedFileComments.comments,
     pastedTexts: extractedPastedTexts.pastedTexts,
     pullRequestContexts: extractedPullRequestContexts.pullRequestContexts,
+    workItems: extractedWorkItems.workItems,
     browserAnnotations: extractedBrowserAnnotations.annotations,
   };
 }

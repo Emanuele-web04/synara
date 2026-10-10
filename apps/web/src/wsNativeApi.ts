@@ -705,6 +705,10 @@ export function createWsNativeApi(): NativeApi {
       getAutoFix: (input) => transport.request(WS_METHODS.pullRequestsGetAutoFix, input),
       setAutoFix: (input) => transport.request(WS_METHODS.pullRequestsSetAutoFix, input),
     },
+    workItems: {
+      search: (input) => transport.request(WS_METHODS.workItemsSearch, input),
+      availability: (input) => transport.request(WS_METHODS.workItemsAvailability, input),
+    },
     contextMenu: {
       show: async <T extends string>(
         items: readonly ContextMenuItem<T>[],

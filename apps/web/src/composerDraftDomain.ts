@@ -33,6 +33,12 @@ import {
   normalizePastedTextContent,
 } from "./lib/composerPastedText";
 import {
+  type WorkItemDraft,
+  normalizeWorkItemDraft,
+  workItemKey,
+  WORK_ITEM_ATTACHMENT_LIMIT,
+} from "./lib/composerWorkItems";
+import {
   type FileCommentDraft,
   type FileCommentSelection,
   normalizeFileCommentSelection,
@@ -118,6 +124,7 @@ export interface ComposerPromptHistorySavedDraft {
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
   pullRequestContexts: PullRequestContextDraft[];
+  workItems: WorkItemDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
 }
@@ -140,6 +147,7 @@ export interface QueuedComposerChatTurn {
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
   pullRequestContexts: PullRequestContextDraft[];
+  workItems: WorkItemDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   selectedProvider: ProviderKind;
@@ -200,6 +208,7 @@ export interface ComposerThreadDraftState {
   fileComments: FileCommentDraft[];
   pastedTexts: PastedTextDraft[];
   pullRequestContexts: PullRequestContextDraft[];
+  workItems: WorkItemDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
@@ -412,6 +421,8 @@ export interface ComposerDraftStoreState {
   addPullRequestContext: (threadId: ThreadId, context: PullRequestContextDraft) => boolean;
   removePullRequestContext: (threadId: ThreadId, contextId: string) => void;
   clearPullRequestContexts: (threadId: ThreadId) => void;
+  addWorkItem: (threadId: ThreadId, item: WorkItemDraft) => boolean;
+  removeWorkItem: (threadId: ThreadId, itemKey: string) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -584,6 +595,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     fileComments: [],
     pastedTexts: [],
     pullRequestContexts: [],
+    workItems: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
@@ -721,6 +733,29 @@ export function normalizePastedTexts(
   return normalizedPastedTexts;
 }
 
+export function normalizeWorkItems(
+  items: unknown,
+  limit = WORK_ITEM_ATTACHMENT_LIMIT,
+): WorkItemDraft[] {
+  const normalizedItems: WorkItemDraft[] = [];
+  const existingKeys = new Set<string>();
+  if (!Array.isArray(items)) return [];
+  for (const item of items) {
+    const normalized = normalizeWorkItemDraft(item);
+    if (!normalized) continue;
+    const key = workItemKey(normalized);
+    if (existingKeys.has(key)) {
+      continue;
+    }
+    if (normalizedItems.length >= limit) {
+      break;
+    }
+    normalizedItems.push(normalized);
+    existingKeys.add(key);
+  }
+  return normalizedItems;
+}
+
 type PersistedPastedTextDraft = Pick<PastedTextDraft, "id" | "createdAt" | "text">;
 
 export function hydratePastedTextsFromPersisted(
@@ -730,6 +765,15 @@ export function hydratePastedTextsFromPersisted(
     return [];
   }
   return normalizePastedTexts(persisted.map((entry) => createPastedTextDraft(entry)));
+}
+
+export function hydrateWorkItemsFromPersisted(
+  persisted: ReadonlyArray<WorkItemDraft> | undefined,
+): WorkItemDraft[] {
+  if (!persisted || persisted.length === 0) {
+    return [];
+  }
+  return normalizeWorkItems(persisted.map((entry) => ({ ...entry })));
 }
 
 export function normalizeTerminalContextForThread(
@@ -798,6 +842,7 @@ export function captureComposerPromptHistorySavedDraft(input: {
     fileComments: normalizeFileComments(draft.fileComments),
     pastedTexts: normalizePastedTexts(draft.pastedTexts),
     pullRequestContexts: normalizePullRequestContexts(draft.pullRequestContexts),
+    workItems: normalizeWorkItems(draft.workItems),
     skills: [...draft.skills],
     mentions: [...draft.mentions],
   };
@@ -830,6 +875,7 @@ export function buildTransferredComposerDraft(input: {
     fileComments: normalizeFileComments(sourceDraft.fileComments),
     pastedTexts: normalizePastedTexts(sourceDraft.pastedTexts),
     pullRequestContexts: normalizePullRequestContexts(sourceDraft.pullRequestContexts),
+    workItems: normalizeWorkItems(sourceDraft.workItems),
     skills: [...sourceDraft.skills],
     mentions: [...sourceDraft.mentions],
     enableComputerControl: sourceDraft.enableComputerControl,
@@ -878,6 +924,7 @@ function clonePromptHistorySavedDraft(
     fileComments: normalizeFileComments(savedDraft.fileComments),
     pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
     pullRequestContexts: normalizePullRequestContexts(savedDraft.pullRequestContexts),
+    workItems: normalizeWorkItems(savedDraft.workItems),
     skills: [...savedDraft.skills],
     mentions: [...savedDraft.mentions],
   };
@@ -897,6 +944,7 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.fileComments.length === 0 &&
     draft.pastedTexts.length === 0 &&
     draft.pullRequestContexts.length === 0 &&
+    draft.workItems.length === 0 &&
     draft.skills.length === 0 &&
     draft.mentions.length === 0 &&
     draft.queuedTurns.length === 0 &&
@@ -1068,6 +1116,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   fileComments: [],
   pastedTexts: EMPTY_PASTED_TEXTS,
   pullRequestContexts: EMPTY_PULL_REQUEST_CONTEXTS,
+  workItems: [],
   skills: EMPTY_SKILLS,
   mentions: EMPTY_MENTIONS,
   queuedTurns: EMPTY_QUEUED_TURNS,

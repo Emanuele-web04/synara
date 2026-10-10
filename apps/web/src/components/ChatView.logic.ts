@@ -1695,6 +1695,7 @@ export function deriveComposerSendState(options: {
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   pastedTexts: ReadonlyArray<PastedTextDraft>;
   pullRequestContexts: ReadonlyArray<PullRequestContextDraft>;
+  workItemCount: number;
 }): {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
@@ -1724,7 +1725,8 @@ export function deriveComposerSendState(options: {
       options.fileCommentCount > 0 ||
       sendableTerminalContexts.length > 0 ||
       sendablePastedTexts.length > 0 ||
-      sendablePullRequestContexts.length > 0,
+      sendablePullRequestContexts.length > 0 ||
+      options.workItemCount > 0,
   };
 }
 
