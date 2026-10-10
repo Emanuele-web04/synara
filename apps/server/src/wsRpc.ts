@@ -1512,7 +1512,8 @@ const makeWsRpcHandlersLayer = () =>
               ),
             ),
           ),
-        [ORCHESTRATION_WS_METHODS.unsubscribeShell]: () => Effect.void,
+        [ORCHESTRATION_WS_METHODS.unsubscribeShell]: (_, { clientId }) =>
+          streamAdmission.releaseKey(clientId, "orchestration.shell"),
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input, { clientId }) =>
           streamAdmission.guard(
             clientId,
@@ -1630,7 +1631,8 @@ const makeWsRpcHandlersLayer = () =>
               trackSidechatVisibility(input.threadId),
             ),
           ),
-        [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
+        [ORCHESTRATION_WS_METHODS.unsubscribeThread]: (input, { clientId }) =>
+          streamAdmission.releaseKey(clientId, `orchestration.thread:${input.threadId}`),
         [WS_METHODS.subscribeOrchestrationDomainEvents]: (_, { clientId }) =>
           streamAdmission.guard(
             clientId,

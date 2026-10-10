@@ -66,7 +66,7 @@ describe("WsStreamAdmission", () => {
     }).pipe(Effect.runPromise);
   });
 
-  it("tears down the evicted stream on a same-key takeover and counts a single release", async () => {
+  it("shares the lease on an identical resubscribe and ends every stream on release", async () => {
     await Effect.gen(function* () {
       const admission = yield* makeWsStreamAdmission();
       const started = yield* Deferred.make<void>();
@@ -85,19 +85,20 @@ describe("WsStreamAdmission", () => {
 
       yield* Deferred.await(started);
       expect(yield* admission.snapshot).toMatchObject({ active: 1, releasedTotal: 0 });
-      // A same-key resubscribe takes the lease over and tears the evicted
-      // stream down through its eviction latch — the fiber draining it
-      // completes without manual interruption. The takeover's own release is
-      // the only one counted because the evicted lease is already gone from
-      // the ledger when the evicted stream finalizes.
+      // An identical resubscribe — same client, same key — attaches to the
+      // existing lease instead of tearing it down and replaying the stream.
+      // Capacity accounting keeps seeing the single live lease.
       yield* Stream.runDrain(admission.guard(1, { key: "server.settings" }, Stream.empty));
       expect(yield* Ref.get(subscriptions)).toBe(1);
+      expect(yield* admission.snapshot).toMatchObject({ active: 1, admittedTotal: 1 });
+      // releaseKey (the unsubscribe path) completes the shared latch, so the
+      // still-running first stream ends without manual interruption.
+      yield* admission.releaseKey(1, "server.settings");
       yield* Fiber.join(fiber);
       expect(yield* admission.snapshot).toMatchObject({
         clients: 0,
         active: 0,
-        admittedTotal: 2,
-        replacedDuplicateTotal: 1,
+        admittedTotal: 1,
         releasedTotal: 1,
       });
     }).pipe(Effect.runPromise);
@@ -107,7 +108,7 @@ describe("WsStreamAdmission", () => {
     await Effect.gen(function* () {
       const admission = yield* makeWsStreamAdmission();
       // Forks a guarded never-ending stream and waits until it is admitted, so
-      // successive resubscribes evict in a deterministic order.
+      // successive resubscribes attach in a deterministic order.
       const forkGuardedNever = () =>
         Effect.gen(function* () {
           const admitted = yield* Deferred.make<void>();
@@ -125,26 +126,22 @@ describe("WsStreamAdmission", () => {
         });
       const first = yield* forkGuardedNever();
       const second = yield* forkGuardedNever();
-      // Each takeover must terminate its predecessor: joining the evicted
-      // fibers completes without manual interruption, and capacity accounting
-      // never sees more than the single live lease.
-      yield* Fiber.join(first);
       const third = yield* forkGuardedNever();
-      yield* Fiber.join(second);
+      // Every identical resubscribe shares the one live lease — none ends its
+      // predecessor, and the ledger never counts more than one active slot.
       expect(yield* admission.snapshot).toMatchObject({
         active: 1,
-        admittedTotal: 3,
-        replacedDuplicateTotal: 2,
+        admittedTotal: 1,
       });
-      yield* Stream.runDrain(
-        admission.guard(1, { key: "orchestration.thread:t", threadId: "t" }, Stream.empty),
-      );
+      // One unsubscribe ends every attached stream through the shared latch.
+      yield* admission.releaseKey(1, "orchestration.thread:t");
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
       yield* Fiber.join(third);
       expect(yield* admission.snapshot).toMatchObject({
         clients: 0,
         active: 0,
-        admittedTotal: 4,
-        replacedDuplicateTotal: 3,
+        admittedTotal: 1,
         releasedTotal: 1,
       });
     }).pipe(Effect.runPromise);
@@ -176,32 +173,35 @@ describe("WsStreamAdmission", () => {
     }).pipe(Effect.runPromise);
   });
 
-  it("lets a same-key resubscribe take over the lease only within the owning RPC client", async () => {
+  it("returns the existing lease on a same-key resubscribe and counts per-holder releases", async () => {
     await Effect.gen(function* () {
       const admission = yield* makeWsStreamAdmission();
       const first = yield* admission.acquire(1, { key: "server.settings" });
-      const takeover = yield* admission.acquire(1, { key: "server.settings" });
+      const shared = yield* admission.acquire(1, { key: "server.settings" });
       const otherClient = yield* admission.acquire(2, { key: "server.settings" });
 
-      expect(takeover.leaseId).not.toBe(first.leaseId);
+      // Same client + key reuses the lease; another client's same-key claim is
+      // an independent lease in its own ledger.
+      expect(shared.leaseId).toBe(first.leaseId);
+      expect(otherClient.leaseId).not.toBe(first.leaseId);
       expect(yield* admission.snapshot).toMatchObject({
         clients: 2,
         active: 2,
-        admittedTotal: 3,
-        replacedDuplicateTotal: 1,
+        admittedTotal: 2,
+        replacedDuplicateTotal: 0,
       });
 
-      // The evicted lease's release must be a no-op: its stream finalizes
-      // later and must not decrement the takeover's live lease.
+      // Each holder's release detaches; the shared lease survives until its
+      // last holder lets go.
       yield* admission.release(first);
       expect(yield* admission.snapshot).toMatchObject({ active: 2, releasedTotal: 0 });
 
-      yield* admission.release(takeover);
+      yield* admission.release(shared);
       yield* admission.release(otherClient);
       expect(yield* admission.snapshot).toMatchObject({
         clients: 0,
         active: 0,
-        admittedTotal: 3,
+        admittedTotal: 2,
         releasedTotal: 2,
       });
     }).pipe(Effect.runPromise);
