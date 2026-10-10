@@ -199,6 +199,9 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_set_thread_pull_request",
   "synara_set_thread_archived",
   "synara_set_thread_goal",
+  // Read-only account quota tools (usageTools.ts)
+  "synara_get_usage",
+  "synara_list_provider_usage",
   // Thread diagnostics (threadDiagnosticTools.ts)
   "synara_read_thread_activity",
   "synara_diagnose_thread",
