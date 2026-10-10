@@ -1013,7 +1013,10 @@ function SidebarHelpMenu({
               <SidebarContextMenuIcon icon={KeyboardIcon} />
               <span>Keybindings</span>
             </MenuItem>
-            <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenFeedback}>
+            <MenuItem
+              className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+              onClick={() => onOpenFeedback()}
+            >
               <SidebarContextMenuIcon icon={FeedbackIcon} />
               <span>Send feedback</span>
             </MenuItem>
@@ -1572,6 +1575,10 @@ export default function Sidebar() {
     if (!isOnAutomations) setAutomationCreateOpen(false);
   }, [isOnAutomations]);
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
+  const openBugReport = useCallback(
+    () => openFeedbackDialog(undefined, "bug"),
+    [openFeedbackDialog],
+  );
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
@@ -6365,7 +6372,14 @@ export default function Sidebar() {
         id: "feedback",
         label: "Feedback Synara",
         description: "Send feedback or report an issue to the Synara team.",
-        keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
+        keywords: ["feedback", "issue", "problem", "report", "support", "synara"],
+      },
+      {
+        id: "bug",
+        label: "Report a bug",
+        description: "Open the bug report dialog with the Bug category selected.",
+        keywords: ["bug", "report", "issue", "problem", "broken", "crash", "synara"],
+        run: openBugReport,
       },
       {
         id: "settings",
@@ -6429,6 +6443,7 @@ export default function Sidebar() {
       importThreadShortcutLabel,
       newChatShortcutLabel,
       newThreadShortcutLabel,
+      openBugReport,
       openSpaceCreator,
       spaces,
       usageSettingsShortcutLabel,
@@ -7465,12 +7480,18 @@ export default function Sidebar() {
           </SidebarContent>
 
           <SidebarFooter
-            // Help and the update button live in the rail; the footer only carries debug tools.
+            // Help and updates live in the rail; keep bug reporting and debug tools here.
             className="gap-2 border-sidebar-border border-t-0 p-2 pt-0 font-system-ui"
           >
             <SidebarMenu>
               <SidebarMenuItem>
                 <div className="flex flex-col gap-1">
+                  <SidebarIconButton
+                    icon={FeedbackIcon}
+                    label="Report a bug"
+                    tooltip="Report a bug"
+                    onClick={openBugReport}
+                  />
                   {DebugFeatureFlagsMenu && showDebugFeatureFlagsMenu && !isOnSettings ? (
                     <Suspense fallback={null}>
                       <DebugFeatureFlagsMenu />

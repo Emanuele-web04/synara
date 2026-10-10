@@ -21,7 +21,7 @@ const THREAD_CONTEXT: FeedbackThreadContext = {
 
 describe("feedbackDialogStore", () => {
   beforeEach(() => {
-    useFeedbackDialogStore.setState({ isOpen: false, context: null });
+    useFeedbackDialogStore.setState({ isOpen: false, context: null, initialCategory: null });
   });
 
   it("opens with the thread context a caller supplies", () => {
@@ -66,5 +66,13 @@ describe("feedbackDialogStore", () => {
     const state = useFeedbackDialogStore.getState();
     expect(state.isOpen).toBe(false);
     expect(state.context).toBeNull();
+  });
+  it("opens a bug category and clears it when the dialog closes", () => {
+    useFeedbackDialogStore.getState().openDialog(THREAD_CONTEXT, "bug");
+    expect(useFeedbackDialogStore.getState().initialCategory).toBe("bug");
+    useFeedbackDialogStore.getState().setOpen(false);
+    expect(useFeedbackDialogStore.getState().initialCategory).toBeNull();
+    useFeedbackDialogStore.getState().openDialog();
+    expect(useFeedbackDialogStore.getState().initialCategory).toBeNull();
   });
 });

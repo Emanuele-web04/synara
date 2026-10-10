@@ -174,6 +174,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   "import-thread": ImportThreadIcon,
   "import-projects": DownloadIcon,
   feedback: BugReportIcon,
+  bug: BugReportIcon,
   settings: SettingsIcon,
   "usage-settings": UsageGaugeIcon,
 };
