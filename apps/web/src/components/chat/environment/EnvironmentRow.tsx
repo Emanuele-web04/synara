@@ -161,6 +161,8 @@ type EnvironmentRowProps = Omit<ComponentPropsWithoutRef<"button">, "children"> 
   icon: ReactNode;
   label: ReactNode;
   trailing?: ReactNode;
+  /** Let a wider leading glyph (e.g. an avatar) size its own gutter. */
+  compact?: boolean;
 };
 
 /**
@@ -172,6 +174,7 @@ export function EnvironmentRow({
   icon,
   label,
   trailing,
+  compact,
   className,
   type,
   ...props
@@ -182,7 +185,12 @@ export function EnvironmentRow({
       className={cn(ENVIRONMENT_ROW_CLASS_NAME, className)}
       {...props}
     >
-      <EnvironmentRowBody icon={icon} label={label} trailing={trailing} />
+      <EnvironmentRowBody
+        icon={icon}
+        label={label}
+        trailing={trailing}
+        {...(compact ? { compact } : {})}
+      />
     </button>
   );
 }

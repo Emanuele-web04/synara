@@ -106,7 +106,7 @@ export function composerOverlayScrollFadeVars(
     "--scroll-edge-fade-inset-b": `${composerOverlayHeightFromInsetPx(bottomInsetPx)}px`,
     "--scroll-edge-fade-layer": maskImage,
     // Read by the whole-window glass rule in index.css, where the transcript dissolves
-    // across the tuck instead of running under the composer.
+    // over a tuck-sized band ending at the composer's top edge instead of running under it.
     "--scroll-edge-fade-tuck": `${COMPOSER_OVERLAY_TUCK_PX}px`,
   };
 }

@@ -66,6 +66,11 @@ composer; it is not sent twice.
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
+  The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
+  summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
+  where finished subagents stay one click away after the strip hides. In split view, the list
+  stays beside the chat in its pane when opening a child or returning to its parent. Failed
+  Stop or background requests report an error so the run is not mistaken for stopped.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
@@ -142,6 +147,14 @@ A turn is one cycle inside that task:
 
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
+
+**Stop** settles the turn once the provider accepts the interrupt and no provider turn is still
+running, even if the provider had already finished and its final events are still arriving.
+Output that arrives after a turn ended is added to its message without marking it as streaming
+again. An assistant item that ends without any text does not add an empty response row.
+
+Chat code blocks above 250,000 characters display their complete source as plain text,
+using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
 
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
@@ -344,6 +357,10 @@ follow a successful commit or push, so inspect the current branch before retryin
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
+
+File Undo and thread revert refuse to change a workspace while another thread has an active or
+pending turn in that same Git checkout. Symlinks and nested folders share this protection;
+separate Git worktrees remain independent. Stop the active turn before retrying Undo.
 
 Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;

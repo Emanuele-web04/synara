@@ -277,6 +277,15 @@ function resolveSubagentSiblingLabel(input: {
   return index >= 0 ? `${DEFAULT_SUBAGENT_LABEL} ${index + 1}` : null;
 }
 
+// Stable 32-bit hash for per-subagent picks (accent color, avatar glyph).
+export function hashLabelSeed(seed: string): number {
+  let hash = 0;
+  for (const character of seed) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return hash;
+}
+
 export function resolveSubagentPresentation(input: {
   nickname?: string | null | undefined;
   role?: string | null | undefined;

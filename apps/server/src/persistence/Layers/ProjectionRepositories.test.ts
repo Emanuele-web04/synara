@@ -31,6 +31,60 @@ const projectionRepositoriesLayer = it.layer(
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect(
+    "keeps workspace classification on the owning turn without resurrecting pending starts",
+    () =>
+      Effect.gen(function* () {
+        const turns = yield* ProjectionTurnRepository;
+        const threadId = ThreadId.makeUnsafe("workspace-marker-thread");
+        const messageId = MessageId.makeUnsafe("workspace-marker-message");
+        const turnId = TurnId.makeUnsafe("workspace-marker-turn");
+        const request = {
+          threadId,
+          messageId,
+          requestedAt: "2026-10-10T10:00:00.000Z",
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+        };
+        yield* turns.replacePendingTurnStart(request);
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        assert.isTrue(
+          Option.getOrThrow(yield* turns.getPendingTurnStartByThreadId({ threadId }))
+            .startedWithoutGitWorkspace,
+        );
+        yield* turns.upsertByTurnId({
+          threadId,
+          turnId,
+          pendingMessageId: messageId,
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+          assistantMessageId: null,
+          state: "running",
+          requestedAt: request.requestedAt,
+          startedAt: request.requestedAt,
+          completedAt: null,
+          checkpointTurnCount: null,
+          checkpointRef: null,
+          checkpointStatus: null,
+          checkpointFiles: [],
+        });
+        yield* turns.deletePendingTurnStartByThreadId({ threadId });
+        // A lagging checkpoint consumer now handles the original domain request.
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        assert.isTrue(
+          Option.getOrThrow(yield* turns.getByTurnId({ threadId, turnId }))
+            .startedWithoutGitWorkspace,
+        );
+        assert.isTrue(Option.isNone(yield* turns.getPendingTurnStartByThreadId({ threadId })));
+        const newerMessageId = MessageId.makeUnsafe("newer-workspace-message");
+        yield* turns.replacePendingTurnStart({ ...request, messageId: newerMessageId });
+        yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
+        const newer = Option.getOrThrow(yield* turns.getPendingTurnStartByThreadId({ threadId }));
+        assert.strictEqual(newer.messageId, newerMessageId);
+        assert.isFalse(newer.startedWithoutGitWorkspace);
+      }),
+  );
+
   it.effect("persists cache reviews, preserves omitted reviews, and clears them explicitly", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;

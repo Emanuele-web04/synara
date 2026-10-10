@@ -82,6 +82,7 @@ import { getThreadFromState } from "../threadDerivation";
 import {
   buildThreadSubscribeInput,
   resetThreadDetailResumeCursorsForTests,
+  setThreadDetailResumeCursor,
 } from "../threadDetailResumeCursors";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
@@ -3084,6 +3085,30 @@ describe("EventRouter scoped orchestration sync", () => {
         await mounted.cleanup();
       }
     }, 60_000);
+
+    it.each([1, 40])(
+      "rejects older snapshots after confirming cached resume seed %s",
+      async (cachedSequence) => {
+        // Cover both a current cache and an initial snapshot from a reset journal.
+        useStore
+          .getState()
+          .syncServerReadModel({ ...fixture.snapshot, snapshotSequence: cachedSequence });
+        setThreadDetailResumeCursor(THREAD_ID, cachedSequence);
+        const mounted = await mountApp();
+        try {
+          // The subscription's first snapshot confirms sequence 1. A later older snapshot
+          // is now a race, not the initial snapshot of a reset server journal.
+          sendThreadSnapshotPush(THREAD_ID, fixture.snapshot.snapshotSequence - 1);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+          expect(buildThreadSubscribeInput(THREAD_ID)).toMatchObject({
+            afterSequence: fixture.snapshot.snapshotSequence,
+          });
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+      60_000,
+    );
 
     it("resyncs instead of applying buffered events after the pre-snapshot buffer overflowed", async () => {
       const mounted = await mountApp();

@@ -138,7 +138,9 @@ export function toSubagentStripItem(
   };
 }
 
-function collectStripItems(
+// One row per subagent across every entry, without the live-turn scoping the strip
+// applies; the Environment panel roster lists the full history from this.
+export function collectSubagentStripItems(
   entries: ReadonlyArray<WorkLogEntry>,
   backgroundedThreadIds: ReadonlySet<string>,
   viewedThreadId: ThreadId | null,
@@ -217,11 +219,11 @@ export function deriveComposerSubagentStripItems(input: {
     : [];
   if (liveTurnEntries.length > 0) {
     const liveTurnProviderThreadIds = new Set(
-      collectStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId).map(
+      collectSubagentStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId).map(
         (item) => item.providerThreadId,
       ),
     );
-    const visibleItems = collectStripItems(
+    const visibleItems = collectSubagentStripItems(
       entriesWithSubagents,
       backgroundedThreadIds,
       viewedThreadId,
@@ -236,7 +238,11 @@ export function deriveComposerSubagentStripItems(input: {
 
   // No subagents spawned by the live turn: keep the latest known set visible only
   // while some subagent is still running or queued, then let the strip retire.
-  const items = collectStripItems(entriesWithSubagents, backgroundedThreadIds, viewedThreadId);
+  const items = collectSubagentStripItems(
+    entriesWithSubagents,
+    backgroundedThreadIds,
+    viewedThreadId,
+  );
   return items.some((item) => item.statusKind === "running" || item.statusKind === "queued")
     ? withParentRow(items, input.parentRow)
     : [];

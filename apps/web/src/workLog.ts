@@ -46,6 +46,11 @@ import {
   mergeWorkLogToolDetails,
   type WorkLogToolDetails,
 } from "./lib/toolCallDetails";
+import {
+  FAST_MODE_STATE_ACTIVITY_KIND,
+  fastModeNoticeFromActivity,
+  type FastModeNotice,
+} from "./lib/fastModeState";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type { ChatMessage, ProposedPlan } from "./types";
@@ -75,6 +80,9 @@ export interface ProviderHandoffInfo {
   contextText: string | null;
   /** Why the target could not start; only set on failure. */
   failureDetail: string | null;
+  /** Set when that side requested fast mode but its session was not serving it. */
+  sourceFastModeNotice?: FastModeNotice | null;
+  targetFastModeNotice?: FastModeNotice | null;
 }
 
 export type ProviderContextLifecycleReason =
@@ -121,7 +129,7 @@ export interface WorkLogEntry {
   id: string;
   createdAt: string;
   /**
-   * Provider runtime sequence for causal ordering within the provider stream.
+   * Provider runtime sequence, used to break equal-time ties in the timeline.
    * Absent for server-created rows: their orchestration event sequence is a
    * different counter, so they order by `createdAt` instead.
    */
@@ -153,8 +161,13 @@ export interface WorkLogEntry {
   // batch roll-up) render as compact centered pills in the coordinator
   // conversation, each carrying a link into the reported thread.
   synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
-  // A task the agent moved to the background finished. Its completion wakes the
-  // agent into a new turn, so the row also marks where that new response starts.
+  // Completion notices and Monitor updates both anchor the response they woke.
+  monitorNotification?: {
+    taskId: string;
+    name: string;
+    output: string;
+    outcome: "updated" | "completed" | "failed" | "stopped";
+  };
   backgroundTaskCompletion?: WorkLogBackgroundTaskCompletion;
   // A subagent's own progress, reported to the thread that launched it. It is
   // that subagent's current step, never the launcher's reasoning.
@@ -249,6 +262,7 @@ export interface WorkLogSynaraWorkerNoticeThread {
 
 export interface WorkLogBackgroundTaskCompletion {
   taskId: string;
+  outcome?: "completed" | "failed" | "stopped";
   taskType: string | null;
   description: string | null;
 }
@@ -256,6 +270,8 @@ export interface WorkLogBackgroundTaskCompletion {
 export interface WorkLogSubagentProgress {
   /** The spawning tool call id: the subagent's provider thread id. */
   toolUseId: string;
+  /** First progress activity in this invocation, stable across parent turns. */
+  invocationId?: string;
   title: string | null;
   /** The subagent's final state, once it ended. */
   outcome?: "completed" | "failed" | "stopped";
@@ -482,6 +498,7 @@ export function deriveWorkLogEntries(
       (activity) =>
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
+    .filter((activity) => activity.kind !== FAST_MODE_STATE_ACTIVITY_KIND)
     .filter((activity) => activity.summary !== "Checkpoint captured")
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
@@ -513,6 +530,15 @@ export function deriveWorkLogEntries(
         ...entry
       }) => entry,
     );
+  const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered);
+  if (handoffFastModeNotices.size > 0) {
+    for (const [index, entry] of derived.entries()) {
+      const notices = handoffFastModeNotices.get(entry.id);
+      if (!entry.providerHandoff || !notices) continue;
+      // Copy rather than mutate: the handoff info is shared with the per-activity cache.
+      derived[index] = { ...entry, providerHandoff: { ...entry.providerHandoff, ...notices } };
+    }
+  }
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
   return [
     ...withSubagentProgressOutcomes(derived, ordered),
@@ -588,7 +614,7 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
   if (!entries.some((entry) => entry.subagentProgress !== undefined)) {
     return entries;
   }
-  type Invocation = { outcome?: WorkLogSubagentProgress["outcome"] };
+  type Invocation = { id?: string; outcome?: WorkLogSubagentProgress["outcome"] };
   const invocationByToolUseId = new Map<string, Invocation>();
   const invocationByProgressId = new Map<string, Invocation>();
   const currentInvocation = (toolUseId: string): Invocation => {
@@ -612,7 +638,11 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
     }
     if (activity.kind === "task.progress") {
       const toolUseId = asTrimmedString(payload?.toolUseId);
-      if (toolUseId) invocationByProgressId.set(activity.id, currentInvocation(toolUseId));
+      if (toolUseId) {
+        const invocation = currentInvocation(toolUseId);
+        invocation.id ??= activity.id;
+        invocationByProgressId.set(activity.id, invocation);
+      }
       continue;
     }
     if (activity.kind === "task.completed") {
@@ -634,13 +664,54 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
     }
   }
   return entries.map((entry) => {
-    const outcome = entry.subagentProgress
-      ? invocationByProgressId.get(entry.id)?.outcome
-      : undefined;
-    return outcome && entry.subagentProgress
-      ? { ...entry, subagentProgress: { ...entry.subagentProgress, outcome } }
+    const invocation = entry.subagentProgress ? invocationByProgressId.get(entry.id) : undefined;
+    return invocation && entry.subagentProgress
+      ? {
+          ...entry,
+          subagentProgress: {
+            ...entry.subagentProgress,
+            invocationId: invocation.id ?? entry.id,
+            ...(invocation.outcome ? { outcome: invocation.outcome } : {}),
+          },
+        }
       : entry;
   });
+}
+
+// A handoff row summarizes two sessions. Each side reads the fast-mode state its own
+// session reported: the source up to the handoff, the target from there to the next one.
+function deriveHandoffFastModeNotices(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">> {
+  const notices = new Map<
+    string,
+    Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">
+  >();
+  let sessionNotice: FastModeNotice | null = null;
+  let openHandoffId: string | null = null;
+  for (const activity of ordered) {
+    if (activity.kind === FAST_MODE_STATE_ACTIVITY_KIND) {
+      sessionNotice = fastModeNoticeFromActivity(activity);
+      if (openHandoffId !== null) {
+        notices.set(openHandoffId, {
+          ...notices.get(openHandoffId),
+          targetFastModeNotice: sessionNotice,
+        });
+      }
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND) {
+      // The target never started, so the source session keeps running.
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND) {
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      openHandoffId = activity.id;
+      sessionNotice = null;
+    }
+  }
+  return notices;
 }
 
 function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
@@ -763,7 +834,15 @@ function deriveBackgroundTaskCompletionEntries(
       label: task.description ? `${noun} ${outcome}: ${task.description}` : `${noun} ${outcome}`,
       tone: payload.status === "failed" ? "error" : "info",
       activityKind: activity.kind,
-      backgroundTaskCompletion: { taskId: payload.taskId, ...task },
+      backgroundTaskCompletion: {
+        taskId: payload.taskId,
+        ...task,
+        ...(payload.status === "completed" ||
+        payload.status === "failed" ||
+        payload.status === "stopped"
+          ? { outcome: payload.status }
+          : {}),
+      },
     });
   }
   return completions;
@@ -1392,6 +1471,25 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (payload?.willRetry === true || asRecord(payload?.data)?.willRetry === true) {
       entry.label = "Provider retrying";
     }
+  }
+  // A Claude Monitor event wakes the agent like a finished background task, so
+  // it gets the same standalone row that marks where the new response starts.
+  if (activity.kind === "runtime.warning" && nativeEventType === "monitor_event") {
+    const taskId = asTrimmedString(asRecord(payload?.data)?.task_id);
+    const data = asRecord(payload?.data);
+    const outcome =
+      data?.outcome === "completed" || data?.outcome === "failed" || data?.outcome === "stopped"
+        ? data.outcome
+        : "updated";
+    const name = asTrimmedString(data?.name) ?? "";
+    entry.monitorNotification = {
+      taskId: taskId ?? activity.id,
+      name,
+      output: asTrimmedString(data?.output) ?? runtimeWarningMessage ?? "",
+      outcome,
+    };
+    entry.label = `Monitor${name ? ` · ${name}` : ""} ${outcome === "completed" ? "finished" : outcome}`;
+    if (outcome === "failed") entry.tone = "error";
   }
   if (activity.kind === "auth.status") {
     entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;
@@ -3278,17 +3376,24 @@ function compareActivityLifecycleRank(kind: string): number {
   return 1;
 }
 
+// Time first: messages carry no sequence, and mergeTimelineEntries is only
+// correct when both sides sort by the same key. Sequence-first let one late
+// row with an unrelated low sequence lead the work list, and every message of
+// the block was emitted above all of that block's work.
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
   if (
     "sequence" in left &&
     "sequence" in right &&
     left.sequence !== undefined &&
-    right.sequence !== undefined &&
-    left.sequence !== right.sequence
+    right.sequence !== undefined
   ) {
     return left.sequence - right.sequence;
   }
-  return left.createdAt.localeCompare(right.createdAt);
+  return 0;
 }
 
 type TimelineComparator = (left: TimelineEntry, right: TimelineEntry) => number;
@@ -3450,6 +3555,40 @@ function isSequenced(row: TimelineEntry): boolean {
   return row.kind === "work" && row.sequence !== undefined;
 }
 
+// The SDK and transcript can report one Monitor termination twice. Coalesce
+// adjacent matching native task/outcome notices only; any reply or different
+// outcome remains a distinct boundary. Keep the exact output and earlier anchor.
+function coalesceMonitorTerminalNotices(entries: TimelineEntry[]): TimelineEntry[] {
+  let result: TimelineEntry[] | undefined;
+  for (let index = 1; index < entries.length; index += 1) {
+    const previous = result?.at(-1) ?? entries[index - 1]!;
+    const current = entries[index]!;
+    if (previous.kind === "work" && current.kind === "work") {
+      const monitorRow = previous.entry.monitorNotification ? previous : current;
+      const completionRow = previous.entry.backgroundTaskCompletion ? previous : current;
+      const monitor = monitorRow.entry.monitorNotification;
+      const completion = completionRow.entry.backgroundTaskCompletion;
+      if (
+        monitorRow !== completionRow &&
+        monitor &&
+        completion &&
+        monitor.outcome !== "updated" &&
+        monitor.taskId === completion.taskId &&
+        monitor.outcome === completion.outcome &&
+        (!previous.entry.turnId ||
+          !current.entry.turnId ||
+          previous.entry.turnId === current.entry.turnId)
+      ) {
+        result ??= entries.slice(0, index);
+        result[result.length - 1] = { ...monitorRow, createdAt: previous.createdAt };
+        continue;
+      }
+    }
+    result?.push(current);
+  }
+  return result ?? entries;
+}
+
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
@@ -3602,29 +3741,30 @@ export function deriveTimelineEntries(
   const compare: TimelineComparator = (left, right) =>
     orderByEntry.get(left)! - orderByEntry.get(right)! || compareTimelineEntries(left, right);
 
-  // Sequenced work rows order causally among themselves; rows without a
-  // provider sequence (server-created) order by time. Sorting both kinds in one
-  // list mixes the two orders into a cycle, so each list is sorted on its own
-  // and only merged.
+  // Keep provider-sequenced work separate from server-created rows so unrelated
+  // counters never break ties against each other. All lists use the same
+  // chronological comparator; provider sequences only order equal-time ties.
   const sequencedWorkRows = workRows.filter(isSequenced);
   const timedWorkRows =
     sequencedWorkRows.length === workRows.length ? [] : workRows.filter((row) => !isSequenced(row));
-  return coalesceAdjacentMessageSegments(
-    mergeTimelineEntries(
+  return coalesceMonitorTerminalNotices(
+    coalesceAdjacentMessageSegments(
       mergeTimelineEntries(
         mergeTimelineEntries(
-          sortedTimelineEntries(messageRows, compare),
-          sortedTimelineEntries(proposedPlanRows, compare),
+          mergeTimelineEntries(
+            sortedTimelineEntries(messageRows, compare),
+            sortedTimelineEntries(proposedPlanRows, compare),
+            compare,
+          ),
+          sortedTimelineEntries(timedWorkRows, compare),
           compare,
         ),
-        sortedTimelineEntries(timedWorkRows, compare),
+        sortedTimelineEntries(
+          sequencedWorkRows.length === workRows.length ? workRows : sequencedWorkRows,
+          compare,
+        ),
         compare,
       ),
-      sortedTimelineEntries(
-        sequencedWorkRows.length === workRows.length ? workRows : sequencedWorkRows,
-        compare,
-      ),
-      compare,
     ),
   );
 }

@@ -140,6 +140,7 @@ export function makeHubWorkGateway(dependencies: {
         },
         {
           kind: "hub-work",
+          inheritedRuntimeMode: spec.inheritedRuntimeMode,
           workItemId: record.id,
           batchId: `hub-work-batch:${stableGatewayDigest({ projectId: record.projectId, scopeKey: record.scopeKey }, 40)}`,
           callerThreadId: record.sourceThreadId,
@@ -236,8 +237,7 @@ export function makeHubWorkGateway(dependencies: {
       );
       if (Option.isNone(caller))
         return yield* Effect.fail(new ToolInputError("Coordinator thread was not found."));
-      const inheritedRuntimeMode =
-        caller.value.runtimeMode === "auto" ? "approval-required" : caller.value.runtimeMode;
+      const inheritedRuntimeMode = caller.value.runtimeMode;
       const tasks = [];
       for (const [taskIndex, spec] of input.threads.entries()) {
         const project = yield* snapshotQuery.getProjectShellById(
@@ -255,7 +255,7 @@ export function makeHubWorkGateway(dependencies: {
           spec: {
             ...spec,
             environment,
-            runtimeMode: spec.runtimeMode ?? inheritedRuntimeMode,
+            ...(spec.runtimeMode === undefined ? { inheritedRuntimeMode } : {}),
             contextMessageIds: sourcesByTask[taskIndex]!.map((message) => message.messageId),
           },
         });
