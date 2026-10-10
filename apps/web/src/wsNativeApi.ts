@@ -20,6 +20,7 @@ import {
   type ExternalMcpCreateIntegrationResult,
   type ExternalMcpIntegration,
   type ExternalMcpRefreshPairingInput,
+  type ExternalMcpUpdateIntegrationInput,
   type ExternalMcpRevokeIntegrationInput,
   type ThreadId,
   type ThreadBrowserState,
@@ -769,6 +770,8 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverListExternalMcpIntegrations),
       createExternalMcpIntegration: (input: ExternalMcpCreateIntegrationInput) =>
         transport.request(WS_METHODS.serverCreateExternalMcpIntegration, input),
+      updateExternalMcpIntegration: (input: ExternalMcpUpdateIntegrationInput) =>
+        transport.request(WS_METHODS.serverUpdateExternalMcpIntegration, input),
       revokeExternalMcpIntegration: (input: ExternalMcpRevokeIntegrationInput) =>
         transport.request(WS_METHODS.serverRevokeExternalMcpIntegration, input),
       refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
