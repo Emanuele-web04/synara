@@ -587,6 +587,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Advanced ──────────────────────────────────────────────────────────────────
   {
+    id: "advanced:pair-device",
+    section: "advanced",
+    title: "Pair a device",
+    keywords:
+      "Owners can create a one-time pairing link or QR code to sign in another phone tablet browser device.",
+    target: null,
+  },
+  {
     id: "advanced:keybindings",
     section: "advanced",
     title: "Keybindings",

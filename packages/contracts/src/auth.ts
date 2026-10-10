@@ -68,6 +68,8 @@ export const AuthPairingCredentialResult = Schema.Struct({
   credential: TrimmedNonEmptyString,
   label: Schema.optionalKey(TrimmedNonEmptyString),
   expiresAt: Schema.DateTimeUtc,
+  /** Configured public origin or concrete bind address usable by another device. */
+  pairingBaseUrl: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthPairingCredentialResult = typeof AuthPairingCredentialResult.Type;
 
