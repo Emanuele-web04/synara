@@ -491,3 +491,30 @@ describe("collectForegroundRunningSubagentStripItems", () => {
     expect(foreground.map((item) => item.primaryLabel)).toEqual(["Ada"]);
   });
 });
+
+describe("composer subagent strip labels", () => {
+  function onlyRow(entrySubagent: WorkLogSubagent): ComposerSubagentStripItem | undefined {
+    return subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [workEntry({ id: "entry-1", turnId: "turn-1", subagents: [entrySubagent] })],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    )[0];
+  }
+
+  it("shows a starting placeholder, never the raw tool id, before the description arrives", () => {
+    const row = onlyRow(
+      subagent({ threadId: "toolu_01P6abc", rawStatus: "running", isActive: true }),
+    );
+
+    expect(row?.primaryLabel).toBe("Starting subagent…");
+    expect(row?.fullLabel).not.toContain("toolu_");
+  });
+
+  it("settles an anonymous row on a neutral label once it finishes", () => {
+    const row = onlyRow(subagent({ threadId: "toolu_01P6abc", rawStatus: "completed" }));
+
+    expect(row?.primaryLabel).toBe("Subagent");
+    expect(row?.fullLabel).toBe("Subagent");
+  });
+});

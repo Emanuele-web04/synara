@@ -211,6 +211,36 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
 
+it("projects Claude Monitor events as labeled notices", () => {
+  const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "claudeAgent",
+      type: "runtime.warning",
+      eventId: "claude-monitor-event",
+      turnId: TURN_ID,
+      payload: {
+        message,
+        detail: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+      },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    tone: "info",
+    kind: "runtime.warning",
+    summary: "Monitor event",
+    turnId: TURN_ID,
+    payload: {
+      message,
+      detail: message,
+      nativeEventType: "monitor_event",
+      data: { task_id: "bu336ro2k" },
+    },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
 it("keeps the full runtime warning message so the row's hover card can reveal it", () => {
   // The work-log row clips the notice to one line with CSS `truncate`; the hover
   // card can only show what the server stored, so the payload must carry the full
