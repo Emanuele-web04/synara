@@ -1,10 +1,13 @@
 // FILE: shortcutsSheet.ts
-// Purpose: Build the shortcut reference sections shown by the keyboard shortcuts sheet.
+// Purpose: Build the shortcut reference sections shown by the keyboard shortcuts sheet, and list
+//          the commands the Settings shortcut editor can bind.
 // Layer: UI helper
 // Depends on: keybinding label resolution, project script command mapping, and platform helpers.
 
 import {
+  SPACE_JUMP_KEYBINDING_COMMANDS,
   STATIC_KEYBINDING_COMMANDS,
+  THREAD_JUMP_KEYBINDING_COMMANDS,
   type KeybindingCommand,
   type ResolvedKeybindingRule,
   type ResolvedKeybindingsConfig,
@@ -50,6 +53,12 @@ interface ShortcutDefinition {
   label: string;
   description: string;
 }
+
+const EFFORT_CYCLE_DEFINITION: ShortcutDefinition = {
+  command: "model.effort.next",
+  label: "Next model effort",
+  description: "Cycle the model's available effort levels and briefly show the selected level.",
+};
 
 // Space jumps address the switcher's visual tab order, so slot 1 is always Void.
 const SPACE_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
@@ -163,10 +172,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description:
       "Cycle to the previous model for the active provider (favorites first, then remaining models).",
   },
+  EFFORT_CYCLE_DEFINITION,
   {
     command: "traitsPicker.toggle",
     label: "Reasoning picker",
     description: "Open the composer reasoning and trait controls.",
+  },
+  {
+    command: "settings.usage",
+    label: "Open usage settings",
+    description: "Open Settings → Usage for provider quota and token totals.",
   },
   {
     command: "composer.focus.toggle",
@@ -179,9 +194,29 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Search the current transcript and jump to each matching message.",
   },
   {
+    command: "search.files",
+    label: "Search files",
+    description: "Open the workspace file-name search palette.",
+  },
+  {
+    command: "search.content",
+    label: "Search snippets",
+    description: "Open the workspace content search palette across file snippets.",
+  },
+  {
     command: "terminal.toggle",
     label: "Toggle terminal",
     description: "Show or hide the terminal surface for the active thread.",
+  },
+  {
+    command: "terminal.new",
+    label: "Focus terminal",
+    description: "Open or focus the terminal panel for this thread.",
+  },
+  {
+    command: "terminal.close",
+    label: "Close terminal",
+    description: "Close the terminal session for this thread.",
   },
   {
     command: "diff.toggle",
@@ -199,6 +234,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Jump the diff viewport to the previous changed file.",
   },
   {
+    command: "sidechat.toggle",
+    label: "Toggle side chat",
+    description: "Open or hide a side chat beside the main conversation.",
+  },
+  {
     command: "browser.toggle",
     label: "Toggle browser",
     description: "Reveal the built-in browser panel for the active thread.",
@@ -214,6 +254,21 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Copy the active thread's ID to the clipboard.",
   },
   {
+    command: "thread.archive",
+    label: "Archive thread",
+    description: "Archive the active chat, with the same confirmation and undo as the thread menu.",
+  },
+  {
+    command: "thread.snooze",
+    label: "Snooze thread",
+    description: "Open the snooze date and time picker for the active chat.",
+  },
+  {
+    command: "thread.markUnread",
+    label: "Mark thread unread",
+    description: "Mark the active chat unread and restore its dismissed notification.",
+  },
+  {
     command: "chat.visible.previous",
     label: "Previous visible thread",
     description: "Cycle to the previous thread that is currently visible in the sidebar.",
@@ -222,6 +277,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "chat.visible.next",
     label: "Next visible thread",
     description: "Cycle to the next thread that is currently visible in the sidebar.",
+  },
+  {
+    command: "threadTab.previous",
+    label: "Previous tab",
+    description: "Switch to the open thread tab on the left of the active one.",
+  },
+  {
+    command: "threadTab.next",
+    label: "Next tab",
+    description: "Switch to the open thread tab on the right of the active one.",
   },
   {
     command: "editor.openFavorite",
@@ -278,39 +343,77 @@ const SIDEBAR_TOGGLE_DEFINITION: ShortcutDefinition = {
   description: "Collapse or reveal the sidebar shell.",
 };
 
-export interface EditableShortcutDefinition {
-  command: KeybindingCommand;
+export interface ShortcutEditorDefinition {
+  id: string;
   label: string;
   description: string;
+  /**
+   * Commands the row edits together: one, the aliases of one action, or the nine
+   * members of a numbered family in key order.
+   */
+  commands: readonly KeybindingCommand[];
+  /** Set for a numbered family; one single-command definition per number key. */
+  members?: readonly ShortcutEditorDefinition[];
 }
 
-/** All built-in commands that can be assigned from Settings → Keybindings. */
-export function listEditableShortcutDefinitions(): EditableShortcutDefinition[] {
-  const definitionsByCommand = new Map<KeybindingCommand, EditableShortcutDefinition>();
-  for (const definition of [
-    SIDEBAR_TOGGLE_DEFINITION,
-    ...AVAILABLE_NOW_DEFINITIONS,
-    ...WORKSPACE_DEFINITIONS,
-    ...THREAD_JUMP_DEFINITIONS,
-  ]) {
+function singleCommandEditorDefinitions(
+  definitions: ReadonlyArray<ShortcutDefinition>,
+): ShortcutEditorDefinition[] {
+  return definitions.map((definition) => {
     const commands = Array.isArray(definition.command) ? definition.command : [definition.command];
-    for (const command of commands) {
-      definitionsByCommand.set(command, {
-        command,
-        label: definition.label,
-        description: definition.description,
-      });
-    }
-  }
+    return {
+      id: commands[0] ?? definition.label,
+      label: definition.label,
+      description: definition.description,
+      commands,
+    };
+  });
+}
 
-  return STATIC_KEYBINDING_COMMANDS.map(
-    (command): EditableShortcutDefinition =>
-      definitionsByCommand.get(command) ?? {
-        command,
-        label: command,
-        description: "Assign a shortcut to this built-in command.",
-      },
-  );
+/**
+ * Every built-in command in the order Settings → Keybindings lists it, bound or not.
+ * The two 1–9 families come back as one definition each so the editor can show and
+ * rebind them as a single shortcut.
+ */
+export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
+  const spaceJumpCommands = new Set<KeybindingCommand>(SPACE_JUMP_KEYBINDING_COMMANDS);
+  const definitions: ShortcutEditorDefinition[] = [
+    ...singleCommandEditorDefinitions([SIDEBAR_TOGGLE_DEFINITION]),
+    ...singleCommandEditorDefinitions(
+      AVAILABLE_NOW_DEFINITIONS.filter(
+        (definition) =>
+          Array.isArray(definition.command) ||
+          !spaceJumpCommands.has(definition.command as KeybindingCommand),
+      ),
+    ),
+    ...singleCommandEditorDefinitions(WORKSPACE_DEFINITIONS),
+    {
+      id: "thread.jump",
+      label: "Jump to visible thread 1–9",
+      description: "Focus a visible thread directly from the sidebar number row.",
+      commands: THREAD_JUMP_KEYBINDING_COMMANDS,
+      members: singleCommandEditorDefinitions(THREAD_JUMP_DEFINITIONS),
+    },
+    {
+      id: "space.jump",
+      label: "Jump to space 1–9",
+      description: "Switch straight to a tab of the space switcher. 1 is always Void.",
+      commands: SPACE_JUMP_KEYBINDING_COMMANDS,
+      members: singleCommandEditorDefinitions(SPACE_JUMP_DEFINITIONS),
+    },
+  ];
+
+  const covered = new Set(definitions.flatMap((definition) => definition.commands));
+  for (const command of STATIC_KEYBINDING_COMMANDS) {
+    if (covered.has(command) || command.startsWith("terminal.split")) continue;
+    definitions.push({
+      id: command,
+      label: command,
+      description: "Assign a shortcut to this built-in command.",
+      commands: [command],
+    });
+  }
+  return definitions;
 }
 
 function modSlashLabel(platform: string): string {
@@ -320,6 +423,7 @@ function modSlashLabel(platform: string): string {
 /** Human-readable sheet label for a keybinding command, e.g. `chat.new` → "New thread". */
 export function shortcutSheetCommandLabel(command: KeybindingCommand): string | null {
   for (const definitions of [
+    [SIDEBAR_TOGGLE_DEFINITION],
     AVAILABLE_NOW_DEFINITIONS,
     WORKSPACE_DEFINITIONS,
     THREAD_JUMP_DEFINITIONS,
@@ -478,6 +582,24 @@ export function buildShortcutSheetSections(
       description: "Custom shortcuts defined for the active project's scripts.",
       entries: projectScriptEntries,
     });
+  }
+
+  if (!currentEntries.some((entry) => entry.command === EFFORT_CYCLE_DEFINITION.command)) {
+    const composerEntries = definitionsToEntries(
+      [EFFORT_CYCLE_DEFINITION],
+      options.keybindings,
+      options.platform,
+      { ...options.context, composerFocus: true, terminalFocus: false },
+    );
+    if (composerEntries.length > 0) {
+      sections.push({
+        id: "composer-context",
+        title: "In composer",
+        description: "Available while the prompt composer or its effort picker has focus.",
+        tone: "muted",
+        entries: composerEntries,
+      });
+    }
   }
 
   return sections;

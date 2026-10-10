@@ -32,6 +32,22 @@ export function getOrphanedWorktreePathForThread(
   return isShared ? null : targetWorktreePath;
 }
 
+export type WorktreeAssociation = {
+  worktreePath?: string | null | undefined;
+  associatedWorktreePath?: string | null | undefined;
+};
+
+/** Whether a thread records `worktreePath` as its current or associated worktree. */
+export function isThreadAssociatedWithWorktree(
+  thread: WorktreeAssociation,
+  worktreePath: string,
+): boolean {
+  return [thread.worktreePath, thread.associatedWorktreePath].some((candidate) => {
+    const normalized = candidate?.trim();
+    return Boolean(normalized) && normalized === worktreePath;
+  });
+}
+
 export function formatWorktreePathForDisplay(worktreePath: string): string {
   const trimmed = worktreePath.trim();
   if (!trimmed) {

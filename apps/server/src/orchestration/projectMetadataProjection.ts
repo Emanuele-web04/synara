@@ -38,6 +38,7 @@ export const applyProjectMetadataProjection = (input: {
           isPinned: input.event.payload.isPinned ?? false,
           titleRefreshMode: null,
           spaceId: input.event.payload.spaceId ?? null,
+          additionalFolders: input.event.payload.additionalFolders ?? [],
           createdAt: input.event.payload.createdAt,
           updatedAt: input.event.payload.updatedAt,
           deletedAt: null,

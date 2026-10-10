@@ -10,6 +10,7 @@ import {
   IsoDateTime,
   ModelSelection,
   ProjectId,
+  ProjectAdditionalFolders,
   ProjectKind,
   ProjectScript,
   SpaceId,
@@ -32,6 +33,9 @@ export const ProjectionProject = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   spaceId: Schema.NullOr(SpaceId).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: Schema.optional(ProjectAdditionalFolders).pipe(
+    Schema.withDecodingDefault(() => []),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

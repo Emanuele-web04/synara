@@ -99,10 +99,10 @@ export function DiffPanelCompareRefMenuSection(props: {
         {commits.map((commit) => (
           <MenuRadioItem key={commit.sha} value={buildDiffPanelCompareRefValue(commit.sha)}>
             <GitCommitIcon className={props.iconClassName} />
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
+            <span className="shrink-0 font-mono text-ui-xs text-muted-foreground tabular-nums">
               {commit.shortSha}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[11px]">
+            <span className="min-w-0 flex-1 truncate text-ui-sm">
               {truncateCommitSubject(commit.subject)}
             </span>
           </MenuRadioItem>
@@ -113,7 +113,7 @@ export function DiffPanelCompareRefMenuSection(props: {
           className={cn(
             "rounded-md border-border/60 shadow-none before:hidden",
             "has-focus-visible:border-neutral-500/15 has-focus-visible:ring-0",
-            "[&_input]:font-sans [&_input]:text-[11px]",
+            "[&_input]:font-sans [&_input]:text-ui-sm",
           )}
           nativeInput
           size="sm"

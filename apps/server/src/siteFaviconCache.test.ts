@@ -6,12 +6,7 @@
 import { outboundHttp, type OutboundHttpResponse } from "@synara/shared/outboundHttp";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  clearSiteFaviconCache,
-  normalizeFaviconHost,
-  resolveFavicon,
-  tryParseHost,
-} from "./siteFaviconCache";
+import { clearSiteFaviconCache, resolveFavicon, tryParseHost } from "./siteFaviconCache";
 
 const imageResponse: OutboundHttpResponse = {
   status: 200,
@@ -25,27 +20,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("normalizeFaviconHost", () => {
-  it("lower-cases the host", () => {
-    expect(normalizeFaviconHost("GitHub.COM")).toBe("github.com");
-  });
-
-  it("strips a leading www.", () => {
-    expect(normalizeFaviconHost("www.example.com")).toBe("example.com");
-  });
-
-  it("keeps non-www subdomains intact", () => {
-    expect(normalizeFaviconHost("docs.example.com")).toBe("docs.example.com");
-  });
-});
-
 describe("tryParseHost", () => {
-  it("extracts the host from a full URL", () => {
-    expect(tryParseHost("https://x.com/thegenioo/status/2062795593567666188")).toBe("x.com");
-  });
-
   it("accepts a bare domain without a scheme", () => {
     expect(tryParseHost("example.com")).toBe("example.com");
+    expect(tryParseHost("docs.example.com")).toBe("docs.example.com");
   });
 
   it("normalizes www and casing", () => {

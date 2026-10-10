@@ -22,7 +22,7 @@ const FILE_ROW_FOCUS_BLOCK_CLASS_NAME =
  * Keyboard focus mirrors the selected block (see the active-block note above).
  */
 export const FILE_ROW_BASE_CLASS_NAME = cn(
-  "flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md text-left text-[12px] transition-colors",
+  "flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md text-left text-ui transition-colors",
   "focus-visible:outline-none",
   FILE_ROW_FOCUS_BLOCK_CLASS_NAME,
 );

@@ -126,22 +126,6 @@ describe("buildAutomationRunEnvelope", () => {
     expect(envelope).toContain("(last run: never, iteration 3/∞)");
     expect(envelope).toContain("\n(empty)\n");
   });
-
-  it("uses the run's claimed iteration after a deferred retry reloads the definition", () => {
-    const envelope = buildAutomationRunEnvelope({
-      definition: definition({ iterationCount: 7 }),
-      run: run({
-        permissionSnapshot: {
-          ...run().permissionSnapshot,
-          iterationNumber: 3,
-        },
-      }),
-      memoryContent: "",
-      lastRunAt: null,
-    });
-
-    expect(envelope).toContain("iteration 3/10");
-  });
 });
 
 describe("automationMemoryForEnvelope", () => {

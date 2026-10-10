@@ -40,15 +40,6 @@ export function removePinnedMessage(
   return nextPins.length === existingPins.length ? keepExistingPins(existingPins) : nextPins;
 }
 
-export function togglePinnedMessage(
-  pins: readonly PinnedMessage[] | null | undefined,
-  pin: PinnedMessage,
-): PinnedMessage[] {
-  return isMessagePinned(pins, pin.messageId)
-    ? removePinnedMessage(pins, pin.messageId)
-    : addPinnedMessage(pins, pin);
-}
-
 export function setPinnedMessageDone(
   pins: readonly PinnedMessage[] | null | undefined,
   messageId: MessageId,

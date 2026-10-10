@@ -1,12 +1,30 @@
 // Shared read-time Claude accounting for Profile Stats and deletion snapshots.
 // Old compact modelUsage may be process-cumulative: only versioned results or
 // retained per-turn main-loop usage are safe. Never infer a version from dates.
+// Rows keep every dispatch origin; callers pick which origins count.
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as Statement from "effect/unstable/sql/Statement";
 
-export function claudeTokenActivityCtes(
+// Restricts token CTEs to one thread (delete-time archive) or to the threads a
+// subquery returns (time-range recaps), so they skip unrelated history.
+export type TokenStatsThreadScope =
+  | { readonly threadId: string }
+  | { readonly threadIdsQuery: Statement.Fragment };
+
+export function tokenStatsThreadFilter(
   sql: SqlClient.SqlClient,
-  scope?: { readonly threadId: string },
-) {
+  column: Statement.Fragment,
+  scope: TokenStatsThreadScope | undefined,
+): Statement.Fragment {
+  if (!scope) {
+    return sql.literal("");
+  }
+  return "threadId" in scope
+    ? sql`AND ${column} = ${scope.threadId}`
+    : sql`AND ${column} IN (${scope.threadIdsQuery})`;
+}
+
+export function claudeTokenActivityCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThreadScope) {
   return sql`
     claude_completed_source AS (
       SELECT
@@ -18,7 +36,7 @@ export function claudeTokenActivityCtes(
         CASE WHEN json_valid(a.payload_json) THEN a.payload_json ELSE '{}' END AS payload_json
       FROM projection_thread_activities a
       WHERE a.kind = 'turn.completed' AND a.turn_id IS NOT NULL
-        ${scope ? sql`AND a.thread_id = ${scope.threadId}` : sql.literal("")}
+        ${tokenStatsThreadFilter(sql, sql.literal("a.thread_id"), scope)}
     ),
     claude_completed_ranked AS (
       SELECT a.thread_id, a.turn_id, a.activity_id, a.created_at, a.payload_json,
@@ -60,10 +78,11 @@ export function claudeTokenActivityCtes(
       FROM claude_completed_ranked c
       LEFT JOIN profile_stats_claude_legacy_usage legacy
         ON legacy.thread_id = c.thread_id AND legacy.turn_id = c.turn_id
-      WHERE rank = 1 AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
+      WHERE rank = 1
     ),
     claude_model_usage_entries AS (
-      SELECT c.activity_id, c.thread_id, c.turn_id, c.created_at, c.model AS fallback_model,
+      SELECT c.activity_id, c.thread_id, c.turn_id, c.created_at, c.dispatch_origin,
+        c.model AS fallback_model,
         m.key AS model,
         CASE WHEN json_valid(m.value) THEN
           CASE WHEN json_type(m.value) = 'object' THEN m.value ELSE '{}' END
@@ -71,7 +90,7 @@ export function claudeTokenActivityCtes(
       FROM claude_completed c, json_each(c.models) m
     ),
     claude_model_token_candidates AS (
-      SELECT activity_id, thread_id, turn_id, created_at,
+      SELECT activity_id, thread_id, turn_id, created_at, dispatch_origin,
         COALESCE(NULLIF(TRIM(CAST(model AS TEXT)), ''), fallback_model) AS model,
         CAST(
           CASE
@@ -101,15 +120,16 @@ export function claudeTokenActivityCtes(
       FROM claude_model_usage_entries
     ),
     claude_model_token_rows AS (
-      SELECT activity_id, thread_id, turn_id, created_at, model, tokens
+      SELECT activity_id, thread_id, turn_id, created_at, dispatch_origin, model, tokens
       FROM claude_model_token_candidates
       WHERE tokens > 0
     ),
     claude_token_rows AS (
-      SELECT thread_id, created_at, model, tokens
+      SELECT thread_id, turn_id, created_at, dispatch_origin, model, tokens
       FROM claude_model_token_rows
       UNION ALL
-      SELECT c.thread_id, c.created_at, c.model, CAST(c.main_tokens AS INTEGER) AS tokens
+      SELECT c.thread_id, c.turn_id, c.created_at, c.dispatch_origin, c.model,
+        CAST(c.main_tokens AS INTEGER) AS tokens
       FROM claude_completed c
       WHERE c.main_tokens > 0
         AND NOT EXISTS (

@@ -3,7 +3,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SchemaGetter from "effect/SchemaGetter";
 
-import { ModelSelection, ProjectScript } from "@synara/contracts";
+import { ModelSelection, ProjectAdditionalFolders, ProjectScript } from "@synara/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   ClearProjectionProjectSpaceAssignmentsInput,
@@ -25,6 +25,7 @@ const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    additionalFolders: Schema.fromJsonString(ProjectAdditionalFolders),
     isPinned: SqliteBoolean,
   }),
 );
@@ -47,6 +48,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           is_pinned,
           title_refresh_mode,
           space_id,
+          additional_folders_json,
           created_at,
           updated_at,
           deleted_at
@@ -61,6 +63,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.isPinned ? 1 : 0},
           ${row.titleRefreshMode ?? null},
           ${row.spaceId},
+          ${JSON.stringify(row.additionalFolders ?? [])},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -75,6 +78,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           is_pinned = excluded.is_pinned,
           title_refresh_mode = excluded.title_refresh_mode,
           space_id = excluded.space_id,
+          additional_folders_json = excluded.additional_folders_json,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -96,6 +100,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           is_pinned AS "isPinned",
           title_refresh_mode AS "titleRefreshMode",
           space_id AS "spaceId",
+          additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -119,6 +124,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           is_pinned AS "isPinned",
           title_refresh_mode AS "titleRefreshMode",
           space_id AS "spaceId",
+          additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

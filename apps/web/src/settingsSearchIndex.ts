@@ -21,7 +21,32 @@ export interface SettingsSearchEntry {
   title: string;
   keywords: string;
   target?: string | null;
+  /**
+   * Whether this row exists on the machine the user is actually looking at.
+   * Omitted means "always". A search result for a row the panel does not render
+   * is a dead end: it scrolls to an anchor that is not there, and it tells the
+   * user Synara has a setting it does not.
+   */
+  applies?: (context: SettingsSearchContext) => boolean;
 }
+
+/**
+ * What the index needs to know about this server to decide which rows exist.
+ * Deliberately a handful of booleans rather than the status objects themselves —
+ * the index answers "does this row render", not "what does it say".
+ */
+export interface SettingsSearchContext {
+  /**
+   * The desktop backend drives the screen the user is already looking at, so
+   * the preview describes the same visible desktop. True only once the status
+   * is known.
+   */
+  readonly computerBackendIsVisibleDesktop: boolean;
+}
+
+const DEFAULT_SETTINGS_SEARCH_CONTEXT: SettingsSearchContext = {
+  computerBackendIsVisibleDesktop: false,
+};
 
 /** DOM id a result deep-links to, or null for panel-level entries with no anchored row. */
 export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | null {
@@ -45,6 +70,20 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "New threads",
     keywords:
       "Pick the default workspace mode for newly created draft threads. local worktree environment",
+  },
+  {
+    id: "general:delete-worktree-on-archive",
+    section: "general",
+    title: "Delete worktree on archive",
+    keywords:
+      "After Archive's Undo period, remove a clean worktree only when its task has stopped and no other task uses it. Keep its branch for recovery. worktree archive cleanup disk space remove delete",
+  },
+  {
+    id: "general:move-sent-messages-to-top",
+    section: "general",
+    title: "Move sent messages to top",
+    keywords:
+      "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream. chat enter send scroll anchor",
   },
   {
     id: "general:welcome-tour",
@@ -74,10 +113,10 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Show the standalone Chats list in the sidebar footer chats not tied to a project. sidebar section",
   },
   {
-    id: "general:studio-section",
+    id: "general:groups-section",
     section: "general",
-    title: "Studio",
-    keywords: "Show the Studio tab in the sidebar switcher. sidebar section content outbox",
+    title: "Hubs",
+    keywords: "Show the Hubs tab in the sidebar switcher. sidebar section content outbox groups",
   },
   {
     id: "general:automation-run-threads",
@@ -236,6 +275,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords:
       "Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background. alerts toast",
   },
+  {
+    id: "notifications:wait-for-subagents",
+    section: "notifications",
+    title: "Wait for subagents",
+    keywords:
+      "Alert once the agent and all of its background subagents have finished. Turn this off to be alerted each time the agent or one of its subagents stops. alerts notification",
+  },
 
   // ── AppSnap ───────────────────────────────────────────────────────────────────
   {
@@ -274,12 +320,62 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
+  // ── Computer use ──────────────────────────────────────────────────────────────
+  {
+    id: "computer:status",
+    section: "computer",
+    title: "Computer status",
+    keywords:
+      "Whether agents can see and control this computer's desktop right now. desktop backend beta availability health kwin hyprland nested wayland linux mac macos screen recording accessibility computer use control status set up install plugin repair",
+    // The status row is conditional and its title is dynamic (Ready /
+    // Reconnecting / Unavailable), so link to the section rather than an
+    // anchored row.
+    target: null,
+  },
+  {
+    id: "computer:open-automatically",
+    section: "computer",
+    title: "Preview",
+    keywords:
+      "Show the in-chat Computer preview the first time an agent acts on the desktop, and choose its size. open automatically compact large. auto open computer use",
+    applies: () => true,
+  },
+  {
+    id: "computer:how-agents-use-the-desktop",
+    section: "computer",
+    title: "Computer control",
+    keywords:
+      "Let the agent use the desktop in any chat. Approval gates and Stop still apply. enable toggle permission desktop agent computer use control",
+  },
+  {
+    id: "computer:cursor-colors",
+    section: "computer",
+    title: "Cursor colors",
+    keywords:
+      "The agent pointer's colors: stock monochrome by default, or custom fill and rim. agent cursor arrow pointer color hex custom",
+  },
+  {
+    id: "computer:always-allowed",
+    section: "computer",
+    title: "Always allowed",
+    keywords:
+      "Durable per-app always-allow grants from computer approvals, with expiry and revoke. always allow approval grant revoke app bundle consent computer use",
+    target: null,
+  },
+
   // ── Behavior ──────────────────────────────────────────────────────────────────
   {
     id: "behavior:thread-titles",
     section: "behavior",
     title: "Thread titles",
     keywords: "Automatic suggested title refresh rename stale conversation opt-in manual pin",
+  },
+  {
+    id: "behavior:sidechat-expiry",
+    section: "behavior",
+    title: "Side chat expiry",
+    keywords:
+      "Expire a side chat after it sits idle for this long. sidechat inactivity timeout 1 hour 24 hours never disable",
   },
   {
     id: "behavior:follow-up-behavior",
@@ -289,10 +385,24 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Choose whether messages sent during an active turn wait in the queue or steer the current run. Ctrl Cmd Enter opposite send",
   },
   {
+    id: "behavior:enter-while-dictating",
+    section: "behavior",
+    title: "Enter while dictating",
+    keywords:
+      "Choose what Enter does while a voice note is recording: stop and transcribe into the composer, or stop and send the message. voice dictation microphone transcribe",
+  },
+  {
     id: "behavior:assistant-output",
     section: "behavior",
     title: "Assistant output",
     keywords: "Show token-by-token output while a response is in progress. streaming",
+  },
+  {
+    id: "behavior:fold-finished-turns",
+    section: "behavior",
+    title: "Fold finished turns",
+    keywords:
+      "Hide a finished turn's tool calls and intermediate messages behind a single Worked for line. A turn stays open while it runs or while its background subagents are still working. collapse steps transcript",
   },
   {
     id: "behavior:effort-slider",
@@ -307,6 +417,27 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Automatically open simulator",
     keywords:
       "Disable automatic iOS Simulator device pane opening. Use Simulator.app without the mirrored panel reopening. background launch",
+  },
+  {
+    id: "behavior:github-link-destination",
+    section: "behavior",
+    title: "Open pull requests and issues",
+    keywords:
+      "Choose where GitHub links in chats open. built-in review view in-app browser external browser destination pr issue",
+  },
+  {
+    id: "behavior:pull-request-diff-colors",
+    section: "behavior",
+    title: "Pull request diff colors",
+    keywords:
+      "Show additions in green and deletions in red in pull request summaries. pr diff stats green red",
+  },
+  {
+    id: "behavior:include-fork-upstreams",
+    section: "behavior",
+    title: "Include fork upstreams",
+    keywords:
+      "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. code review inbox github upstream remote fork",
   },
   {
     id: "behavior:diff-line-wrapping",
@@ -332,6 +463,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Terminal close confirmation",
     keywords: "Ask before closing a terminal tab and clearing its history. safety confirm",
   },
+  {
+    id: "behavior:keep-computer-awake",
+    section: "behavior",
+    title: "Keep computer awake",
+    keywords:
+      "caffeinate sleep macOS prevent sleep keep awake agent working system on off idle active",
+    // Row only renders on macOS with caffeinate available.
+    target: null,
+  },
 
   // ── Keybindings ───────────────────────────────────────────────────────────────
   {
@@ -339,7 +479,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "shortcuts",
     title: "Keybindings",
     keywords:
-      "Every keyboard shortcut available in Synara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
+      "Every keyboard shortcut available in Synara: change, add, remove, or reset them. keybindings hotkeys key combo cmd ctrl customize rebind unassigned reset defaults",
     target: null,
   },
 
@@ -363,6 +503,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Models ────────────────────────────────────────────────────────────────────
   {
+    id: "models:source-control-writing-style",
+    section: "models",
+    title: "Source control writing style",
+    keywords:
+      "Repository conventions Conventional Commits custom instructions commit messages PR titles descriptions",
+  },
+  {
     id: "models:git-writing-model",
     section: "models",
     title: "Git writing model",
@@ -377,6 +524,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Providers ─────────────────────────────────────────────────────────────────
   {
+    id: "providers:cpu-priority",
+    section: "providers",
+    title: "Keep Synara responsive",
+    keywords:
+      "Lower agent CPU scheduling priority performance load nice responsiveness restart sessions",
+  },
+  {
     id: "providers:automatic-cli-update-checks",
     section: "providers",
     title: "Automatic CLI update checks",
@@ -384,11 +538,18 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Check Codex Claude and other provider CLIs for newer versions in the background. updates upgrade disable nags",
   },
   {
-    id: "providers:visible-providers",
+    id: "providers:enabled-providers",
     section: "providers",
-    title: "Visible providers",
+    title: "Enabled providers",
     keywords:
-      "Drag providers into your preferred picker order and hide the ones you don't use. visibility order",
+      "Allow background checks and new turns. Enabling a provider does not install it or sign it in. enable disable activity",
+  },
+  {
+    id: "providers:available-clis",
+    section: "providers",
+    title: "Available CLIs",
+    keywords:
+      "Show or hide installed providers in the picker and drag them into your preferred order. visible providers visibility order",
   },
   {
     id: "providers:provider-updates",
@@ -421,6 +582,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
+  {
+    id: "usage:sidebar-rings",
+    section: "usage",
+    title: "Sidebar usage rings",
+    keywords:
+      "Choose up to two provider accounts for usage rings at the bottom of the sidebar rail. multiple Claude accounts quota",
+    target: null,
+  },
+
   // ── Advanced ──────────────────────────────────────────────────────────────────
   {
     id: "advanced:keybindings",
@@ -450,6 +620,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Current application version. about",
   },
   {
+    id: "advanced:feature-tour",
+    section: "advanced",
+    title: "What’s new since 0.9.2",
+    keywords:
+      "Replay feature tour redesigned workspace provider accounts Code review slider updates",
+  },
+  {
     id: "advanced:release-history",
     section: "advanced",
     title: "Release history",
@@ -474,12 +651,17 @@ export function settingsSectionLabel(section: SettingsSectionId): string {
 export function rankSettingsSearchEntries(
   query: string,
   limit: number,
+  context: SettingsSearchContext | undefined = DEFAULT_SETTINGS_SEARCH_CONTEXT,
 ): readonly SettingsSearchEntry[] {
   const trimmed = query.trim();
   if (trimmed.length === 0) {
     return [];
   }
-  const ranked = rankProviderDiscoveryItems(SETTINGS_SEARCH_ENTRIES, trimmed, (entry) => [
+  const resolvedContext = context ?? DEFAULT_SETTINGS_SEARCH_CONTEXT;
+  const available = SETTINGS_SEARCH_ENTRIES.filter(
+    (entry) => entry.applies?.(resolvedContext) ?? true,
+  );
+  const ranked = rankProviderDiscoveryItems(available, trimmed, (entry) => [
     { value: entry.title },
     { value: entry.keywords, weight: 200 },
     { value: settingsSectionLabel(entry.section), weight: 400 },

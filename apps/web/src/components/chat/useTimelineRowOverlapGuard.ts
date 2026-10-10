@@ -1,17 +1,8 @@
 // FILE: useTimelineRowOverlapGuard.ts
-// Purpose: Pre-paint correction for LegendList's one-frame row overlap. The
-//          list positions each row's container absolutely from its size model,
-//          but on web the model→DOM write goes through a default-priority React
-//          update that flushes in a macrotask — after the frame in which a row
-//          changed height has already painted. Every frame where a row grows
-//          (streaming text, tool calls landing, the 220ms disclosure animation)
-//          therefore paints with the rows below still at stale offsets, drawn
-//          on top of the grown row. This hook closes that window: a
-//          ResizeObserver fires in the same frame as the height change but
-//          before paint, and pushes the stale containers down with direct
-//          style writes. LegendList's own commit lands next frame with the
-//          same cumulative positions, so the manual writes are transient and
-//          never fight the list's model.
+// Purpose: Correct stale virtualized row positions before paint. Row growth
+//          and late position-only commits can both place a container over its
+//          predecessor. Observe both changes so a deferred position write cannot
+//          undo a resize correction and leave the transcript permanently overlapped.
 // Layer: React hooks (chat timeline)
 
 import { useCallback, useEffect, useRef } from "react";
@@ -43,7 +34,7 @@ function resolvePositionedContainer(row: HTMLElement): HTMLElement | null {
 }
 
 /**
- * Observes timeline row elements and, whenever any row's size changes, pushes
+ * Observes row sizes and container positions and, when they change, pushes
  * the containers below a grown row down so no two rows paint on top of each
  * other. Only ever moves containers down: a transient gap (a row shrank and
  * the rows below catch up next frame) is invisible, while pulling rows up
@@ -54,6 +45,8 @@ function resolvePositionedContainer(row: HTMLElement): HTMLElement | null {
 export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (() => void) | void {
   const observerRef = useRef<ResizeObserver | null>(null);
   const observedRowsRef = useRef(new Set<HTMLElement>());
+  const positionObserversRef = useRef(new Set<MutationObserver>());
+  const containerTopsRef = useRef(new WeakMap<HTMLElement, number>());
 
   const closeOverlaps = useCallback((entries?: readonly ResizeObserverEntry[]) => {
     // Inline-style reads only — no forced layout yet.
@@ -67,6 +60,7 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
         continue;
       }
       const top = Number.parseFloat(container.style.top);
+      containerTopsRef.current.set(container, top);
       if (!Number.isFinite(top) || top < OUT_OF_VIEW_THRESHOLD_PX) {
         continue;
       }
@@ -122,6 +116,8 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
 
     const placed: { container: HTMLElement; top: number; height: number }[] = [];
     for (const [container, top] of containerTops) {
+      // A position commit can also resize content before ResizeObserver runs.
+      // Read current geometry, batching all reads before the correction writes.
       const height = container.getBoundingClientRect().height;
       if (height <= 0) {
         continue;
@@ -137,16 +133,20 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
       if (current.top < minTop - OVERLAP_EPSILON_PX) {
         current.top = minTop;
         current.container.style.top = `${minTop}px`;
+        containerTopsRef.current.set(current.container, minTop);
       }
     }
   }, []);
 
   useEffect(() => {
     const observedRows = observedRowsRef.current;
+    const positionObservers = positionObserversRef.current;
     return () => {
       observerRef.current?.disconnect();
       observerRef.current = null;
       observedRows.clear();
+      for (const observer of positionObservers) observer.disconnect();
+      positionObservers.clear();
     };
   }, []);
 
@@ -157,11 +157,29 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
       }
       // ResizeObserver callbacks run after layout but before paint, so the
       // correction below lands in the same frame as the size change.
-      observerRef.current ??= new ResizeObserver(closeOverlaps);
+      observerRef.current ??= new ResizeObserver((entries) => closeOverlaps(entries));
       const observer = observerRef.current;
-      observer.observe(element);
+      observer.observe(element, { box: "border-box" });
       observedRowsRef.current.add(element);
+      const container = resolvePositionedContainer(element);
+      const positionObserver = container
+        ? new MutationObserver(() => {
+            // Ignore our own corrections and unrelated style changes. The observer
+            // runs before paint, including when no row triggers ResizeObserver.
+            if (
+              Number.parseFloat(container.style.top) !== containerTopsRef.current.get(container)
+            ) {
+              closeOverlaps();
+            }
+          })
+        : null;
+      if (container && positionObserver) {
+        positionObserver.observe(container, { attributes: true, attributeFilter: ["style"] });
+        positionObserversRef.current.add(positionObserver);
+      }
       return () => {
+        positionObserver?.disconnect();
+        if (positionObserver) positionObserversRef.current.delete(positionObserver);
         observer.unobserve(element);
         observedRowsRef.current.delete(element);
       };

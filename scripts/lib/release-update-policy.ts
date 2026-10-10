@@ -23,17 +23,24 @@ export interface ResolvedReleaseUpdatePolicy {
   readonly lane: ReleaseLane;
   readonly bridgeTag: string;
   readonly channel: string;
+  readonly desktopFlavor: "production" | "beta";
 }
 
 const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const CHANNEL_PATTERN = /^[a-z0-9-]+$/;
 
-function parseVersion(value: string): { core: readonly number[]; isPrerelease: boolean } {
+function parseVersion(value: string): {
+  core: readonly number[];
+  isPrerelease: boolean;
+  prereleaseId: string | null;
+} {
   const match = VERSION_PATTERN.exec(value);
   if (!match) throw new Error(`Invalid release version: ${value}`);
+  const prerelease = match[4];
   return {
     core: [Number(match[1]), Number(match[2]), Number(match[3])],
-    isPrerelease: match[4] !== undefined,
+    isPrerelease: prerelease !== undefined,
+    prereleaseId: prerelease?.split(".")[0] ?? null,
   };
 }
 
@@ -92,6 +99,11 @@ export function resolveReleaseUpdatePolicy(
     );
   }
 
+  // `beta` is the only prerelease identifier with its own updater channel and
+  // packaged desktop flavor; every other suffix keeps the stable channel so
+  // prerelease assets stay inert to the shipped feed.
+  const betaChannel = requested.prereleaseId === "beta";
+
   return {
     version,
     tag: `v${version}`,
@@ -100,7 +112,8 @@ export function resolveReleaseUpdatePolicy(
     mirrorToStableChannel: false,
     lane: normalizedConfig.lane,
     bridgeTag: `v${normalizedConfig.bridgeVersion}`,
-    channel: normalizedConfig.channel,
+    channel: betaChannel ? "beta" : normalizedConfig.channel,
+    desktopFlavor: betaChannel ? "beta" : "production",
   };
 }
 
@@ -134,10 +147,11 @@ function copyChannelManifests(
 export function prepareReleaseUpdateManifests(
   assetDirectory: string,
   config: ReleaseUpdatePolicyConfig,
+  channelOverride?: string,
 ): readonly string[] {
   const normalizedConfig = validateReleaseUpdatePolicyConfig(config);
   const sourceNames = ["latest-mac.yml", "latest.yml", "latest-linux.yml"] as const;
-  const destinationNames = channelManifestNames(normalizedConfig.channel);
+  const destinationNames = channelManifestNames(channelOverride ?? normalizedConfig.channel);
   if (normalizedConfig.lane === "bridge") {
     const missing = sourceNames.filter((name) => !existsSync(resolve(assetDirectory, name)));
     if (missing.length > 0) {

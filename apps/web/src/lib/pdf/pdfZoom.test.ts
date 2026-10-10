@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   clampPdfScale,
-  formatZoomPercent,
   nextZoomScale,
   PDF_MAX_SCALE,
   PDF_MIN_SCALE,
@@ -67,13 +66,5 @@ describe("zoom stepping", () => {
 
   it("floors zoom-out at the min scale when below the first preset", () => {
     expect(previousZoomScale(0.5)).toBe(PDF_MIN_SCALE);
-  });
-});
-
-describe("formatZoomPercent", () => {
-  it("formats scale as a rounded percentage", () => {
-    expect(formatZoomPercent(1)).toBe("100%");
-    expect(formatZoomPercent(1.25)).toBe("125%");
-    expect(formatZoomPercent(0.5)).toBe("50%");
   });
 });

@@ -1,3 +1,4 @@
+import type { CompletionRepository } from "../completionRepository.ts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -43,6 +44,7 @@ export interface ReserveAgentGatewayOperationInput {
 }
 
 export interface AgentGatewayOperationRepositoryShape {
+  readonly completions: CompletionRepository;
   readonly reserve: (
     input: ReserveAgentGatewayOperationInput,
   ) => Effect.Effect<ReserveAgentGatewayOperationResult, Error>;
@@ -71,11 +73,11 @@ export interface AgentGatewayOperationRepositoryShape {
     readonly errorJson: string;
     readonly now: string;
   }) => Effect.Effect<void, Error>;
-  readonly complete: (input: {
-    readonly operationId: string;
-    readonly resultJson: string;
-    readonly now: string;
-  }) => Effect.Effect<void, Error>;
+  /** Persist required creation metadata and the replay result in one transaction. */
+  readonly complete: (
+    input: { readonly operationId: string; readonly resultJson: string; readonly now: string },
+    beforeCommit?: Effect.Effect<void, Error>,
+  ) => Effect.Effect<void, Error>;
   readonly fail: (input: {
     readonly operationId: string;
     readonly errorJson: string;

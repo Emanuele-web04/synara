@@ -132,7 +132,7 @@ export function AutomationSaveStatus({
     return () => clearTimeout(timer);
   }, [saving, failed]);
   return (
-    <p aria-live="polite" className="h-4 text-xs text-muted-foreground/70">
+    <p aria-live="polite" className="h-4 text-ui leading-snug text-muted-foreground/70">
       {saving ? "Saving…" : showSaved ? "Saved" : ""}
     </p>
   );

@@ -88,7 +88,7 @@ export function BrowserVaultMaster({
     <div className="space-y-3 py-3">
       {revealed !== null ? (
         <>
-          <label className="block space-y-1 text-sm">
+          <label className="block space-y-1 text-ui leading-snug">
             <span>Password</span>
             <Input
               aria-label="Revealed password"
@@ -112,7 +112,7 @@ export function BrowserVaultMaster({
             void submit();
           }}
         >
-          <label className="block space-y-1 text-sm">
+          <label className="block space-y-1 text-ui leading-snug">
             <span>{action.kind === "setup" ? "New master password" : "Master password"}</span>
             <Input
               type="password"
@@ -126,7 +126,7 @@ export function BrowserVaultMaster({
           </label>
           {action.kind === "setup" ? (
             <>
-              <label className="block space-y-1 text-sm">
+              <label className="block space-y-1 text-ui leading-snug">
                 <span>Confirm master password</span>
                 <Input
                   type="password"
@@ -137,13 +137,13 @@ export function BrowserVaultMaster({
                   disabled={busy}
                 />
               </label>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-ui leading-snug text-muted-foreground">
                 Keep this password somewhere safe. A forgotten master password cannot be reset here.
               </p>
             </>
           ) : null}
           {error ? (
-            <p role="alert" className="text-sm text-destructive">
+            <p role="alert" className="text-ui leading-snug text-destructive">
               {error}
             </p>
           ) : null}

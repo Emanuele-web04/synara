@@ -16,6 +16,8 @@ export function automationCadenceLabel(schedule: AutomationSchedule): string {
   switch (schedule.type) {
     case "manual":
       return "Manual";
+    case "project-event":
+      return "On project events";
     case "once":
       return `Once ${schedule.runAt}`;
     case "interval":

@@ -10,7 +10,7 @@ const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 type ExecFileSyncLike = (
   file: string,
   args: ReadonlyArray<string>,
-  options: { encoding: "utf8"; timeout: number },
+  options: { encoding: "utf8"; timeout: number; windowsHide?: boolean },
 ) => string;
 
 function trimNonEmpty(value: string | null | undefined): string | undefined {
@@ -110,6 +110,7 @@ export function readPathFromLaunchctl(
       execFile("/bin/launchctl", ["getenv", "PATH"], {
         encoding: "utf8",
         timeout: 2000,
+        windowsHide: true,
       }),
     );
   } catch {
@@ -217,6 +218,7 @@ export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
   const output = execFile(shell, ["-ilc", buildEnvironmentCaptureCommand(names)], {
     encoding: "utf8",
     timeout: 5000,
+    windowsHide: true,
   });
 
   const environment: Partial<Record<string, string>> = {};
@@ -312,7 +314,9 @@ export const readWindowsPersistentEnvironment: WindowsEnvironmentReader = (
   const output = execFile(
     resolveWindowsPowerShellPath(),
     ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_ENVIRONMENT_SCRIPT],
-    { encoding: "utf8", timeout: 5000 },
+    // Hide the interpreter window: without it every read flashes a console on
+    // Windows, because this process is a GUI app spawning a console child.
+    { encoding: "utf8", timeout: 5000, windowsHide: true },
   );
 
   let parsed: {

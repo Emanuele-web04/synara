@@ -47,7 +47,7 @@ function recordingEngine(
 async function trustedSourceImage(root: string, fileName: string, content: string) {
   const trustedRoot = path.join(root, "codex-home", "generated_images");
   const sourcePath = path.join(trustedRoot, fileName);
-  await mkdir(trustedRoot, { recursive: true });
+  await mkdir(path.dirname(sourcePath), { recursive: true });
   await writeFile(sourcePath, content);
   return { trustedRoot, sourcePath };
 }
@@ -74,7 +74,11 @@ describe("studioGeneratedImageFileName", () => {
 describe("copyGeneratedImageToStudioWorkspace", () => {
   it("copies without moving the original, creates Outbox/Images, and leaves no temp files", async () => {
     const root = await temporaryRoot();
-    const { trustedRoot, sourcePath } = await trustedSourceImage(root, "exec-1.png", "image bytes");
+    const { trustedRoot, sourcePath } = await trustedSourceImage(
+      root,
+      "..session/exec-1.png",
+      "image bytes",
+    );
     const workspaceRoot = path.join(root, "Studio");
 
     const copied = await Effect.runPromise(

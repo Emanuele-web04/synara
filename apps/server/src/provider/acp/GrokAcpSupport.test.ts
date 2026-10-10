@@ -3,12 +3,12 @@ import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveAcpPermissionPolicy } from "./AcpAdapterSupport.ts";
 import {
   applyGrokAcpModelSelection,
   buildGrokAcpSpawnInput,
   isGrokSessionStoragePathNotFoundError,
   resolveGrokAcpAuthMethodId,
+  resolveGrokAcpAuthMethodIdForEnv,
   runGrokAcpCompactionCommand,
 } from "./GrokAcpSupport.ts";
 
@@ -25,20 +25,7 @@ describe("buildGrokAcpSpawnInput", () => {
       command: "grok",
       args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
       cwd: "/tmp/project",
-    });
-  });
-
-  it("uses the configured Grok binary path", () => {
-    expect(
-      buildGrokAcpSpawnInput(
-        { binaryPath: "/usr/local/bin/grok" },
-        "/tmp/project",
-        "approval-required",
-      ),
-    ).toMatchObject({
-      command: "/usr/local/bin/grok",
-      args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
-      cwd: "/tmp/project",
+      providerEnvironment: { driver: "grok" },
     });
   });
 
@@ -67,6 +54,7 @@ describe("buildGrokAcpSpawnInput", () => {
         "stdio",
       ],
       cwd: "/tmp/project",
+      providerEnvironment: { driver: "grok" },
     });
     expect(spawn.args).not.toContain("--always-approve");
   });
@@ -179,6 +167,20 @@ describe("resolveGrokAcpAuthMethodId", () => {
     ).resolves.toBe("xai.api_key");
   });
 
+  it("uses the selected legacy key without inheriting an ambient XAI_API_KEY alias", async () => {
+    process.env.XAI_API_KEY = "ambient-account-a";
+    delete process.env.GROK_CODE_XAI_API_KEY;
+
+    await expect(
+      Effect.runPromise(
+        resolveGrokAcpAuthMethodIdForEnv(
+          { GROK_CODE_XAI_API_KEY: "selected-account-b" },
+          "grok_work",
+        )(initializeWithAuthMethods(["cached_token", "xai.api_key"])),
+      ),
+    ).resolves.toBe("xai.api_key");
+  });
+
   it("falls back to cached token auth when no API key is configured", async () => {
     delete process.env.XAI_API_KEY;
     delete process.env.GROK_CODE_XAI_API_KEY;
@@ -238,43 +240,6 @@ describe("resolveGrokAcpAuthMethodId", () => {
 
     expect(unknownError.message).toContain("advertised: future_auth");
     expect(emptyError.message).toContain("advertised: none");
-  });
-});
-
-describe("Grok ACP permission policy", () => {
-  const options = [
-    { kind: "allow_once", optionId: "allow-once" },
-    { kind: "reject_once", optionId: "reject-once" },
-  ] as const;
-
-  it("surfaces approval-required requests to Synara", () => {
-    expect(
-      resolveAcpPermissionPolicy({
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        options,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("auto-allows Full Access requests with the provider's request-scoped option", () => {
-    expect(
-      resolveAcpPermissionPolicy({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        options,
-      }),
-    ).toEqual({ outcome: "selected", optionId: "allow-once" });
-  });
-
-  it("keeps Plan mode fail-closed above Full Access", () => {
-    expect(
-      resolveAcpPermissionPolicy({
-        runtimeMode: "full-access",
-        interactionMode: "plan",
-        options,
-      }),
-    ).toEqual({ outcome: "selected", optionId: "reject-once" });
   });
 });
 

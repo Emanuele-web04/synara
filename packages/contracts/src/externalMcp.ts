@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import { IsoDateTime, MessageId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderKind, RuntimeMode } from "./orchestration";
+import { ProviderInstanceId } from "./providerInstance";
 
 export const EXTERNAL_MCP_AUDIENCE = "synara.external-mcp" as const;
 export const EXTERNAL_MCP_MAX_PROMPT_CHARS = 100_000;
@@ -19,6 +20,7 @@ export const ExternalMcpCapability = Schema.Literals([
   "tasks:read-project",
   "runtime:local",
   "runtime:full-access",
+  "computer:control",
 ]);
 export type ExternalMcpCapability = typeof ExternalMcpCapability.Type;
 
@@ -125,6 +127,7 @@ export const ExternalMcpCreateTaskInput = Schema.Struct({
   requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH)),
   projectId: ProjectId,
   provider: ProviderKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   model: TrimmedNonEmptyString,
   options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_PROMPT_CHARS)),
@@ -132,6 +135,9 @@ export const ExternalMcpCreateTaskInput = Schema.Struct({
   environment: Schema.optional(Schema.Literals(["local", "worktree"])),
   runtimeMode: Schema.optional(RuntimeMode),
   baseRef: Schema.optional(TrimmedNonEmptyString),
+  // Requires the "computer:control" integration capability. Created tasks get
+  // the computer tool family with per-action approval gating unchanged.
+  enableComputerControl: Schema.optional(Schema.Boolean),
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalMcpCreateTaskInput = typeof ExternalMcpCreateTaskInput.Type;
 

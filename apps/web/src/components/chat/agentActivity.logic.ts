@@ -34,7 +34,7 @@ export function isReasoningUpdateWorkEntry(
 }
 
 export function isCodexActivityStatusWorkEntry(entry: WorkLogEntry): boolean {
-  if (isReasoningUpdateWorkEntry(entry)) {
+  if (isReasoningUpdateWorkEntry(entry) || entry.activityKind === "tool.summary") {
     return true;
   }
   const isStatusOnlyCommand =
@@ -44,8 +44,26 @@ export function isCodexActivityStatusWorkEntry(entry: WorkLogEntry): boolean {
   );
 }
 
+// Generic runtime notices (unhandled SDK messages, retries) render as quiet italic
+// text without a leading glyph; the tone checkmark made them read as completed work.
+// Notices with their own semantic icon keep it.
+export function isPlainRuntimeNoticeWorkEntry(
+  entry: Pick<WorkLogEntry, "activityKind" | "nativeEventType" | "providerContextLifecycle">,
+): boolean {
+  return (
+    entry.activityKind === "auth.status" ||
+    (entry.activityKind === "runtime.warning" &&
+      entry.nativeEventType !== "background_tasks_changed" &&
+      !entry.providerContextLifecycle)
+  );
+}
+
 export function isAgentActivityWorkEntry(entry: WorkLogEntry): boolean {
-  return entry.itemType === "collab_agent_tool_call" || isReasoningUpdateWorkEntry(entry);
+  return (
+    entry.itemType === "collab_agent_tool_call" ||
+    entry.activityKind === "tool.summary" ||
+    isReasoningUpdateWorkEntry(entry)
+  );
 }
 
 // Unmapped provider events keep their native type as the title and a safe detail as preview.

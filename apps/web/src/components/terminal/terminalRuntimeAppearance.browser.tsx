@@ -5,8 +5,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  getTerminalBoldFontWeight,
-  getTerminalFontWeight,
+  getTerminalMinimumContrastRatio,
+  isTerminalBackgroundTranslucent,
   terminalThemeFromApp,
 } from "./terminalRuntimeAppearance";
 
@@ -57,8 +57,25 @@ describe("terminalThemeFromApp", () => {
     expect(theme.selectionBackground).toMatch(/^rgba\(\d+, \d+, \d+, 0\.\d+\)$/);
   });
 
-  it("keeps terminal text intentionally lighter than bold shell output", () => {
-    expect(getTerminalFontWeight()).toBe(300);
-    expect(getTerminalBoldFontWeight()).toBe(500);
+  it("clears the background, and flags it for transparency, on a glass window", () => {
+    root.style.setProperty("--color-token-terminal-background", "#0f0f11");
+    expect(isTerminalBackgroundTranslucent(terminalThemeFromApp())).toBe(false);
+
+    root.style.setProperty("--app-terminal-surface", "transparent");
+    const theme = terminalThemeFromApp();
+
+    // The theme's own RGB survives: xterm paints reverse-video text in its opaque form.
+    expect(theme.background).toBe("rgba(15, 15, 17, 0)");
+    expect(isTerminalBackgroundTranslucent(theme)).toBe(true);
+  });
+});
+
+describe("getTerminalMinimumContrastRatio", () => {
+  it("raises text contrast only on a light terminal", () => {
+    root.classList.remove("dark");
+    expect(getTerminalMinimumContrastRatio()).toBe(4.5);
+
+    root.classList.add("dark");
+    expect(getTerminalMinimumContrastRatio()).toBe(1);
   });
 });

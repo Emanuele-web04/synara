@@ -7,12 +7,14 @@ export type ProviderIntentEvent = Extract<
       | "thread.created"
       | "thread.deleted"
       | "thread.archived"
+      | "thread.unarchived"
       | "thread.meta-updated"
       | "thread.session-set"
       | "thread.runtime-mode-set"
       | "thread.interaction-mode-set"
       | "thread.turn-queued"
       | "thread.turn-start-requested"
+      | "thread.claude-cache-response-requested"
       | "thread.goal-continuation-requested"
       | "thread.turn-interrupt-requested"
       | "thread.task-stop-requested"
@@ -29,12 +31,14 @@ const PROVIDER_INTENT_EVENT_TYPES = new Set<ProviderIntentEvent["type"]>([
   "thread.created",
   "thread.deleted",
   "thread.archived",
+  "thread.unarchived",
   "thread.meta-updated",
   "thread.session-set",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.turn-queued",
   "thread.turn-start-requested",
+  "thread.claude-cache-response-requested",
   "thread.goal-continuation-requested",
   "thread.turn-interrupt-requested",
   "thread.task-stop-requested",
@@ -57,6 +61,7 @@ export const isProviderIntentEvent = (event: OrchestrationEvent): event is Provi
 export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
   event.type === "thread.created" ||
   event.type === "thread.archived" ||
+  event.type === "thread.unarchived" ||
   // The claimed handler only performs the idempotent durable enqueue. Queue
   // draining runs after the delivery settles, so replay never repeats provider
   // dispatch as part of this claim.
@@ -65,6 +70,9 @@ export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): b
 export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean =>
   event.type !== "thread.created" &&
   event.type !== "thread.deleted" &&
+  // Restores only the computer manager's local admission state. It is safe to
+  // replay and must not be skipped by an unrelated provider delivery failure.
+  event.type !== "thread.unarchived" &&
   event.type !== "thread.session-set" &&
   event.type !== "thread.turn-queued";
 
@@ -73,8 +81,10 @@ export const isClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
 
 /**
  * Intents that must still execute while a thread is quarantined by a blocking
- * delivery. Skipping an interrupt is never safe: the turn it would settle keeps
- * running (or keeps showing as running) with no other way out for the user.
+ * delivery. Interrupt, stop and archive must still be able to tear down live
+ * work; quarantining new work must never disable cancellation.
  */
 export const isQuarantineExemptProviderIntent = (event: ProviderIntentEvent): boolean =>
-  event.type === "thread.turn-interrupt-requested";
+  event.type === "thread.turn-interrupt-requested" ||
+  event.type === "thread.session-stop-requested" ||
+  event.type === "thread.archived";

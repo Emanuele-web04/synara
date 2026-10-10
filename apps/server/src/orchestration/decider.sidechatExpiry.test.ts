@@ -154,7 +154,7 @@ describe("side chat expiry decider", () => {
           },
         }),
       ),
-    ).rejects.toThrow("expired after 1 hour of inactivity");
+    ).rejects.toThrow("expired after a period of inactivity");
   });
 
   it("rejects goal continuations after expiry", async () => {
@@ -172,7 +172,7 @@ describe("side chat expiry decider", () => {
           },
         }),
       ),
-    ).rejects.toThrow("expired after 1 hour of inactivity");
+    ).rejects.toThrow("expired after a period of inactivity");
   });
 
   it("rejects approval responses after expiry", async () => {
@@ -190,7 +190,7 @@ describe("side chat expiry decider", () => {
           },
         }),
       ),
-    ).rejects.toThrow("expired after 1 hour of inactivity");
+    ).rejects.toThrow("expired after a period of inactivity");
   });
 
   it("rejects user-input responses after expiry", async () => {
@@ -208,7 +208,7 @@ describe("side chat expiry decider", () => {
           },
         }),
       ),
-    ).rejects.toThrow("expired after 1 hour of inactivity");
+    ).rejects.toThrow("expired after a period of inactivity");
   });
 
   it("compares expiry activity timestamps by instant", async () => {

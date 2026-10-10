@@ -18,6 +18,7 @@ describe("ServerLifecycleEvents", () => {
             homeDir: "/home/tester",
             chatWorkspaceRoot: "/home/tester/.synara/chats",
             studioWorkspaceRoot: "/home/tester/.synara/chats/Studio",
+            groupsWorkspaceRoot: "/home/tester/.synara/chats/Groups",
             projectName: "one",
           },
         });
@@ -34,6 +35,7 @@ describe("ServerLifecycleEvents", () => {
             homeDir: "/home/tester",
             chatWorkspaceRoot: "/home/tester/.synara/chats",
             studioWorkspaceRoot: "/home/tester/.synara/chats/Studio",
+            groupsWorkspaceRoot: "/home/tester/.synara/chats/Groups",
             projectName: "two",
           },
         });

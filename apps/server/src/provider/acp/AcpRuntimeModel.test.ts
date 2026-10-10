@@ -164,6 +164,63 @@ describe("AcpRuntimeModel", () => {
     }
   });
 
+  it.each(["_toolName", "toolName", "tool_name"] as const)(
+    "projects the authoritative %s Computer name on initial calls and updates",
+    (nameKey) => {
+      const rawInput = {
+        [nameKey]: " mcp__synara__computer_type_text ",
+        label: "Message",
+        text: "private typed value",
+      };
+      for (const sessionUpdate of ["tool_call", "tool_call_update"] as const) {
+        const parsed = parseSessionUpdateEvent({
+          sessionId: "session-1",
+          update: {
+            sessionUpdate,
+            toolCallId: "computer-1",
+            title: "Tool",
+            kind: "other",
+            status: "in_progress",
+            rawInput,
+          },
+        } satisfies Acp.SessionNotification);
+        const event = parsed.events[0];
+        expect(event?._tag).toBe("ToolCallUpdated");
+        if (event?._tag !== "ToolCallUpdated") throw new Error("Expected Computer tool update");
+        expect(event.toolCall.data.toolName).toBe("computer_type_text");
+        expect(event.toolCall.data.rawInput).toBe(rawInput);
+        expect(event.toolCall.title).not.toContain(rawInput.text);
+      }
+    },
+  );
+
+  it.each([
+    { _toolName: "computer_future_tool" },
+    { _toolName: "Click mcp__synara__computer_click" },
+    { _toolName: "mcp__other__computer_click" },
+    { _toolName: "computer_click\nprivate value" },
+    { _toolName: 123, toolName: "computer_click" },
+    { _toolName: "foreign_tool", toolName: "computer_click" },
+    { text: "computer_click" },
+    "computer_click",
+  ])("does not derive a Computer name from arbitrary input or provider prose: %j", (rawInput) => {
+    const parsed = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-unnamed",
+        title: "mcp__synara__computer_click",
+        kind: "other",
+        rawInput,
+      },
+    } satisfies Acp.SessionNotification);
+    const event = parsed.events[0];
+    expect(event?._tag).toBe("ToolCallUpdated");
+    if (event?._tag !== "ToolCallUpdated") throw new Error("Expected tool update");
+    expect(event.toolCall.data).not.toHaveProperty("toolName");
+    expect(event.toolCall.data.rawInput).toBe(rawInput);
+  });
+
   it("preserves Grok prompt-policy denial text on failed shell tools", () => {
     const pending = parseSessionUpdateEvent({
       sessionId: "session-1",
