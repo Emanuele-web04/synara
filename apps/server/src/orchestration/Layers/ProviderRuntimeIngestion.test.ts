@@ -8401,6 +8401,51 @@ describe("ProviderRuntimeIngestion", () => {
     expect(inner.title).toBe("Inner worker");
   });
 
+  it("never records the launching conversation as a subagent of its own subagent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    // Inside the "survey" child, a collab call names both a new child and the
+    // root conversation that launched survey (Codex reports back to "root").
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-child-collab"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-child-collab"),
+      providerRefs: {
+        providerThreadId: "codex-survey",
+        providerParentThreadId: "codex-root",
+      },
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Subagent",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            receiverThreadIds: ["codex-runner", "codex-root"],
+            prompt: "Run wc -l calc.py.",
+          },
+        },
+      },
+    });
+
+    const runner = await waitForThread(
+      harness.engine,
+      () => true,
+      2000,
+      asThreadId("subagent:thread-1:codex-runner"),
+    );
+    expect(runner.sourceThreadId).toBe("subagent:thread-1:codex-survey");
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    expect(readModel.threads.some((thread) => thread.id === "subagent:thread-1:codex-root")).toBe(
+      false,
+    );
+  });
+
   it("publishes the native subagent cap notice once across distinct overflowing events", async () => {
     const harness = await createHarness();
     const collabEvent = (eventId: string, receiverThreadIds: ReadonlyArray<string>) =>

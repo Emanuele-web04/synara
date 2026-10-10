@@ -63,6 +63,7 @@ import {
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { BackgroundTaskRow } from "./BackgroundTaskRow";
 import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
+import { SubagentRunCard } from "./SubagentRunCard";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import ChatMarkdown from "../ChatMarkdown";
@@ -762,6 +763,11 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // above so the early return never changes hook order.
   if (workEntry.backgroundTask) {
     return <BackgroundTaskRow task={workEntry.backgroundTask} fontSizePx={textFontSizePx} />;
+  }
+
+  // A turn's subagents fold into one entry that renders as the subagent card.
+  if (workEntry.subagentRun) {
+    return <SubagentRunCard workEntry={workEntry} />;
   }
 
   // A created-automation row renders as its own card instead of a tool-call line.
