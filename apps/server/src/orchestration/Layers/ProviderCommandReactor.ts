@@ -5951,6 +5951,18 @@ const make = Effect.gen(function* () {
       }),
     });
     if (result._tag === "ok") {
+      // ProviderService retires a parent runtime after interrupting it, and a
+      // turn the provider had already ended (its terminal event still queued
+      // behind the stream) has nothing left to interrupt. Once no provider
+      // turn is live, a retired generation's exit is dropped, so waiting for
+      // a terminal event leaves Stop looking dead. Settle now; a terminal
+      // event still in flight applies on top of this state.
+      if (!(yield* hasLiveProviderTurn(input.threadId))) {
+        yield* settleInterruptedProviderTurn({
+          threadId: input.threadId,
+          createdAt: input.createdAt,
+        });
+      }
       return;
     }
 
