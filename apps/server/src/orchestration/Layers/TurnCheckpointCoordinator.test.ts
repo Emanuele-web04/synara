@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { ThreadId } from "@synara/contracts";
-import { assert, it } from "@effect/vitest";
+import { assert, it as effectIt } from "@effect/vitest";
 import { Deferred, Duration, Effect, Fiber, Option, Ref } from "effect";
 
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 
-it.layer(TurnCheckpointCoordinatorLive)("TurnCheckpointCoordinator", (it) => {
+effectIt.layer(TurnCheckpointCoordinatorLive)("TurnCheckpointCoordinator", (it) => {
   it.effect("keeps a turn activation behind a validated checkpoint mutation", () =>
     Effect.gen(function* () {
       const coordinator = yield* TurnCheckpointCoordinator;
@@ -231,7 +231,7 @@ it.layer(TurnCheckpointCoordinatorLive)("TurnCheckpointCoordinator", (it) => {
       }),
   );
 
-  it.live(
+  effectIt.live(
     "admits concurrent provider activations but gives a workspace writer exclusive ownership",
     () =>
       Effect.gen(function* () {

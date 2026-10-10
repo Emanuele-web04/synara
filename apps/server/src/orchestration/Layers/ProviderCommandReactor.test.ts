@@ -13607,10 +13607,11 @@ describe("ProviderCommandReactor", () => {
             createdAt: new Date().toISOString(),
           }),
         );
-        await waitFor(async () =>
-          (await readHarnessThread(harness))?.activities.some(
-            (activity) => activity.kind === "checkpoint.baseline.skipped",
-          ),
+        await waitFor(
+          async () =>
+            (await readHarnessThread(harness))?.activities.some(
+              (activity) => activity.kind === "checkpoint.baseline.skipped",
+            ) ?? false,
         );
         const dispatch = mode === "review" ? harness.startReview : harness.sendTurn;
         expect(dispatch).not.toHaveBeenCalled();
