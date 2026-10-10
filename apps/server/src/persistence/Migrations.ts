@@ -148,6 +148,11 @@ import Migration0129 from "./Migrations/129_ProjectionThreadsSnooze.ts";
 import Migration0130 from "./Migrations/130_PullRequestAutoFix.ts";
 import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
 import Migration0132 from "./Migrations/132_ExternalMcpTurnCapacityRecovery.ts";
+import Migration0133 from "./Migrations/133_ExternalAgentProfiles.ts";
+import Migration0134 from "./Migrations/134_CapabilityEvidence.ts";
+import Migration0135 from "./Migrations/135_ExternalAgentLifecycle.ts";
+import Migration0137 from "./Migrations/137_ExternalAgentRevisionMembership.ts";
+import Migration0136 from "./Migrations/136_CapabilityEvidenceWithdrawal.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -296,6 +301,11 @@ export const migrationEntries = [
   [130, "PullRequestAutoFix", Migration0130],
   [131, "ProjectSourceFolders", Migration0131],
   [132, "ExternalMcpTurnCapacityRecovery", Migration0132],
+  [133, "ExternalAgentProfiles", Migration0133],
+  [134, "CapabilityEvidence", Migration0134],
+  [135, "ExternalAgentLifecycle", Migration0135],
+  [136, "CapabilityEvidenceWithdrawal", Migration0136],
+  [137, "ExternalAgentRevisionMembership", Migration0137],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

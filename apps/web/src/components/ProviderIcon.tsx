@@ -75,6 +75,7 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
   omp: OmpIcon,
+  external: PiIcon,
 };
 
 export function providerIconToneClassName(
@@ -91,7 +92,7 @@ export function providerIconToneClassName(
 }
 
 export type ProviderIconProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
-  readonly provider: ProviderKind | null | undefined;
+  readonly provider: ProviderKind | "external" | null | undefined;
   readonly fallback?: ReactNode;
   readonly tone?: ProviderIconTone;
 };
@@ -107,7 +108,9 @@ export function ProviderIcon({
   const fallback = fallbackProp ?? null;
   const tone = toneProp ?? "default";
   const ariaHidden = ariaHiddenProp ?? true;
-  if (provider === null || provider === undefined) {
+  // External agent profiles have no built-in provider glyph; the caller
+  // supplies a fallback icon (or null) for them.
+  if (provider === null || provider === undefined || provider === "external") {
     return fallback;
   }
 

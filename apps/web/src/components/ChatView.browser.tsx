@@ -4512,10 +4512,15 @@ describe("ChatView transcript geometry (full app)", () => {
           providerHandoff: true,
           modelSelection: { provider: "claudeAgent" },
         });
-        // The handoff waits for its durable outcome, not just command admission.
-        // Settle it before unmounting so its timeout cannot toast over a later test.
+        // Complete the real outcome waiter before unmounting. Merely recording
+        // the command leaves its 120-second timeout alive; it can emit an error
+        // toast into an unrelated later test's newly mounted provider.
         await vi.waitFor(() =>
-          expect(fixture.snapshot.threads[0]?.modelSelection.provider).toBe("claudeAgent"),
+          expect(
+            fixture.snapshot.threads[0]?.activities.some(
+              (activity) => activity.kind === "provider.handoff",
+            ),
+          ).toBe(true),
         );
         // Same thread: no new thread, and the route stays put.
         expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
@@ -4581,8 +4586,8 @@ describe("ChatView transcript geometry (full app)", () => {
                   ...thread,
                   ...(outcome === "completed"
                     ? {
-                        modelSelection: {
-                          provider: targetProvider,
+                        modelSelection: modelSelection ?? {
+                          provider: "claudeAgent",
                           model: targetModel,
                         },
                         session: {

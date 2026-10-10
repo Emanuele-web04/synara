@@ -1,9 +1,11 @@
+import type { ProviderOptions } from "./providerModelOptions";
 // FILE: composerDraftModels.ts
 // Purpose: Normalizes provider-scoped model selections and resolves effective composer models.
 // Exports: Model state helpers used by persistence, actions, and the public facade.
 
 import {
   GROK_REASONING_EFFORT_OPTIONS,
+  ExternalAgentModelSelection,
   ProviderInstanceId,
   ProviderKind,
   type ClaudeCodeEffort,
@@ -63,6 +65,8 @@ export type LegacyCodexFields = typeof LegacyCodexFields.Type;
 
 const ANTIGRAVITY_REASONING_EFFORT_SET = new Set(["low", "medium", "high", "thinking"]);
 
+type BuiltInModelSelection = Exclude<ModelSelection, { readonly provider: "external" }>;
+
 export interface EffectiveComposerModelState {
   selectedModel: ModelSlug;
   modelOptions: ProviderModelOptions | null;
@@ -71,9 +75,10 @@ export interface EffectiveComposerModelState {
 function mergeProviderModelOptionsFromSelections(
   ...selections: ReadonlyArray<ModelSelection | null | undefined>
 ): ProviderModelOptions | null {
-  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {};
+  const result: Partial<Record<ProviderKind, ProviderOptions>> = {};
   for (const selection of selections) {
     if (!selection) continue;
+    if (selection.provider === "external") continue;
     if (selection.options) {
       result[selection.provider] = selection.options;
     } else {
@@ -122,7 +127,7 @@ function deriveEffectiveComposerModelOptions(input: {
     return baseOptions;
   }
 
-  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = baseOptions
+  const result: Partial<Record<ProviderKind, ProviderOptions>> = baseOptions
     ? { ...baseOptions }
     : {};
   for (const selection of Object.values(draftSelections)) {
@@ -210,9 +215,9 @@ function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
 }
 
 export function makeModelSelection(
-  provider: ProviderKind,
+  provider: Exclude<ProviderKind, "external">,
   model: string,
-  options?: ProviderModelOptions[ProviderKind],
+  options?: ProviderOptions | null | undefined,
   supportsAutoMode?: boolean,
   instanceId?: ProviderInstanceId | null | undefined,
 ): ModelSelection {
@@ -553,6 +558,14 @@ export function normalizeModelSelection(
   if (!model) {
     return null;
   }
+  if (provider === "external") {
+    const decoded = Schema.decodeUnknownOption(ExternalAgentModelSelection)({
+      ...candidate,
+      provider,
+      model,
+    });
+    return decoded._tag === "Some" ? decoded.value : null;
+  }
   const modelOptions = migratedGeminiSelection
     ? null
     : normalizeProviderModelOptions(
@@ -603,6 +616,7 @@ export function reconcileProviderScopedModelSelection(
   requested: ModelSelection,
   current: ModelSelection | null | undefined,
 ): ModelSelection {
+  if (requested.provider === "external") return requested;
   if (
     requested.options !== undefined ||
     !modelSelectionMatchesProviderInstance(current, requested.provider, requested.instanceId)
@@ -702,8 +716,8 @@ export function legacySyncModelSelectionOptions(
   modelSelection: ModelSelection | null,
   modelOptions: ProviderModelOptions | null | undefined,
 ): ModelSelection | null {
-  if (modelSelection === null) {
-    return null;
+  if (modelSelection === null || modelSelection.provider === "external") {
+    return modelSelection;
   }
   const normalizedOptions =
     modelSelection.provider === "grok"
@@ -722,7 +736,7 @@ export function legacyMergeModelSelectionIntoProviderModelOptions(
   modelSelection: ModelSelection | null,
   currentModelOptions: ProviderModelOptions | null | undefined,
 ): ProviderModelOptions | null {
-  if (modelSelection?.options === undefined) {
+  if (modelSelection?.provider === "external" || modelSelection?.options === undefined) {
     return normalizeProviderModelOptions(currentModelOptions);
   }
   return legacyReplaceProviderModelOptions(
@@ -734,8 +748,8 @@ export function legacyMergeModelSelectionIntoProviderModelOptions(
 
 function legacyReplaceProviderModelOptions(
   currentModelOptions: ProviderModelOptions | null | undefined,
-  provider: ProviderKind,
-  nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
+  provider: Exclude<ProviderKind, "external">,
+  nextProviderOptions: ProviderOptions | null | undefined,
 ): ProviderModelOptions | null {
   const { [provider]: _discardedProviderModelOptions, ...otherProviderModelOptions } =
     currentModelOptions ?? {};
@@ -767,7 +781,7 @@ export function legacyToModelSelectionByProvider(
             provider,
             model,
             provider === "grok" ? normalizeGrokModelOptions(model, modelOptions.grok) : options,
-          );
+          ) as BuiltInModelSelection;
         }
       }
     }
@@ -939,7 +953,9 @@ export function resolvePreferredComposerModelSelection(input: {
 
   // Pi and OMP have no static default model, so an empty draft falls back to Codex.
   const fallbackProvider =
-    preferredProvider === "pi" || preferredProvider === "omp" ? "codex" : preferredProvider;
+    preferredProvider === "pi" || preferredProvider === "omp" || preferredProvider === "external"
+      ? "codex"
+      : preferredProvider;
   const fallbackInstanceId =
     fallbackProvider === preferredProvider ? preferredInstanceId : fallbackProvider;
 

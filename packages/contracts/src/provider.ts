@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 import {
   ApprovalRequestId,
+  AgentProfileId,
   EventId,
   IsoDateTime,
   ProviderItemId,
@@ -36,6 +37,8 @@ const ProviderSessionStatus = Schema.Literals([
 
 export const ProviderSession = Schema.Struct({
   provider: ProviderDriverKind,
+  /** Live profile identity, including non-resumable CLI sessions. */
+  externalAgentProfileId: Schema.optional(AgentProfileId),
   providerInstanceId: Schema.optional(ProviderInstanceId),
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,

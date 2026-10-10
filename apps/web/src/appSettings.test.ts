@@ -389,6 +389,7 @@ describe("resolveAppModelSelection", () => {
           opencode: [],
           pi: [],
           omp: [],
+          external: [],
         },
         "galapagos-alpha",
       ),
@@ -410,6 +411,7 @@ describe("resolveAppModelSelection", () => {
           opencode: [],
           pi: [],
           omp: [],
+          external: [],
         },
         "",
       ),
@@ -1557,6 +1559,7 @@ describe("provider-indexed custom model settings", () => {
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
     customOmpModels: [],
+    customExternalModels: [],
   } as const;
 
   it("stores default-instance custom models in the provider instance map", () => {
@@ -1739,6 +1742,7 @@ describe("provider-indexed custom model settings", () => {
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
       omp: [],
+      external: [],
     });
   });
 
@@ -2059,6 +2063,7 @@ describe("AppSettingsSchema", () => {
       customOpenCodeModels: [],
       customPiModels: [],
       customOmpModels: [],
+      customExternalModels: [],
     });
   });
 
