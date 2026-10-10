@@ -35,6 +35,33 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("recovers the stored fork cutoff from persisted rows on every continuation read", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-10T10:00:00.000Z";
+      const threadId = asThreadId("persisted-fork");
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('fork-project', 'Fork', '/tmp/fork-project', '[]', ${now}, ${now})`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, fork_source_thread_id, fork_source_message_id, created_at, updated_at)
+        VALUES (${threadId}, 'fork-project', 'Fork', '{"provider":"codex","model":"gpt-5"}', 'fork-source', 'selected-message', ${now}, ${now})`;
+      const detail = Option.getOrThrow(yield* query.getThreadDetailById(threadId));
+      const shell = Option.getOrThrow(yield* query.getThreadShellById(threadId));
+      const command = (yield* query.getCommandReadModel()).threads.find(
+        (thread) => thread.id === threadId,
+      )!;
+      const snapshot = (yield* query.getSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      )!;
+      for (const thread of [detail, shell, command, snapshot]) {
+        assert.equal(thread.forkSourceThreadId, "fork-source");
+        assert.equal(thread.forkSourceMessageId, "selected-message");
+      }
+    }),
+  );
+
   it.effect("returns a multi-folder project's extra folders from every project read", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;

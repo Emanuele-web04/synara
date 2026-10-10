@@ -1358,6 +1358,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentNickname: null,
           subagentRole: null,
           forkSourceThreadId: command.sourceThreadId,
+          // Resolved against the source lazily, at the provider fork: an
+          // unknown or mid-turn point falls back to the imported transcript.
+          ...(command.throughMessageId !== undefined
+            ? { forkSourceMessageId: command.throughMessageId }
+            : {}),
           sidechatSourceThreadId: command.sidechatSourceThreadId,
           sidechatLastActivityAt: command.sidechatSourceThreadId ? command.createdAt : null,
           sidechatExpiredAt: null,

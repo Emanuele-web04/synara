@@ -22,7 +22,9 @@ New thread (⌘N on macOS, Ctrl+N elsewhere) reopens an unsent draft. Once a sen
 including worktree preparation, it opens another draft while the original send continues.
 The task appears in the sidebar before Git preparation finishes, with a **Preparing worktree**
 indicator. Its provider session starts only after the worktree is ready. If preparation fails or
-is cancelled, the task and its prompt remain available for retry.
+is cancelled, the task and its prompt remain available for retry. Pressing Send again while a
+message for the same task is still being sent shows a notice and keeps the new text in the
+composer; it is not sent twice.
 
 ## The main surfaces
 
@@ -140,6 +142,9 @@ A turn is one cycle inside that task:
 
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
+
+Chat code blocks above 250,000 characters display their complete source as plain text,
+using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
 
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
@@ -334,6 +339,10 @@ follow a successful commit or push, so inspect the current branch before retryin
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
+
+File Undo and thread revert refuse to change a workspace while another thread has an active or
+pending turn in that same Git checkout. Symlinks and nested folders share this protection;
+separate Git worktrees remain independent. Stop the active turn before retrying Undo.
 
 Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;

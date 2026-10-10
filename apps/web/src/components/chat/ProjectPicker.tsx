@@ -50,6 +50,7 @@ import {
 } from "../ui/combobox";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { useSpacesUiStore } from "../../spacesUiStore";
+import { useCreateProjectDialogStore } from "../../createProjectDialogStore";
 
 interface ProjectPickerProps {
   align?: "start" | "center" | "end";
@@ -132,6 +133,10 @@ function joinDirectoryPath(rootPath: string, relativePath: string): string {
   return `${normalizedRoot}${separator}${normalizedRelative}`;
 }
 
+function hasNativeFolderPicker(): boolean {
+  return typeof window !== "undefined" && Boolean(window.desktopBridge?.pickFolder);
+}
+
 function getNavigatorPlatform(): string {
   const navigatorLike = globalThis.navigator as
     | (Navigator & { userAgentData?: { platform?: string } })
@@ -183,6 +188,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   const [directoryEntries, setDirectoryEntries] = useState<readonly ProjectDirectoryEntry[]>([]);
   const [resetTriggerFocused, setResetTriggerFocused] = useState(false);
   const resetInFlightRef = useRef(false);
+  const openCreateProjectDialog = useCreateProjectDialogStore((state) => state.setOpen);
   const isProjectSelectionMode = selectionMode === "project";
 
   const activeFolderOptions = useMemo(() => {
@@ -422,6 +428,16 @@ export const ProjectPicker = memo(function ProjectPicker({
 
   const handleAddNewProject = useCallback(async () => {
     if (isPicking) return;
+    // Without the desktop folder dialog the pick resolves to nothing. Hand off to the
+    // sidebar's Create project dialog (typed path, or clone) instead of doing nothing.
+    const handOffWithoutFolderDialog = () => {
+      if (onCreateProjectFromPath) {
+        setOpen(false);
+        openCreateProjectDialog(true);
+        return;
+      }
+      setErrorMessage("Choosing a folder needs the desktop app.");
+    };
     const api = readNativeApi();
     if (!api) {
       setErrorMessage("App is still connecting. Try again in a moment.");
@@ -434,6 +450,9 @@ export const ProjectPicker = memo(function ProjectPicker({
       const pickedPath = await api.dialogs.pickFolder();
       if (!pickedPath) {
         setIsPicking(false);
+        if (!hasNativeFolderPicker()) {
+          handOffWithoutFolderDialog();
+        }
         return;
       }
       if (onCreateProjectFromPath) {
@@ -449,7 +468,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       setIsPicking(false);
       setErrorMessage(error instanceof Error ? error.message : "Unable to open the folder picker.");
     }
-  }, [isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot]);
+  }, [isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot, openCreateProjectDialog]);
 
   const handleResetToHome = useCallback(() => {
     if (resetInFlightRef.current) {
