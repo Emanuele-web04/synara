@@ -57,7 +57,30 @@ describe("showFileReferenceContextMenu", () => {
 
     expect(harness.showContextMenu).toHaveBeenCalledWith(
       [
-        { id: "reveal-in-folder", label: "Open in Explorer" },
+        { id: "reveal-in-folder", label: "Show in Explorer" },
+        { id: "copy-path", label: "Copy path" },
+      ],
+      { x: 12, y: 34 },
+    );
+  });
+
+  it.each([
+    ["MacIntel", "Reveal in Finder"],
+    ["Win32", "Show in Explorer"],
+    ["Linux x86_64", "Show in folder"],
+  ])("labels the file reveal action per platform (%s)", async (platform, label) => {
+    vi.stubGlobal("navigator", { platform });
+
+    await showFileReferenceContextMenu({
+      path: "/repo/output/video.mp4",
+      revealPath: "/repo/output/video.mp4",
+      position: { x: 12, y: 34 },
+      onReferenceInChat: undefined,
+    });
+
+    expect(harness.showContextMenu).toHaveBeenCalledWith(
+      [
+        { id: "reveal-in-folder", label },
         { id: "copy-path", label: "Copy path" },
       ],
       { x: 12, y: 34 },
@@ -109,8 +132,33 @@ describe("showFileReferenceContextMenu", () => {
 
     expect(harness.toast).toHaveBeenCalledWith({
       type: "error",
-      title: "Unable to reveal file",
+      title: "Unable to show in Explorer",
       description: "Folder not found: /repo/output/video.mp4",
+    });
+  });
+
+  it.each([
+    ["MacIntel", "Unable to reveal in Finder"],
+    ["Win32", "Unable to show in Explorer"],
+    ["Linux x86_64", "Unable to show in folder"],
+  ])("titles the reveal failure per platform (%s)", async (platform, title) => {
+    vi.stubGlobal("navigator", { platform });
+    harness.clicked = "reveal-in-folder";
+    harness.showInFolder.mockRejectedValue(
+      new Error("File or folder not found: /repo/output/video.mp4"),
+    );
+
+    await showFileReferenceContextMenu({
+      path: "/repo/output/video.mp4",
+      revealPath: "/repo/output/video.mp4",
+      position: { x: 12, y: 34 },
+      onReferenceInChat: undefined,
+    });
+
+    expect(harness.toast).toHaveBeenCalledWith({
+      type: "error",
+      title,
+      description: "File or folder not found: /repo/output/video.mp4",
     });
   });
 

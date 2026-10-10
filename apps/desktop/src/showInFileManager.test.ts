@@ -30,11 +30,18 @@ describe("showInFileManager", () => {
     expect(shell.openPath).toHaveBeenCalledOnce();
   });
 
-  it("throws the openPath error message", async () => {
+  it("throws a non-empty openPath error message", async () => {
     const shell = makeShell("No application knows how to open it.");
     await expect(showInFileManager("/Users/me/code", true, "darwin", shell)).rejects.toThrow(
       "No application knows how to open it.",
     );
+    expect(shell.showItemInFolder).not.toHaveBeenCalled();
+  });
+
+  it("preserves empty-string success semantics for a whitespace response", async () => {
+    const shell = makeShell("   ");
+    await expect(showInFileManager("/Users/me/code", true, "darwin", shell)).resolves.toBeUndefined();
+    expect(shell.openPath).toHaveBeenCalledExactlyOnceWith("/Users/me/code");
     expect(shell.showItemInFolder).not.toHaveBeenCalled();
   });
 });
