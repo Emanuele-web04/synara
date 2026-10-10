@@ -44,8 +44,8 @@ export function resolveBrowserRuntimePresentation(input: {
   );
   return {
     surface: native ? ("native" as const) : ("renderer" as const),
-    bounds,
-    pageZoomFactor: native && floating ? scale * desktopZoom : 1,
+    bounds: native || !floating ? bounds : resolveDesktopDipRectFromCssRect(rect, desktopZoom),
+    pageZoomFactor: floating ? scale * desktopZoom : 1,
   };
 }
 

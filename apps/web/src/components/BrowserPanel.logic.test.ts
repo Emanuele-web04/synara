@@ -78,8 +78,8 @@ describe("native browser presentation ownership", () => {
       }),
     ).toEqual({
       surface: "renderer",
-      bounds: { x: 20, y: 40, width: 1280, height: 800 },
-      pageZoomFactor: 1,
+      bounds: { x: 20, y: 30, width: 320, height: 220 },
+      pageZoomFactor: 0.25,
     });
   });
 });
