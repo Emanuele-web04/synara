@@ -17,8 +17,7 @@ import { toastManager } from "~/components/ui/toast";
 import { abbreviateHomePath } from "~/components/sidebarHoverCardAnchors";
 import type { useProjectAgent } from "~/components/chat/project/useProjectAgent";
 import { FolderOpenIcon } from "~/lib/icons";
-import { getNavigatorPlatform } from "~/lib/utils";
-import { getRevealInFolderLabel } from "~/lib/fileReferenceContextMenu";
+import { resolveFileManagerActionLabel } from "~/lib/fileManagerNaming";
 import { revealFolderInShell } from "~/lib/revealFolder";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
@@ -48,7 +47,7 @@ export function GroupEnvironmentSection(props: {
     .filter((project): project is Project => project !== undefined);
   const missingLinkedIds = linkedProjectIds.filter((id) => !projectById.has(id));
 
-  const revealLabel = getRevealInFolderLabel(getNavigatorPlatform());
+  const revealLabel = resolveFileManagerActionLabel("folder");
   const canReveal =
     typeof window !== "undefined" && Boolean(window.desktopBridge) && props.workspacePath;
   const canPickFolder = typeof window !== "undefined" && Boolean(window.desktopBridge?.pickFolder);
