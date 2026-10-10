@@ -152,6 +152,16 @@ export const ExternalMcpCreateTaskInput = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalMcpCreateTaskInput = typeof ExternalMcpCreateTaskInput.Type;
 
+export const ExternalMcpSendTaskMessageInput = Schema.Struct({
+  requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH)),
+  threadId: ThreadId,
+  message: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_PROMPT_CHARS)),
+  mode: Schema.optional(Schema.Literals(["queue", "steer"])).pipe(
+    Schema.withDecodingDefault(() => "queue"),
+  ),
+}).annotate({ parseOptions: { onExcessProperty: "error" } });
+export type ExternalMcpSendTaskMessageInput = typeof ExternalMcpSendTaskMessageInput.Type;
+
 export const ExternalMcpReadTaskInput = Schema.Struct({
   threadId: ThreadId,
   cursor: Schema.optional(Schema.String),

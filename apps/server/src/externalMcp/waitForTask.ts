@@ -77,6 +77,15 @@ export const waitForExternalMcpTaskState = Effect.fn(function* (input: {
   readonly timeoutMs: number;
   readonly assertActive: () => Effect.Effect<void, GatewayToolError>;
   readonly projectionTurns: Pick<ProjectionTurnRepositoryShape, "getManyWaitSnapshot">;
+  readonly resolveRequestRun?: () => Effect.Effect<
+    {
+      readonly turnId: string | null;
+      readonly state: ExternalMcpWaitState;
+      readonly blocked: boolean;
+      readonly errorCode: string | null;
+    },
+    unknown
+  >;
   readonly resolveLatestTurn?: () => Effect.Effect<
     { readonly runId: string | null; readonly state: ExternalMcpWaitState } | null,
     unknown
@@ -84,13 +93,30 @@ export const waitForExternalMcpTaskState = Effect.fn(function* (input: {
 }) {
   const deadline = Date.now() + input.timeoutMs;
   const threadId = ThreadId.makeUnsafe(input.threadId);
-  let runId = input.runId === null ? null : TurnId.makeUnsafe(input.runId);
+  let runId =
+    input.runId === null || input.resolveRequestRun ? null : TurnId.makeUnsafe(input.runId);
   let state = runId === null && input.initialState === "idle" ? "pending" : input.initialState;
+  let blocked = false;
+  let errorCode: string | null = null;
+  const resolveRequest = Effect.gen(function* () {
+    if (!input.resolveRequestRun) return;
+    const request = yield* input.resolveRequestRun();
+    runId = request.turnId === null ? null : TurnId.makeUnsafe(request.turnId);
+    state = request.state;
+    blocked = request.blocked;
+    errorCode = request.errorCode;
+  });
+  if (input.resolveRequestRun) {
+    yield* input.assertActive();
+    yield* resolveRequest;
+  }
   let pollDelayMs = 200;
-  while (!isTerminalWaitState(state) && Date.now() < deadline) {
+  while (!isTerminalWaitState(state) && !blocked && Date.now() < deadline) {
     yield* Effect.sleep(Math.min(pollDelayMs, Math.max(1, deadline - Date.now())));
     yield* input.assertActive();
-    if (runId === null && input.resolveLatestTurn) {
+    if (input.resolveRequestRun) {
+      yield* resolveRequest;
+    } else if (runId === null && input.resolveLatestTurn) {
       const latest = yield* input.resolveLatestTurn();
       if (latest !== null) {
         runId = latest.runId === null ? null : TurnId.makeUnsafe(latest.runId);
@@ -116,9 +142,12 @@ export const waitForExternalMcpTaskState = Effect.fn(function* (input: {
   }
   yield* input.assertActive();
   return {
-    runId,
+    runId: input.resolveRequestRun ? input.runId : runId,
+    turnId: runId,
     state,
     terminal: isTerminalWaitState(state),
-    timedOut: !isTerminalWaitState(state),
+    timedOut: !isTerminalWaitState(state) && !blocked,
+    blocked,
+    errorCode,
   } as const;
 });

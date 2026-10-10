@@ -4942,7 +4942,11 @@ describe("ProviderCommandReactor", () => {
 
       await respondToReview(harness, review, "continue");
 
-      expect((await readHarnessThread(harness))?.claudeCacheReview).toBeNull();
+      const recoveredThread = await readHarnessThread(harness);
+      expect(recoveredThread?.claudeCacheReview).toBeNull();
+      expect(
+        recoveredThread?.messages.find((message) => message.id === "cache-held-message"),
+      ).toMatchObject({ turnId: "turn-1", startsNewTurn: true });
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
       expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
         input: "Continue with this exact message",
@@ -11502,7 +11506,7 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-image-edit-assistant-complete"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         messageId: asMessageId("assistant-image-edit"),
-        turnId: asTurnId("turn-image-edit"),
+        turnId: asTurnId("turn-1"),
         createdAt: now,
       }),
     );
@@ -16060,6 +16064,12 @@ describe("ProviderCommandReactor", () => {
   it("steers Debug turns immediately with one prompt prefix", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    harness.steerTurn.mockImplementationOnce(() =>
+      Effect.succeed({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-running"),
+      }),
+    );
 
     harness.setRuntimeSessionTurnState({
       threadId: "thread-1",
@@ -16120,7 +16130,7 @@ describe("ProviderCommandReactor", () => {
     const message = (
       await Effect.runPromise(harness.engine.getReadModel())
     ).threads[0]?.messages.find((entry) => entry.id === "msg-steer-codex");
-    expect(message?.turnId).toBeNull();
+    expect(message?.turnId).toBe("turn-running");
     expect(message?.startsNewTurn).toBe(false);
   });
 

@@ -1672,6 +1672,24 @@ export const ThreadTurnStartCommand = Schema.Struct({
       recordedAt: IsoDateTime,
     }),
   ),
+  // Server-only external-task authorization, checked at serialized admission.
+  // ClientThreadTurnStartCommand deliberately cannot set this field.
+  taskWritePrecondition: Schema.optional(
+    Schema.Struct({
+      projectId: ProjectId,
+      projectWorkspaceRoot: TrimmedNonEmptyString,
+      envMode: ThreadEnvironmentMode,
+      branch: Schema.NullOr(TrimmedNonEmptyString),
+      worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+      workingDirectory: Schema.NullOr(TrimmedNonEmptyString),
+      runtimeMode: RuntimeMode,
+      interactionMode: ProviderInteractionMode,
+      modelSelection: ModelSelection,
+      sessionProviderInstanceId: Schema.NullOr(ProviderInstanceId),
+      sessionRuntimeMode: Schema.NullOr(RuntimeMode),
+      gatewayOperationId: TrimmedNonEmptyString,
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 

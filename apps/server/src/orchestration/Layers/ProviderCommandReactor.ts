@@ -1537,7 +1537,9 @@ const make = Effect.gen(function* () {
     readonly requestId?: string;
     readonly lifecycleGeneration?: string;
     readonly responseCommandId?: CommandId;
-    readonly settlementStatus?: "retryable" | "uncertain";
+    readonly messageId?: MessageId;
+    readonly sourceEventSequence?: number;
+    readonly settlementStatus?: "retryable" | "uncertain" | "rejected";
   }) =>
     orchestrationEngine.dispatch({
       type: "thread.activity.append",
@@ -1553,6 +1555,10 @@ const make = Effect.gen(function* () {
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(input.lifecycleGeneration ? { lifecycleGeneration: input.lifecycleGeneration } : {}),
           ...(input.responseCommandId ? { responseCommandId: input.responseCommandId } : {}),
+          ...(input.messageId ? { messageId: input.messageId } : {}),
+          ...(input.sourceEventSequence !== undefined
+            ? { sourceEventSequence: input.sourceEventSequence }
+            : {}),
           ...(input.settlementStatus ? { settlementStatus: input.settlementStatus } : {}),
         },
         turnId: input.turnId,
@@ -4477,6 +4483,9 @@ const make = Effect.gen(function* () {
           kind: "provider.turn.start.failed",
           summary: "Provider turn start failed",
           detail: `User message '${event.payload.messageId}' was not found for turn start request.`,
+          messageId: event.payload.messageId,
+          sourceEventSequence: deliveryEventSequence ?? event.sequence,
+          settlementStatus: "rejected",
           turnId: null,
           createdAt: event.payload.createdAt,
         });
@@ -4668,6 +4677,11 @@ const make = Effect.gen(function* () {
                     kind: "provider.turn.start.failed",
                     summary: "Provider turn start failed",
                     detail,
+                    messageId: message.id,
+                    sourceEventSequence: deliveryEventSequence ?? event.sequence,
+                    ...(classifyProviderAttemptOutcome(Exit.failCause(cause))._tag === "rejected"
+                      ? { settlementStatus: "rejected" as const }
+                      : {}),
                     turnId: null,
                     createdAt: event.payload.createdAt,
                   });
@@ -4751,11 +4765,10 @@ const make = Effect.gen(function* () {
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
-      // A requested steer can still become a separate queued turn (for
-      // providers without native steering, or if the live turn already
-      // settled). Persist that effective boundary while leaving native steer
-      // continuations unbound to a new turn.
-      if (startedTurn && event.payload.dispatchMode === "steer" && !isNativeSteer) {
+      // Persist the exact accepted run, including native steering into an
+      // existing turn. bind-turn preserves the effective startsNewTurn boundary;
+      // a native continuation must not acquire a new chronological group.
+      if (startedTurn) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.user.bind-turn",
           commandId: CommandId.makeUnsafe(
