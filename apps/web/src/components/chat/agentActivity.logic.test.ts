@@ -57,6 +57,31 @@ describe("deriveAgentActivityTimelineState", () => {
     expect(state.detailById.get("agent-reasoning:reasoning-1")?.entries).toHaveLength(2);
   });
 
+  it("orders a reasoning trace row by its first update, time and sequence alike", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "reasoning-1",
+        label: "Reasoning update",
+        tone: "info",
+        sequence: 10,
+        createdAt: "2026-06-05T00:00:01.000Z",
+      }),
+      workEntry({
+        id: "reasoning-2",
+        label: "Reasoning update",
+        tone: "info",
+        sequence: 30,
+        createdAt: "2026-06-05T00:00:09.000Z",
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries[0]).toMatchObject({
+      id: "agent-reasoning:reasoning-1",
+      createdAt: "2026-06-05T00:00:01.000Z",
+      sequence: 10,
+    });
+  });
+
   it("keeps canonical reasoning tool calls as separate timeline rows", () => {
     const state = deriveAgentActivityTimelineState([
       workEntry({

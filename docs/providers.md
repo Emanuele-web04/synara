@@ -248,6 +248,15 @@ turn active for recovery to retry.
 Rollback commits a cut at a user-turn boundary with provider file restoration disabled because
 Synara owns workspace checkpoints.
 
+## Claude Monitor notifications
+
+Claude Monitor can wake a session with output batches that the SDK does not forward.
+Synara reads the bounded session-transcript tail to recover those notifications without
+splitting the assistant reply. Each notification keeps its timestamp and task identity.
+The transcript shows a compact Monitor update or terminal outcome; its output is available
+in the shared detail disclosure. Failed and stopped outcomes stay explicit. Updates do not
+mean the Monitor finished, and tool-only notifications do not enable assistant auto-follow.
+
 ## Provider sessions
 
 Use [Import projects](project-import.md) to bring local Codex and Claude Code projects and

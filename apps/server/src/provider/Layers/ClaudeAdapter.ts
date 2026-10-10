@@ -171,6 +171,11 @@ import {
   readClaudeWorkflowOutputText,
   type ClaudeWorkflowRuntimeState,
 } from "../claudeWorkflowRuntime.ts";
+import {
+  makeClaudeMonitorEventCursor,
+  readClaudeMonitorEvents,
+  type ClaudeMonitorEventCursor,
+} from "../claudeMonitorEvents.ts";
 import { buildClaudeInstanceProcessEnv } from "../claudeEnvironment.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
@@ -514,6 +519,11 @@ interface ClaudeSessionContext {
   // seed the set because they can race the aggregate snapshot and suppress its
   // "Moved to background" notice entirely.
   readonly knownBackgroundTaskIds: Set<string>;
+  // Turn that was running when each task started. Task messages can arrive
+  // after that turn ended (a stopped turn's subagents report "stopped", a
+  // background task finishes later) and must stay attributed to it rather
+  // than to whatever turn is active by then.
+  readonly taskTurnIds: Map<string, TurnId>;
   // Task ids with provider-terminal evidence. Agent-scoped human interactions
   // are cancelled only on this evidence (or whole-session stop), never merely
   // because their parent foreground turn completed.
@@ -556,6 +566,10 @@ interface ClaudeSessionContext {
   // Poller state per workflow task id, kept reachable so settle can backfill
   // runtime-only fields (effort) into the final output-file snapshots.
   readonly workflowRuntimeStates: Map<string, ClaudeWorkflowRuntimeState>;
+  // Root contexts only: where the CLI writes this session's transcript, and the
+  // read position for Monitor events the SDK stream does not forward.
+  readonly claudeConfigDir?: string;
+  readonly monitorEventCursor?: ClaudeMonitorEventCursor;
   // Set on subagent-scoped contexts only: stamps providerThreadId (the Task
   // tool_use_id) + providerParentThreadId on every runtime event this context emits.
   readonly subagentRefs?: {
@@ -1114,6 +1128,18 @@ function resolveSelectedClaudeThinkingToggle(
 
 function asCanonicalTurnId(value: TurnId): TurnId {
   return value;
+}
+
+// Task events belong to the turn that started the task, falling back to the
+// active turn for tasks this session never saw start.
+function taskTurnIdField(
+  context: Pick<ClaudeSessionContext, "taskTurnIds" | "turnState">,
+  taskId: string,
+): { readonly turnId?: TurnId } {
+  const turnId =
+    context.taskTurnIds.get(taskId) ??
+    (context.turnState ? asCanonicalTurnId(context.turnState.turnId) : undefined);
+  return turnId ? { turnId } : {};
 }
 
 function asRuntimeRequestId(value: ApprovalRequestId): RuntimeRequestId {
@@ -3874,6 +3900,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pendingSubagentSteers: new Map(),
           pendingSubagentStops: new Set(),
           knownBackgroundTaskIds: new Set(),
+          taskTurnIds: new Map(),
           terminalTaskIds: new Set(),
           settledSubagentToolUseIds: new Map(),
           subagentToolOwners: new Map(),
@@ -4661,6 +4688,52 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    // Shows the Monitor events that woke the agent into the current turn. The SDK
+    // stream omits them, so they are read back from the session transcript. The
+    // read runs beside the stream so file I/O never reorders stream handling.
+    const emitMonitorEvents = (context: ClaudeSessionContext): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const cursor = context.monitorEventCursor;
+        const sessionId = context.resumeSessionId;
+        if (!cursor || !context.turnState || !sessionId) {
+          return;
+        }
+        const turnId = asCanonicalTurnId(context.turnState.turnId);
+        yield* Effect.gen(function* () {
+          const events = yield* readClaudeMonitorEvents(fileSystem, cursor, {
+            sessionId,
+            configDir: context.claudeConfigDir,
+            notBefore: context.startedAt,
+          });
+          for (const event of events) {
+            if (context.stopped) return;
+            const stamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent(context, {
+              type: "runtime.warning",
+              eventId: stamp.eventId,
+              provider: PROVIDER,
+              // The notification time places the row above the reply it prompted.
+              createdAt: event.createdAt,
+              threadId: context.session.threadId,
+              turnId,
+              payload: {
+                message: event.message,
+                detail: {
+                  type: "system",
+                  subtype: "monitor_event",
+                  task_id: event.taskId,
+                  notificationId: event.id,
+                  name: event.name,
+                  output: event.output,
+                  outcome: event.outcome,
+                },
+              },
+              providerRefs: nativeProviderRefs(context),
+            });
+          }
+        }).pipe(Effect.forkIn(adapterScope));
+      });
+
     // Auto-start a synthetic turn for messages that arrive without an active turn
     // (e.g., background agent/subagent responses between user prompts).
     const ensureSyntheticTurn = (context: ClaudeSessionContext): Effect.Effect<void> =>
@@ -4711,6 +4784,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             payload: {},
           },
         });
+        // A turn without a user prompt may have been started by a Monitor event.
+        yield* emitMonitorEvents(context);
       });
 
     // Transcript marker on the child thread, emitted only at actual delivery
@@ -4988,6 +5063,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         if (status === "failed") {
           yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
+        }
+
+        // Retry in case the CLI had not yet written the notification at turn start.
+        if (message.origin?.kind === "task-notification") {
+          yield* emitMonitorEvents(context);
         }
 
         yield* completeTurn(context, status, errorMessage, message);
@@ -5271,9 +5351,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             provider: PROVIDER,
             createdAt: taskStamp.createdAt,
             threadId: owner.target.session.threadId,
-            ...(owner.target.turnState
-              ? { turnId: asCanonicalTurnId(owner.target.turnState.turnId) }
-              : {}),
+            ...(owner.target === context
+              ? taskTurnIdField(context, message.task_id)
+              : owner.target.turnState
+                ? { turnId: asCanonicalTurnId(owner.target.turnState.turnId) }
+                : {}),
             payload: {
               taskId: RuntimeTaskId.makeUnsafe(message.task_id),
               ...(status !== undefined ? { status } : {}),
@@ -5494,6 +5576,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           case "task_started": {
             context.terminalTaskIds.delete(message.task_id);
+            if (context.turnState && !context.taskTurnIds.has(message.task_id)) {
+              context.taskTurnIds.set(message.task_id, asCanonicalTurnId(context.turnState.turnId));
+            }
             // Resuming an existing agent (SendMessage) restarts its task id under
             // the new tool call. Alias that call to the original Task tool_use_id
             // so the resumed run reuses its child thread instead of a new one.
@@ -5654,6 +5739,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const startedTaskToolUseId = startedOwner.run?.toolUseId ?? message.tool_use_id;
             yield* offerRuntimeEvent(startedOwner.target, {
               ...baseFor(startedOwner.target),
+              ...(startedOwner.target === context ? taskTurnIdField(context, message.task_id) : {}),
               type: "task.started",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
@@ -5702,6 +5788,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const progressRun = progressOwner.run;
             yield* offerRuntimeEvent(progressOwner.target, {
               ...baseFor(progressOwner.target),
+              ...(progressOwner.target === context
+                ? taskTurnIdField(context, message.task_id)
+                : {}),
               type: "task.progress",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
@@ -5756,6 +5845,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             );
             yield* offerRuntimeEvent(completedOwner.target, {
               ...baseFor(completedOwner.target),
+              ...(completedOwner.target === context
+                ? taskTurnIdField(context, message.task_id)
+                : {}),
               type: "task.completed",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
@@ -5769,6 +5861,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(completedOwner.run ? { toolUseId: completedOwner.run.toolUseId } : {}),
               },
             });
+            context.taskTurnIds.delete(message.task_id);
             context.liveWorkflowTaskIds.delete(message.task_id);
             context.knownWorkflowTaskIds.delete(message.task_id);
             context.workflowTaskIdByMemberTaskId.delete(message.task_id);
@@ -6200,11 +6293,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             provider: PROVIDER,
             createdAt: stamp.createdAt,
             threadId: context.session.threadId,
+            ...(context.taskTurnIds.has(taskId)
+              ? { turnId: context.taskTurnIds.get(taskId)! }
+              : {}),
             payload: { taskId: RuntimeTaskId.makeUnsafe(taskId), status: "stopped" },
             providerRefs: nativeProviderRefs(context),
           });
         }
         context.knownBackgroundTaskIds.clear();
+        context.taskTurnIds.clear();
 
         const updatedAt = yield* nowIso;
         context.session = {
@@ -7198,6 +7295,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             pendingSubagentSteers,
             pendingSubagentStops,
             knownBackgroundTaskIds: new Set(),
+            taskTurnIds: new Map(),
             terminalTaskIds: new Set(),
             settledSubagentToolUseIds: new Map(),
             subagentToolOwners: new Map(),
@@ -7211,6 +7309,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             workflowRuntimePollers: new Map(),
             workflowAgentLabels: new Map(),
             workflowRuntimeStates: new Map(),
+            ...(claudeSdkEnv.CLAUDE_CONFIG_DIR
+              ? { claudeConfigDir: claudeSdkEnv.CLAUDE_CONFIG_DIR }
+              : {}),
+            monitorEventCursor: makeClaudeMonitorEventCursor(),
           };
           installationContext = context;
           yield* Effect.gen(function* () {

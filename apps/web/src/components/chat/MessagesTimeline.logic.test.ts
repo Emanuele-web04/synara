@@ -978,26 +978,45 @@ describe("deriveMessagesTimelineRows", () => {
     expect(messageRow(rows, "report-1")?.durationStart).toBe("2026-01-01T00:01:00Z");
   });
 
-  it("opens a live turn woken by a background task with a Resumed header", () => {
-    const rows = deriveMessagesTimelineRows({
-      ...baseInput,
-      isWorking: true,
-      activeTurnInProgress: true,
-      activeTurnId: TurnId.makeUnsafe("turn-3"),
-      activeTurnStartedAt: "2026-01-01T00:02:00.500Z",
-      timelineEntries: wokenResponseEntries({ lastStreaming: true }),
-    });
+  it.each(["task", "monitor"])(
+    "opens a live turn woken by a %s with a Resumed header",
+    (wakeKind) => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        isWorking: true,
+        activeTurnInProgress: true,
+        activeTurnId: TurnId.makeUnsafe("turn-3"),
+        activeTurnStartedAt: "2026-01-01T00:02:00.500Z",
+        timelineEntries: wokenResponseEntries({ lastStreaming: true }).map((row) => {
+          if (wakeKind !== "monitor" || row.kind !== "work" || !row.entry.backgroundTaskCompletion)
+            return row;
+          const { backgroundTaskCompletion: completion, ...entry } = row.entry;
+          return {
+            ...row,
+            entry: {
+              ...entry,
+              monitorNotification: {
+                taskId: completion.taskId,
+                name: completion.description ?? "Monitor",
+                output: "CI finished",
+                outcome: "completed" as const,
+              },
+            },
+          };
+        }),
+      });
 
-    const headerIndex = rows.findIndex((row) => row.kind === "working-header");
-    const header = rows[headerIndex];
-    expect(header?.kind === "working-header" && header.resumedBy).toEqual([
-      { description: "Second", outcome: "finished" },
-    ]);
-    // It sits right after the previous turn, where the completion line was.
-    const previous = rows[headerIndex - 1];
-    expect(previous?.kind === "message" && previous.message.id).toBe("report-1");
-    expect(rows.some((row) => row.kind === "work" && row.id === "entry-done-2")).toBe(false);
-  });
+      const headerIndex = rows.findIndex((row) => row.kind === "working-header");
+      const header = rows[headerIndex];
+      expect(header?.kind === "working-header" && header.resumedBy).toEqual([
+        { description: "Second", outcome: "finished" },
+      ]);
+      // It sits right after the previous turn, where the completion line was.
+      const previous = rows[headerIndex - 1];
+      expect(previous?.kind === "message" && previous.message.id).toBe("report-1");
+      expect(rows.some((row) => row.kind === "work" && row.id === "entry-done-2")).toBe(false);
+    },
+  );
 
   it("keeps earlier responses folded while a background task wakes a new one", () => {
     const rows = deriveMessagesTimelineRows({

@@ -582,7 +582,7 @@ interface TimelineDiffMessage {
 /** A background task whose completion woke the agent into a new turn. */
 export interface TurnResumedBy {
   readonly description: string | null;
-  readonly outcome: "finished" | "failed" | "stopped";
+  readonly outcome: "finished" | "failed" | "stopped" | "updated";
 }
 
 /**
@@ -1022,7 +1022,8 @@ export function deriveMessagesTimelineRows(input: {
   const responseMessages = input.timelineEntries.flatMap((entry): TimelineDurationMessage[] =>
     entry.kind === "message"
       ? [entry.message]
-      : entry.kind === "work" && entry.entry.backgroundTaskCompletion
+      : entry.kind === "work" &&
+          (entry.entry.backgroundTaskCompletion || entry.entry.monitorNotification)
         ? [{ id: entry.id, role: "user", createdAt: entry.createdAt }]
         : [],
   );
@@ -1106,7 +1107,8 @@ export function deriveMessagesTimelineRows(input: {
           });
         } else if (
           isStandaloneWorkEntry(runEntry.entry) ||
-          runEntry.entry.backgroundTaskCompletion
+          runEntry.entry.backgroundTaskCompletion ||
+          runEntry.entry.monitorNotification
         ) {
           flushPendingWorkGroup();
           nextRows.push({
@@ -1406,7 +1408,10 @@ function findLiveTurnHeaderInsertion(
 // Returns the terminal assistant only when it is still the transcript tail.
 // A newer user message means the next turn has begun but has not produced text yet.
 function isBackgroundTaskCompletionRow(row: MessagesTimelineRow): boolean {
-  return row.kind === "work" && row.groupedEntries.some((entry) => entry.backgroundTaskCompletion);
+  return (
+    row.kind === "work" &&
+    row.groupedEntries.some((entry) => entry.backgroundTaskCompletion || entry.monitorNotification)
+  );
 }
 
 function findTailTerminalAssistantMessageId(
@@ -1683,10 +1688,14 @@ function collectResumedBy(
     if (!isBackgroundTaskCompletionRow(row) || row.kind !== "work") break;
     for (const entry of row.groupedEntries.toReversed()) {
       const completion = entry.backgroundTaskCompletion;
-      if (!completion) continue;
+      const monitor = entry.monitorNotification;
+      if (!completion && !monitor) continue;
       resumedBy.unshift({
-        description: completion.description,
-        outcome: completion.outcome ?? "finished",
+        description: completion?.description ?? monitor?.name ?? null,
+        outcome:
+          completion?.outcome ??
+          (monitor?.outcome === "completed" ? "finished" : monitor?.outcome) ??
+          "finished",
       });
     }
   }
