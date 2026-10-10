@@ -30,6 +30,18 @@ import {
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 
+// A "Show N more" toggle costs a row of its own, so hiding one or two rows
+// behind it saves nothing and only hides work. Lists collapse only when the
+// toggle would hide at least this many rows.
+export const MIN_HIDDEN_ROWS_TO_COLLAPSE = 3;
+
+// How many of `total` rows a list capped at `maxVisible` hides, or 0 when the
+// cap would hide too few rows to be worth a toggle.
+export function collapsibleHiddenRowCount(total: number, maxVisible: number): number {
+  const hidden = Math.max(0, total - Math.max(0, maxVisible));
+  return hidden >= MIN_HIDDEN_ROWS_TO_COLLAPSE ? hidden : 0;
+}
+
 export function canSubmitUserMessageEdit(input: {
   draft: string;
   allowEmpty: boolean;
@@ -202,7 +214,7 @@ export function capOpenWorkEntryRenderChunks(
     isFoldedWorkEntryChunk(chunk) ? [] : chunk.entries.filter(shouldCapEntry),
   );
   const maxVisibleEntries = Math.max(0, options.maxVisibleEntries);
-  const hiddenEntryCount = Math.max(0, openEntries.length - maxVisibleEntries);
+  const hiddenEntryCount = collapsibleHiddenRowCount(openEntries.length, maxVisibleEntries);
   const hasOverflow = hiddenEntryCount > 0;
 
   if (!hasOverflow || options.expanded) {

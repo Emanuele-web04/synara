@@ -114,6 +114,7 @@ import {
 import {
   canSubmitUserMessageEdit,
   capOpenWorkEntryRenderChunks,
+  collapsibleHiddenRowCount,
   isFoldedWorkEntryChunk,
   resolveWorkEntryChunkFold,
   chunkCollapsedTurnItems,
@@ -1546,7 +1547,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               </div>
             );
           }
-          const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
+          const hasOverflow =
+            collapsibleHiddenRowCount(groupedEntries.length, MAX_VISIBLE_WORK_LOG_ENTRIES) > 0;
           const visibleEntries =
             hasOverflow && !isExpanded
               ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
@@ -1913,8 +1915,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             const toolGroupId = toolEntries.length > 0 ? workGroupId : null;
             const toolExpanded =
               toolGroupId !== null ? (expandedWorkGroupsState[toolGroupId] ?? false) : false;
+            const collapsibleToolCount = collapsibleHiddenRowCount(
+              toolEntries.length,
+              MAX_VISIBLE_INLINE_TOOL_ENTRIES,
+            );
             const visibleToolEntries =
-              toolExpanded || toolEntries.length <= MAX_VISIBLE_INLINE_TOOL_ENTRIES
+              toolExpanded || collapsibleToolCount === 0
                 ? toolEntries
                 : activeTurnInProgress
                   ? toolEntries.slice(-MAX_VISIBLE_INLINE_TOOL_ENTRIES)
@@ -1940,6 +1946,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               renderableToolEntries: toolEntries.filter(isRenderableToolEntry),
               visibleRenderableToolEntries: visibleToolEntries.filter(isRenderableToolEntry),
               hiddenToolCount: toolEntries.length - visibleToolEntries.length,
+              hasToolOverflow: collapsibleToolCount > 0,
               hasGenericFileChangeEntry,
             };
           };
@@ -2155,24 +2162,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       <div className="space-y-px">
                         {display.visibleRenderableToolEntries.map(renderInlineToolRow)}
                       </div>
-                      {display.toolGroupId &&
-                        display.toolEntries.length > MAX_VISIBLE_INLINE_TOOL_ENTRIES && (
-                          <div className="py-0.5">
-                            <button
-                              type="button"
-                              className={cn(
-                                "transition-colors duration-150 hover:text-foreground",
-                                MUTED_LABEL_TEXT_CLASS_NAME,
-                              )}
-                              style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                              onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
-                            >
-                              {display.toolExpanded
-                                ? "Show less"
-                                : `+${display.hiddenToolCount} more tool calls`}
-                            </button>
-                          </div>
-                        )}
+                      {display.toolGroupId && display.hasToolOverflow && (
+                        <div className="py-0.5">
+                          <button
+                            type="button"
+                            className={cn(
+                              "transition-colors duration-150 hover:text-foreground",
+                              MUTED_LABEL_TEXT_CLASS_NAME,
+                            )}
+                            style={{ fontSize: `${normalizedChatFontSizePx}px` }}
+                            onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
+                          >
+                            {display.toolExpanded
+                              ? "Show less"
+                              : `+${display.hiddenToolCount} more tool calls`}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 {!hasCollapsedWork && display.statusEntries.length > 0 && (
@@ -2486,8 +2492,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     checkpointFiles.length,
                     "file",
                   )}`;
-                  const firstCheckpointFiles = checkpointFiles.slice(0, MAX_VISIBLE_CHANGED_FILES);
-                  const overflowCheckpointFiles = checkpointFiles.slice(MAX_VISIBLE_CHANGED_FILES);
+                  const visibleCheckpointFileCount =
+                    collapsibleHiddenRowCount(checkpointFiles.length, MAX_VISIBLE_CHANGED_FILES) > 0
+                      ? MAX_VISIBLE_CHANGED_FILES
+                      : checkpointFiles.length;
+                  const firstCheckpointFiles = checkpointFiles.slice(0, visibleCheckpointFileCount);
+                  const overflowCheckpointFiles = checkpointFiles.slice(visibleCheckpointFileCount);
                   const renderCheckpointFileRow = (
                     file: (typeof checkpointFiles)[number],
                     withFirstReset: boolean,
