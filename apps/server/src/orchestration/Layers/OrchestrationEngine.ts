@@ -678,9 +678,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.user-input.respond":
       case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+      case "thread.message.user.bind-turn":
+      case "thread.message.user.set-turn-boundary":
       case "thread.message.assistant.complete":
         // Read the exact message, including a resumed message older than the
-        // transcript window. This avoids loading a whole thread to finalize it.
+        // transcript window. Shell snapshots omit messages, so turn binding and
+        // boundary updates need the same durable lookup as assistant completion.
         return messageRepository
           .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
           .pipe(
@@ -689,7 +692,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 new OrchestrationCommandInternalError({
                   commandId: command.commandId,
                   commandType: command.type,
-                  detail: `Failed to load the complete assistant message: ${error.message}`,
+                  detail: `Failed to load the message for ${command.type}: ${error.message}`,
                 }),
             ),
             Effect.flatMap((message) => {
