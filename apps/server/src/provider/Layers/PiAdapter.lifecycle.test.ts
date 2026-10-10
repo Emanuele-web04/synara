@@ -254,6 +254,8 @@ it.each([
   { toolName: "bash", args: { command: "printf hello \n" }, title: "printf hello" },
   { toolName: "bash", args: { command: " \n" }, title: "bash" },
   { toolName: "read", args: { path: "file.txt " }, title: "read file.txt" },
+  { toolName: " custom_tool \n", args: { command: " raw input \n" }, title: "custom_tool" },
+  { toolName: " \t", args: { command: " raw input \n" }, title: "Tool" },
 ])(
   "persists $toolName lifecycle titles without changing tool arguments: $title",
   async ({ toolName, args, title }) => {
@@ -295,13 +297,49 @@ it.each([
           ),
         );
         expect(encodable).toBe(true);
-        expect(event.payload).toMatchObject({ title });
+        expect(event.payload).toMatchObject({ title, data: { toolName, args } });
       }
       const snapshot = await Effect.runPromise(adapter.readThread(threadId));
       expect(snapshot.turns.find((entry) => entry.id === turn.turnId)?.items).toContainEqual(
         expect.objectContaining({ callId: "title-tool", args }),
       );
       await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+      await waitFor(() => expect(completions(events)).toHaveLength(1));
+      const assistant = session.messages.find((message) => message.role === "assistant");
+      if (!assistant) throw new Error("Expected the completed SDK assistant message");
+      session.agent.state.messages = [
+        {
+          ...assistant,
+          content: [{ type: "toolCall", id: "history-tool", name: toolName, arguments: args }],
+          stopReason: "toolUse",
+        },
+        {
+          role: "toolResult",
+          toolCallId: "history-tool",
+          toolName,
+          content: [{ type: "text", text: "done" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+      ];
+      const history = await Effect.runPromise(adapter.readThread(threadId));
+      const historyItems = history.turns.flatMap((entry) => entry.items);
+      expect(historyItems).toEqual([
+        expect.objectContaining({
+          callId: "history-tool",
+          status: "started",
+          title,
+          toolName,
+          args,
+        }),
+        expect.objectContaining({
+          callId: "history-tool",
+          status: "completed",
+          title,
+          toolName,
+          data: expect.objectContaining({ args }),
+        }),
+      ]);
     });
   },
 );

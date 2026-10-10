@@ -48,6 +48,7 @@ import { type Thread } from "../../types";
 import {
   WorktreeSetupCancelledError,
   createWorktreeSetupResolution,
+  hasServerReceivedSentMessage,
   resolveQueuedTurnDispatchSettings,
   revokeUserMessagePreviewUrls,
   runWorktreeCreationFlow,
@@ -729,6 +730,18 @@ export function useChatTurnExecution({
           );
         }
       })().catch(async (err: unknown) => {
+        // The server already recorded this message, so the turn exists whatever failed
+        // around it. Rolling back would delete the promoted thread and hand the sent
+        // prompt back to the composer, where it survives reloads and gets sent again.
+        if (
+          !turnStartSucceeded &&
+          hasServerReceivedSentMessage(
+            getThreadFromState(useStore.getState(), threadIdForSend),
+            messageIdForSend,
+          )
+        ) {
+          turnStartSucceeded = true;
+        }
         // A user-cancelled worktree setup unwinds through this same rollback,
         // but silently: no error styling on the step row, no thread error.
         const setupCancelled = err instanceof WorktreeSetupCancelledError;

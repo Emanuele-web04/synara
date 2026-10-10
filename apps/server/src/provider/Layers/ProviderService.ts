@@ -3549,6 +3549,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (!adapter.forkThread) {
           return null;
         }
+        if (
+          input.throughTurnId !== undefined &&
+          adapter.capabilities.supportsForkThroughTurn !== true
+        ) {
+          yield* Effect.logInfo(
+            "provider native fork skipped because the provider cannot fork at an earlier turn",
+            {
+              sourceThreadId: input.sourceThreadId,
+              threadId: input.threadId,
+              provider: resolvedSource.instance.driver,
+              throughTurnId: input.throughTurnId,
+            },
+          );
+          return null;
+        }
 
         const forked = yield* adapter
           .forkThread({

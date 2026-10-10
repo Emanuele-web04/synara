@@ -141,9 +141,13 @@ describe("sidebar leading controls dock", () => {
           .poll(() => {
             const rect = strip.getBoundingClientRect();
             const y = rect.top + rect.height / 2;
+            // Clipped tabs add the overflow menu button right after the strip; the chrome
+            // past that control must stay draggable.
+            const trailing =
+              screen.container.querySelector<HTMLElement>("[aria-label$='more tabs']") ?? strip;
             return [
               nativeDragRegionAt(screen.container, rect.left - 6, y),
-              nativeDragRegionAt(screen.container, rect.right + 6, y),
+              nativeDragRegionAt(screen.container, trailing.getBoundingClientRect().right + 6, y),
             ];
           })
           .toEqual(["drag", "drag"]);
