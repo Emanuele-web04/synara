@@ -1,13 +1,59 @@
+import { useStore } from "../../store";
+import { initialState } from "../../storeState";
 import { ApprovalRequestId, ThreadId, TurnId } from "@synara/contracts";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { renderHook } from "vitest-browser-react";
 
 import { resetComposerDraftStore } from "../../composerDraftStoreTestFixtures";
-import { makeActivity, makeThread } from "../../storeTestFixtures";
+import { makeActivity, makeState, makeThread } from "../../storeTestFixtures";
+import { adoptVerifiedThreadCacheIdentity } from "../../threadDetailCacheIdentity";
+import { startThreadDetailCachePersistence } from "../../threadDetailCache";
 import type { Thread } from "../../types";
 import { useChatPendingInteractions } from "./useChatPendingInteractions";
+const api = vi.hoisted(() => ({ dispatchCommand: vi.fn(), subscribeThread: vi.fn() }));
+vi.mock("../../nativeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../nativeApi")>()),
+  readNativeApi: () => ({ orchestration: api }),
+}));
 
-afterEach(() => resetComposerDraftStore());
+afterEach(() => {
+  resetComposerDraftStore();
+  useStore.setState(initialState);
+  api.dispatchCommand.mockReset();
+  api.subscribeThread.mockReset();
+});
+
+it("does not deliver a queued pending-input response after identity invalidates detail", async () => {
+  const thread = threadWithPendingRequests({
+    provider: "codex",
+    status: "running",
+    orchestrationStatus: "running",
+    activeTurnId: turnId,
+    createdAt,
+    updatedAt: createdAt,
+  });
+  adoptVerifiedThreadCacheIdentity("input-identity-before");
+  useStore.setState({
+    ...makeState(thread),
+    threadDetailSyncById: { [threadId]: "synced" },
+    threadDetailAppliedSequenceById: { [threadId]: 20 },
+  });
+  const stop = startThreadDetailCachePersistence();
+  api.dispatchCommand.mockResolvedValue({});
+  api.subscribeThread.mockResolvedValue({});
+  const screen = await renderPendingInteractions(thread);
+  try {
+    expect(screen.result.current.pendingUserInputs).toHaveLength(1);
+    screen.result.current.onCancelActivePendingUserInput();
+    adoptVerifiedThreadCacheIdentity("input-identity-after");
+    expect(useStore.getState().threadDetailSyncById?.[threadId]).toBe("cached");
+    await Promise.resolve();
+    expect(api.dispatchCommand).not.toHaveBeenCalled();
+  } finally {
+    stop();
+    await screen.unmount();
+  }
+});
 
 const threadId = ThreadId.makeUnsafe("pending-gate-thread");
 const turnId = TurnId.makeUnsafe("pending-gate-turn");
@@ -114,3 +160,21 @@ it.each([
     expect(result.current.pendingUserInputs).toEqual([]);
   },
 );
+
+it("holds cached approvals and input controls until replay confirms authority", async () => {
+  useStore.setState({ threadDetailSyncById: { [threadId]: "cached" } });
+  const { result } = await renderPendingInteractions(
+    threadWithPendingRequests({
+      provider: "codex",
+      status: "running",
+      orchestrationStatus: "running",
+      activeTurnId: turnId,
+      createdAt,
+      updatedAt: createdAt,
+    }),
+  );
+  expect(result.current.pendingApprovals).toEqual([]);
+  expect(result.current.pendingUserInputs).toEqual([]);
+  useStore.getState().confirmThreadDetailReplay(threadId);
+  await expect.poll(() => result.current.pendingApprovals.length).toBe(1);
+});

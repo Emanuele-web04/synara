@@ -1,12 +1,13 @@
 import { OrchestrationThreadActivity, type TurnId } from "@synara/contracts";
 import { useMemo } from "react";
-import { deriveWorkLogEntries, omitRoutedSubagentWorkEntries } from "../../session-logic";
+import { deriveWorkLogEntries, deriveSubagentTaskEnds } from "../../session-logic";
 import { useStore } from "../../store";
 import type { Thread } from "../../types";
 import { useWorkflowRunUiThreadState } from "../../workflowRunUiStore";
 import { enrichSubagentWorkEntries } from "../ChatView.logic";
 import { createRelevantWorkLogThreadsSelector } from "../ChatView.selectors";
 import { deriveComposerSubagentStripItems } from "./ComposerSubagentStrip.logic";
+import { findLatestSubagentThreadRun, foldSubagentRunWorkEntries } from "./SubagentRunCard.logic";
 import { useSubagentRoster, useSubagentStripSource } from "./useSubagentStripSource";
 import { deriveWorkflowRunState, type WorkflowSubagentThreadRef } from "./WorkflowRunCard.logic";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
@@ -90,11 +91,11 @@ export function useChatWorkLog({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
-  // Subagents are presented by the composer strip (and their own threads); the
-  // transcript drops the routed fan-out rows entirely. The enriched list above is
-  // still what feeds the strip-adjacent derivations that need receiver metadata.
+  // Preserve each launch position for timeline grouping; state-only updates and
+  // progress attach to their owning invocation. The shared roster remains the
+  // source of parent/sibling retention and Environment navigation.
   const workLogEntries = useMemo(
-    () => omitRoutedSubagentWorkEntries(enrichedWorkLogEntries),
+    () => foldSubagentRunWorkEntries(enrichedWorkLogEntries),
     [enrichedWorkLogEntries],
   );
   const subagentSource = useSubagentStripSource({
@@ -128,6 +129,34 @@ export function useChatWorkLog({
     ],
   );
   const subagentRoster = useSubagentRoster(subagentSource);
+  const subagentTaskEnds = useMemo(
+    () => deriveSubagentTaskEnds(subagentSource.stripSourceActivities),
+    [subagentSource.stripSourceActivities],
+  );
+  const subagentThreadRunRow = useMemo(
+    () =>
+      activeThread?.parentThreadId && activeThreadId
+        ? findLatestSubagentThreadRun({
+            entries: foldSubagentRunWorkEntries(stripWorkLogEntries),
+            threads: subagentSource.stripRelevantWorkLogThreads,
+            parentThreadId: stripSourceThreadId,
+            liveTurnId: stripLiveTurnId,
+            childThreadId: activeThreadId,
+            taskEndByToolUseId: subagentTaskEnds,
+            backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+          })
+        : null,
+    [
+      activeThread?.parentThreadId,
+      activeThreadId,
+      stripWorkLogEntries,
+      subagentSource.stripRelevantWorkLogThreads,
+      stripSourceThreadId,
+      stripLiveTurnId,
+      subagentTaskEnds,
+      backgroundedSubagentToolUseIds,
+    ],
+  );
   // Links workflow agent rows to their subagent child threads (and models) when the
   // Task tool_use_id produced one; agents spawned without a tool call stay unlinked.
   const workflowSubagentThreadsByToolUseId = useMemo(() => {
@@ -176,6 +205,10 @@ export function useChatWorkLog({
   );
   return {
     workLogEntries,
+    subagentRunThreads: relevantWorkLogThreads,
+    backgroundedSubagentToolUseIds,
+    subagentTaskEnds,
+    subagentThreadRunRow,
     composerSubagentStripItems,
     subagentRoster,
     stripSourceThreadId,

@@ -77,7 +77,10 @@ import {
   tryBeginQueuedComposerAutoDispatch,
 } from "../lib/queuedComposerDrain";
 import { useKanbanUiStore } from "../kanbanUiStore";
-import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
+import {
+  resetThreadDetailResumeCursors,
+  setThreadDetailResumeCursor,
+} from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
@@ -96,6 +99,7 @@ import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { getAppTypographyScale } from "../lib/appTypography";
 import { threadJumpCommandForIndex } from "../keybindings";
 import { useStore } from "../store";
+import { clearThreadDetailCache, writeThreadDetailCache } from "../lib/threadDetailCache";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -173,6 +177,7 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
+let threadDetailSnapshotBarrier: Promise<void> | null = null;
 const wsRequests: WsRequestEnvelope["body"][] = [];
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -1097,6 +1102,12 @@ function createSnapshotWithInlineToolOverflow(options: {
   };
 }
 
+function findInlineToolsTurnDisclosure(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
+    "[data-message-id='msg-assistant-inline-tools'] [data-turn-header='completed'] button[aria-expanded]",
+  );
+}
+
 function createSnapshotWithHistoricalToolHydrationDuringLiveTurn(options: {
   hydrateHistoricalActivities: boolean;
 }): OrchestrationReadModel {
@@ -1511,13 +1522,17 @@ const worker = setupWorker(
         if (!thread) {
           return;
         }
-        sendEffectRpcChunk(client, parsed.request.id, {
+        const detailSnapshot = {
           kind: "snapshot",
           snapshot: {
             snapshotSequence: fixture.snapshot.snapshotSequence,
             thread,
           },
-        });
+        };
+        const sendDetailSnapshot = () =>
+          sendEffectRpcChunk(client, parsed.request.id, detailSnapshot);
+        if (threadDetailSnapshotBarrier) void threadDetailSnapshotBarrier.then(sendDetailSnapshot);
+        else sendDetailSnapshot();
         return;
       }
       if (method === WS_METHODS.subscribeServerProviderStatuses) {
@@ -2127,6 +2142,19 @@ async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasureme
   };
 }
 
+async function waitForSplitChatReady(threadIds: readonly ThreadId[]): Promise<void> {
+  // Empty secondary threads have a composer before detail hydration. Capture
+  // DOM identity after their loading layout has become the real empty landing.
+  await vi.waitFor(() => {
+    const state = useStore.getState();
+    for (const threadId of threadIds) {
+      expect(state.threadDetailSyncById?.[threadId]).toBe("synced");
+    }
+    expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(threadIds.length);
+  });
+  await waitForLayout();
+}
+
 async function waitForMountedChatReady(options: {
   host: HTMLElement;
   snapshot: OrchestrationReadModel;
@@ -2307,8 +2335,11 @@ describe("ChatView transcript geometry (full app)", () => {
     });
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
+    resetThreadDetailResumeCursors();
+    await clearThreadDetailCache();
     await resetHomeChatProjectPrewarmStateForTests();
     attachmentResponseDelayMs = 0;
+    threadDetailSnapshotBarrier = null;
     attachmentUploadSequence = 0;
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
@@ -2349,6 +2380,8 @@ describe("ChatView transcript geometry (full app)", () => {
       turnDiffIdsByThreadId: {},
       turnDiffSummaryByThreadId: {},
       threadDetailSyncById: {},
+      threadDetailAppliedSequenceById: {},
+      threadHistoryById: {},
       deletedProjectIdsById: {},
       deletedThreadIdsById: {},
       sidebarThreadSummaryById: {},
@@ -2610,8 +2643,12 @@ describe("ChatView transcript geometry (full app)", () => {
             const hints = [...sidebar.querySelectorAll<HTMLElement>('[data-slot="kbd"]')].filter(
               (hint) => hint.closest("[data-thread-item]"),
             );
-            expect(hints.length).toBe(activityViewEnabled ? 5 : 6);
-            if (!activityViewEnabled) expect(sidebar.textContent).toContain("Atlas");
+            expect(hints.length).toBe(activityViewEnabled ? 5 : 7);
+            if (!activityViewEnabled) {
+              expect(sidebar.textContent).toContain("Atlas");
+              // The open subagent reveals its own child as well as its ancestors.
+              expect(sidebar.textContent).toContain("Nova");
+            }
             if (customShortcut) expect(hints[0]!.textContent).toContain("Ctrl+Alt+Shift+Meta");
             for (const hint of hints) {
               const row = hint.closest<HTMLElement>("[data-thread-item]")!;
@@ -2649,6 +2686,8 @@ describe("ChatView transcript geometry (full app)", () => {
                 index === 0 || hint.closest("[data-thread-item]")!.textContent?.includes("Atlas"),
             )) {
               const row = hoverHint.closest<HTMLElement>("[data-thread-item]")!;
+              let interaction = "hover";
+              await userEvent.hover(row);
               const actions = activityViewEnabled
                 ? row.querySelector<HTMLElement>(
                     'span[class*="group-hover/activity-row:opacity-100"]',
@@ -2668,11 +2707,43 @@ describe("ChatView transcript geometry (full app)", () => {
               await userEvent.unhover(row);
               await userEvent.hover(row);
               const assertHoverLayout = () => {
-                expect(
-                  Number(getComputedStyle(hoverHint).opacity),
-                  `Shortcut ${hoverHint.textContent} should fade (hover=${hoverGroup.matches(":hover")}, focus=${hoverGroup.contains(document.activeElement)})`,
-                ).toBe(0);
-                expect(Number(getComputedStyle(actions).opacity)).toBe(1);
+                const hintOpacity = Number(getComputedStyle(hoverHint).opacity);
+                const actionsOpacity = Number(getComputedStyle(actions).opacity);
+                const rect = row.getBoundingClientRect();
+                const group = hoverHint.closest<HTMLElement>(
+                  '[class~="group/thread-row"], [class~="group/activity-row"]',
+                );
+                const target = row.matches('[role="button"]')
+                  ? row
+                  : row.querySelector<HTMLElement>('button, [role="button"]');
+                const debug =
+                  hintOpacity === 0 && actionsOpacity === 1
+                    ? undefined
+                    : JSON.stringify({
+                        interaction,
+                        fontSize,
+                        width,
+                        hint: hoverHint.textContent,
+                        rowHover: row.matches(":hover"),
+                        rowFocusWithin: row.matches(":focus-within"),
+                        groupHover: group?.matches(":hover"),
+                        groupFocusWithin: group?.matches(":focus-within"),
+                        connected: row.isConnected && hoverHint.isConnected,
+                        target: target?.outerHTML.slice(0, 250),
+                        activeElement: document.activeElement?.outerHTML.slice(0, 250),
+                        activeFocusVisible: document.activeElement?.matches(":focus-visible"),
+                        documentHasFocus: document.hasFocus(),
+                        rowRect: rect.toJSON(),
+                        rowCenterHit: document
+                          .elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+                          ?.outerHTML.slice(0, 250),
+                        hintOpacity,
+                        actionsOpacity,
+                        hintClasses: hoverHint.className,
+                        actionsClasses: actions.className,
+                      });
+                expect(hintOpacity, debug).toBe(0);
+                expect(actionsOpacity, debug).toBe(1);
                 const actionsRect = actions.getBoundingClientRect();
                 for (const label of [...row.querySelectorAll<HTMLElement>("span")].filter(
                   (element) =>
@@ -2695,6 +2766,7 @@ describe("ChatView transcript geometry (full app)", () => {
               const focusTarget = row.matches('[role="button"]')
                 ? row
                 : row.querySelector<HTMLElement>('button, [role="button"]')!;
+              interaction = "focus";
               focusTarget.focus();
               await vi.waitFor(assertHoverLayout, { timeout: 3_000 });
               focusTarget.blur();
@@ -2974,10 +3046,7 @@ describe("ChatView transcript geometry (full app)", () => {
           search: () => ({ splitViewId }),
         });
       await openSplit();
-      await vi.waitFor(() =>
-        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
-      );
-      await waitForLayout();
+      await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
       const editors = [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')];
       const divider = document.querySelector<HTMLElement>('[data-split-divider="true"]')!;
       const frame = divider.parentElement!.getBoundingClientRect();
@@ -3078,10 +3147,7 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
-        );
-        await waitForLayout();
+        await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
         const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const editorForThread = (threadId: ThreadId) => {
           const scope = splitViewPaneScopeId(
@@ -3154,10 +3220,7 @@ describe("ChatView transcript geometry (full app)", () => {
         params: { threadId: THREAD_ID },
         search: () => ({ splitViewId }),
       });
-      await vi.waitFor(() =>
-        expect(document.querySelectorAll('[contenteditable="true"]').length).toBe(2),
-      );
-      await waitForLayout();
+      await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
       const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
       if (
         split.root.kind !== "split" ||
@@ -3238,10 +3301,7 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(3),
-        );
-        await waitForLayout();
+        await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID, thirdId]);
         const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const editorForThread = (threadId: ThreadId) => {
           const scope = splitViewPaneScopeId(
@@ -3337,10 +3397,9 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(panes),
+        await waitForSplitChatReady(
+          panes === 3 ? [THREAD_ID, OTHER_THREAD_ID, thirdId] : [THREAD_ID, OTHER_THREAD_ID],
         );
-        await waitForLayout();
         const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const targetThreadId = closing === "source" ? thirdId : THREAD_ID;
         const editorForThread = (threadId: ThreadId) => {
@@ -3868,7 +3927,12 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
       await page.getByRole("button", { name: /Approve once/u }).click();
-      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
+      await vi.waitFor(() =>
+        expect(subscribeThread).toHaveBeenCalledWith({
+          threadId: THREAD_ID,
+          messageWindow: { limit: 100 },
+        }),
+      );
       await expect
         .element(page.getByRole("button", { name: /Approve once/u }))
         .not.toBeInTheDocument();
@@ -4256,7 +4320,12 @@ describe("ChatView transcript geometry (full app)", () => {
           answers: {},
         }),
       );
-      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
+      await vi.waitFor(() =>
+        expect(subscribeThread).toHaveBeenCalledWith({
+          threadId: THREAD_ID,
+          messageWindow: { limit: 100 },
+        }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 250));
       await expect.element(page.getByText("Choose option 1?")).not.toBeInTheDocument();
       await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
@@ -6131,7 +6200,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.body.textContent).toContain("Thinking");
           expect(document.body.textContent).not.toContain("Loading");
-          expect(document.body.textContent).not.toContain("Working for");
+          expect(document.querySelector("[data-turn-header='live']")).toBeNull();
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -6143,7 +6212,7 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       expect(document.body.textContent).toContain("Thinking");
       expect(document.body.textContent).not.toContain("Loading");
-      expect(document.body.textContent).not.toContain("Working for");
+      expect(document.querySelector("[data-turn-header='live']")).toBeNull();
 
       syncActiveThread((thread) => ({
         ...thread,
@@ -6167,7 +6236,9 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Thinking");
-          expect(document.body.textContent).toContain("Working for");
+          const liveHeader = document.querySelector("[data-turn-header='live']");
+          expect(liveHeader).not.toBeNull();
+          expect(liveHeader?.textContent).toMatch(/^Working \d/);
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -6180,7 +6251,7 @@ describe("ChatView transcript geometry (full app)", () => {
   // Regression: the sent message must reach its anchored coordinate in one
   // motion and then stay there for the rest of the turn. The failure this guards
   // is the message visibly jumping up and down through send → Thinking →
-  // "Working for" → streaming, which is what a fixed-target scroll produces once
+  // Working → streaming, which is what a fixed-target scroll produces once
   // the coordinate moves under it (reserve sizing, rows above being remeasured).
   it("moves a sent message to its anchor and handles a long streamed response", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
@@ -6297,7 +6368,7 @@ describe("ChatView transcript geometry (full app)", () => {
           updatedAt: isoAt(1_301),
         }));
       });
-      // Turn actually starts: the "Working for" header replaces Thinking.
+      // Turn actually starts: the Working header appears beside Thinking.
       at(420, () => {
         syncActiveThread((thread) => ({
           ...thread,
@@ -6787,10 +6858,15 @@ describe("ChatView transcript geometry (full app)", () => {
           container.dispatchEvent(new Event("scroll"));
         }
         await vi.waitFor(
-          () =>
+          () => {
+            if (action === "thread switch") {
+              expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+              expect(isTranscriptContentVisible(container)).toBe(true);
+            }
             expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(
               action === "thread switch" ? AUTO_SCROLL_BOTTOM_THRESHOLD_PX : 4,
-            ),
+            );
+          },
           { timeout: 3_000 },
         );
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
@@ -6798,6 +6874,21 @@ describe("ChatView transcript geometry (full app)", () => {
       for (let index = 0; index < 8; index += 1) {
         grow();
         await waitForLayout();
+      }
+      if (action === "thread switch") {
+        // The reveal still drains after delivery. Verify follow at the painted
+        // end, rather than during the first frames of the final text batch.
+        await vi.waitFor(
+          () => {
+            const paragraphs = container
+              .querySelector(`[data-message-id='${CSS.escape(messageId)}']`)
+              ?.querySelectorAll("p");
+            expect(paragraphs?.length).toBe(24);
+            expect(paragraphs?.[23]?.textContent).toBe("More streaming output. ".repeat(35).trim());
+          },
+          { timeout: 10_000, interval: 20 },
+        );
+        await waitForTranscriptLayoutToSettle(container);
       }
       await vi.waitFor(() =>
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
@@ -7009,11 +7100,9 @@ describe("ChatView transcript geometry (full app)", () => {
     });
     const restoreApi = installDeterministicSendNativeApi({ beforeTurnStart: () => barrier });
     try {
-      const findDisclosure = () =>
-        Array.from(document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find(
-          (button) => button.textContent?.includes("Worked for"),
-        );
-      await vi.waitFor(() => expect(findDisclosure()?.getAttribute("aria-expanded")).toBe("false"));
+      await vi.waitFor(() =>
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false"),
+      );
       useComposerDraftStore.getState().setPrompt(THREAD_ID, "Thanks");
       (await waitForSendButton()).click();
       await vi.waitFor(() => expect(hasDispatchedCommandType("thread.turn.start")).toBe(true));
@@ -7021,7 +7110,7 @@ describe("ChatView transcript geometry (full app)", () => {
       // changes transcript height even if the final settled state looks right.
       for (let frame = 0; frame < 20; frame += 1) {
         await nextFrame();
-        expect(findDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
         expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
         expect(document.body.textContent).not.toContain("Used 6 tools");
       }
@@ -11963,8 +12052,14 @@ describe("ChatView transcript geometry (full app)", () => {
       });
 
       try {
-        expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull();
-        expect(document.querySelector('[data-empty-landing-composer-block="true"]')).not.toBeNull();
+        // A shell with no messages is not the authoritative empty detail yet.
+        await expect
+          .poll(() => useStore.getState().threadDetailSyncById?.[THREAD_ID])
+          .toBe("synced");
+        await expect.element(page.getByTestId("empty-landing-heading")).toBeInTheDocument();
+        await expect
+          .poll(() => document.querySelector('[data-empty-landing-composer-block="true"]'))
+          .not.toBeNull();
       } finally {
         await mounted.cleanup();
       }
@@ -14741,7 +14836,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("collapses a settled leading tool run mid-turn, then folds into Worked for after the grace delay", async () => {
+  it("collapses a settled leading tool run mid-turn, then folds into the turn header after the grace delay", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotWithInlineToolOverflow({ active: true }),
@@ -14768,20 +14863,23 @@ describe("ChatView transcript geometry (full app)", () => {
         snapshotSequence: fixture.snapshot.snapshotSequence + 1,
       });
 
-      // The first settled paint keeps the live layout: no "Worked for" fold yet.
+      // The first settled paint keeps the live layout: no turn disclosure yet.
       expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
+      expect(findInlineToolsTurnDisclosure()).toBeNull();
       expect(document.body.textContent).toContain("Used 6 tools");
 
       await new Promise<void>((resolve) => {
         window.setTimeout(() => resolve(), 260);
       });
 
-      // Once the grace delay lapses the settled turn folds into "Worked for…",
+      // Once the grace delay lapses the settled turn folds into its Worked header,
       // but the old details stay mounted briefly inside the shared disclosure
       // close transition so the transcript height eases down instead of snapping.
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Worked for");
+          const settledTrigger = findInlineToolsTurnDisclosure();
+          expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
+          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
           const transitionClone = document.querySelector(
             "[data-settled-turn-collapse-transition='true']",
           );
@@ -14798,19 +14896,14 @@ describe("ChatView transcript geometry (full app)", () => {
       });
 
       // After the close motion finishes, details are only available by opening
-      // the "Worked for…" disclosure.
+      // the Worked header's disclosure.
       await vi.waitFor(
         () => {
           expect(
             document.querySelector("[data-settled-turn-collapse-transition='true']"),
           ).toBeNull();
           expect(document.body.textContent).not.toContain("Tool 1");
-          const settledTrigger = Array.from(
-            document.querySelectorAll<HTMLButtonElement>("button"),
-          ).find((element) => element.textContent?.includes("Worked for"));
-          if (settledTrigger) {
-            expect(settledTrigger.getAttribute("aria-expanded")).toBe("false");
-          }
+          expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -14833,7 +14926,9 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       await vi.waitFor(
         () => {
-          expect(document.body.textContent).toContain("Worked for");
+          const settledTrigger = findInlineToolsTurnDisclosure();
+          expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
+          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -14861,6 +14956,75 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each([
+    { streaming: false, confirmedRunning: false },
+    { streaming: true, confirmedRunning: false },
+    { streaming: true, confirmedRunning: true },
+  ])(
+    "only animates later live settlement after cached running detail confirms (streaming=$streaming, confirmedRunning=$confirmedRunning)",
+    async ({ streaming, confirmedRunning }) => {
+      await clearThreadDetailCache();
+      const originalCached = createSnapshotWithInlineToolOverflow({ active: true });
+      const cached = {
+        ...originalCached,
+        threads: originalCached.threads.map((thread) => ({
+          ...thread,
+          messages: thread.messages.map((message) =>
+            message.id === MessageId.makeUnsafe("msg-assistant-inline-tools")
+              ? { ...message, streaming }
+              : message,
+          ),
+        })),
+      };
+      await writeThreadDetailCache(
+        { origin: location.origin, serverInstanceId: "browser-test-server" },
+        { snapshotSequence: cached.snapshotSequence, thread: cached.threads[0]! },
+      );
+      let releaseSnapshot!: () => void;
+      threadDetailSnapshotBarrier = new Promise<void>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+      const authoritative = createSnapshotWithInlineToolOverflow({ active: confirmedRunning });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...authoritative, snapshotSequence: cached.snapshotSequence + 1 },
+      });
+      try {
+        expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("cached");
+        expect(useStore.getState().threadTurnStateById?.[THREAD_ID]?.latestTurn?.state).toBe(
+          "running",
+        );
+        releaseSnapshot();
+        if (confirmedRunning) {
+          await vi.waitFor(() => {
+            expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+          });
+          await nextFrame();
+          useStore.getState().syncServerReadModel({
+            ...createSnapshotWithInlineToolOverflow({ active: false }),
+            snapshotSequence: cached.snapshotSequence + 2,
+          });
+        }
+        let transitionFrames = 0;
+        const startedAt = performance.now();
+        while (performance.now() - startedAt < 1_000) {
+          await nextFrame();
+          if (document.querySelector("[data-settled-turn-collapse-transition='true']"))
+            transitionFrames += 1;
+        }
+        expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+        expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+        if (confirmedRunning) expect(transitionFrames).toBeGreaterThan(0);
+        else expect(transitionFrames).toBe(0);
+      } finally {
+        releaseSnapshot();
+        threadDetailSnapshotBarrier = null;
+        await mounted.cleanup();
+        await clearThreadDetailCache();
+      }
+    },
+  );
+
   // Thread detail does not always land in one write: a thread can paint its
   // transcript before the record that says its last turn already completed. Until
   // that record lands the tail turn is treated as live, so every tool row renders
@@ -14882,7 +15046,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       // Baseline: with no turn record the tail turn reads as live, so its work
-      // sits inline instead of folded into the turn's "Worked for…" disclosure.
+      // sits inline instead of folded into the turn header's disclosure.
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Wrapped up the inline tool review.");
@@ -14890,7 +15054,7 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      expect(document.body.textContent).not.toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()).toBeNull();
 
       useStore.getState().syncServerReadModel({
         ...settledSnapshot,
@@ -14921,7 +15085,8 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       // The turn must land folded, in one step, with no animated close replay.
-      expect(document.body.textContent).toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
       expect(transitionFrames).toBe(0);
       // One settle step is the floor: the fold itself changes the height once.
       expect(heightChangeFrames).toBeLessThanOrEqual(2);
@@ -14964,7 +15129,11 @@ describe("ChatView transcript geometry (full app)", () => {
         }
       }
 
-      expect(document.body.textContent).toContain("Worked for");
+      expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+m \d+s·/);
+      expect(document.querySelector("[data-turn-header='live']")?.textContent).toMatch(
+        /^Working \d/,
+      );
       expect(transitionFrames).toBe(0);
     } finally {
       await mounted.cleanup();

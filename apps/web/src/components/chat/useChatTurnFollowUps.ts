@@ -1,3 +1,4 @@
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { MessageId, ThreadId, type ProviderKind, type TurnId } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -160,6 +161,7 @@ export function useChatTurnFollowUps({
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
+      (activeThread && isThreadDetailAwaitingVerification(activeThread.id)) ||
       sendInFlightRef.current
     ) {
       return false;
@@ -241,6 +243,8 @@ export function useChatTurnFollowUps({
           planDispatchSettings.modelSelection.provider,
         providerOptions: planDispatchSettings.providerOptions,
       });
+      if (isThreadDetailAwaitingVerification(threadIdForSend))
+        throw new Error("Wait for the conversation to reconnect before sending.");
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -317,7 +321,13 @@ export function useChatTurnFollowUps({
   const onEditUserMessage = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
       const api = readNativeApi();
-      if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) {
+      if (
+        !api ||
+        !activeThread ||
+        !isServerThread ||
+        isRevertingCheckpoint ||
+        isThreadDetailAwaitingVerification(activeThread.id)
+      ) {
         return false;
       }
       const editTarget = resolveTailUserMessageEditTarget({
@@ -363,6 +373,7 @@ export function useChatTurnFollowUps({
           threadId: activeThread.id,
           createdAt: messageCreatedAt,
         });
+        if (isThreadDetailAwaitingVerification(activeThread.id)) return false;
         await api.orchestration.dispatchCommand({
           type: "thread.message.edit-and-resend",
           commandId: newCommandId(),
@@ -515,6 +526,7 @@ export function useChatTurnFollowUps({
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
+      (activeThread && isThreadDetailAwaitingVerification(activeThread.id)) ||
       sendInFlightRef.current
     ) {
       return;
@@ -566,6 +578,8 @@ export function useChatTurnFollowUps({
         createdAt,
       })
       .then(() => {
+        if (isThreadDetailAwaitingVerification(activeThread.id))
+          throw new Error("Wait for the conversation to reconnect before sending.");
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
           provider: implementationDispatchSettings.modelSelection.provider,

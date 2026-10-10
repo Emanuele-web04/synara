@@ -1,3 +1,4 @@
+import { TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import type { WorkLogEntry } from "../../session-logic";
 import {
@@ -10,7 +11,8 @@ import {
   isReasoningUpdateWorkEntry,
   isUnmappedProviderEventWorkEntry,
 } from "./agentActivity.logic";
-import { deriveTimelineEntries } from "../../workLog";
+import { deriveTimelineEntries, deriveWorkLogEntries } from "../../workLog";
+import { makeActivity } from "../../storeTestFixtures";
 
 function workEntry(overrides: Partial<WorkLogEntry> & Pick<WorkLogEntry, "id">): WorkLogEntry {
   return {
@@ -243,6 +245,153 @@ describe("deriveAgentActivityTimelineState", () => {
       "agent-reasoning:reasoning-1",
       "tool-1",
       "tool-2",
+    ]);
+  });
+});
+
+describe("subagent progress", () => {
+  const progress = (
+    id: string,
+    toolUseId: string,
+    title: string,
+    detail: string,
+    turnId: string,
+  ): WorkLogEntry =>
+    workEntry({
+      id,
+      label: "Subagent progress",
+      tone: "info",
+      activityKind: "task.progress",
+      detail,
+      turnId: TurnId.makeUnsafe(turnId),
+      subagentProgress: { toolUseId, title },
+    });
+
+  it("is attributed to its subagent instead of reading as reasoning", () => {
+    const entry = progress("p-1", "toolu_outer", "Outer worker", "Running Sleep 8", "turn-1");
+    expect(isReasoningUpdateWorkEntry(entry)).toBe(false);
+    expect(formatAgentActivityEntryTitle(entry)).toBe("Outer worker");
+    // Settled steps must not keep the present-tense "Running" prefix.
+    expect(formatAgentActivityEntryPreview(entry)).toBe("Sleep 8");
+  });
+
+  it("groups per subagent and per turn, never across either", () => {
+    const state = deriveAgentActivityTimelineState([
+      progress("a-1", "toolu_a", "Agent A", "Running sleep 8", "turn-1"),
+      progress("b-1", "toolu_b", "Agent B", "Running sleep 12", "turn-1"),
+      progress("a-2", "toolu_a", "Agent A", "Running echo A", "turn-1"),
+      workEntry({
+        id: "reasoning-1",
+        label: "Reasoning update",
+        tone: "info",
+        turnId: TurnId.makeUnsafe("turn-1"),
+      }),
+      progress("a-3", "toolu_a", "Agent A", "Running wc -l", "turn-2"),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual([
+      "subagent-progress:a-1",
+      "subagent-progress:b-1",
+      "agent-reasoning:reasoning-1",
+      "subagent-progress:a-3",
+    ]);
+    expect(state.timelineWorkEntries[0]).toMatchObject({
+      label: "Agent A",
+      toolTitle: "Agent A",
+      preview: "2 updates - echo A",
+    });
+    expect(state.timelineWorkEntries[1]).toMatchObject({ label: "Agent B", preview: "sleep 12" });
+    expect(state.timelineWorkEntries[3]).toMatchObject({ label: "Agent A", preview: "wc -l" });
+    expect(state.detailById.get("subagent-progress:a-1")?.entries).toHaveLength(2);
+    expect(state.detailById.get("subagent-progress:a-1")?.title).toBe("Agent A");
+  });
+
+  it.each(["stopped", "failed"] as const)(
+    "preserves a %s invocation when resumed in the same turn",
+    (status) => {
+      const turnId = TurnId.makeUnsafe("same-parent-turn");
+      const activity = (
+        id: string,
+        kind: string,
+        payload: Record<string, string>,
+        second: number,
+      ) =>
+        makeActivity({ id, kind, turnId, createdAt: `2026-06-05T00:00:0${second}.000Z`, payload });
+      const identity = { taskId: "task-reused", toolUseId: "toolu_reused" };
+      const state = deriveAgentActivityTimelineState(
+        deriveWorkLogEntries(
+          [
+            activity("old-start", "task.started", identity, 0),
+            activity(
+              "old-progress",
+              "task.progress",
+              { ...identity, detail: "Running old step" },
+              1,
+            ),
+            activity("old-end", "task.completed", { ...identity, status }, 2),
+            activity("resume", "task.started", identity, 3),
+            activity(
+              "new-progress",
+              "task.progress",
+              { ...identity, detail: "Running new step" },
+              4,
+            ),
+            activity("new-end", "task.completed", { ...identity, status: "completed" }, 5),
+          ],
+          undefined,
+        ),
+      );
+      const groups = state.timelineWorkEntries.filter((entry) => entry.subagentProgress);
+      expect(groups).toHaveLength(2);
+      expect(groups[0]?.subagentProgress?.outcome).toBe(status);
+      expect(groups[0]?.preview).toContain(status === "failed" ? "Failed" : "Stopped");
+      expect(groups[1]?.subagentProgress?.outcome).toBe("completed");
+      expect(state.detailById.get(groups[0]!.id)?.entries.map((entry) => entry.id)).toEqual([
+        "old-progress",
+      ]);
+      expect(state.detailById.get(groups[1]!.id)?.entries.map((entry) => entry.id)).toEqual([
+        "new-progress",
+      ]);
+    },
+  );
+
+  it("shows a stopped or failed subagent's outcome instead of a done row", () => {
+    const withOutcome = (
+      id: string,
+      outcome: "completed" | "failed" | "stopped",
+    ): WorkLogEntry => ({
+      ...progress(id, `toolu_${id}`, `Agent ${id}`, "Running sleep 45", "turn-1"),
+      subagentProgress: { toolUseId: `toolu_${id}`, title: `Agent ${id}`, outcome },
+    });
+    const state = deriveAgentActivityTimelineState([
+      withOutcome("a", "stopped"),
+      withOutcome("b", "failed"),
+      withOutcome("c", "completed"),
+    ]);
+    const [stopped, failed, completed] = state.timelineWorkEntries;
+    expect(stopped).toMatchObject({ preview: "Stopped - sleep 45", tone: "info" });
+    expect(failed).toMatchObject({ preview: "Failed - sleep 45", tone: "error" });
+    expect(completed).toMatchObject({ preview: "sleep 45", tone: "info" });
+  });
+
+  it("does not merge reasoning updates from different turns", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "r-1",
+        label: "Reasoning update",
+        tone: "info",
+        turnId: TurnId.makeUnsafe("turn-1"),
+      }),
+      workEntry({
+        id: "r-2",
+        label: "Reasoning update",
+        tone: "info",
+        turnId: TurnId.makeUnsafe("turn-2"),
+      }),
+    ]);
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual([
+      "agent-reasoning:r-1",
+      "agent-reasoning:r-2",
     ]);
   });
 });

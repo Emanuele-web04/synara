@@ -1,7 +1,7 @@
 // FILE: toolCallLabel.ts
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveFriendlyCommandTarget, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveFriendlyCommandTarget, command icon classifiers, deriveInlineCommandCall, deriveLiteralCommand, deriveCommandReadTargets, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
 // Depends on: @synara/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
@@ -680,7 +680,9 @@ export interface ReadableCommandDisplay {
   readonly fullCommand: string;
 }
 
-export type CommandVisualKind = "inspect" | "git" | "github" | "terminal";
+// "read" and "search" split the read-only inspections so a file read and a
+// pattern search wear different glyphs; listings (`ls`) are plain commands.
+export type CommandVisualKind = "read" | "search" | "git" | "github" | "terminal";
 
 function humanizeRequestKind(
   requestKind: ReadableToolTitleInput["requestKind"],
@@ -894,23 +896,14 @@ function collectDescriptorCandidates(
   }
 }
 
-// Read-only inspection commands surfaced with the search/magnifying-glass icon in
-// the timeline (reads, searches, finds, listings), as opposed to commands that
-// mutate or execute, which keep the terminal icon. These sets are the single
-// source of truth for both the command labels below and the icon decision.
+// Read-only inspection commands: file reads wear the file glyph, searches and
+// finds the magnifier; listings and everything else keep the terminal icon.
+// These sets are the single source of truth for both the command labels below
+// and the icon decision.
 const READ_FILE_COMMAND_TOOLS = new Set(["cat", "nl", "head", "tail", "sed", "less", "more"]);
 const SEARCH_COMMAND_TOOLS = new Set(["rg", "grep", "ag", "ack"]);
 const FIND_COMMAND_TOOLS = new Set(["find", "fd"]);
 const LIST_COMMAND_TOOLS = new Set(["ls"]);
-
-function isInspectCommandTool(tool: string): boolean {
-  return (
-    READ_FILE_COMMAND_TOOLS.has(tool) ||
-    SEARCH_COMMAND_TOOLS.has(tool) ||
-    FIND_COMMAND_TOOLS.has(tool) ||
-    LIST_COMMAND_TOOLS.has(tool)
-  );
-}
 
 // Derives the compact command sentence shown inline while preserving the full command for hover/detail UI.
 export function deriveReadableCommandDisplay(
@@ -1036,10 +1029,13 @@ export function deriveFriendlyCommandTarget(rawCommand: string): string {
 // Classifies command rows for transcript glyphs after peeling away shell/env wrappers.
 // This keeps `git -C`, `env ... gh`, and `/bin/zsh -lc "cd ... && git ..."` visually branded.
 export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind {
+  if (deriveCommandReadTargets(rawCommand) !== null) {
+    return "read";
+  }
   const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
   const [tool] = splitToolAndArgs(firstShellCommandSegment(command));
-  if (isInspectCommandTool(tool)) {
-    return "inspect";
+  if (SEARCH_COMMAND_TOOLS.has(tool) || FIND_COMMAND_TOOLS.has(tool)) {
+    return "search";
   }
   if (tool === "git") {
     return "git";
@@ -1052,6 +1048,134 @@ export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind 
 
 export function deriveInlineCommandCall(rawCommand: string): string {
   return stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
+}
+
+// The command a row shows: what actually ran, minus the shell wrapper
+// (`/bin/zsh -lc "…"`) and leading `cd <dir> &&` preambles. Pipes, chains and
+// quoting stay verbatim, unlike `deriveInlineCommandCall`, which keeps only the
+// first pipeline stage for classification.
+export function deriveLiteralCommand(rawCommand: string): string {
+  let value = rawCommand.trim();
+  const lowered = value.toLowerCase();
+  for (const prefix of SHELL_WRAPPER_PREFIXES) {
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    value = value.slice(prefix.length).trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1).trim();
+    }
+    break;
+  }
+  return stripLeadingShellPreambles(value).replace(/\s+/g, " ").trim();
+}
+
+// Files a command only reads, or null when the command does anything else.
+// A row may say "Read <file>" instead of the literal command only when that
+// is the whole story: no pipes, chains, redirects or substitutions, and no
+// in-place edit (`sed -i`).
+export function deriveCommandReadTargets(rawCommand: string): string[] | null {
+  const literal = deriveLiteralCommand(rawCommand);
+  if (literal.length === 0 || hasUnquotedShellOperator(literal)) {
+    return null;
+  }
+  const [tool, args] = splitToolAndArgs(stripCommandDisplayWrappers(literal));
+  if (!READ_FILE_COMMAND_TOOLS.has(tool)) {
+    return null;
+  }
+  const tokens = tokenizeCommandArgs(args);
+  const files: string[] = [];
+  let skipNext = false;
+  let sedScriptPending = tool === "sed";
+  let sedPrintOnly = false;
+  for (const token of tokens) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (token.startsWith("-") && token.length > 1) {
+      if (tool === "sed") {
+        if (token === "-i" || token.startsWith("-i") || token.startsWith("--in-place")) {
+          return null;
+        }
+        if (token === "-n" || token === "--quiet" || token === "--silent") {
+          sedPrintOnly = true;
+        }
+        if (token === "-e" || token === "--expression") {
+          sedScriptPending = false;
+          skipNext = true;
+        }
+      }
+      if ((tool === "head" || tool === "tail") && (token === "-n" || token === "-c")) {
+        skipNext = true;
+      }
+      continue;
+    }
+    if (sedScriptPending) {
+      sedScriptPending = false;
+      continue;
+    }
+    files.push(compactPath(token));
+  }
+  if (tool === "sed" && !sedPrintOnly) {
+    return null;
+  }
+  return files.length > 0 ? files : null;
+}
+
+const SHELL_WRAPPER_PREFIXES = [
+  "/usr/bin/bash -lc ",
+  "/usr/bin/bash -c ",
+  "/bin/bash -lc ",
+  "/bin/bash -c ",
+  "/usr/bin/zsh -lc ",
+  "/usr/bin/zsh -c ",
+  "/bin/zsh -lc ",
+  "/bin/zsh -c ",
+  "/bin/sh -lc ",
+  "/bin/sh -c ",
+  "bash -lc ",
+  "bash -c ",
+  "zsh -lc ",
+  "zsh -c ",
+  "sh -lc ",
+  "sh -c ",
+];
+
+// Pipes, chains, redirects, background jobs and substitutions outside quotes.
+function hasUnquotedShellOperator(value: string): boolean {
+  let quote: '"' | "'" | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (
+      char === "|" ||
+      char === "&" ||
+      char === ";" ||
+      char === ">" ||
+      char === "<" ||
+      char === "`" ||
+      (char === "$" && value[index + 1] === "(")
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function humanizeGitCommand(
@@ -1393,27 +1517,8 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     return value;
   }
 
-  const shellPrefixes = [
-    "/usr/bin/bash -lc ",
-    "/usr/bin/bash -c ",
-    "/bin/bash -lc ",
-    "/bin/bash -c ",
-    "/usr/bin/zsh -lc ",
-    "/usr/bin/zsh -c ",
-    "/bin/zsh -lc ",
-    "/bin/zsh -c ",
-    "/bin/sh -lc ",
-    "/bin/sh -c ",
-    "bash -lc ",
-    "bash -c ",
-    "zsh -lc ",
-    "zsh -c ",
-    "sh -lc ",
-    "sh -c ",
-  ];
-
   const lowered = value.toLowerCase();
-  for (const prefix of shellPrefixes) {
+  for (const prefix of SHELL_WRAPPER_PREFIXES) {
     if (!lowered.startsWith(prefix)) {
       continue;
     }

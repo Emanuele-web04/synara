@@ -60,6 +60,7 @@ import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/Projectio
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
 import { ServerConfig } from "../../config.ts";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
@@ -177,6 +178,7 @@ const THREAD_PROPOSED_PLAN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["
 
 const THREAD_ACTIVITY_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.activity-appended",
+  "thread.turn-interrupt-requested",
   "thread.reverted",
   "thread.conversation-rolled-back",
 ]);
@@ -1266,6 +1268,28 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.turn-interrupt-requested": {
+          const session = Option.getOrNull(
+            yield* projectionThreadSessionRepository.getByThreadId({
+              threadId: event.payload.threadId,
+            }),
+          );
+          const activity = deriveTurnStopActivity(event, session?.activeTurnId ?? null);
+          if (activity) {
+            yield* projectionThreadActivityRepository.upsert({
+              activityId: activity.id,
+              threadId: event.payload.threadId,
+              turnId: activity.turnId,
+              tone: activity.tone,
+              kind: activity.kind,
+              summary: activity.summary,
+              payload: activity.payload,
+              sequence: event.sequence,
+              createdAt: activity.createdAt,
+            });
+          }
+          return;
+        }
         case "thread.activity-appended":
           yield* projectionThreadActivityRepository.upsert({
             activityId: event.payload.activity.id,

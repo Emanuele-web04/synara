@@ -103,6 +103,34 @@ it("persists terminal error identity and announced retry state in chat activitie
   }
 });
 
+it("records the model a turn started on and nothing when the provider names none", () => {
+  const event = runtimeEvent({
+    provider: "claudeAgent",
+    type: "turn.started",
+    eventId: "turn-started",
+    turnId: TURN_ID,
+    payload: { model: "claude-haiku-5-5" },
+  });
+  expect(projectProviderRuntimeActivities(event, 7)).toEqual([
+    {
+      id: EventId.makeUnsafe("turn-started"),
+      createdAt: CREATED_AT,
+      tone: "info",
+      kind: "turn.started",
+      summary: "Turn started",
+      payload: { model: "claude-haiku-5-5", provider: "claudeAgent" },
+      turnId: TURN_ID,
+      sequence: 7,
+    },
+  ]);
+  expectSchemaValidActivities(event);
+  expect(
+    projectProviderRuntimeActivities(
+      runtimeEvent({ type: "turn.started", eventId: "bare", turnId: TURN_ID, payload: {} }),
+    ),
+  ).toEqual([]);
+});
+
 it("projects tool summaries with stable group identity and no empty rows", () => {
   const event = runtimeEvent({
     provider: "claudeAgent",
@@ -179,6 +207,36 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
     kind: "runtime.warning",
     summary: type === "info" ? "Pi extension" : "Runtime warning",
     payload: { message: "Extension notification", detail: "Extension notification" },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
+it("projects Claude Monitor events as labeled notices", () => {
+  const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "claudeAgent",
+      type: "runtime.warning",
+      eventId: "claude-monitor-event",
+      turnId: TURN_ID,
+      payload: {
+        message,
+        detail: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+      },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    tone: "info",
+    kind: "runtime.warning",
+    summary: "Monitor event",
+    turnId: TURN_ID,
+    payload: {
+      message,
+      detail: message,
+      nativeEventType: "monitor_event",
+      data: { task_id: "bu336ro2k" },
+    },
   });
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
@@ -549,6 +607,43 @@ describe("projected activities satisfy the orchestration command schema", () => 
 });
 
 describe("provider runtime activity projection", () => {
+  it("attributes Claude task progress to its subagent instead of reasoning", () => {
+    const subagentProgress = runtimeEvent({
+      type: "task.progress",
+      provider: "claudeAgent",
+      eventId: "claude-subagent-progress",
+      turnId: TURN_ID,
+      payload: {
+        taskId: "task-outer",
+        description: "Running Sleep briefly then echo bg",
+        toolUseId: "toolu_outer",
+        subagentTitle: "Outer worker",
+      },
+    });
+    const taskProgress = runtimeEvent({
+      type: "task.progress",
+      provider: "claudeAgent",
+      eventId: "claude-task-progress",
+      turnId: TURN_ID,
+      payload: { taskId: "task-bash", description: "Monitoring the build" },
+    });
+    const codexReasoning = runtimeEvent({
+      type: "task.progress",
+      eventId: "codex-agent-reasoning",
+      turnId: TURN_ID,
+      payload: { taskId: "codex-task", description: "Planning the change" },
+    });
+    expectSchemaValidActivities(subagentProgress);
+    const [subagentActivity] = projectProviderRuntimeActivities(subagentProgress);
+    expect(subagentActivity?.summary).toBe("Subagent progress");
+    expect(subagentActivity?.payload).toMatchObject({
+      toolUseId: "toolu_outer",
+      subagentTitle: "Outer worker",
+    });
+    expect(projectProviderRuntimeActivities(taskProgress)[0]?.summary).toBe("Reasoning update");
+    expect(projectProviderRuntimeActivities(codexReasoning)[0]?.summary).toBe("Reasoning update");
+  });
+
   it("keeps assistant text and assistant lifecycle events out of work activity", () => {
     const events = [
       runtimeEvent({

@@ -66,6 +66,10 @@ composer; it is not sent twice.
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
+  Long conversations open at recent work. Load earlier messages, Find, pinned-message navigation,
+  and Go to first message can reach their earlier history. Reloads can reuse private local detail
+  after verifying the connected server; actions wait for reconciliation.
+  See [Thread history and reload recovery](thread-history.md) for compatibility and storage limits.
   The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
   summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
   where finished subagents stay one click away after the strip hides. In split view, the list
@@ -147,6 +151,20 @@ A turn is one cycle inside that task:
 
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
+
+Each settled turn has a **Worked** header with its duration, completion time, and final state.
+The model appears when it changes from the previous turn. Expand the header to read the tools and
+full narration; turning off finished-turn folding keeps the same header with the work visible.
+**Stopped by you** requires a request explicitly marked as user Stop, followed by an interrupted
+outcome for that turn. Agent, automatic, steering, and historical interruptions without that actor
+say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
+keep one row as they run and settle; a completion that wakes the provider starts a separate **Resumed**
+response with its own live and settled duration, even when the provider reuses the launch's turn ID.
+
+**Stop** settles the turn once the provider accepts the interrupt and no provider turn is still
+running, even if the provider had already finished and its final events are still arriving.
+Output that arrives after a turn ended is added to its message without marking it as streaming
+again. An assistant item that ends without any text does not add an empty response row.
 
 Chat code blocks above 250,000 characters display their complete source as plain text,
 using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
