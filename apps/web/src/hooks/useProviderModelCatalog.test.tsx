@@ -706,6 +706,37 @@ describe("useProviderModelCatalog", () => {
     ]);
   });
 
+  it("does not expose OMP internal roles as selectable models", () => {
+    // Keep the legacy field in the runtime-shaped fixture: the server still
+    // carries roles for ACP/runtime consumers, while this hook owns the
+    // user-facing model catalog boundary.
+    const discovery = {
+      models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
+      roles: [{ name: "smol", model: "anthropic/claude-sonnet-4" }],
+      source: "omp-cli",
+      cached: false,
+    };
+    modelQueries.set("omp", {
+      data: discovery,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.modelOptionsByProvider.omp.map((model) => model.slug)).toEqual([
+      "anthropic/claude-sonnet-4",
+    ]);
+    expect(
+      catalog?.modelOptionsByProvider.omp.some((model) => model.slug.startsWith("role:")),
+    ).toBe(false);
+  });
+
   it("clears OMP loading and options on terminal discovery failure", () => {
     // OMP has no static model fallback. A terminal discovery failure (retries
     // exhausted) must NOT park the picker on the skeleton (the documented

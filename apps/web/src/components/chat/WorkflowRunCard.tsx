@@ -23,7 +23,6 @@ import {
 import {
   CheckIcon,
   CopyIcon,
-  LoaderIcon,
   PanelCollapseIcon,
   PanelExpandIcon,
   PauseIcon,
@@ -38,6 +37,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNowMs } from "~/hooks/useNowMs";
 import { formatClockDuration } from "../../session-logic";
 import { Button } from "../ui/button";
+import { LiveStatusSpinner } from "../ui/spinner";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import {
@@ -355,7 +355,7 @@ export function WorkflowRunCard({
       <ComposerStackedPanelHeaderRow>
         <ComposerStackedPanelRowMain title={workflowRun.description ?? undefined}>
           {compact && workflowRun.runningCount > 0 ? (
-            <LoaderIcon className={cn(COMPOSER_STACKED_PANEL_ICON_CLASS_NAME, "animate-spin")} />
+            <LiveStatusSpinner className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           ) : (
             <WorkflowIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           )}

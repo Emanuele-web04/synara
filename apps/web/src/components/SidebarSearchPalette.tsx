@@ -568,12 +568,19 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         !isBrowsing &&
         props.activeProjectCwd != null &&
         props.activeThreadId != null &&
+        props.onOpenFile != null &&
         debouncedThreadQuery.length > 0,
       staleTime: FILE_SEARCH_STALE_TIME_MS,
     }),
   );
   const matchedFiles =
-    !isBrowsing && props.activeThreadId != null && props.activeProjectCwd != null
+    !isBrowsing &&
+    props.activeThreadId != null &&
+    props.activeProjectCwd != null &&
+    props.onOpenFile != null &&
+    trimmedQuery.length > 0 &&
+    trimmedQuery === debouncedThreadQuery &&
+    !activeProjectFileSearch.isPlaceholderData
       ? (activeProjectFileSearch.data?.entries ?? EMPTY_FILE_ENTRIES)
       : EMPTY_FILE_ENTRIES;
   const { data: serverThreadSearch } = useQuery({

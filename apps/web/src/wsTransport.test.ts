@@ -476,7 +476,12 @@ it("recovers a failed thread subscription on a responsive session using its late
     await vi.advanceTimersByTimeAsync(500);
     expect(internals.reconnect).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledTimes(2);
-    expect(subscribe).toHaveBeenLastCalledWith({ threadId, afterSequence: 12 });
+    expect(subscribe).toHaveBeenLastCalledWith({
+      threadId,
+      afterSequence: 12,
+      batchReplay: true,
+      messageWindow: { limit: 100 },
+    });
   } finally {
     internals.disposed = true;
     await internals.stopStream(`orchestration.thread:${threadId}`);
@@ -638,7 +643,12 @@ it.each(["orchestration.shell", "orchestration.thread:capped-overflow"])(
       expect(failure).toHaveBeenCalledWith(
         expect.objectContaining({ code: "ORCHESTRATION_STREAM_OVERFLOW" }),
       );
-      expect(buildThreadSubscribeInput(threadId)).toEqual({ threadId, afterSequence: 42 });
+      expect(buildThreadSubscribeInput(threadId)).toEqual({
+        threadId,
+        afterSequence: 42,
+        batchReplay: true,
+        messageWindow: { limit: 100 },
+      });
       expect(internals.reconnect).not.toHaveBeenCalled();
       expect(internals.streamCapacityRetryTimers.has(key)).toBe(false);
     } finally {
@@ -1471,7 +1481,14 @@ describe("WsTransport", () => {
         await Promise.resolve();
         await vi.advanceTimersByTimeAsync(250);
 
-        expect(restartedInputs).toEqual([{ threadId: "thread-overflow", afterSequence: 100 }]);
+        expect(restartedInputs).toEqual([
+          {
+            threadId: "thread-overflow",
+            afterSequence: 100,
+            batchReplay: true,
+            messageWindow: { limit: 100 },
+          },
+        ]);
         expect(reconnect).not.toHaveBeenCalled();
       } finally {
         resetThreadDetailResumeCursorsForTests();

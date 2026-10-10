@@ -15,6 +15,7 @@ vi.mock("~/appSettings", () => ({
     settings: {
       disabledProviders: ["codex", "claudeAgent"],
       railUsageProviders: ["codex", "claudeAgent"],
+      railUsageInstanceIds: null,
       railUsageWindow: "both",
     },
     updateSettings,
@@ -34,6 +35,6 @@ it("keeps disabled sidebar preferences when selecting another provider", async (
     .getByRole("switch", { name: "Show OpenCode usage at the bottom of the sidebar" })
     .click();
   expect(updateSettings).toHaveBeenCalledWith({
-    railUsageProviders: ["codex", "claudeAgent", "opencode"],
+    railUsageInstanceIds: ["codex", "claudeAgent", "opencode"],
   });
 });

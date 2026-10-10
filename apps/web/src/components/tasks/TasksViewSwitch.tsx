@@ -1,6 +1,6 @@
 // FILE: TasksViewSwitch.tsx
 // Purpose: The List / Kanban switch shown in the Tasks and Kanban headers where both views
-//          exist (Beta). Picking one opens it and makes it what the Tasks entry opens next.
+//          exist. Picking one opens it and makes it what the Tasks entry opens next.
 // Layer: Tasks UI component
 // Exports: TasksViewSwitch
 

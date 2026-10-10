@@ -112,7 +112,7 @@ function applyTodoEventHoldingEdits(
   };
 }
 
-/** `enabled` is false where Tasks is a Beta-only feature, so Stable never asks the server. */
+/** Only request to-dos while the connected server offers Tasks. */
 export function useTodoList(enabled = true) {
   const queryClient = useQueryClient();
   const query = useQuery({
@@ -137,7 +137,7 @@ export function useTodoList(enabled = true) {
           todos,
         });
       } catch (error) {
-        // A server without Tasks (Stable, reached from a browser) turns Kanban back on.
+        // A server without Tasks (an older server) turns Kanban back on.
         noteTasksRefusal(error);
         throw error;
       }

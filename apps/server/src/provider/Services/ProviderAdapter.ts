@@ -94,6 +94,12 @@ export interface ProviderAdapterCapabilities {
   readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
   readonly supportsTurnSteering?: boolean;
+  /**
+   * True when `forkThread` honors `throughTurnId`. Other adapters never see a
+   * cutoff: ProviderService skips their native fork so the fork is rebuilt
+   * from its imported transcript instead of carrying later source turns.
+   */
+  readonly supportsForkThroughTurn?: boolean;
   /** True when `turn.diff.updated.payload.unifiedDiff` contains a parseable live patch. */
   readonly supportsLiveTurnDiffPatch?: boolean;
 }
@@ -243,6 +249,13 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
+  /**
+   * Renew retired tool authority after all native background work has settled.
+   * True keeps the current session/generation; false requires full replacement.
+   * The adapter must keep admission fenced until renewal is proven complete.
+   */
+  readonly renewAgentGatewayCredential?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
+
   /** Validate and retire before generation rotation; the returned start retains per-attempt preflight. */
   readonly prepareSessionReplacement?: (input: ProviderSessionStartInput) => Effect.Effect<
     | {
@@ -342,6 +355,15 @@ export interface ProviderAdapterShape<TError> {
    * Canonical runtime event stream emitted by this adapter.
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+
+  /**
+   * Opt-in delivery guarantee for pre-journal assistant text batching. The
+   * adapter mints fresh local canonical IDs and drains an owned destructive
+   * queue: resubscription/reconnection never redelivers a consumed canonical ID.
+   * The pump owns retries of the exact accepted envelope. Providers with native
+   * replay IDs or replaying streams must omit this and retain original events.
+   */
+  readonly runtimeEventDelivery?: "fresh-ids-once";
 
   /**
    * Read provider-specific composer capabilities.

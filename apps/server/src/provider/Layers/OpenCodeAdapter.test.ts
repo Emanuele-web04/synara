@@ -987,6 +987,203 @@ describe("OpenCode host policy delivery", () => {
 });
 
 describe("OpenCodeAdapter runtime lifecycle", () => {
+  it.each([false, true])(
+    "recovers missed V2 tool output before completing a reconnected turn (snapshot retry: %s)",
+    async (failFirstSnapshot) => {
+      const disconnected = createSubscribedEventQueue();
+      const reconnected = createSubscribedEventQueue();
+      let snapshots: Array<{ info: Record<string, unknown>; parts: Part[] }> = [];
+      const runtime = createMockOpenCodeRuntime({
+        eventSubscriptions: [disconnected.stream, reconnected.stream],
+        messages: async () => {
+          if (snapshots.length && failFirstSnapshot) {
+            failFirstSnapshot = false;
+            throw new Error("snapshot temporarily unavailable");
+          }
+          return { data: snapshots };
+        },
+      });
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const collected = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = asThreadId("v2-reconnect-output");
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "inspect",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "local/model" },
+          });
+          snapshots = [
+            {
+              info: { id: "msg-missed", role: "assistant", time: { completed: 3 }, finish: "stop" },
+              parts: [
+                {
+                  id: "part-missed",
+                  messageID: "msg-missed",
+                  sessionID: "opencode-session-1",
+                  type: "tool",
+                  tool: "bash",
+                  callID: "call-missed",
+                  state: {
+                    status: "completed",
+                    input: { command: "pwd" },
+                    title: "pwd",
+                    output: "/workspace",
+                    metadata: {},
+                    time: { start: 1, end: 3 },
+                  },
+                },
+              ],
+            },
+          ];
+          disconnected.close();
+          reconnected.push({
+            id: "evt-terminal",
+            type: "synara.opencode.execution",
+            properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+          });
+          reconnected.push({
+            id: "evt-terminal-retry",
+            type: "synara.opencode.execution",
+            properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+          });
+          const events = yield* Fiber.join(collected);
+          reconnected.close();
+          yield* adapter.stopSession(threadId);
+          return events;
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+      );
+      const toolIndex = result.findIndex(
+        (event) => event.type === "item.completed" && event.itemId === "call-missed",
+      );
+      const terminalIndex = result.findIndex((event) => event.type === "turn.completed");
+      expect(toolIndex).toBeGreaterThanOrEqual(0);
+      expect(toolIndex).toBeLessThan(terminalIndex);
+      expect(result[toolIndex]?.payload).toMatchObject({
+        data: { state: { output: "/workspace" } },
+      });
+    },
+  );
+
+  it("projects a native background continuation as a new turn without submitting another prompt", async () => {
+    const queue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    });
+    client.event.subscribe = (async () => ({
+      stream: queue.stream,
+    })) as typeof client.event.subscribe;
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        let ended = 0;
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed" && ++ended === 2),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const threadId = asThreadId("v2-continuation");
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "hello",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "local/model" },
+        });
+        queue.push({
+          id: "first-end",
+          type: "synara.opencode.execution",
+          properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+        });
+        queue.push({
+          id: "native-wakeup",
+          type: "synara.opencode.execution.started",
+          properties: { sessionID: "opencode-session-1" },
+        });
+        queue.push({
+          id: "second-end",
+          type: "synara.opencode.execution",
+          properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+        });
+        const result = yield* Fiber.join(collected);
+        queue.close();
+        yield* adapter.stopSession(threadId);
+        return result;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+    const starts = events.filter((event) => event.type === "turn.started");
+    expect(starts).toHaveLength(2);
+    expect(starts[0]?.turnId).not.toBe(starts[1]?.turnId);
+    expect(runtime.promptCalls).toHaveLength(1);
+  });
+  it.each([
+    ["succeeded", "completed"],
+    ["failed", "failed"],
+    ["interrupted", "interrupted"],
+  ] as const)(
+    "settles V2 execution %s with its authoritative outcome",
+    async (outcome, expected) => {
+      const queue = createSubscribedEventQueue();
+      const runtime = createMockOpenCodeRuntime();
+      const client = runtime.runtime.createOpenCodeSdkClient({
+        baseUrl: "http://127.0.0.1:4099",
+        directory: process.cwd(),
+      });
+      client.event.subscribe = (async () => ({
+        stream: queue.stream,
+      })) as typeof client.event.subscribe;
+      const events = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const collected = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          const threadId = asThreadId("v2-outcome");
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "hello",
+            attachments: [],
+            modelSelection: { provider: "opencode", model: "local/model" },
+          });
+          queue.push({
+            id: "evt_end",
+            type: "synara.opencode.execution",
+            properties: {
+              sessionID: "opencode-session-1",
+              outcome,
+              ...(outcome === "failed" ? { message: "Native failure" } : {}),
+            },
+          });
+          const result = yield* Fiber.join(collected);
+          queue.close();
+          yield* adapter.stopSession(threadId);
+          return result;
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+      );
+      expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
+        state: expected,
+      });
+    },
+  );
   it("rejects a cancelled question and routes normal answers to the owning directory", async () => {
     const threadId = asThreadId("thread-question-cancel");
     const question = {

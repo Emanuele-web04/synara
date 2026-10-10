@@ -682,11 +682,17 @@ const makeWsRpcHandlersLayer = () =>
       // is actively running. Waiting here is safe because the cursor-safe
       // stream attaches its live tap before evaluating the snapshot effect, so
       // no event that commits during the wait is lost.
-      const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
+      const loadThreadDetailSnapshotWithBootstrapWait = (
+        threadId: ThreadId,
+        messageWindow?: import("@synara/contracts").OrchestrationThreadMessageWindow,
+      ) =>
         Effect.gen(function* () {
           const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
           while (true) {
-            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
+            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(
+              threadId,
+              messageWindow,
+            );
             if (Option.isSome(detail) || Date.now() >= deadline) {
               return detail;
             }
@@ -1180,7 +1186,7 @@ const makeWsRpcHandlersLayer = () =>
       const tasksEnabled = isServerBetaFeatureEnabled("tasks");
       const tasksUnavailableError = () =>
         new WsRpcError({
-          message: "Tasks is available in Synara Beta.",
+          message: "Tasks is unavailable on this server.",
           code: TASKS_UNAVAILABLE_ERROR_CODE,
           retryable: false,
         });
@@ -1378,7 +1384,7 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
           rpcEffect(
             projectionReadModelQuery
-              .getThreadDetailSnapshotById(input.threadId)
+              .getThreadDetailSnapshotById(input.threadId, input.messageWindow)
               .pipe(Effect.map(Option.getOrNull)),
             "Failed to load orchestration thread detail snapshot",
           ),
@@ -1502,7 +1508,10 @@ const makeWsRpcHandlersLayer = () =>
                         snapshot: item.snapshot,
                       }),
                     )
-                  : toShellStreamEvent(item.event),
+                  : item.kind === "event"
+                    ? toShellStreamEvent(item.event)
+                    : // The shell stream never opts into batched replay.
+                      Effect.succeed(Option.none<OrchestrationShellStreamItem>()),
               ),
               Stream.flatMap((item) =>
                 Option.isSome(item) ? Stream.succeed(item.value) : Stream.empty,
@@ -1528,6 +1537,10 @@ const makeWsRpcHandlersLayer = () =>
               // gap. Out-of-range cursors (negative or overflowing gap) fall
               // back to the snapshot inside the stream factory.
               resumeFromSequence: input.afterSequence,
+              // Opted-in clients get the whole gap as one item and apply it in a
+              // single store update, so a stale cached turn does not replay its
+              // intermediate states on screen.
+              batchReplay: input.batchReplay,
               // A hard-purged thread leaves no rows to replay while the journal
               // head stays above the cursor, so the gap check alone would
               // accept the resume and stream nothing. Falling through to the
@@ -1555,7 +1568,10 @@ const makeWsRpcHandlersLayer = () =>
                 label: "orchestration.thread-detail",
                 onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
               },
-              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
+              snapshot: loadThreadDetailSnapshotWithBootstrapWait(
+                input.threadId,
+                input.messageWindow,
+              ).pipe(
                 Effect.flatMap(
                   Option.match({
                     onNone: () =>
@@ -1597,6 +1613,13 @@ const makeWsRpcHandlersLayer = () =>
                   return Stream.succeed<OrchestrationThreadStreamItem>({
                     kind: "event",
                     event: item.event,
+                  });
+                }
+                if (item.kind === "replay") {
+                  return Stream.succeed<OrchestrationThreadStreamItem>({
+                    kind: "replay",
+                    events: item.events,
+                    threadId: input.threadId,
                   });
                 }
                 // A silently empty snapshot would leave the client waiting forever
@@ -3032,7 +3055,7 @@ const makeWsRpcHandlersLayer = () =>
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
           ),
-        // Tasks is Beta-only; Stable refuses it here and keeps Kanban.
+        // Keep refusal handling for hosts that do not offer Tasks.
         [WS_METHODS.todoList]: () =>
           whenTasksEnabled(rpcEffect(todoService.list(), "Failed to list tasks")),
         [WS_METHODS.todoCreate]: (input) =>

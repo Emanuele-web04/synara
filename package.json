@@ -82,6 +82,10 @@
     "vitest": "catalog:"
   },
   "overrides": {
+    "@effect/platform-node-shared>effect": "catalog:",
+    "@effect/platform-node>effect": "catalog:",
+    "@effect/sql-sqlite-bun>effect": "catalog:",
+    "@effect/vitest>effect": "catalog:",
     "axios": "^1.16.0",
     "defu": "^6.1.5",
     "fast-uri": "^3.1.2",

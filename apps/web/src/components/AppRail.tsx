@@ -15,6 +15,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { TasksCoachmark } from "./OneTimeCoachmark";
 import type { RailItemId } from "~/appRail.logic";
 import { createCentralIconComponent } from "~/lib/central-icons";
 import {
@@ -164,21 +165,24 @@ export function appRailButtonClassName(active: boolean): string {
 function AppRailButton({ item }: { item: AppRailItem }) {
   const label = item.badge ? `${item.label} · ${item.badge.accessibleLabel}` : item.label;
   const glyphs = item.glyphs;
+  const button = (
+    <SidebarIconButton
+      icon={item.active ? glyphs.active : glyphs.idle}
+      iconClassName={APP_RAIL_GLYPH_CLASS_NAME}
+      label={label}
+      size="lg"
+      tooltip={item.id === "tasks" ? undefined : label}
+      tooltipSide="right"
+      aria-current={item.active ? "page" : undefined}
+      className={appRailButtonClassName(item.active)}
+      onClick={item.onSelect}
+      {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
+      {...(item.onFocus ? { onFocus: item.onFocus } : {})}
+    />
+  );
   return (
     <div className="relative shrink-0">
-      <SidebarIconButton
-        icon={item.active ? glyphs.active : glyphs.idle}
-        iconClassName={APP_RAIL_GLYPH_CLASS_NAME}
-        label={label}
-        size="lg"
-        tooltip={label}
-        tooltipSide="right"
-        aria-current={item.active ? "page" : undefined}
-        className={appRailButtonClassName(item.active)}
-        onClick={item.onSelect}
-        {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
-        {...(item.onFocus ? { onFocus: item.onFocus } : {})}
-      />
+      {item.id === "tasks" ? <TasksCoachmark tooltip={label}>{button}</TasksCoachmark> : button}
       {/* Same corner dot as the Activity bell's unread marker; the count is in the tooltip. */}
       {item.badge ? (
         <span
