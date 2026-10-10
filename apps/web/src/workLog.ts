@@ -119,7 +119,11 @@ export interface WorkLogComputerSetupRequired {
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
-  /** Server-owned orchestration event sequence for causal ordering. */
+  /**
+   * Activity order key from two unrelated counters: provider rows carry the
+   * provider runtime journal sequence, rows the server writes itself carry the
+   * orchestration event sequence. The timeline compares it only to break ties.
+   */
   sequence?: number;
   turnId?: TurnId | null;
   label: string;
@@ -3040,17 +3044,24 @@ function compareActivityLifecycleRank(kind: string): number {
   return 1;
 }
 
+// Time first: messages carry no sequence, and mergeTimelineEntries is only
+// correct when both sides sort by the same key. Sequence-first let one late
+// row with an unrelated low sequence lead the work list, and every message of
+// the block was emitted above all of that block's work.
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
   if (
     "sequence" in left &&
     "sequence" in right &&
     left.sequence !== undefined &&
-    right.sequence !== undefined &&
-    left.sequence !== right.sequence
+    right.sequence !== undefined
   ) {
     return left.sequence - right.sequence;
   }
-  return left.createdAt.localeCompare(right.createdAt);
+  return 0;
 }
 
 type TimelineComparator = (left: TimelineEntry, right: TimelineEntry) => number;

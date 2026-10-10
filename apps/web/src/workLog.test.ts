@@ -4378,6 +4378,87 @@ describe("deriveTimelineEntries", () => {
     },
   );
 
+  it("keeps a block chronological when a server-written row carries an unrelated low sequence", () => {
+    // Provider rows carry the runtime journal sequence; server-written rows
+    // (checkpoint feedback) carry the orchestration sequence, which here is
+    // lower although the row is the latest one of the block.
+    const questionTurnId = TurnId.makeUnsafe("question-turn");
+    const backgroundTurnId = TurnId.makeUnsafe("background-subagent-turn");
+    const at = (time: string) => `2026-10-08T${time}Z`;
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Do steps 8 and 9",
+          createdAt: at("09:40:09.000"),
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("progress"),
+          role: "assistant",
+          turnId: questionTurnId,
+          text: "Starting step 8",
+          createdAt: at("09:42:23.000"),
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("final-summary"),
+          role: "assistant",
+          turnId: backgroundTurnId,
+          text: "Steps 8 and 9 are done",
+          createdAt: at("09:57:07.000"),
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "question",
+          turnId: questionTurnId,
+          createdAt: at("09:40:20.239"),
+          sequence: 155_732,
+          tone: "info",
+          label: "Asked a question",
+        },
+        {
+          id: "answer",
+          turnId: questionTurnId,
+          createdAt: at("09:40:48.588"),
+          sequence: 155_739,
+          tone: "info",
+          label: "Answered",
+        },
+        {
+          id: "tool",
+          turnId: questionTurnId,
+          createdAt: at("09:44:00.000"),
+          sequence: 156_000,
+          tone: "tool",
+          label: "Ran command",
+        },
+        {
+          id: "checkpoint-baseline-skipped",
+          turnId: backgroundTurnId,
+          createdAt: at("09:57:12.611"),
+          sequence: 145_293,
+          tone: "info",
+          label: "Checkpoint baseline unavailable for this turn",
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "request",
+      "question",
+      "answer",
+      "progress",
+      "tool",
+      "final-summary",
+      "checkpoint-baseline-skipped",
+    ]);
+  });
+
   it("keeps late interrupted-turn tools before a non-native steer turn", () => {
     const interruptedTurnId = TurnId.makeUnsafe("interrupted-turn");
     const queuedSteerTurnId = TurnId.makeUnsafe("queued-steer-turn");
