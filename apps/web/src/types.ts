@@ -389,6 +389,7 @@ export interface ComposerThreadMentionSource {
 
 export interface ThreadSession {
   provider: ProviderKind;
+  runtimeMode?: RuntimeMode;
   providerInstanceId?: ProviderInstanceId;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;
