@@ -250,6 +250,26 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
+### Provider-native subagents
+
+Each subagent a Claude or Codex agent launches gets its own child thread under the task. Its
+brief, and any later message its launcher sends it on resume, opens the child thread as a
+message marked as sent by the agent. A resumed Claude subagent continues on the same child
+thread while its routing identity is retained. Claude bounds each inactive ownership cache to
+200 recent entries, keeping live work, nested launchers and unfinished task owners pinned.
+If an older identity expired, an explicit native task id on a resume recovers a child under that
+identity; the previous child thread and its recorded history remain available. Work a subagent
+starts itself (a background command, a monitor, a nested subagent) is recorded on that subagent's
+thread; the parent thread keeps only each subagent's own start,
+progress and outcome. A nested subagent's thread hangs off the task like the others and records
+the subagent that launched it as its source thread. A background subagent's final outcome
+(completed, failed or stopped) updates the call that launched it.
+
+Children are named after their description, nickname or brief, never after a provider id.
+Codex multi-agent v2 encrypts spawn briefs, so its children are named after their task name and
+open without a brief. Synara shows up to 20 provider-native subagents per turn and notes on the
+parent thread when more ran.
+
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
 Once native background work settles, it keeps the app-server process alive, unsubscribes the
 native conversation, verifies that Codex unloaded it, and resumes the same conversation with
