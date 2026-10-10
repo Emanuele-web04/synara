@@ -263,6 +263,7 @@ import {
   resolveThreadArtifactWorkspaceRoot,
   resolveThreadDetailHydration,
   resolveWorkingLabel,
+  isFirstSessionConnect,
   shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
   shouldShowComposerProviderInstancePicker,
@@ -6578,6 +6579,10 @@ export default function ChatView({
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
                     workingLabel={resolveWorkingLabel({
+                      isFirstConnect: isFirstSessionConnect({
+                        messages: activeThread.messages,
+                        latestTurn: activeThread.latestTurn,
+                      }),
                       isSettlingTurnDispatch,
                       isSendBusy,
                       turnTakenOver,

@@ -3290,6 +3290,32 @@ it.layer(TestLayer)("git integration", (it) => {
         }),
     );
 
+    it.effect("skips fetching an upstream whose remote disappeared during status refresh", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const source = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(source);
+        const branch = (yield* git(source, ["branch", "--show-current"])).trim();
+        yield* git(source, ["remote", "add", "origin", remote]);
+        yield* git(source, ["push", "-u", "origin", branch]);
+        const realGitCore = yield* GitCore;
+        let remoteChecked = false;
+        let fetchCount = 0;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.remoteExists") {
+            remoteChecked = true;
+            return Effect.succeed({ code: 2, stdout: "", stderr: "No such remote" });
+          }
+          if (input.args[0] === "fetch") fetchCount += 1;
+          return realGitCore.execute(input);
+        });
+        yield* core.statusDetails(source);
+        yield* Effect.promise(() => vi.waitFor(() => expect(remoteChecked).toBe(true)));
+        expect(fetchCount).toBe(0);
+      }),
+    );
+
     it.effect("returns UI status before its background upstream refresh completes", () =>
       Effect.gen(function* () {
         const remote = yield* makeTmpDir();

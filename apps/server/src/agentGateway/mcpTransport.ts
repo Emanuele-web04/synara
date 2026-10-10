@@ -306,6 +306,7 @@ export function makeAgentGatewayMcpTransport(input: {
                 {
                   callerThreadId,
                   latestTurnId: callerThread.value.latestTurn?.turnId ?? null,
+                  latestTurnState: callerThread.value.latestTurn?.state ?? null,
                 },
               ),
             );
