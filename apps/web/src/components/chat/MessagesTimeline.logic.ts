@@ -405,6 +405,7 @@ export function resolveThreadFindJumpTarget(
 
 export function computeMessageDurationStart(
   messages: ReadonlyArray<TimelineDurationMessage>,
+  { advanceOnCompletedAssistant = true }: { readonly advanceOnCompletedAssistant?: boolean } = {},
 ): Map<string, string> {
   const result = new Map<string, string>();
   let lastBoundary: string | null = null;
@@ -414,7 +415,7 @@ export function computeMessageDurationStart(
       lastBoundary = message.createdAt;
     }
     result.set(message.id, lastBoundary ?? message.createdAt);
-    if (message.role === "assistant" && message.completedAt) {
+    if (advanceOnCompletedAssistant && message.role === "assistant" && message.completedAt) {
       lastBoundary = message.completedAt;
     }
   }
