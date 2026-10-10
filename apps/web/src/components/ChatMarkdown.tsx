@@ -13,11 +13,12 @@ import {
   TriangleAlertIcon,
   type LucideIcon,
 } from "~/lib/icons";
-import type { ProviderMentionReference } from "@synara/contracts";
+import { ThreadId, type ProviderMentionReference } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
 import { remarkGithubAlerts, type GithubAlertKind } from "../lib/remarkGithubAlerts";
+import { remarkHtmlBreaks } from "../lib/remarkHtmlBreaks";
 import React, {
   Children,
   createContext,
@@ -34,11 +35,14 @@ import React, {
   useRef,
   useState,
   type ReactNode,
+  type SyntheticEvent,
 } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -50,6 +54,11 @@ import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
+import {
+  ChatLinkActionsContext,
+  resolveGitHubItemClickOpener,
+  showLinkContextMenu,
+} from "../lib/linkContextMenu";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
@@ -134,7 +143,9 @@ interface ChatMarkdownProps {
   isStreaming?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
-  onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  onImageExpand?:
+    | ((preview: ExpandedImagePreview, sourceImage?: HTMLImageElement) => void)
+    | undefined;
   /** Case-insensitive substring to wrap while in-thread find is open. */
   findQuery?: string | undefined;
   /** Active occurrence in this markdown body; other hits stay dimmer. */
@@ -148,6 +159,13 @@ interface ChatMarkdownProps {
   variant?: "assistant" | "user";
   /** Mention metadata for chip icon resolution; only used by the user variant. */
   mentionReferences?: ReadonlyArray<ProviderMentionReference> | undefined;
+  /**
+   * Parses and sanitizes authored HTML embedded in the markdown. Keep this
+   * disabled for provider/user content, which must continue to render HTML as
+   * text.
+   */
+  parseHtml?: boolean | undefined;
+  onOpenThread?: ((threadId: ThreadId) => void) | undefined;
   /** Terminal selections rendered as inline chips inside user-message markdown. */
   terminalContexts?: ReadonlyArray<ParsedTerminalContextEntry> | undefined;
   /**
@@ -218,6 +236,7 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
   remarkGithubAlerts,
+  remarkHtmlBreaks,
 ];
 // User prompts are casual typing, not authored markdown: hard-break single
 // newlines and skip math entirely (the composer chip plugin is appended per
@@ -241,8 +260,21 @@ function restoreLiteralDollarPlaceholders(value: string): string {
     .replaceAll(encodeURIComponent(LITERAL_DOLLAR_PLACEHOLDER), "$");
 }
 
+// synara://thread/<target> links carry an id or title that may be
+// %-encoded; a malformed sequence keeps the raw target instead of throwing.
+function decodeSynaraThreadLinkTarget(target: string): string {
+  try {
+    return decodeURIComponent(target).trim();
+  } catch {
+    return target.trim();
+  }
+}
+
 function markdownUrlTransform(href: string): string {
   const restoredHref = restoreLiteralDollarPlaceholders(href);
+  if (restoredHref.startsWith("thread://") || restoredHref.startsWith("synara://thread/")) {
+    return restoredHref;
+  }
   return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
 }
 
@@ -287,6 +319,24 @@ type MarkdownParentNode = {
 type MarkdownNode = MarkdownTextNode | MarkdownParentNode | Record<string, unknown>;
 const CHAT_FIND_TEXT_TAG_NAME = "chat-find-text";
 const CHAT_FIND_TEXT_START_ATTRIBUTE = "data-chat-find-text-start";
+// Keep the renderer's generated metadata through the authored-HTML sanitizer.
+// KaTeX runs afterward so its generated MathML/styles do not widen this allowlist.
+const AUTHORED_HTML_SCHEMA = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), CHAT_FIND_TEXT_TAG_NAME],
+  attributes: {
+    ...defaultSchema.attributes,
+    [CHAT_FIND_TEXT_TAG_NAME]: ["dataChatFindTextStart"],
+    blockquote: [
+      ...(defaultSchema.attributes?.blockquote ?? []),
+      ["dataGithubAlert", "note", "tip", "important", "warning", "caution"],
+    ],
+  },
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), "file", "thread", "synara"],
+  },
+};
 function remarkFindableText() {
   return (tree: MarkdownNode) => wrapFindableTextNodes(tree);
 }
@@ -1045,6 +1095,7 @@ function UncachedShikiCodeBlock({
 }
 
 interface MarkdownRenderContextValue {
+  isInsideLink: boolean;
   cwd: ChatMarkdownProps["cwd"];
   knownAbsoluteFilePaths: string[] | undefined;
   diffThemeName: DiffThemeName;
@@ -1052,6 +1103,7 @@ interface MarkdownRenderContextValue {
   isUserVariant: boolean;
   mentionReferences: ChatMarkdownProps["mentionReferences"];
   onImageExpand: ChatMarkdownProps["onImageExpand"];
+  onOpenThread: ChatMarkdownProps["onOpenThread"];
   onTaskToggle: ChatMarkdownProps["onTaskToggle"];
   resolvedTheme: ReturnType<typeof useTheme>["resolvedTheme"];
   terminalContexts: ChatMarkdownProps["terminalContexts"];
@@ -1086,9 +1138,36 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   a: function MarkdownLink({ node: _node, href, children, ...props }) {
-    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme } =
-      useContext(MarkdownRenderContext)!;
+    const context = useContext(MarkdownRenderContext)!;
+    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme, onOpenThread } = context;
+    const linkedContext = useMemo(
+      () => ({ ...context, onImageExpand: undefined, isInsideLink: true }),
+      [context],
+    );
+    // Linked images belong to the link, not to the fullscreen gallery.
+    const linkedChildren = (
+      <MarkdownRenderContext.Provider value={linkedContext}>
+        {children}
+      </MarkdownRenderContext.Provider>
+    );
+    const linkActions = useContext(ChatLinkActionsContext);
     const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
+    const threadHref = restoredHref?.startsWith("thread://")
+      ? restoredHref.slice("thread://".length)
+      : restoredHref?.startsWith("synara://thread/")
+        ? decodeSynaraThreadLinkTarget(restoredHref.slice("synara://thread/".length))
+        : null;
+    if (threadHref && onOpenThread) {
+      return (
+        <button
+          type="button"
+          className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
+          onClick={() => onOpenThread(ThreadId.makeUnsafe(threadHref))}
+        >
+          {linkedChildren}
+        </button>
+      );
+    }
     const isExternalHttp = isExternalHttpHref(restoredHref);
     if (isUserVariant && isExternalHttp) {
       // GFM autolinks a pasted URL before the chips plugin can see it; when the
@@ -1115,11 +1194,33 @@ const MARKDOWN_COMPONENTS: Components = {
           target="_blank"
           rel="noopener noreferrer"
           className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
+          {...(isExternalHttp
+            ? {
+                // A plain click on a pull request or issue follows the user's setting (in
+                // the app by default); cmd/ctrl-click keeps the default external open.
+                onClick: (event: React.MouseEvent) => {
+                  if (event.metaKey || event.ctrlKey) return;
+                  const openGitHubItem = resolveGitHubItemClickOpener(restoredHref, linkActions);
+                  if (!openGitHubItem) return;
+                  event.preventDefault();
+                  openGitHubItem(restoredHref);
+                },
+                onContextMenu: (event: React.MouseEvent) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void showLinkContextMenu({
+                    url: restoredHref,
+                    position: { x: event.clientX, y: event.clientY },
+                    actions: linkActions,
+                  });
+                },
+              }
+            : {})}
         >
           {isExternalHttp ? (
             <LinkChipIcon url={restoredHref} className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME} />
           ) : null}
-          {children}
+          {linkedChildren}
         </a>
       );
     }
@@ -1128,7 +1229,7 @@ const MARKDOWN_COMPONENTS: Components = {
       <OpenableFileChip
         targetPath={targetPath}
         theme={resolvedTheme}
-        label={children}
+        label={linkedChildren}
         {...(restoredHref ? { href: restoredHref } : {})}
       />
     );
@@ -1210,7 +1311,7 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   img: function MarkdownImage({ node: _node, src, alt: altProp, ...props }) {
-    const { cwd, onImageExpand } = useContext(MarkdownRenderContext)!;
+    const { cwd, onImageExpand, isInsideLink } = useContext(MarkdownRenderContext)!;
     const alt = altProp ?? "";
     const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
     if (isLocalImageMarkdownSrc(restoredSrc)) {
@@ -1220,10 +1321,35 @@ const MARKDOWN_COMPONENTS: Components = {
           alt={alt}
           cwd={cwd}
           onImageExpand={onImageExpand}
+          isLinked={isInsideLink}
         />
       );
     }
-    return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
+    if (!onImageExpand || !restoredSrc) {
+      return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
+    }
+    const expandImage = (event: SyntheticEvent<HTMLImageElement>) => {
+      event.preventDefault();
+      onImageExpand(
+        { images: [{ src: restoredSrc, name: alt || "Image" }], index: 0 },
+        event.currentTarget,
+      );
+    };
+    return (
+      <img
+        {...props}
+        src={restoredSrc}
+        alt={alt}
+        loading="lazy"
+        role="button"
+        tabIndex={0}
+        data-expandable-image=""
+        onClick={expandImage}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") expandImage(event);
+        }}
+      />
+    );
   },
   li: function MarkdownListItem({ node, children, ...props }) {
     // Task items carry their source line down to the checkbox via context.
@@ -1311,13 +1437,16 @@ function ChatMarkdown({
   variant: variantProp,
   mentionReferences,
   terminalContexts,
+  onOpenThread,
+  parseHtml: parseHtmlProp,
 }: ChatMarkdownProps) {
   // Defaults applied with ?? in the body, not in the destructuring: default
   // values in parameter destructuring make React Compiler 1.0.0 bail on the
   // whole component (BuildHIR AssignmentPattern), losing its auto-memoization.
   const isStreaming = isStreamingProp ?? false;
-  const className = classNameProp ?? "text-sm leading-relaxed";
+  const className = classNameProp ?? "text-chat leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const parseHtml = parseHtmlProp ?? false;
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;
   const { resolvedTheme } = useTheme();
@@ -1381,13 +1510,25 @@ function ChatMarkdown({
       remarkFindableText,
     ];
   }, [composerChipsRemarkPlugin, wikiLinkRoot, cwd]);
-  const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
+  const rehypePlugins = useMemo<MarkdownRehypePlugins>(() => {
+    if (isUserVariant) {
+      return USER_MARKDOWN_REHYPE_PLUGINS;
+    }
+    if (parseHtml) {
+      // Raw HTML is only enabled for authored local-file previews. Sanitize
+      // immediately after parsing so scripts, event handlers, and unsafe URL
+      // schemes never reach React's renderer.
+      return [rehypeRaw, [rehypeSanitize, AUTHORED_HTML_SCHEMA], ...MARKDOWN_REHYPE_PLUGINS];
+    }
+    return MARKDOWN_REHYPE_PLUGINS;
+  }, [isUserVariant, parseHtml]);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     applyActiveChatFindMatch(rootRef.current, findActiveRange);
   }, [findActiveRange, findQuery, renderedText]);
   const renderContext = useMemo<MarkdownRenderContextValue>(
     () => ({
+      isInsideLink: false,
       cwd,
       knownAbsoluteFilePaths,
       diffThemeName,
@@ -1395,6 +1536,7 @@ function ChatMarkdown({
       isUserVariant,
       mentionReferences,
       onImageExpand,
+      onOpenThread,
       onTaskToggle,
       resolvedTheme,
       terminalContexts,
@@ -1408,6 +1550,7 @@ function ChatMarkdown({
       isUserVariant,
       mentionReferences,
       onImageExpand,
+      onOpenThread,
       onTaskToggle,
       resolvedTheme,
       terminalContexts,

@@ -7,11 +7,12 @@
 
 import { Schema } from "effect";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 import { CentralIcon } from "../lib/central-icons";
+import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { AnnouncementSheet } from "./AnnouncementSheet";
 
 const APP_SNAP_WELCOME_STORAGE_KEY = "synara:appsnap-welcome:v1";
@@ -23,7 +24,7 @@ type AppSnapWelcomeStorage = typeof AppSnapWelcomeStorageSchema.Type;
 
 const INITIAL_STORAGE: AppSnapWelcomeStorage = { acknowledged: false };
 
-export function AppSnapWelcomeDialog() {
+export function AppSnapWelcomeDialog({ children }: { children?: ReactNode }) {
   const navigate = useNavigate();
   const [storage, setStorage] = useLocalStorage(
     APP_SNAP_WELCOME_STORAGE_KEY,
@@ -31,6 +32,8 @@ export function AppSnapWelcomeDialog() {
     AppSnapWelcomeStorageSchema,
   );
   const [open, setOpen] = useState(false);
+  const [probeSettled, setProbeSettled] = useState(false);
+  const handedOff = useAnnouncementSheetSlotStore((state) => state.handedOff);
   // Both startup dialogs probe asynchronously; without arbitration a fresh macOS install
   // could stack this sheet on the welcome tour. Wait for the tour's gate and its close.
   const onboardingBlocking = useOnboardingDialogStore(
@@ -55,6 +58,9 @@ export function AppSnapWelcomeDialog() {
         // Do not acknowledge a failed probe: a transient desktop startup issue
         // should not permanently hide the introduction on the next launch.
         console.warn("[appsnap] Could not check welcome-dialog support", error);
+      })
+      .finally(() => {
+        if (!disposed) setProbeSettled(true);
       });
 
     return () => {
@@ -77,25 +83,31 @@ export function AppSnapWelcomeDialog() {
   const dialogOpen = open && !storage.acknowledged && !onboardingBlocking;
 
   return (
-    <AnnouncementSheet
-      open={dialogOpen}
-      hero={
-        // Same glyph as the AppSnap settings panel this dialog links to.
-        <span className="flex size-16 shrink-0 items-center justify-center rounded-2xl border border-[color:var(--color-border)] bg-muted/30 text-foreground">
-          <CentralIcon name="screen-capture" className="size-8" />
-        </span>
-      }
-      title="Synara AppSnaps are live!"
-      description={
-        <>
-          Press both Option keys (⌥&thinsp;⌥) to snap any app&rsquo;s window into the task
-          you&rsquo;re working in.
-        </>
-      }
-      dismissLabel="Not now"
-      confirmLabel="Set up AppSnap"
-      onDismiss={acknowledge}
-      onConfirm={openSettings}
-    />
+    <>
+      {(storage.acknowledged || !window.desktopBridge?.appSnap || probeSettled) &&
+      (!dialogOpen || handedOff)
+        ? children
+        : null}
+      <AnnouncementSheet
+        open={dialogOpen}
+        hero={
+          // Same glyph as the AppSnap settings panel this dialog links to.
+          <span className="flex size-16 shrink-0 items-center justify-center rounded-2xl border border-[color:var(--color-border)] bg-muted/30 text-foreground">
+            <CentralIcon name="screen-capture" className="size-8" />
+          </span>
+        }
+        title="Synara AppSnaps are live!"
+        description={
+          <>
+            Press both Option keys (⌥&thinsp;⌥) to snap any app&rsquo;s window into the task
+            you&rsquo;re working in.
+          </>
+        }
+        dismissLabel="Not now"
+        confirmLabel="Set up AppSnap"
+        onDismiss={acknowledge}
+        onConfirm={openSettings}
+      />
+    </>
   );
 }

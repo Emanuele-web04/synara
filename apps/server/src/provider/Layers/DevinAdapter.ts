@@ -108,6 +108,7 @@ import {
   withAcpPlanModePrompt,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import {
+  canonicalRequestTypeFromAcpKind,
   makeAcpAssistantItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
@@ -118,10 +119,13 @@ import {
   stampAcpRuntimeEventLifecycleGeneration,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import {
+  type AcpPermissionRequest,
   type AcpPlanUpdate,
   type AcpSessionMode,
   type AcpSessionModeState,
   type AcpToolCallState,
+  isProviderGenericToolTitle,
+  mergeToolCallState,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
 import {
@@ -147,7 +151,7 @@ import {
   type DevinAcpRuntimeSettings,
 } from "../acp/DevinAcpSupport.ts";
 import { createDevinSessionConfig, type DevinSessionConfig } from "../acp/DevinSessionConfig.ts";
-import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import { isAcpStartupTimeoutError, type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import { makeEventNdjsonLogger, type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
@@ -219,7 +223,7 @@ export function resolveDevinOptionalTimeoutMs(input: {
   return parsed;
 }
 
-export function resolveDevinWedgeRecoveryOptions(
+function resolveDevinWedgeRecoveryOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): DevinWedgeRecoveryOptions {
   return {
@@ -417,7 +421,22 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   // turn. Pruned to the just-settled turn on each dispatch (a straggler can
   // lag by at most one turn on the FIFO session/update stream).
   readonly turnToolCallIds: Map<string, TurnId>;
+  // Latest ACP tool-call state per provider tool-call id, merged across
+  // ToolCallUpdated events. Devin's request_permission toolCall arrives sparse
+  // (usually only {toolCallId, kind}), so the permission handler looks up this
+  // tracked state to show the tool name and its arguments on the approval
+  // card. Bounded to the same window as turnToolCallIds.
+  readonly devinToolCallStateById: Map<string, AcpToolCallState>;
   readonly devinToolCallLifecycleById: Map<string, "active" | "terminal">;
+  // Session-scoped approval keys recorded by "Always allow this session".
+  // Each key is (canonical request kind + the exact thing approved): the full
+  // command string for execute, the provider's tool name for other tools — so
+  // approving `ls` never silently extends to `rm -rf`, and approving one MCP
+  // tool never extends to another. Destructive and network kinds (delete,
+  // move, fetch) are never remembered at all, matching the other adapters:
+  // Codex/Cursor/Grok/Droid remember nothing, and OpenCode forwards the
+  // choice to the provider instead of caching it.
+  readonly devinSessionApprovedRequestKeys: Set<string>;
   // Wedge detection state, fed by the child's mirrored stderr log stream and
   // consumed by the per-session wedge supervisor. stallWatchDetectedAt records
   // the child's own stall confession (first warning wins; any turn progress
@@ -479,14 +498,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readDevinProviderStartOptions(
-  providerOptions: unknown,
-): { readonly binaryPath?: string } | undefined {
+function readDevinProviderStartOptions(providerOptions: unknown):
+  | {
+      readonly binaryPath?: string;
+      readonly environment?: Readonly<Record<string, string>>;
+    }
+  | undefined {
   if (!isRecord(providerOptions) || !isRecord(providerOptions.devin)) {
     return undefined;
   }
   const binaryPath = providerOptions.devin.binaryPath;
-  return typeof binaryPath === "string" ? { binaryPath } : {};
+  const rawEnvironment = providerOptions.devin.environment;
+  const environment = isRecord(rawEnvironment)
+    ? Object.fromEntries(
+        Object.entries(rawEnvironment).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      )
+    : undefined;
+  return {
+    ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+    ...(environment && Object.keys(environment).length > 0 ? { environment } : {}),
+  };
 }
 
 function parseDevinResume(resumeCursor: unknown): { readonly sessionId: string } | undefined {
@@ -692,29 +725,71 @@ function setDevinDiscoveryCacheEntry<Result>(
   }
 }
 
+function devinDiscoveryCacheKey(input: {
+  readonly binaryPath: string;
+  readonly cwd?: string;
+  readonly instanceId?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+}): string {
+  const environment = input.environment
+    ? Object.entries(input.environment)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([name, value]) => {
+          let hash = 0x811c9dc5;
+          for (let index = 0; index < value.length; index += 1) {
+            hash ^= value.charCodeAt(index);
+            hash = Math.imul(hash, 0x01000193);
+          }
+          return [name, (hash >>> 0).toString(36)] as const;
+        })
+    : null;
+  return JSON.stringify([
+    input.instanceId ?? null,
+    input.binaryPath,
+    input.cwd ?? null,
+    environment,
+  ]);
+}
+
 export function makeCachedDevinModelDiscovery<E, R>(input: {
   readonly discoveryLock: Semaphore.Semaphore;
-  readonly discover: (binaryPath: string) => Effect.Effect<ProviderListModelsResult, E, R>;
+  readonly discover: (
+    binaryPath: string,
+    environment?: Readonly<Record<string, string>>,
+  ) => Effect.Effect<ProviderListModelsResult, E, R>;
 }) {
   const cache = new Map<
     string,
     { readonly expiresAt: number; readonly result: ProviderListModelsResult }
   >();
-  return (binaryPath: string, options?: { readonly forceReload?: boolean }) => {
-    const resolvedBinaryPath = resolveDevinBinaryPath(binaryPath);
-    const cached = cache.get(resolvedBinaryPath);
+  return (
+    binaryPath: string,
+    options?: {
+      readonly forceReload?: boolean;
+      readonly instanceId?: string;
+      readonly environment?: Readonly<Record<string, string>>;
+    },
+  ) => {
+    const childEnvironment = { ...process.env, ...(options?.environment ?? {}) };
+    const resolvedBinaryPath = resolveDevinBinaryPath(binaryPath, { env: childEnvironment });
+    const cacheKey = devinDiscoveryCacheKey({
+      binaryPath: resolvedBinaryPath,
+      ...(options?.instanceId ? { instanceId: options.instanceId } : {}),
+      ...(options?.environment ? { environment: options.environment } : {}),
+    });
+    const cached = cache.get(cacheKey);
     if (options?.forceReload !== true && cached && cached.expiresAt > Date.now()) {
       return Effect.succeed({ ...cached.result, cached: true });
     }
     return input.discoveryLock.withPermits(1)(
       Effect.gen(function* () {
-        const cached = cache.get(resolvedBinaryPath);
+        const cached = cache.get(cacheKey);
         if (options?.forceReload !== true && cached && cached.expiresAt > Date.now()) {
           return { ...cached.result, cached: true };
         }
-        const result = yield* input.discover(resolvedBinaryPath);
+        const result = yield* input.discover(resolvedBinaryPath, options?.environment);
         if (result.error === undefined) {
-          setDevinDiscoveryCacheEntry(cache, resolvedBinaryPath, {
+          setDevinDiscoveryCacheEntry(cache, cacheKey, {
             expiresAt: Date.now() + DEVIN_MODEL_DISCOVERY_CACHE_MS,
             result,
           });
@@ -1256,6 +1331,96 @@ export function pruneDevinToolCallTurnIds(
   }
 }
 
+const DEVIN_PERMISSION_PARAMS_PREVIEW_MAX_CHARS = 400;
+
+// What a session-scoped "Always allow" may safely cover. Only the request
+// kinds that key cleanly to a specific tool or command are eligible: execute
+// keys on the exact command string (Codex remembers nothing and Claude's SDK
+// suggestions scope to concrete commands, so this is never broader); other
+// kinds key on the provider-reported tool name. Destructive and network
+// kinds never get a key — a remembered approval must not extend to them —
+// and a request with no identifiable command/tool is never remembered.
+function devinSessionApprovalKey(
+  permissionRequest: AcpPermissionRequest,
+  toolCall: AcpToolCallState | undefined,
+): string | undefined {
+  const kind = permissionRequest.kind;
+  if (kind === "delete" || kind === "move" || kind === "fetch") {
+    return undefined;
+  }
+  const requestKind = canonicalRequestTypeFromAcpKind(kind);
+  if (kind === "execute") {
+    const command = toolCall?.command;
+    return typeof command === "string" && command.trim().length > 0
+      ? `${requestKind}:${command.trim()}`
+      : undefined;
+  }
+  const toolName = readDevinPermissionToolName(toolCall);
+  return toolName === undefined ? undefined : `${requestKind}:${toolName}`;
+}
+
+function readDevinPermissionToolName(toolCall: AcpToolCallState | undefined): string | undefined {
+  const dataName = toolCall?.data.toolName;
+  if (typeof dataName === "string" && dataName.trim().length > 0) {
+    return dataName.trim();
+  }
+  const rawInput = toolCall?.data.rawInput;
+  if (isRecord(rawInput)) {
+    for (const key of ["_toolName", "toolName", "tool_name"] as const) {
+      const value = rawInput[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+// Approval cards read their label from `detail` in the same "name: {args}"
+// shape the other adapters use. Devin's request_permission toolCall arrives
+// sparse (often only {toolCallId, kind}), so the tracked tool-call state —
+// merged at the call site — supplies the tool name and a short argument
+// preview instead of the bare "Session <id>" fallback.
+export function summarizeDevinPermissionToolCall(toolCall: AcpToolCallState | undefined): {
+  readonly detail?: string;
+  readonly toolName?: string;
+  readonly input?: unknown;
+} {
+  // The tracked/merged state synthesizes a generic "Tool" presentation title
+  // for sparse toolCalls; only a provider-supplied name is a useful label.
+  const meaningfulTitle =
+    toolCall !== undefined && !isProviderGenericToolTitle(toolCall.title, toolCall.kind)
+      ? toolCall.title
+      : undefined;
+  const toolName = readDevinPermissionToolName(toolCall) ?? meaningfulTitle;
+  const meaningfulDetail =
+    toolCall !== undefined && !isProviderGenericToolTitle(toolCall.detail, toolCall.kind)
+      ? toolCall.detail
+      : undefined;
+  const rawInput = toolCall?.data.rawInput;
+  const toolInput = isRecord(rawInput)
+    ? (rawInput.arguments ?? rawInput.input ?? rawInput)
+    : rawInput;
+  let paramsPreview: string | undefined;
+  if (toolInput !== undefined) {
+    try {
+      paramsPreview = JSON.stringify(toolInput).slice(0, DEVIN_PERMISSION_PARAMS_PREVIEW_MAX_CHARS);
+    } catch {
+      paramsPreview = undefined;
+    }
+  }
+  const detail =
+    toolCall?.command ??
+    (toolName !== undefined && paramsPreview !== undefined
+      ? `${toolName}: ${paramsPreview}`
+      : (meaningfulTitle ?? meaningfulDetail));
+  return {
+    ...(detail !== undefined ? { detail } : {}),
+    ...(toolName !== undefined ? { toolName } : {}),
+    ...(toolInput !== undefined ? { input: toolInput } : {}),
+  };
+}
+
 // Settles the active turn and records it as the last settled turn. Returns
 // whether the turn was actually cleared (false when it already settled,
 // keeping the call sites idempotent). lastSettledTurnId is what the next
@@ -1381,12 +1546,15 @@ export function makeDevinAdapter(
 
     const makeDevinDiscoveryRuntime = (input: {
       readonly binaryPath?: string;
+      readonly environment?: Readonly<Record<string, string>>;
       readonly cwd: string;
     }) =>
       createAcpRuntime({
         devinSettings: {
           ...(devinSettings.binaryPath ? { binaryPath: devinSettings.binaryPath } : {}),
           ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+          ...(devinSettings.environment ? { environment: devinSettings.environment } : {}),
+          ...(input.environment ? { environment: input.environment } : {}),
         },
         childProcessSpawner,
         cwd: input.cwd,
@@ -1394,7 +1562,10 @@ export function makeDevinAdapter(
         clientInfo: { name: "Synara Command Discovery", version: "0.0.0" },
       });
 
-    const discoverDevinModelsUncached = (binaryPath: string) => {
+    const discoverDevinModelsUncached = (
+      binaryPath: string,
+      environment?: Readonly<Record<string, string>>,
+    ) => {
       const fallbackResult = {
         models: buildDevinStaticModelDescriptors(),
         source: "devin.static",
@@ -1404,7 +1575,10 @@ export function makeDevinAdapter(
       return Effect.gen(function* () {
         let discoveryError: string | undefined;
         const cliModels = yield* Effect.gen(function* () {
-          const childEnv = buildProviderChildEnvironment({ provider: PROVIDER });
+          const childEnv = buildProviderChildEnvironment({
+            provider: PROVIDER,
+            ...(environment ? { baseEnv: { ...process.env, ...environment } } : {}),
+          });
           const child = yield* childProcessSpawner.spawn(
             makeEffectProcessCommand(binaryPath, ["models", "list", "--format", "json"], {
               env: childEnv,
@@ -1773,6 +1947,15 @@ export function makeDevinAdapter(
 
           const devinModelSelection =
             input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+          const providerDevinOptions = readDevinProviderStartOptions(input.providerOptions);
+          const configuredEnvironment = {
+            ...(devinSettings.environment ?? {}),
+            ...(providerDevinOptions?.environment ?? {}),
+          };
+          const providerEnvironment = {
+            ...process.env,
+            ...configuredEnvironment,
+          };
 
           const existing = sessions.get(input.threadId);
           // Recheck under the lock: a user turn may start while recovery waits.
@@ -1820,6 +2003,7 @@ export function makeDevinAdapter(
                 connection: gatewaySessionLease.connection,
                 stdioProxy: agentGatewayCredentials.stdioProxy,
                 bootstrapToken,
+                env: providerEnvironment,
               });
             },
             catch: (error) =>
@@ -1851,14 +2035,20 @@ export function makeDevinAdapter(
             payloadLimit: DEVIN_ACP_LOG_PAYLOAD_LIMIT,
             shouldMirrorIncomingRaw: (payload) => payload.includes("devinShell"),
           });
-          const providerDevinOptions = readDevinProviderStartOptions(input.providerOptions);
           const discoveryBinaryPath = resolveDevinBinaryPath(
             providerDevinOptions?.binaryPath?.trim() || devinSettings.binaryPath,
+            { env: providerEnvironment },
           );
           const effectiveModel = yield* resolveDevinStartModel({
             explicitModel: devinSettings.model,
             modelSelection: devinModelSelection,
-            discoverModels: () => discoverDevinModels(discoveryBinaryPath),
+            discoverModels: () =>
+              discoverDevinModels(discoveryBinaryPath, {
+                ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
+                ...(Object.keys(configuredEnvironment).length > 0
+                  ? { environment: configuredEnvironment }
+                  : {}),
+              }),
           });
           const effectiveDevinSettings: DevinAcpRuntimeSettings = {
             ...(devinSettings.binaryPath !== undefined
@@ -1867,6 +2057,9 @@ export function makeDevinAdapter(
             ...(effectiveModel !== undefined ? { model: effectiveModel } : {}),
             ...(providerDevinOptions?.binaryPath !== undefined
               ? { binaryPath: providerDevinOptions.binaryPath }
+              : {}),
+            ...(Object.keys(configuredEnvironment).length > 0
+              ? { environment: configuredEnvironment }
               : {}),
           };
 
@@ -1880,7 +2073,7 @@ export function makeDevinAdapter(
             requestedModel: devinModelSelection?.model,
             modelVariant: devinModelSelection?.options?.modelVariant,
             reasoningEffort: devinModelSelection?.options?.reasoningEffort,
-            apiKeyConfigured: hasDevinApiKeyEnv(),
+            apiKeyConfigured: hasDevinApiKeyEnv(providerEnvironment),
             alwaysApprove: input.runtimeMode === "full-access",
             binaryPath: effectiveDevinSettings.binaryPath ?? "devin",
           });
@@ -1930,19 +2123,70 @@ export function makeDevinAdapter(
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/request_permission", params);
 
+                const permissionRequest = parsePermissionRequest(params);
+                // Devin's request_permission toolCall arrives sparse (usually
+                // only {toolCallId, kind}); merge the tracked session/update
+                // state so policy matching and the approval card can see the
+                // tool name and its arguments.
+                const trackedToolCall = ctx?.devinToolCallStateById.get(params.toolCall.toolCallId);
+                const toolCall =
+                  permissionRequest.toolCall === undefined
+                    ? trackedToolCall
+                    : mergeToolCallState(trackedToolCall, permissionRequest.toolCall);
+                const toolCallRawInput = isRecord(toolCall?.data.rawInput)
+                  ? toolCall.data.rawInput
+                  : params.toolCall.rawInput;
+
                 const policyOutcome = resolveAcpPermissionPolicy({
                   runtimeMode: input.runtimeMode,
                   interactionMode: ctx?.activeInteractionMode,
                   options: params.options,
                   computerControlEnabled: ctx?.enableComputerControl === true,
                   activeTurn: ctx?.activeTurnId !== undefined,
-                  toolCall: params.toolCall,
+                  autoApproveSynaraTools: input.autoApproveSynaraTools === true,
+                  gatewaySessionActive: gatewaySessionLease !== undefined,
+                  toolCall: {
+                    kind: permissionRequest.kind,
+                    rawInput: toolCallRawInput,
+                    metadata: params.toolCall._meta ?? params._meta,
+                  },
                 });
                 if (policyOutcome !== undefined) {
                   return { outcome: policyOutcome };
                 }
 
-                const permissionRequest = parsePermissionRequest(params);
+                // "Always allow this session" sticks to the exact request it
+                // covered — same kind AND same command/tool — never the whole
+                // request kind.
+                const sessionApprovalKey = devinSessionApprovalKey(permissionRequest, toolCall);
+                if (
+                  sessionApprovalKey !== undefined &&
+                  input.runtimeMode !== "auto" &&
+                  ctx?.devinSessionApprovedRequestKeys.has(sessionApprovalKey)
+                ) {
+                  const sessionAllowOptionId = selectAcpPermissionOptionId(
+                    "acceptForSession",
+                    params.options,
+                  );
+                  if (sessionAllowOptionId !== undefined) {
+                    return {
+                      outcome: {
+                        outcome: "selected" as const,
+                        optionId: sessionAllowOptionId,
+                      },
+                    };
+                  }
+                }
+
+                const toolSummary = summarizeDevinPermissionToolCall(toolCall);
+                // parsePermissionRequest's own detail can carry the same
+                // synthesized "Tool" label; only a real provider detail counts
+                // before the session-name fallback.
+                const permissionDetail =
+                  permissionRequest.detail !== undefined &&
+                  !isProviderGenericToolTitle(permissionRequest.detail, permissionRequest.kind)
+                    ? permissionRequest.detail
+                    : undefined;
                 const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
                 const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
                 const decision = yield* Deferred.make<ProviderApprovalDecision>();
@@ -1960,8 +2204,19 @@ export function makeDevinAdapter(
                     turnId: ctx?.activeTurnId,
                     requestId: runtimeRequestId,
                     permissionRequest,
-                    detail: permissionRequest.detail ?? JSON.stringify(params).slice(0, 2000),
-                    args: params,
+                    detail:
+                      toolSummary.detail ??
+                      permissionDetail ??
+                      (typeof params.sessionId === "string"
+                        ? `Session ${params.sessionId}`
+                        : JSON.stringify(params).slice(0, 2000)),
+                    args: {
+                      ...params,
+                      ...(toolSummary.toolName !== undefined
+                        ? { toolName: toolSummary.toolName }
+                        : {}),
+                      ...(toolSummary.input !== undefined ? { input: toolSummary.input } : {}),
+                    },
                     source: "acp.jsonrpc",
                     method: "session/request_permission",
                     rawPayload: params,
@@ -1970,6 +2225,14 @@ export function makeDevinAdapter(
 
                 const resolved = yield* Deferred.await(decision);
                 pendingApprovals.delete(requestId);
+
+                if (
+                  resolved === "acceptForSession" &&
+                  input.runtimeMode !== "auto" &&
+                  sessionApprovalKey !== undefined
+                ) {
+                  ctx?.devinSessionApprovedRequestKeys.add(sessionApprovalKey);
+                }
 
                 yield* offerRuntimeEvent(
                   input.lifecycleGeneration,
@@ -2060,18 +2323,33 @@ export function makeDevinAdapter(
             );
 
             return yield* acp.start().pipe(
-              Effect.mapError((cause) =>
-                resumeSessionId !== undefined &&
-                cause instanceof AcpRequestError &&
-                cause.errorMessage.trim().toLowerCase() === "failed to load session data"
-                  ? new ProviderAdapterProcessError({
+              Effect.catch((cause) =>
+                Effect.gen(function* () {
+                  if (isAcpStartupTimeoutError(cause)) {
+                    // No prompt has been submitted. Only declare rejection after
+                    // the scoped ACP finalizer proves its process tree stopped.
+                    // A cleanup defect must propagate as an uncertain delivery.
+                    yield* Scope.close(sessionScope, Exit.void);
+                    return yield* new ProviderAdapterProcessError({
                       provider: PROVIDER,
                       threadId: input.threadId,
                       detail: cause.message,
-                      reason: "resume-state-unavailable",
+                      reason: "startup-failed",
                       cause,
-                    })
-                  : acpToAdapterError(input.threadId)(cause),
+                    });
+                  }
+                  return yield* resumeSessionId !== undefined &&
+                  cause instanceof AcpRequestError &&
+                  cause.errorMessage.trim().toLowerCase() === "failed to load session data"
+                    ? new ProviderAdapterProcessError({
+                        provider: PROVIDER,
+                        threadId: input.threadId,
+                        detail: cause.message,
+                        reason: "resume-state-unavailable",
+                        cause,
+                      })
+                    : acpToAdapterError(input.threadId)(cause);
+                }),
               ),
             );
           });
@@ -2082,6 +2360,7 @@ export function makeDevinAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -2121,7 +2400,9 @@ export function makeDevinAdapter(
             lastPlanFingerprint: undefined,
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
+            devinToolCallStateById: new Map(),
             devinToolCallLifecycleById: new Map(),
+            devinSessionApprovedRequestKeys: new Set(),
             devinStallWatchDetectedAt: undefined,
             devinSpawnStalls: new Map(),
             devinWedgeRecoveryAttemptedFor: undefined,
@@ -2221,6 +2502,16 @@ export function makeDevinAdapter(
 
                   case "ToolCallUpdated":
                     {
+                      // Always merge first: a later request_permission for this
+                      // tool call may carry a sparse toolCall and relies on the
+                      // tracked state for its approval-card label.
+                      ctx.devinToolCallStateById.set(
+                        event.toolCall.toolCallId,
+                        mergeToolCallState(
+                          ctx.devinToolCallStateById.get(event.toolCall.toolCallId),
+                          event.toolCall,
+                        ),
+                      );
                       if (ctx.compactingThread) {
                         const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
                         if (failedToolDetail !== undefined) {
@@ -2798,6 +3089,13 @@ export function makeDevinAdapter(
         // free to cancel it until ctx.acp.prompt actually returns.
         ctx.activePromptResolved = false;
         pruneDevinToolCallTurnIds(ctx.turnToolCallIds, keptTurnId);
+        // Bound tracked tool-call state to the same window: permission
+        // requests only ever reference current or just-settled turn calls.
+        for (const toolCallId of ctx.devinToolCallStateById.keys()) {
+          if (!ctx.turnToolCallIds.has(toolCallId)) {
+            ctx.devinToolCallStateById.delete(toolCallId);
+          }
+        }
         ctx.activeInteractionMode = interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
@@ -3147,7 +3445,12 @@ export function makeDevinAdapter(
       const cacheKey =
         cwd === undefined
           ? undefined
-          : `${input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin"}\u0000${cwd}`;
+          : devinDiscoveryCacheKey({
+              binaryPath: input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin",
+              cwd,
+              ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
+            });
       const cached = cacheKey === undefined ? undefined : commandDiscoveryCache.get(cacheKey);
       // Fast path: serve a fresh cached result without serializing behind the
       // discovery lock.
@@ -3175,7 +3478,12 @@ export function makeDevinAdapter(
           }
           const binaryPath =
             input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin";
-          const cacheKey = `${binaryPath}\u0000${cwd}`;
+          const cacheKey = devinDiscoveryCacheKey({
+            binaryPath,
+            cwd,
+            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
+          });
           // Recheck under the lock: a concurrent discovery may have populated
           // the cache while this fiber waited for the permit.
           const cached = commandDiscoveryCache.get(cacheKey);
@@ -3185,6 +3493,7 @@ export function makeDevinAdapter(
 
           const runtime = yield* makeDevinDiscoveryRuntime({
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
             cwd,
           });
           yield* runtime.start();
@@ -3419,7 +3728,13 @@ export function makeDevinAdapter(
 
     const listModels: NonNullable<DevinAdapterShape["listModels"]> = (input) =>
       discoverDevinModels(
-        resolveDevinBinaryPath(input.binaryPath?.trim() || devinSettings.binaryPath),
+        resolveDevinBinaryPath(input.binaryPath?.trim() || devinSettings.binaryPath, {
+          env: { ...process.env, ...(input.environment ?? {}) },
+        }),
+        {
+          ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+          ...(input.environment ? { environment: input.environment } : {}),
+        },
       );
 
     const stopAll: DevinAdapterShape["stopAll"] = () =>

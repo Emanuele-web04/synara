@@ -40,7 +40,7 @@ type AcpCanonicalRequestType = Extract<
   "exec_command_approval" | "file_read_approval" | "file_change_approval" | "tool_approval"
 >;
 
-function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonicalRequestType {
+export function canonicalRequestTypeFromAcpKind(kind: string | "unknown"): AcpCanonicalRequestType {
   switch (kind) {
     case "execute":
       return "exec_command_approval";

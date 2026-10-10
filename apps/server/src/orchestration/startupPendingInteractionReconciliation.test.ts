@@ -27,6 +27,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSna
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { reconcileRestartStuckTurns } from "./startupTurnReconciliation.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
@@ -78,6 +79,7 @@ describe("boot-time pending interaction reconciliation", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
+      Layer.provide(ServerSettingsService.layerTest()),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
@@ -142,6 +144,7 @@ describe("boot-time pending interaction reconciliation", () => {
       readonly id: string;
       readonly kind: string;
       readonly payload: OrchestrationThreadActivity["payload"];
+      readonly sequence?: number;
     }) =>
       Effect.runPromise(
         engine.dispatch({
@@ -156,6 +159,7 @@ describe("boot-time pending interaction reconciliation", () => {
             payload: input.payload,
             turnId: null,
             createdAt: new Date().toISOString(),
+            ...(input.sequence !== undefined ? { sequence: input.sequence } : {}),
           },
           createdAt: new Date().toISOString(),
         }),
@@ -258,8 +262,8 @@ describe("boot-time pending interaction reconciliation", () => {
     await harness.runBootReconciliation();
 
     const thread = await harness.readThread();
-    expect(pendingInteractionStatus(thread, "req-orphaned-user-input")).toBe("uncertain");
-    expect(pendingInteractionStatus(thread, "req-orphaned-approval")).toBe("uncertain");
+    expect(await harness.readRowStatus("req-orphaned-user-input")).toBe("confirmed");
+    expect(await harness.readRowStatus("req-orphaned-approval", "approval")).toBe("confirmed");
     expect(await harness.readPendingCounts()).toEqual({
       pendingApprovalCount: 0,
       pendingUserInputCount: 0,
@@ -296,9 +300,138 @@ describe("boot-time pending interaction reconciliation", () => {
     await harness.runBootReconciliation();
 
     const thread = await harness.readThread();
-    expect(pendingInteractionStatus(thread, "req-structured")).toBe("uncertain");
+    expect(await harness.readRowStatus("req-structured")).toBe("confirmed");
     expect(failureActivitiesFor(thread, "req-structured")).toHaveLength(1);
   });
+
+  it.each([
+    { interactionKind: "userInput" as const, stale: true },
+    { interactionKind: "approval" as const, stale: true },
+    { interactionKind: "userInput" as const, stale: false },
+  ])(
+    "settles a claimed $interactionKind failure durably (stale=$stale)",
+    async ({ interactionKind, stale }) => {
+      const harness = await createHarness();
+      const requestId = ApprovalRequestId.makeUnsafe("req-claimed-failure");
+      const requestKind = interactionKind === "approval" ? "approval" : "user-input";
+      const commandId = CommandId.makeUnsafe("cmd-response-claimed");
+      await harness.appendActivity({
+        id: "claimed-request",
+        kind: `${requestKind}.requested`,
+        payload: {
+          requestId,
+          lifecycleGeneration: LIFECYCLE_GENERATION,
+          requestKind: "command",
+          questions: structuredQuestions,
+        },
+        sequence: 2_479_474,
+      });
+      const response = {
+        commandId,
+        threadId: THREAD_ID,
+        requestId,
+        lifecycleGeneration: LIFECYCLE_GENERATION,
+        createdAt: new Date().toISOString(),
+      };
+      await Effect.runPromise(
+        harness.engine.dispatch(
+          interactionKind === "userInput"
+            ? { ...response, type: "thread.user-input.respond", answers: {} }
+            : { ...response, type: "thread.approval.respond", decision: "cancel" },
+        ),
+      );
+      expect(await harness.readRowStatus(requestId, interactionKind)).toBe("responding");
+      await harness.appendActivity({
+        id: "claimed-failure",
+        kind: `provider.${requestKind}.respond.failed`,
+        sequence: 874_284,
+        payload: {
+          requestId,
+          lifecycleGeneration: LIFECYCLE_GENERATION,
+          responseCommandId: commandId,
+          settlementStatus: "uncertain",
+          detail: stale
+            ? `Stale pending ${requestKind} request: ${requestId}. Restart the turn to continue.`
+            : "Provider response delivery could not be confirmed.",
+        },
+      });
+      expect(await harness.readRowStatus(requestId, interactionKind)).toBe(
+        stale ? "confirmed" : "uncertain",
+      );
+      const row = Option.getOrThrow(
+        await harness.managed.runPromise(
+          harness.pendingInteractions.getByIdentity({
+            threadId: THREAD_ID,
+            interactionKind,
+            requestId,
+          }),
+        ),
+      );
+      expect(row.resolvedAt === null).toBe(!stale);
+      const thread = await harness.readThread();
+      expect(
+        thread?.pendingInteractions?.some((interaction) => interaction.requestId === requestId),
+      ).toBe(!stale);
+    },
+  );
+
+  it.each(["approval", "userInput"] as const)(
+    "closes a legacy uncertain %s row even when its stale failure already exists",
+    async (interactionKind) => {
+      const harness = await createHarness();
+      const requestId = ApprovalRequestId.makeUnsafe("req-legacy-stale");
+      const requestKind = interactionKind === "approval" ? "approval" : "user-input";
+      await harness.appendActivity({
+        id: "legacy-request",
+        kind: `${requestKind}.requested`,
+        payload: {
+          requestId,
+          lifecycleGeneration: LIFECYCLE_GENERATION,
+          requestKind: "command",
+          questions: structuredQuestions,
+        },
+      });
+      await harness.appendActivity({
+        id: "legacy-failure",
+        kind: `provider.${requestKind}.respond.failed`,
+        payload: {
+          requestId,
+          lifecycleGeneration: LIFECYCLE_GENERATION,
+          detail: `Stale pending ${requestKind} request: ${requestId}. Restart the turn to continue.`,
+        },
+      });
+      // Simulate a persisted row from the old projection, whose callback is gone.
+      const row = Option.getOrThrow(
+        await harness.managed.runPromise(
+          harness.pendingInteractions.getByIdentity({
+            threadId: THREAD_ID,
+            interactionKind,
+            requestId,
+          }),
+        ),
+      );
+      await harness.managed.runPromise(
+        harness.pendingInteractions.upsert({ ...row, status: "uncertain", resolvedAt: null }),
+      );
+      await harness.runBootReconciliation();
+      expect(await harness.readRowStatus(requestId, interactionKind)).toBe("confirmed");
+      const settled = Option.getOrThrow(
+        await harness.managed.runPromise(
+          harness.pendingInteractions.getByIdentity({
+            threadId: THREAD_ID,
+            interactionKind,
+            requestId,
+          }),
+        ),
+      );
+      expect(settled.resolvedAt).not.toBeNull();
+      const failures = failureActivitiesFor(await harness.readThread(), requestId);
+      await harness.runBootReconciliation();
+      expect(failureActivitiesFor(await harness.readThread(), requestId)).toHaveLength(
+        failures.length,
+      );
+    },
+  );
 
   it("leaves resolved interactions untouched", async () => {
     const harness = await createHarness();
@@ -356,7 +489,7 @@ describe("boot-time pending interaction reconciliation", () => {
     });
 
     const thread = await harness.readThread();
-    expect(pendingInteractionStatus(thread, "req-orphaned")).toBe("uncertain");
+    expect(await harness.readRowStatus("req-orphaned")).toBe("confirmed");
     expect(pendingInteractionStatus(thread, "req-post-boot")).toBe("pending");
     expect(failureActivitiesFor(thread, "req-post-boot")).toHaveLength(0);
     expect(await harness.readPendingCounts()).toEqual({

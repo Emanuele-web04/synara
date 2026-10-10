@@ -14,7 +14,7 @@ import {
   pendingRequestInstanceKey,
 } from "@synara/shared/threadSummary";
 
-import { orderedActivities } from "./workLog";
+import { orderedActivities, parseUserInputQuestions } from "./workLog";
 
 export interface PendingApproval {
   requestId: ApprovalRequestId;
@@ -26,7 +26,7 @@ export interface PendingApproval {
   detail?: string;
   permissionProfile?: Record<string, unknown>;
   sessionApprovalAvailable?: boolean;
-  approvalScope?: "computer-task";
+  approvalScope?: "computer-task" | "computer-foreground" | "device-task";
   toolName?: string;
   toolParamsDisplay?: ReadonlyArray<PendingToolParamDisplay>;
 }
@@ -251,53 +251,6 @@ function replayPendingInteractions<
   );
 }
 
-function parseUserInputQuestions(
-  payload: Record<string, unknown> | null,
-): ReadonlyArray<UserInputQuestion> | null {
-  const questions = payload?.questions;
-  if (!Array.isArray(questions)) {
-    return null;
-  }
-  const parsed = questions
-    .map<UserInputQuestion | null>((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const question = entry as Record<string, unknown>;
-      if (
-        typeof question.id !== "string" ||
-        typeof question.header !== "string" ||
-        typeof question.question !== "string" ||
-        !Array.isArray(question.options)
-      ) {
-        return null;
-      }
-      const options = question.options
-        .map<UserInputQuestion["options"][number] | null>((option) => {
-          if (!option || typeof option !== "object") return null;
-          const optionRecord = option as Record<string, unknown>;
-          if (
-            typeof optionRecord.label !== "string" ||
-            typeof optionRecord.description !== "string"
-          ) {
-            return null;
-          }
-          return {
-            label: optionRecord.label,
-            description: optionRecord.description,
-          };
-        })
-        .filter((option): option is UserInputQuestion["options"][number] => option !== null);
-      return {
-        id: question.id,
-        header: question.header,
-        question: question.question,
-        options,
-        ...(question.multiSelect === true ? { multiSelect: true } : {}),
-      };
-    })
-    .filter((question): question is UserInputQuestion => question !== null);
-  return parsed.length > 0 ? parsed : null;
-}
-
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   settlements?: ReadonlyArray<OrchestrationPendingInteraction>,
@@ -343,9 +296,11 @@ export function derivePendingApprovals(
           ...(detail ? { detail } : {}),
           ...(permissionProfile ? { permissionProfile } : {}),
           ...(sessionApprovalAvailable !== undefined ? { sessionApprovalAvailable } : {}),
-          ...(payload?.approvalScope === "computer-task"
-            ? { approvalScope: "computer-task" as const }
-            : {}),
+          ...(payload?.approvalScope === "computer-task" || payload?.approvalScope === "device-task"
+            ? { approvalScope: payload.approvalScope as "computer-task" | "device-task" }
+            : payload?.approvalScope === "computer-foreground"
+              ? { approvalScope: "computer-foreground" as const }
+              : {}),
           ...(toolName ? { toolName } : {}),
           ...(toolParamsDisplay ? { toolParamsDisplay } : {}),
         };

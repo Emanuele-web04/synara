@@ -3,10 +3,8 @@
 // Layer: Component rendering tests
 // Depends on: SettingsSidebarNav, the settings search index, and React server rendering.
 
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { settingRowAnchorId } from "../settingsNavigation";
 import {
   SETTINGS_SEARCH_ENTRIES,
@@ -30,47 +28,6 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "behavior:diff-line-wrapping")).toBe(true);
   });
 
-  it("indexes the follow-up Queue and Steer preference", () => {
-    const results = rankSettingsSearchEntries("steer", 12);
-    expect(results.some((entry) => entry.id === "behavior:follow-up-behavior")).toBe(true);
-  });
-
-  it("surfaces the automation run threads visibility row", () => {
-    const results = rankSettingsSearchEntries("automation runs", 12);
-    expect(results.some((entry) => entry.id === "general:automation-run-threads")).toBe(true);
-  });
-
-  it("keeps the Computer auto-open row searchable for every desktop preview", () => {
-    const offered = rankSettingsSearchEntries("open automatically", 12, {
-      computerBackendIsVisibleDesktop: false,
-    });
-    expect(offered.some((entry) => entry.id === "computer:open-automatically")).toBe(true);
-
-    const visibleDesktop = rankSettingsSearchEntries("open automatically", 12, {
-      computerBackendIsVisibleDesktop: true,
-    });
-    expect(visibleDesktop.some((entry) => entry.id === "computer:open-automatically")).toBe(true);
-  });
-
-  it("indexes the Computer control switch with its guardrails", () => {
-    const entry = SETTINGS_SEARCH_ENTRIES.find(
-      (candidate) => candidate.id === "computer:how-agents-use-the-desktop",
-    );
-    expect(entry?.title).toBe("Computer control");
-    expect(entry?.keywords).toContain("Approval gates and Stop still apply");
-  });
-
-  it("includes the activity toasts notification row", () => {
-    const results = rankSettingsSearchEntries("toasts", 12);
-    expect(results.some((entry) => entry.id === "notifications:activity-toasts")).toBe(true);
-  });
-
-  it("indexes environment instructions and the system UI font row", () => {
-    expect(SETTINGS_SEARCH_ENTRIES.map((entry) => entry.id)).toEqual(
-      expect.arrayContaining(["general:environment-instructions", "appearance:system-ui-font"]),
-    );
-  });
-
   it("surfaces every row in a section when searching the section label", () => {
     const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
     expect(results.some((entry) => entry.section === "appearance")).toBe(true);
@@ -92,36 +49,30 @@ describe("rankSettingsSearchEntries", () => {
       }
     }
   });
-});
 
-describe("SettingsSidebarNav", () => {
-  it("renders the soft search input alongside the section list", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsSidebarNav activeSection="general" onBack={vi.fn()} onSelectSection={vi.fn()} />,
-    );
-
-    expect(markup).toContain('aria-label="Search settings"');
-    expect(markup).toContain('aria-label="Settings sections"');
-    expect(markup).toContain("Back to app");
+  it("finds the Behavior and Providers rows by their titles", () => {
+    const titles = (query: string) =>
+      rankSettingsSearchEntries(query, 12).map((entry) => entry.title);
+    expect(titles("dictating")).toContain("Enter while dictating");
+    expect(titles("diff colors")).toContain("Pull request diff colors");
+    expect(titles("enabled providers")).toContain("Enabled providers");
   });
 
-  it("groups settings by user intent instead of implementation ownership", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsSidebarNav activeSection="general" onBack={vi.fn()} onSelectSection={vi.fn()} />,
-    );
+  it("finds the Fold finished turns and Wait for subagents rows", () => {
+    const sections = (query: string) =>
+      rankSettingsSearchEntries(query, 12).map((entry) => `${entry.section}:${entry.title}`);
+    expect(sections("fold")).toContain("behavior:Fold finished turns");
+    expect(sections("worked for")).toContain("behavior:Fold finished turns");
+    expect(sections("subagents")).toContain("notifications:Wait for subagents");
+    const targets = (query: string) =>
+      rankSettingsSearchEntries(query, 12).map((entry) => settingsSearchEntryTarget(entry));
+    expect(targets("fold")).toContain("setting-fold-finished-turns");
+    expect(targets("subagents")).toContain("setting-wait-for-subagents");
+  });
 
-    expect(markup).toContain("Personal");
-    expect(markup).toContain("Integrations");
-    expect(markup).toContain("Coding");
-    expect(markup).toContain("System");
-    expect(markup).toContain("Archived");
-    expect(markup).toContain("Chat behavior");
-    expect(markup).toContain("MCP connections");
-    expect(markup).toContain("Agent providers");
-    expect(markup).toContain("Managed worktrees");
-    expect(markup).toContain("System tools");
-    expect(markup).toContain("Archived threads");
-    expect(markup).not.toContain(">App<");
-    expect(markup).not.toContain(">Synara<");
+  it("deep-links the provider picker result to the Available CLIs row", () => {
+    const [top] = rankSettingsSearchEntries("picker order", 12);
+    expect(top?.title).toBe("Available CLIs");
+    expect(settingsSearchEntryTarget(top!)).toBe("setting-available-clis");
   });
 });

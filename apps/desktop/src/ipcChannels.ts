@@ -7,6 +7,7 @@ export const DESKTOP_IPC_CHANNELS = {
   saveFile: "desktop:save-file",
   confirm: "desktop:confirm",
   setTheme: "desktop:set-theme",
+  setWindowMaterial: "desktop:set-window-material",
   getAppIcon: "desktop:get-app-icon",
   setAppIcon: "desktop:set-app-icon",
   contextMenu: "desktop:context-menu",
@@ -27,8 +28,24 @@ export const DESKTOP_IPC_CHANNELS = {
   customTitleBarSetPreference: "desktop:custom-title-bar-set-preference",
   customTitleBarRelaunch: "desktop:custom-title-bar-relaunch",
   menuAction: "desktop:menu-action",
+  setMenuShortcuts: "desktop:set-menu-shortcuts",
   quitConfirmationRequest: "desktop:quit-confirmation-request",
   quitConfirmationResponse: "desktop:quit-confirmation-response",
+  beta: {
+    getState: "desktop:beta-get-state",
+    launch: "desktop:beta-launch",
+    install: "desktop:beta-install",
+    importAndLaunch: "desktop:beta-import-and-launch",
+    leave: "desktop:beta-leave",
+  },
+  betaDiagnostics: {
+    enabled: "desktop:beta-diagnostics-enabled",
+    rendererReady: "desktop:beta-diagnostics-renderer-ready",
+    reportError: "desktop:beta-diagnostics-report-error",
+    recordActivity: "desktop:beta-diagnostics-record-activity",
+    reportIssue: "desktop:beta-diagnostics-report-issue",
+    getReportStatus: "desktop:beta-diagnostics-report-status",
+  },
   updateState: "desktop:update-state",
   updateGetState: "desktop:update-get-state",
   updateCheck: "desktop:update-check",
@@ -42,6 +59,11 @@ export const DESKTOP_IPC_CHANNELS = {
   transcribeVoice: "desktop:server-transcribe-voice",
   computerPreviewFrame: "computerPreview.frame",
   computerSetCursorStyle: "desktop:computer-set-cursor-style",
+  audioLevel: {
+    setSource: "desktop:audio-level-set-source",
+    listMicrophones: "desktop:audio-level-list-microphones",
+    level: "desktop:audio-level",
+  },
   storageMigration: {
     read: "desktop:storage-migration-read",
     acknowledge: "desktop:storage-migration-acknowledge",
@@ -119,5 +141,6 @@ export const DESKTOP_IPC_CHANNELS = {
 export const BROWSER_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.browser;
 export const BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL = "desktop:browser-annotations-guest-command";
 export const APPSNAP_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.appSnap;
+export const BETA_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.beta;
 export const DESKTOP_WS_URL_CHANNEL = DESKTOP_IPC_CHANNELS.wsUrl;
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = DESKTOP_IPC_CHANNELS.transcribeVoice;

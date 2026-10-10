@@ -1,21 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { type ProviderKind } from "@synara/contracts";
 
 import {
   normalizeStarredModels,
   starredModelKey,
   toggleStarredModel,
+  unstarModel,
   type StarredModel,
 } from "~/lib/starredModels";
 import {
-  buildStarredTabRows,
   buildStarredModelOptionsPatch,
-  formatStarredTraitsLabel,
+  buildStarredTabRows,
   modelPickerShortcutRowIndex,
-  resolveStarredTraits,
 } from "./ComposerModelPicker.logic";
 import { getComposerTraitSelection } from "./composerTraits";
-import { type ProviderModelOption } from "../../providerModelOptions";
 
 const CODEX_HIGH_FAST: StarredModel = {
   provider: "codex",
@@ -25,57 +22,7 @@ const CODEX_HIGH_FAST: StarredModel = {
   thinking: null,
 };
 
-const EMPTY_MODEL_OPTIONS: Record<ProviderKind, ReadonlyArray<ProviderModelOption>> = {
-  codex: [],
-  claudeAgent: [],
-  cursor: [],
-  devin: [],
-  antigravity: [],
-  grok: [],
-  droid: [],
-  opencode: [],
-  pi: [],
-};
-
 describe("starred model presets", () => {
-  it.each([
-    { options: [], expectedModel: null },
-    { options: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }], expectedModel: null },
-    { options: [{ slug: "gpt-5.5", name: "GPT-5.5" }], expectedModel: "gpt-5.5" },
-  ])("only enables presets present in the current catalog: %j", ({ options, expectedModel }) => {
-    const [row] = buildStarredTabRows({
-      starredModels: [CODEX_HIGH_FAST],
-      modelOptionsByProvider: { ...EMPTY_MODEL_OPTIONS, codex: options },
-      query: "",
-      current: CODEX_HIGH_FAST,
-      effortLevelsFor: () => [],
-    });
-
-    expect(row?.selectableModel).toBe(expectedModel);
-    expect(row?.selected).toBe(expectedModel !== null);
-    expect(row?.preset).toBe(CODEX_HIGH_FAST);
-    if (expectedModel === null) expect(row?.detail).toBe("Unavailable");
-  });
-
-  it("snapshots the traits currently resolved for a model", () => {
-    const selection = getComposerTraitSelection("codex", "gpt-5.5", "", {
-      reasoningEffort: "high",
-      fastMode: true,
-    });
-    expect(resolveStarredTraits(selection)).toEqual({
-      effort: "high",
-      fastMode: true,
-      thinking: null,
-    });
-  });
-
-  it("round-trips a preset back into a provider option patch", () => {
-    const selection = getComposerTraitSelection("codex", "gpt-5.5", "", undefined);
-    expect(
-      buildStarredModelOptionsPatch({ provider: "codex", selection, starred: CODEX_HIGH_FAST }),
-    ).toEqual({ reasoningEffort: "high", fastMode: true });
-  });
-
   it("skips traits the target model does not expose", () => {
     const selection = getComposerTraitSelection("codex", "gpt-5.5", "", undefined);
     expect(
@@ -85,14 +32,6 @@ describe("starred model presets", () => {
         starred: { effort: "not-a-level", fastMode: null, thinking: false },
       }),
     ).toEqual({});
-  });
-
-  it("labels a preset through the model's effort ladder", () => {
-    const { effortLevels } = getComposerTraitSelection("codex", "gpt-5.5", "", undefined);
-    expect(formatStarredTraitsLabel(CODEX_HIGH_FAST, effortLevels)).toBe("High · Fast");
-    expect(
-      formatStarredTraitsLabel({ effort: null, fastMode: null, thinking: null }, effortLevels),
-    ).toBe("");
   });
 
   it("keeps one star per model + traits combination", () => {
@@ -105,6 +44,14 @@ describe("starred model presets", () => {
     expect(toggleStarredModel(both, CODEX_HIGH_FAST)).toEqual([lowEffort]);
   });
 
+  it("unstars every preset of a model and keeps the provider's other models", () => {
+    const lowEffort = { ...CODEX_HIGH_FAST, effort: "low" };
+    const otherModel = { ...CODEX_HIGH_FAST, model: "gpt-5.4" };
+    expect(unstarModel([CODEX_HIGH_FAST, otherModel, lowEffort], CODEX_HIGH_FAST)).toEqual([
+      otherModel,
+    ]);
+  });
+
   it("drops stored entries for unknown providers and duplicates", () => {
     expect(
       normalizeStarredModels([
@@ -113,6 +60,52 @@ describe("starred model presets", () => {
         { ...CODEX_HIGH_FAST, provider: "retired-provider" },
       ]),
     ).toEqual([CODEX_HIGH_FAST]);
+  });
+});
+
+describe("account-scoped starred presets", () => {
+  const WORK_HIGH_FAST: StarredModel = { ...CODEX_HIGH_FAST, instanceId: "codex_work" };
+
+  it("stars the same model and traits separately per account", () => {
+    const both = toggleStarredModel(toggleStarredModel([], CODEX_HIGH_FAST), WORK_HIGH_FAST);
+    expect(both).toEqual([CODEX_HIGH_FAST, WORK_HIGH_FAST]);
+    expect(unstarModel(both, WORK_HIGH_FAST)).toEqual([CODEX_HIGH_FAST]);
+  });
+
+  it("stores the default account implicitly so older presets keep their meaning", () => {
+    expect(normalizeStarredModels([{ ...CODEX_HIGH_FAST, instanceId: "codex" }])).toEqual([
+      CODEX_HIGH_FAST,
+    ]);
+    expect(starredModelKey({ ...CODEX_HIGH_FAST, instanceId: "codex" })).toBe(
+      starredModelKey(CODEX_HIGH_FAST),
+    );
+  });
+
+  it("builds starred rows from each account's catalog and labels non-default accounts", () => {
+    const rows = buildStarredTabRows({
+      starredModels: [CODEX_HIGH_FAST, WORK_HIGH_FAST],
+      modelOptionsFor: (_provider, instanceId) =>
+        instanceId === "codex_work"
+          ? [{ slug: "gpt-5.5", name: "GPT-5.5 (work)" }]
+          : [{ slug: "gpt-5.5", name: "GPT-5.5" }],
+      accountLabelFor: (instanceId) => (instanceId === "codex_work" ? "Work" : undefined),
+      query: "",
+      current: {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: "gpt-5.5",
+        effort: "high",
+        fastMode: true,
+        thinking: null,
+      },
+      effortLevelsFor: () => [],
+    });
+
+    expect(rows.map((row) => [row.instanceId, row.name, row.selected])).toEqual([
+      [undefined, "GPT-5.5", false],
+      ["codex_work", "GPT-5.5 (work)", true],
+    ]);
+    expect(rows[1]?.detail?.startsWith("Work")).toBe(true);
   });
 });
 

@@ -4,7 +4,7 @@
 //          skill discovery as supported for every provider.
 // Layer: Server provider tests
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,15 +15,19 @@ import type {
   ProviderListAgentsResult,
   ProviderListCommandsResult,
   ProviderListModelsResult,
+  ProviderListPluginsResult,
   ProviderListSkillsResult,
+  ServerProviderStatus,
+  ServerSettings,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Layer } from "effect";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Effect, Layer, Stream } from "effect";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   deriveServerPaths,
   resolveDefaultChatWorkspaceRoot,
+  resolveDefaultGroupsWorkspaceRoot,
   resolveDefaultStudioWorkspaceRoot,
   ServerConfig,
   type ServerConfigShape,
@@ -34,6 +38,7 @@ import { ProviderAdapterRequestError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderDiscoveryService } from "../Services/ProviderDiscoveryService.ts";
+import { ProviderHealth } from "../Services/ProviderHealth.ts";
 import { clearSkillsCatalogCacheForTests } from "../skillsCatalog.ts";
 import { ProviderDiscoveryServiceLive } from "./ProviderDiscoveryService.ts";
 
@@ -50,7 +55,7 @@ async function writeSkill(skillDir: string, name: string): Promise<void> {
   );
 }
 
-const makeConfigLayer = () =>
+const makeConfigLayer = (getStatuses: () => readonly ServerProviderStatus[] = () => []) =>
   Layer.effect(
     ServerConfig,
     Effect.gen(function* () {
@@ -63,6 +68,7 @@ const makeConfigLayer = () =>
         homeDir,
         chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir }),
         studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir }),
+        groupsWorkspaceRoot: resolveDefaultGroupsWorkspaceRoot({ homeDir }),
         baseDir,
         ...derived,
         staticDir: undefined,
@@ -76,6 +82,15 @@ const makeConfigLayer = () =>
         logWebSocketEvents: false,
       } satisfies ServerConfigShape;
     }),
+  ).pipe(
+    Layer.provideMerge(
+      Layer.succeed(ProviderHealth, {
+        getStatuses: Effect.sync(getStatuses),
+        refresh: Effect.sync(getStatuses),
+        updateProvider: () => Effect.die("Provider updates are not used by discovery tests."),
+        streamChanges: Stream.empty,
+      }),
+    ),
   );
 
 const makeRegistryLayer = (adapter: Partial<ProviderAdapterShape<ProviderAdapterError>>) =>
@@ -127,6 +142,20 @@ const runListModels = (input: {
   return Effect.runPromise(
     program as unknown as Effect.Effect<ProviderListModelsResult, never, never>,
   );
+};
+
+const runDiscovery = <A>(input: {
+  adapter: Partial<ProviderAdapterShape<ProviderAdapterError>>;
+  settings?: Partial<ServerSettings>;
+  effect: Effect.Effect<A, unknown, ProviderDiscoveryService>;
+}) => {
+  const baseLayer = Layer.mergeAll(
+    makeConfigLayer(),
+    ServerSettingsService.layerTest(input.settings),
+    makeRegistryLayer(input.adapter),
+  ).pipe(Layer.provideMerge(NodeServices.layer));
+  const testLayer = ProviderDiscoveryServiceLive.pipe(Layer.provideMerge(baseLayer));
+  return Effect.runPromise(input.effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, never>);
 };
 
 beforeEach(async () => {
@@ -208,6 +237,161 @@ describe("ProviderDiscoveryService.listSkills", () => {
   });
 });
 
+describe("ProviderDiscoveryService provider instances", () => {
+  it("clears stale Codex account fields when resolving the explicit default instance", async () => {
+    let captured: Record<string, unknown> | undefined;
+
+    const result = await runDiscovery({
+      adapter: {
+        listModels: (input) =>
+          Effect.sync(() => {
+            captured = input as unknown as Record<string, unknown>;
+            return {
+              models: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListModelsResult;
+          }),
+      },
+      settings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            config: {
+              homePath: "/work-codex",
+              shadowHomePath: "/work-auth",
+              accountId: "work",
+            },
+          },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listModels({
+          provider: "codex",
+          instanceId: "codex",
+          homePath: "/stale-home",
+          shadowHomePath: "/stale-shadow",
+          accountId: "stale",
+        });
+      }),
+    });
+
+    expect(result.source).toBe("stub");
+    expect(captured).toMatchObject({ provider: "codex", instanceId: "codex" });
+    expect(captured).not.toHaveProperty("homePath");
+    expect(captured).not.toHaveProperty("shadowHomePath");
+    expect(captured).not.toHaveProperty("accountId");
+  });
+
+  it("passes resolved Codex instance options into plugin discovery", async () => {
+    let captured: Record<string, unknown> | undefined;
+
+    await runDiscovery({
+      adapter: {
+        listPlugins: (input) =>
+          Effect.sync(() => {
+            captured = input as unknown as Record<string, unknown>;
+            return {
+              marketplaces: [],
+              marketplaceLoadErrors: [],
+              remoteSyncError: null,
+              featuredPluginIds: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListPluginsResult;
+          }),
+      },
+      settings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            config: {
+              homePath: "/work-codex",
+              shadowHomePath: "/work-auth",
+              accountId: "work",
+            },
+          },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listPlugins({
+          provider: "codex",
+          instanceId: "codex_work",
+        });
+      }),
+    });
+
+    expect(captured).toMatchObject({
+      provider: "codex",
+      instanceId: "codex_work",
+      homePath: "/work-codex",
+      shadowHomePath: "/work-auth",
+      accountId: "work",
+    });
+  });
+
+  it("rejects explicit unknown provider instance ids", async () => {
+    await expect(
+      runDiscovery({
+        adapter: {
+          listModels: () =>
+            Effect.succeed({
+              models: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListModelsResult),
+        },
+        effect: Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          return yield* discovery.listModels({
+            provider: "codex",
+            instanceId: "codex_removed",
+          });
+        }),
+      }),
+    ).rejects.toThrow("Unknown provider instance 'codex_removed'");
+  });
+
+  it("returns an empty disabled result without invoking the instance adapter", async () => {
+    let adapterCalls = 0;
+    await expect(
+      runDiscovery({
+        adapter: {
+          listModels: () => {
+            adapterCalls += 1;
+            return Effect.succeed({
+              models: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListModelsResult);
+          },
+        },
+        settings: {
+          providerInstances: {
+            codex_disabled: {
+              driver: "codex",
+              enabled: false,
+              config: {
+                homePath: "/disabled-codex",
+              },
+            },
+          },
+        },
+        effect: Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          return yield* discovery.listModels({
+            provider: "codex",
+            instanceId: "codex_disabled",
+          });
+        }),
+      }),
+    ).resolves.toEqual({ models: [], source: "disabled", cached: false });
+    expect(adapterCalls).toBe(0);
+  });
+});
+
 describe("ProviderDiscoveryService.getComposerCapabilities", () => {
   it("reports skill discovery as supported even when the adapter declines it", async () => {
     const baseLayer = Layer.mergeAll(
@@ -231,6 +415,113 @@ describe("ProviderDiscoveryService.getComposerCapabilities", () => {
 });
 
 describe("ProviderDiscoveryService.listModels", () => {
+  it("honors an explicit refresh through the decoded discovery request", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let calls = 0;
+    try {
+      const refreshed = await runDiscovery({
+        adapter: {
+          listModels: () =>
+            Effect.sync(() => ({
+              models: [{ slug: `model-${++calls}`, name: "Model" }],
+              source: "codex-app-server",
+            })),
+        },
+        effect: Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          yield* discovery.listModels({ provider: "codex", cwd });
+          now += 61_000;
+          const cached = yield* discovery.listModels({
+            provider: "codex",
+            cwd,
+            refresh: "if-stale",
+          });
+          expect(cached.models[0]?.slug).toBe("model-1");
+          return yield* discovery.listModels({ provider: "codex", cwd, refresh: "now" });
+        }),
+      });
+      expect(refreshed.models[0]?.slug).toBe("model-2");
+      expect(calls).toBe(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each(["running service", "restart"])(
+    "refreshes Claude models after a CLI update across a %s",
+    async (mode) => {
+      let version = "2.1.283";
+      let resolvedModel = "claude-sonnet-5";
+      let adapterCalls = 0;
+      const makeLayer = () =>
+        ProviderDiscoveryServiceLive.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              makeConfigLayer(() => [
+                {
+                  provider: "claudeAgent",
+                  driver: "claudeAgent",
+                  instanceId: "claudeAgent",
+                  status: "ready",
+                  available: true,
+                  authStatus: "authenticated",
+                  version,
+                  checkedAt: "2026-09-30T00:00:00.000Z",
+                },
+              ]),
+              ServerSettingsService.layerTest(),
+              makeRegistryLayer({
+                listModels: () =>
+                  Effect.sync(() => {
+                    adapterCalls += 1;
+                    return {
+                      models: [{ slug: "sonnet", resolvedModel, name: "Sonnet" }],
+                      source: "sdk",
+                      cached: false,
+                    };
+                  }),
+              }),
+            ).pipe(Layer.provideMerge(NodeServices.layer)),
+          ),
+        );
+      const input = { provider: "claudeAgent" as const, cwd };
+      const upgrade = () => {
+        version = "2.1.284";
+        resolvedModel = "claude-sonnet-5-5";
+      };
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          const first = yield* discovery.listModels(input);
+          expect(first.models[0]?.resolvedModel).toBe("claude-sonnet-5");
+          const cached = yield* discovery.listModels(input);
+          expect(cached.cached).toBe(true);
+          if (mode === "restart") return null;
+          upgrade();
+          return yield* discovery.listModels(input);
+        }).pipe(Effect.provide(makeLayer())),
+      );
+
+      let refreshed = result;
+      if (mode === "restart") {
+        expect(existsSync(path.join(baseDir, "userdata", "provider-models", "catalogs.json"))).toBe(
+          true,
+        );
+        upgrade();
+        refreshed = await Effect.runPromise(
+          Effect.gen(function* () {
+            const discovery = yield* ProviderDiscoveryService;
+            return yield* discovery.listModels(input);
+          }).pipe(Effect.provide(makeLayer())),
+        );
+      }
+      expect(refreshed?.models[0]?.resolvedModel).toBe("claude-sonnet-5-5");
+      expect(refreshed?.cached).toBe(false);
+      expect(adapterCalls).toBe(2);
+    },
+  );
+
   it("skips OpenCode agent and command discovery until re-enabled", async () => {
     const adapterCalls: string[] = [];
     const adapter: Partial<ProviderAdapterShape<ProviderAdapterError>> = {
@@ -312,26 +603,6 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(adapterCalls).toBe(0);
   });
 
-  it("dispatches model discovery for an enabled provider", async () => {
-    let adapterCalls = 0;
-    const result = await runListModels({
-      adapter: {
-        listModels: () => {
-          adapterCalls += 1;
-          return Effect.succeed({
-            models: [{ slug: "cursor-model", name: "Cursor Model" }],
-            source: "cursor.cli",
-            cached: false,
-          });
-        },
-      },
-      enabled: true,
-    });
-
-    expect(result.models).toEqual([{ slug: "cursor-model", name: "Cursor Model" }]);
-    expect(adapterCalls).toBe(1);
-  });
-
   it("serves repeat model discovery from the shared cache without re-invoking the adapter", async () => {
     let adapterCalls = 0;
     const baseLayer = Layer.mergeAll(
@@ -395,5 +666,83 @@ describe("ProviderDiscoveryService.listModels", () => {
       source: "cursor.cli",
       cached: false,
     });
+  });
+
+  it("serves a persisted catalog on a fresh service without re-invoking the adapter", async () => {
+    const catalogPath = path.join(baseDir, "userdata", "provider-models", "catalogs.json");
+    let adapterCalls = 0;
+    const makeAdapter = () => ({
+      listModels: () => {
+        adapterCalls += 1;
+        return Effect.succeed({
+          models: [{ slug: "cursor-model", name: "Cursor Model" }],
+          source: "cursor.cli",
+          cached: false,
+        });
+      },
+    });
+    const makeLayer = () =>
+      ProviderDiscoveryServiceLive.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            makeConfigLayer(),
+            ServerSettingsService.layerTest(),
+            makeRegistryLayer(makeAdapter()),
+          ).pipe(Layer.provideMerge(NodeServices.layer)),
+        ),
+      );
+
+    const first = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listModels({ provider: "cursor", cwd });
+      }).pipe(Effect.provide(makeLayer())) as Effect.Effect<ProviderListModelsResult, never, never>,
+    );
+    expect(first.cached).toBe(false);
+    expect(adapterCalls).toBe(1);
+
+    // The write daemon flushes asynchronously; wait for the snapshot to land.
+    const deadline = Date.now() + 5_000;
+    while (!existsSync(catalogPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(catalogPath)).toBe(true);
+
+    // A second service over the same stateDir is a restart: it must answer from
+    // the persisted snapshot instead of paying discovery again.
+    const second = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listModels({ provider: "cursor", cwd });
+      }).pipe(Effect.provide(makeLayer())) as Effect.Effect<ProviderListModelsResult, never, never>,
+    );
+
+    expect(second).toEqual({ ...first, cached: true });
+    expect(adapterCalls).toBe(1);
+  });
+
+  it("ignores a malformed persisted catalog and re-discovers", async () => {
+    const catalogPath = path.join(baseDir, "userdata", "provider-models", "catalogs.json");
+    // Private mode: atomicWrite refuses group/other-writable parents.
+    await mkdir(path.dirname(catalogPath), { recursive: true, mode: 0o700 });
+    await writeFile(catalogPath, "{not-json", "utf8");
+
+    let adapterCalls = 0;
+    const result = await runListModels({
+      adapter: {
+        listModels: () => {
+          adapterCalls += 1;
+          return Effect.succeed({
+            models: [{ slug: "cursor-model", name: "Cursor Model" }],
+            source: "cursor.cli",
+            cached: false,
+          });
+        },
+      },
+      enabled: true,
+    });
+
+    expect(result.models).toHaveLength(1);
+    expect(adapterCalls).toBe(1);
   });
 });

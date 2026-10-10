@@ -1,3 +1,12 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver-sdk/Cargo.toml b/libs/cua-driver/rust/crates/cua-driver-sdk/Cargo.toml
+--- a/libs/cua-driver/rust/crates/cua-driver-sdk/Cargo.toml
++++ b/libs/cua-driver/rust/crates/cua-driver-sdk/Cargo.toml
+@@ -11,4 +11,4 @@
+ [lib]
+-crate-type = ["rlib", "cdylib"]
++crate-type = ["rlib"]
+
+ [dependencies]
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
 index 87bc75ea7..69b5e580e 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs

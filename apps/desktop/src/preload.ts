@@ -5,6 +5,7 @@ import type {
   DesktopAgentCursorStyle,
   DesktopBridge,
   DesktopComputerPreviewFrame,
+  DesktopDiagnosticActivity,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -21,6 +22,22 @@ function getDesktopWsUrl(): string | null {
     return ipcWsUrl ?? resolveDesktopWsUrlFromEnv(process.env);
   } catch {
     return resolveDesktopWsUrlFromEnv(process.env);
+  }
+}
+
+function getBetaDiagnosticsBridge(): DesktopBridge["betaDiagnostics"] {
+  try {
+    if (ipcRenderer.sendSync(IPC.betaDiagnostics.enabled) !== true) return undefined;
+    return {
+      rendererReady: () => ipcRenderer.send(IPC.betaDiagnostics.rendererReady),
+      reportError: (error) => ipcRenderer.send(IPC.betaDiagnostics.reportError, error),
+      reportIssue: (issue) => ipcRenderer.invoke(IPC.betaDiagnostics.reportIssue, issue),
+      getReportStatus: (id) => ipcRenderer.invoke(IPC.betaDiagnostics.getReportStatus, id),
+      recordActivity: (breadcrumb) =>
+        ipcRenderer.send(IPC.betaDiagnostics.recordActivity, breadcrumb),
+    };
+  } catch {
+    return undefined;
   }
 }
 
@@ -95,7 +112,24 @@ function parseBrowserAnnotationEvent(payload: unknown): BrowserAnnotationEvent |
   return payload as BrowserAnnotationEvent;
 }
 
+const betaDiagnosticsBridge = getBetaDiagnosticsBridge();
+let lastBrowserResize = -Infinity;
+function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
+  try {
+    if (!betaDiagnosticsBridge?.recordActivity) return;
+    if (activity === "browser.resize") {
+      const now = Date.now();
+      if (now - lastBrowserResize < 1_000) return;
+      lastBrowserResize = now;
+    }
+    betaDiagnosticsBridge.recordActivity({ activity, phase: "started" });
+  } catch {
+    /* best effort */
+  }
+}
+
 contextBridge.exposeInMainWorld("desktopBridge", {
+  ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
   // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
   getPathForFile: (file: File) => {
@@ -110,6 +144,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
   setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),
   showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),
@@ -167,6 +202,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setCursorStyle: (style: DesktopAgentCursorStyle | null) =>
       ipcRenderer.invoke(IPC.computerSetCursorStyle, style),
   },
+  audioLevel: {
+    setSource: (source, microphoneId) =>
+      ipcRenderer.invoke(IPC.audioLevel.setSource, source, microphoneId ?? null),
+    listMicrophones: () => ipcRenderer.invoke(IPC.audioLevel.listMicrophones),
+    onLevel: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, level: unknown) => {
+        if (typeof level !== "number" || !Number.isFinite(level)) return;
+        listener(level);
+      };
+
+      ipcRenderer.on(IPC.audioLevel.level, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(IPC.audioLevel.level, wrappedListener);
+      };
+    },
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;
@@ -178,6 +229,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IPC.menuAction, wrappedListener);
     };
   },
+  setMenuShortcuts: (shortcuts) => ipcRenderer.invoke(IPC.setMenuShortcuts, shortcuts),
   onQuitConfirmationRequest: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       const request = parseQuitConfirmationRequest(payload);
@@ -208,6 +260,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IPC.zoomFactorChanged, wrappedListener);
     };
+  },
+  beta: {
+    getState: () => ipcRenderer.invoke(IPC.beta.getState),
+    install: () => ipcRenderer.invoke(IPC.beta.install),
+    launch: () => ipcRenderer.invoke(IPC.beta.launch),
+    importAndLaunch: () => ipcRenderer.invoke(IPC.beta.importAndLaunch),
+    leave: (input: { readonly moveToTrash: boolean }) => ipcRenderer.invoke(IPC.beta.leave, input),
   },
   getUpdateState: () => ipcRenderer.invoke(IPC.updateGetState),
   checkForUpdates: () => ipcRenderer.invoke(IPC.updateCheck),
@@ -309,11 +368,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         };
       },
     },
-    open: (input) => ipcRenderer.invoke(IPC.browser.open, input),
+    open: (input) => {
+      recordBrowserActivity("browser.open");
+      return ipcRenderer.invoke(IPC.browser.open, input);
+    },
     close: (input) => ipcRenderer.invoke(IPC.browser.close, input),
     hide: (input) => ipcRenderer.invoke(IPC.browser.hide, input),
     getState: (input) => ipcRenderer.invoke(IPC.browser.getState, input),
     setPanelBounds: async (input) => {
+      recordBrowserActivity("browser.resize");
       ipcRenderer.send(IPC.browser.setBounds, input);
     },
     attachWebview: (input) => ipcRenderer.invoke(IPC.browser.attachWebview, input),
@@ -323,7 +386,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IPC.browser.copyScreenshotToClipboard, input),
     captureScreenshot: (input) => ipcRenderer.invoke(IPC.browser.captureScreenshot, input),
     capturePreview: (input) => ipcRenderer.invoke(IPC.browser.capturePreview, input),
-    navigate: (input) => ipcRenderer.invoke(IPC.browser.navigate, input),
+    navigate: (input) => {
+      recordBrowserActivity("browser.navigate");
+      return ipcRenderer.invoke(IPC.browser.navigate, input);
+    },
     reload: (input) => ipcRenderer.invoke(IPC.browser.reload, input),
     goBack: (input) => ipcRenderer.invoke(IPC.browser.goBack, input),
     goForward: (input) => ipcRenderer.invoke(IPC.browser.goForward, input),

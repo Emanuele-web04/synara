@@ -66,6 +66,9 @@ export type SynaraContextResult = typeof SynaraContextResult.Type;
 
 export const SynaraCreateThreadSpec = Schema.Struct({
   prompt: Schema.String.check(Schema.isNonEmpty()),
+  contextMessageIds: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isNonEmpty())).check(Schema.isMaxLength(16)),
+  ),
   notifyCreatorOnComplete: Schema.optional(Schema.Boolean),
   title: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   target: ModelSelection,
@@ -156,6 +159,9 @@ export const SynaraCreatedThreadResult = Schema.Struct({
   environment: Schema.Literals(["local", "worktree"]),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  /** Ready-to-use markdown link target for the created thread
+   * (`thread://<threadId>`) — renders as a clickable thread link. */
+  link: Schema.optional(Schema.String),
   status: Schema.Literal("task_dispatched"),
 });
 export type SynaraCreatedThreadResult = typeof SynaraCreatedThreadResult.Type;

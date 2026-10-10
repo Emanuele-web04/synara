@@ -3,6 +3,7 @@
 // Layer: UI styling helper
 // Exports: notification surface class names/tones used by toast and status banners.
 
+import { FLOATING_OVERLAY_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { cn } from "~/lib/utils";
 
 // Every notification card shares the same neutral popover chrome; only the
@@ -37,12 +38,17 @@ const ERROR_NOTIFICATION_TONE_CLASS_NAME =
 
 export function notificationSurfaceClassName(options: {
   compact: boolean;
+  floating?: boolean;
   tone?: NotificationTone;
 }): string {
   return cn(
     options.compact
       ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME
       : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+    options.floating && FLOATING_OVERLAY_SURFACE_CLASS_NAME,
     options.tone === "error" && ERROR_NOTIFICATION_TONE_CLASS_NAME,
+    options.floating &&
+      options.tone === "error" &&
+      "[--app-overlay-surface:color-mix(in_srgb,var(--destructive)_5%,var(--popover))] dark:[--app-overlay-surface:color-mix(in_srgb,var(--destructive)_8%,var(--popover))]",
   );
 }

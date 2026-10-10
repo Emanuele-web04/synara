@@ -56,9 +56,17 @@ import {
   type GitWorkingTreePatch,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
+import {
+  gitSubcommand,
+  tryWithGitCommandAdmission,
+  withGitCommandAdmission,
+} from "./GitCommandAdmission.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+// Writes can scale with repository size and network speed. Bound captured logs,
+// not the operation; caller interruption still closes the owned process scope.
+const GIT_MUTATION_OPTIONS = { timeoutMs: null, outputMode: "truncate" } as const;
 // Successful upstream refreshes stay warm for 15s. Failures used to use
 // Duration.zero, which re-ran `git fetch` on every git.status and created a
 // permanent fetch storm for unreachable remotes (#515). Cache failures too,
@@ -70,7 +78,7 @@ const STATUS_UPSTREAM_REFRESH_FAILURE_INTERVAL_MAX = Duration.seconds(300);
 // latency). Align with the success refresh interval.
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
-type StatusUpstreamRefreshResult = "refreshed" | "failed";
+type StatusUpstreamRefreshResult = "refreshed" | "failed" | "skipped";
 
 interface StatusUpstreamRefreshCacheKeyFields {
   readonly cwd: string;
@@ -97,6 +105,7 @@ export function makeStatusUpstreamRefreshCacheTimeToLive() {
       key: StatusUpstreamRefreshCacheKeyFields,
     ): Duration.Duration {
       const mapKey = statusUpstreamRefreshBackoffMapKey(key);
+      if (Exit.isSuccess(exit) && exit.value === "skipped") return Duration.seconds(1);
       if (Exit.isSuccess(exit) && exit.value === "refreshed") {
         consecutiveFailures.delete(mapKey);
         return STATUS_UPSTREAM_REFRESH_INTERVAL;
@@ -153,14 +162,27 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
 });
 
 type TraceTailState = {
-  processedChars: number;
-  remainder: string;
+  /** Bytes of the trace file already consumed; the next read starts here. */
+  processedBytes: number;
+  /** Trailing bytes after the last newline, kept raw so a multibyte character split across reads survives. */
+  remainder: Uint8Array;
 };
+
+const NEWLINE_BYTE = 0x0a;
+
+function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
+  if (left.length === 0) return right;
+  if (right.length === 0) return left;
+  const combined = new Uint8Array(left.length + right.length);
+  combined.set(left, 0);
+  combined.set(right, left.length);
+  return combined;
+}
 
 class StatusUpstreamRefreshCacheKey extends Data.Class<StatusUpstreamRefreshCacheKeyFields> {}
 
 interface ExecuteGitOptions {
-  timeoutMs?: number | undefined;
+  timeoutMs?: number | null | undefined;
   allowNonZeroExit?: boolean | undefined;
   fallbackErrorMessage?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
@@ -517,9 +539,10 @@ const createTrace2Monitor = Effect.fn(function* (
   });
   const hookStartByChildKey = new Map<string, { hookName: string; startedAtMs: number }>();
   const traceTailState = yield* Ref.make<TraceTailState>({
-    processedChars: 0,
-    remainder: "",
+    processedBytes: 0,
+    remainder: new Uint8Array(0),
   });
+  const traceDecoder = new TextDecoder();
 
   const handleTraceLine = (line: string) =>
     Effect.gen(function* () {
@@ -578,34 +601,43 @@ const createTrace2Monitor = Effect.fn(function* (
     });
 
   const deltaMutex = yield* Semaphore.make(1);
+  // Tail the file from the last consumed byte instead of re-reading it whole
+  // on every watch event: the trace only grows while git and its hooks run, so
+  // whole-file reads made the tail quadratic in the trace size.
   const readTraceDelta = deltaMutex.withPermit(
-    fs.readFileString(traceFilePath).pipe(
-      Effect.flatMap((contents) =>
-        Effect.uninterruptible(
-          Ref.modify(traceTailState, ({ processedChars, remainder }) => {
-            if (contents.length <= processedChars) {
-              return [[], { processedChars, remainder }];
-            }
-
-            const appended = contents.slice(processedChars);
-            const combined = remainder + appended;
-            const lines = combined.split("\n");
-            const nextRemainder = lines.pop() ?? "";
-
-            return [
-              lines.map((line) => line.replace(/\r$/, "")),
-              {
-                processedChars: contents.length,
-                remainder: nextRemainder,
-              },
-            ];
-          }).pipe(
-            Effect.flatMap((lines) => Effect.forEach(lines, handleTraceLine, { discard: true })),
-          ),
+    Effect.gen(function* () {
+      const { processedBytes } = yield* Ref.get(traceTailState);
+      const appended = yield* Stream.runFold(
+        fs.stream(traceFilePath, { offset: processedBytes }),
+        () => new Uint8Array(0),
+        concatBytes,
+      );
+      if (appended.length === 0) {
+        return;
+      }
+      yield* Effect.uninterruptible(
+        Ref.modify(traceTailState, ({ processedBytes: consumed, remainder }) => {
+          const combined = concatBytes(remainder, appended);
+          const lastNewline = combined.lastIndexOf(NEWLINE_BYTE);
+          if (lastNewline === -1) {
+            return [[], { processedBytes: consumed + appended.length, remainder: combined }];
+          }
+          const lines = traceDecoder
+            .decode(combined.subarray(0, lastNewline))
+            .split("\n")
+            .map((line) => line.replace(/\r$/, ""));
+          return [
+            lines,
+            {
+              processedBytes: consumed + appended.length,
+              remainder: combined.slice(lastNewline + 1),
+            },
+          ];
+        }).pipe(
+          Effect.flatMap((lines) => Effect.forEach(lines, handleTraceLine, { discard: true })),
         ),
-      ),
-      Effect.ignore({ log: true }),
-    ),
+      );
+    }).pipe(Effect.ignore({ log: true })),
   );
   const traceFileName = path.basename(traceFilePath);
   yield* Stream.runForEach(fs.watch(traceFilePath), (event) => {
@@ -621,11 +653,11 @@ const createTrace2Monitor = Effect.fn(function* (
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
       yield* readTraceDelta;
-      const finalLine = yield* Ref.modify(traceTailState, ({ processedChars, remainder }) => [
-        remainder.trim(),
+      const finalLine = yield* Ref.modify(traceTailState, ({ processedBytes, remainder }) => [
+        traceDecoder.decode(remainder).trim(),
         {
-          processedChars,
-          remainder: "",
+          processedBytes,
+          remainder: new Uint8Array(0),
         },
       ]);
       if (finalLine.length > 0) {
@@ -784,7 +816,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ...input,
           args: [...input.args],
         } as const;
-        const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const timeoutMs = input.timeoutMs === null ? null : (input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
         const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
         const outputMode = input.outputMode ?? "error";
 
@@ -860,6 +892,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           } satisfies ExecuteGitResult;
         });
 
+        if (timeoutMs === null) {
+          return yield* commandEffect.pipe(Effect.scoped);
+        }
         return yield* commandEffect.pipe(
           Effect.scoped,
           Effect.timeoutOption(timeoutMs),
@@ -880,6 +915,37 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       });
     }
+
+    const executeWithoutAdmission = execute;
+    const prepareCommandInput = (input: ExecuteGitInput): ExecuteGitInput => {
+      const subcommand = gitSubcommand(input.args);
+      return {
+        ...input,
+        args: [...input.args],
+        ...(subcommand === "push" ||
+        subcommand === "fetch" ||
+        subcommand === "pull" ||
+        subcommand === "clone"
+          ? { env: { ...input.env, GIT_TERMINAL_PROMPT: "0" } }
+          : {}),
+      };
+    };
+    execute = (input) =>
+      Effect.suspend(() => {
+        const commandInput = prepareCommandInput(input);
+        return withGitCommandAdmission(
+          commandInput,
+          Effect.suspend(() => executeWithoutAdmission(commandInput)),
+        );
+      });
+    const tryExecute = (input: ExecuteGitInput) =>
+      Effect.suspend(() => {
+        const commandInput = prepareCommandInput(input);
+        return tryWithGitCommandAdmission(
+          commandInput,
+          Effect.suspend(() => executeWithoutAdmission(commandInput)),
+        );
+      });
 
     const executeGit = (
       operation: string,
@@ -939,6 +1005,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       executeGit(operation, cwd, args, { allowNonZeroExit }).pipe(
         Effect.map((result) => result.stdout),
       );
+
+    // Status must enumerate all file metadata for the UI. Stream NUL records
+    // past the diagnostic capture limit; never use this for patches or blobs.
+    const runGitNulMetadata = (
+      operation: string,
+      cwd: string,
+      args: readonly string[],
+      options: ExecuteGitOptions = {},
+    ) =>
+      Effect.gen(function* () {
+        const records: string[] = [];
+        yield* executeGit(operation, cwd, args, {
+          outputMode: "truncate",
+          ...options,
+          progress: {
+            stdoutLineDelimiter: "\0",
+            onStdoutLine: (record) =>
+              Effect.sync(() => {
+                records.push(record);
+              }),
+          },
+        });
+        return records.join("\0");
+      });
 
     const repositoryMutationLocks = new Map<string, Semaphore.Semaphore>();
     const repositoryMutationCounts = new Map<string, number>();
@@ -1039,7 +1129,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             },
           );
 
-          const numstatStdout = yield* executeGit(
+          const numstatStdout = yield* runGitNulMetadata(
             "GitCore.statusDetails.moveAwareNumstat",
             cwd,
             ["diff", "--cached", "--numstat", "-z", "--find-renames"],
@@ -1048,7 +1138,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               allowNonZeroExit: true,
               timeoutMs: MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS,
             },
-          ).pipe(Effect.map((result) => result.stdout));
+          );
 
           return summarizeGitNumstatOutputs([numstatStdout]);
         }),
@@ -1119,16 +1209,22 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const resolveCurrentUpstream = (
       cwd: string,
+      immediate = false,
     ): Effect.Effect<
       { upstreamRef: string; remoteName: string; upstreamBranch: string } | null,
       GitCommandError
     > =>
       Effect.gen(function* () {
-        const upstreamRef = yield* runGitStdout(
-          "GitCore.resolveCurrentUpstream",
-          cwd,
-          ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
-          true,
+        const args = ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"];
+        const upstreamRef = yield* (
+          immediate
+            ? tryExecute({
+                operation: "GitCore.resolveCurrentUpstream",
+                cwd,
+                args,
+                allowNonZeroExit: true,
+              }).pipe(Effect.map((result) => (Option.isSome(result) ? result.value.stdout : "")))
+            : runGitStdout("GitCore.resolveCurrentUpstream", cwd, args, true)
         ).pipe(Effect.map((stdout) => stdout.trim()));
 
         if (upstreamRef.length === 0 || upstreamRef === "@{upstream}") {
@@ -1152,32 +1248,42 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const fetchUpstreamRef = (
-      cwd: string,
-      upstream: { upstreamRef: string; remoteName: string; upstreamBranch: string },
-    ): Effect.Effect<void, GitCommandError> => {
-      const refspec = `+refs/heads/${upstream.upstreamBranch}:refs/remotes/${upstream.upstreamRef}`;
-      return runGit(
-        "GitCore.fetchUpstreamRef",
-        cwd,
-        ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec],
-        true,
-      );
-    };
-
     const fetchUpstreamRefForStatus = (
       cwd: string,
       upstream: { upstreamRef: string; remoteName: string; upstreamBranch: string },
-    ): Effect.Effect<void, GitCommandError> => {
+    ): Effect.Effect<StatusUpstreamRefreshResult, GitCommandError> => {
       const refspec = `+refs/heads/${upstream.upstreamBranch}:refs/remotes/${upstream.upstreamRef}`;
-      return executeGit(
-        "GitCore.fetchUpstreamRefForStatus",
+      // Explicit remote-tracking refs are sufficient for status. FETCH_HEAD
+      // belongs to user fetch workflows that may still be resolving its commit.
+      const args = [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        upstream.remoteName,
+        refspec,
+      ];
+      return tryExecute({
+        operation: "GitCore.fetchUpstreamRefForStatus",
         cwd,
-        ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec],
-        {
-          timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
-        },
-      ).pipe(Effect.asVoid);
+        args,
+        allowNonZeroExit: true,
+        timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
+      }).pipe(
+        Effect.flatMap((result) => {
+          if (Option.isNone(result)) return Effect.succeed("skipped" as const);
+          if (result.value.code === 0) return Effect.succeed("refreshed" as const);
+          return Effect.fail(
+            createGitCommandError(
+              "GitCore.fetchUpstreamRefForStatus",
+              cwd,
+              args,
+              result.value.stderr.trim() ||
+                `${commandLabel(args)} failed: code=${result.value.code}`,
+            ),
+          );
+        }),
+      );
     };
 
     const upstreamRefreshPolicy = makeStatusUpstreamRefreshCacheTimeToLive();
@@ -1190,7 +1296,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           remoteName: cacheKey.remoteName,
           upstreamBranch: cacheKey.upstreamBranch,
         }).pipe(
-          Effect.as("refreshed" as const),
           Effect.catch((cause) => {
             const failures = upstreamRefreshPolicy.getFailureCount(cacheKey);
             const logFields = {
@@ -1219,7 +1324,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const refreshStatusUpstreamIfStale = (cwd: string): Effect.Effect<void, GitCommandError> =>
       Effect.gen(function* () {
-        const upstream = yield* resolveCurrentUpstream(cwd);
+        const upstream = yield* resolveCurrentUpstream(cwd, true);
         if (!upstream) return;
         yield* Cache.get(
           statusUpstreamRefreshCache,
@@ -1232,12 +1337,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       });
 
-    const refreshCheckedOutBranchUpstream = (cwd: string): Effect.Effect<void, GitCommandError> =>
-      Effect.gen(function* () {
-        const upstream = yield* resolveCurrentUpstream(cwd);
-        if (!upstream) return;
-        yield* fetchUpstreamRef(cwd, upstream);
-      });
+    const scheduleStatusUpstreamRefresh = (cwd: string) =>
+      refreshStatusUpstreamIfStale(cwd).pipe(
+        Effect.catchIf(isMissingGitCwdError, () => Effect.void),
+        Effect.ignoreCause({ log: true }),
+        Effect.forkIn(statusRefreshScope),
+        Effect.asVoid,
+      );
 
     const resolveDefaultBranchName = (
       cwd: string,
@@ -1510,13 +1616,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         if (refreshUpstream) {
-          yield* refreshStatusUpstreamIfStale(cwd).pipe(
-            Effect.catchIf(isMissingGitCwdError, () => Effect.void),
-            Effect.ignoreCause({ log: true }),
-          );
+          yield* scheduleStatusUpstreamRefresh(cwd);
         }
 
-        const statusStdout = yield* runGitStdout("GitCore.statusDetails.status", cwd, [
+        const statusStdout = yield* runGitNulMetadata("GitCore.statusDetails.status", cwd, [
           "status",
           "--porcelain=2",
           "--branch",
@@ -1616,8 +1719,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         const numstatOutputs = yield* Effect.all(
           [
-            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat", "-z"]),
-            runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
+            runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
+              "diff",
+              "--numstat",
+              "-z",
+            ]),
+            runGitNulMetadata("GitCore.statusDetails.stagedNumstat", cwd, [
               "diff",
               "--cached",
               "--numstat",
@@ -1682,6 +1789,47 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const statusDetails: GitCoreShape["statusDetails"] = (cwd) => readStatusDetails(cwd, true);
 
+    const readActionStatus: GitCoreShape["readActionStatus"] = (cwd) =>
+      Effect.gen(function* () {
+        yield* scheduleStatusUpstreamRefresh(cwd);
+        const headers: string[] = [];
+        let hasWorkingTreeChanges = false;
+        yield* executeGit(
+          "GitCore.readActionStatus",
+          cwd,
+          ["status", "--porcelain=2", "--branch", "-z"],
+          {
+            outputMode: "truncate",
+            progress: {
+              stdoutLineDelimiter: "\0",
+              onStdoutLine: (record) =>
+                Effect.sync(() => {
+                  // Headers precede all file records. Rename source paths must
+                  // never be interpreted as headers, even if their names match.
+                  if (hasWorkingTreeChanges) return;
+                  if (record.startsWith("# ")) headers.push(record);
+                  else hasWorkingTreeChanges = true;
+                }),
+            },
+          },
+        );
+        const parsed = parseGitStatusPorcelain(headers.join("\0"));
+        const aheadCount =
+          !parsed.upstreamRef && parsed.branch
+            ? yield* computeAheadCountAgainstBase(cwd, parsed.branch).pipe(
+                Effect.catch(() => Effect.succeed(0)),
+              )
+            : parsed.aheadCount;
+        return {
+          branch: parsed.branch,
+          upstreamRef: parsed.upstreamRef,
+          hasUpstream: parsed.upstreamRef !== null,
+          aheadCount,
+          behindCount: parsed.behindCount,
+          hasWorkingTreeChanges,
+        };
+      });
+
     const readBranchContext: GitCoreShape["readBranchContext"] = (cwd) =>
       Effect.gen(function* () {
         const branchOperation = "GitCore.readBranchContext.branch";
@@ -1726,11 +1874,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const details = yield* readStatusDetails(input.cwd, false);
         if (details.hasUpstream) {
-          yield* refreshStatusUpstreamIfStale(input.cwd).pipe(
-            Effect.catchIf(isMissingGitCwdError, () => Effect.void),
-            Effect.ignoreCause({ log: true }),
-            Effect.forkIn(statusRefreshScope),
-          );
+          yield* scheduleStatusUpstreamRefresh(input.cwd);
         }
         return {
           branch: details.branch,
@@ -2508,34 +2652,74 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const prepareCommitContext: GitCoreShape["prepareCommitContext"] = (cwd, filePaths) =>
       Effect.gen(function* () {
         if (filePaths && filePaths.length > 0) {
-          yield* runGit("GitCore.prepareCommitContext.reset", cwd, ["reset"]).pipe(
-            Effect.catch(() => Effect.void),
+          if (filePaths.some((filePath) => filePath.includes("\0"))) {
+            return yield* createGitCommandError(
+              "GitCore.prepareCommitContext.addSelected",
+              cwd,
+              ["add", "-A"],
+              "Selected file paths cannot contain NUL characters.",
+            );
+          }
+          yield* executeGit(
+            "GitCore.prepareCommitContext.reset",
+            cwd,
+            ["reset"],
+            GIT_MUTATION_OPTIONS,
+          ).pipe(Effect.catch(() => Effect.void));
+          // A pathspec file avoids OS argument-size limits for large selections.
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const directory = yield* fileSystem.makeTempDirectoryScoped({
+                prefix: "synara-git-pathspec-",
+              });
+              const pathspec = nodePath.join(directory, "paths");
+              yield* fileSystem.writeFileString(pathspec, `${filePaths.join("\0")}\0`);
+              yield* executeGit(
+                "GitCore.prepareCommitContext.addSelected",
+                cwd,
+                ["add", "-A", `--pathspec-from-file=${pathspec}`, "--pathspec-file-nul"],
+                GIT_MUTATION_OPTIONS,
+              );
+            }),
+          ).pipe(
+            Effect.mapError(
+              toGitCommandError(
+                {
+                  operation: "GitCore.prepareCommitContext.addSelected",
+                  cwd,
+                  args: ["add", "-A"],
+                },
+                "failed to stage selected files.",
+              ),
+            ),
           );
-          yield* runGit("GitCore.prepareCommitContext.addSelected", cwd, [
-            "add",
-            "-A",
-            "--",
-            ...filePaths,
-          ]);
         } else {
-          yield* runGit("GitCore.prepareCommitContext.addAll", cwd, ["add", "-A"]);
+          yield* executeGit(
+            "GitCore.prepareCommitContext.addAll",
+            cwd,
+            ["add", "-A"],
+            GIT_MUTATION_OPTIONS,
+          );
         }
 
-        const stagedSummary = yield* runGitStdout(
+        const stagedSummary = yield* executeGit(
           "GitCore.prepareCommitContext.stagedSummary",
           cwd,
           ["diff", "--cached", "--name-status"],
-        ).pipe(Effect.map((stdout) => stdout.trim()));
+          GIT_MUTATION_OPTIONS,
+        ).pipe(Effect.map((result) => result.stdout.trim()));
         if (stagedSummary.length === 0) {
           return null;
         }
 
-        const stagedPatch = yield* runGitStdout("GitCore.prepareCommitContext.stagedPatch", cwd, [
-          "diff",
-          "--cached",
-          "--patch",
-          "--minimal",
-        ]);
+        // Message generation only needs a bounded preview. A large patch must
+        // not prevent committing the complete staged contents.
+        const stagedPatch = yield* executeGit(
+          "GitCore.prepareCommitContext.stagedPatch",
+          cwd,
+          ["diff", "--cached", "--patch", "--minimal"],
+          GIT_MUTATION_OPTIONS,
+        ).pipe(Effect.map((result) => result.stdout));
 
         return {
           stagedSummary,
@@ -2571,6 +2755,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             }
           : null;
         yield* executeGit("GitCore.commit.commit", cwd, args, {
+          ...GIT_MUTATION_OPTIONS,
           ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
           ...(progress ? { progress } : {}),
         }).pipe(Effect.asVoid);
@@ -2584,7 +2769,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const pushCurrentBranch: GitCoreShape["pushCurrentBranch"] = (cwd, fallbackBranch) =>
       Effect.gen(function* () {
-        const details = yield* statusDetails(cwd);
+        const details = yield* readActionStatus(cwd);
         const branch = details.branch ?? fallbackBranch;
         if (!branch) {
           return yield* createGitCommandError(
@@ -2641,12 +2826,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               "Cannot push because no git remote is configured for this repository.",
             );
           }
-          yield* runGit("GitCore.pushCurrentBranch.pushWithUpstream", cwd, [
-            "push",
-            "-u",
-            publishRemoteName,
-            branch,
-          ]);
+          yield* executeGit(
+            "GitCore.pushCurrentBranch.pushWithUpstream",
+            cwd,
+            ["push", "-u", publishRemoteName, branch],
+            GIT_MUTATION_OPTIONS,
+          );
           return {
             status: "pushed" as const,
             branch,
@@ -2659,11 +2844,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           Effect.catch(() => Effect.succeed(null)),
         );
         if (currentUpstream) {
-          yield* runGit("GitCore.pushCurrentBranch.pushUpstream", cwd, [
-            "push",
-            currentUpstream.remoteName,
-            `HEAD:${currentUpstream.upstreamBranch}`,
-          ]);
+          yield* executeGit(
+            "GitCore.pushCurrentBranch.pushUpstream",
+            cwd,
+            ["push", currentUpstream.remoteName, `HEAD:${currentUpstream.upstreamBranch}`],
+            GIT_MUTATION_OPTIONS,
+          );
           return {
             status: "pushed" as const,
             branch,
@@ -2672,7 +2858,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           };
         }
 
-        yield* runGit("GitCore.pushCurrentBranch.push", cwd, ["push"]);
+        yield* executeGit("GitCore.pushCurrentBranch.push", cwd, ["push"], GIT_MUTATION_OPTIONS);
         return {
           status: "pushed" as const,
           branch,
@@ -3686,6 +3872,22 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             ),
           ),
         );
+        // Drop administrative entries for worktrees whose directories vanished
+        // out of band, so stale `.git/worktrees/<name>` metadata cannot pin their
+        // branches or confuse later listings. The removal itself already
+        // succeeded; a prune failure is logged, never surfaced.
+        yield* executeGit("GitCore.removeWorktree.prune", input.cwd, ["worktree", "prune"], {
+          timeoutMs: 10_000,
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("worktree removal could not prune stale worktree metadata", {
+              cwd: input.cwd,
+              path: input.path,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          ),
+          Effect.asVoid,
+        );
         if (temporaryBranch !== null) {
           // Compare-and-delete against the HEAD observed above: if a concurrent
           // Git process repointed the ref since then, its commits survive. The
@@ -3776,7 +3978,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           input.cwd,
           ["push", "-u", remoteName, input.branch],
           {
-            timeoutMs: 30_000,
+            ...GIT_MUTATION_OPTIONS,
             fallbackErrorMessage: "git branch publish failed",
           },
         );
@@ -3900,7 +4102,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         // Refresh upstream refs in the background so checkout remains responsive.
         yield* Effect.forkScoped(
-          refreshCheckedOutBranchUpstream(input.cwd).pipe(Effect.ignoreCause({ log: true })),
+          refreshStatusUpstreamIfStale(input.cwd).pipe(Effect.ignoreCause({ log: true })),
         );
       });
 
@@ -4128,6 +4330,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       status,
       statusDetails,
       readBranchContext,
+      readActionStatus,
       readWorkingTreePatch,
       readUnstagedPatch,
       readStagedPatch,

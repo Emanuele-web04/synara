@@ -42,7 +42,6 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { CommandId, EventId } from "@synara/contracts";
-import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
 import {
   derivePendingThreadRequestIds,
   type PendingThreadRequestKind,
@@ -143,17 +142,12 @@ function planStalePendingRequestCommands(input: {
 }): ReadonlyArray<ThreadActivityAppendCommand> {
   const commands: ThreadActivityAppendCommand[] = [];
   if (input.thread.pendingInteractions !== undefined) {
-    const isAlreadyStale = createStalePendingInteractionMatcher(input.thread.activities ?? []);
     for (const interaction of input.thread.pendingInteractions) {
       // A process restart loses every live provider callback. Pending,
       // responding, and previously retryable rows are therefore no longer
-      // answerable. Uncertain user-input responses are also retryable unless
-      // their callback has already been explicitly invalidated.
-      if (
-        interaction.status === "confirmed" ||
-        isAlreadyStale(interaction) ||
-        (interaction.status === "uncertain" && interaction.interactionKind === "approval")
-      ) {
+      // answerable. Legacy uncertain rows also need durable terminal settlement,
+      // even if a stale failure already removed them from the activity summary.
+      if (!isUnsettledPendingInteraction(interaction)) {
         continue;
       }
       commands.push(
@@ -354,9 +348,9 @@ export function planRestartTurnReconciliation(input: {
  * failed individual dispatch must never block the server from coming up.
  *
  * Deliberately not a second `getCommandReadModel()` load. That query costs ~150ms
- * on a large database and this runs on the blocking startup path, after several
- * reactors have already started — so re-reading it would be both slower and
- * staler than the model the engine is already maintaining.
+ * on a large database and this runs on the blocking startup path, after the
+ * orchestration reactor has already started — so re-reading it would be both
+ * slower and staler than the model the engine is already maintaining.
  *
  * The durable pending-interaction rows are read once, up front. Rows created
  * after that read belong to a runtime started in *this* process and stay

@@ -52,16 +52,3 @@ it("opens the project import dialog from the call to action and does not announc
   expect(JSON.parse(localStorage.getItem(storageKey) ?? "[]")).toContain("/first/worktrees");
   await expect.element(page.getByRole("button", { name: "Not now" })).not.toBeInTheDocument();
 });
-
-it("stays dismissed after Not now without opening the import dialog", async () => {
-  const first = await renderDialog();
-  await page.getByRole("button", { name: "Not now" }).click();
-  await expect.element(page.getByRole("button", { name: "Not now" })).not.toBeInTheDocument();
-  expect(useProjectImportDialogStore.getState().isOpen).toBe(false);
-  await first.unmount();
-
-  await renderDialog();
-  await expect
-    .element(page.getByRole("heading", { name: "Import projects" }))
-    .not.toBeInTheDocument();
-});

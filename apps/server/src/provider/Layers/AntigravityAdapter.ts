@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import crypto from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
@@ -151,6 +152,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   readonly enableComputerControl?: boolean;
   readonly lifecycleGeneration?: string;
   readonly binaryPath: string;
+  readonly environment: NodeJS.ProcessEnv;
   readonly turns: StoredTurn[];
   activeTurnId?: TurnId | undefined;
   activeProcess?: ChildProcess | undefined;
@@ -236,9 +238,12 @@ function resumeConversationId(value: unknown): string | undefined {
   return undefined;
 }
 
-function transcriptPathForConversation(conversationId: string): string {
+function transcriptPathForConversation(
+  conversationId: string,
+  homeDir: string = os.homedir(),
+): string {
   return path.join(
-    os.homedir(),
+    homeDir,
     ".gemini",
     "antigravity-cli",
     "brain",
@@ -284,6 +289,20 @@ function inactiveHookOutput(event: string): string {
   return "{}";
 }
 
+/**
+ * Inactive-fallback payload with no `"` characters. agy forwards win32 hook
+ * commands to cmd.exe without decoding JSON escapes, so `echo {"decision":..}`
+ * would arrive as `echo {\"decision\":..}` and echo the backslashes verbatim
+ * (protojson `syntax error (line 1:2)`), blocking every tool call. PowerShell
+ * single-quoted segments joined with `[char]34` rebuild the exact decision
+ * JSON at runtime; `^(...)` stops cmd parsing the parens (caret needs no JSON
+ * escape). Fallback payloads must stay `'`-free (true for all current values).
+ */
+function win32FallbackHookJson(event: string): string {
+  const body = inactiveHookOutput(event).split('"').join(`'+[char]34+'`);
+  return `Write-Output ^('${body}'^)`;
+}
+
 export function buildAntigravityCaptureCommand(
   executablePath: string,
   scriptPath: string,
@@ -300,7 +319,7 @@ export function buildAntigravityCaptureCommand(
     // paths are space-free in every supported install layout (dev bun/electron
     // binaries and packaged apps under %LOCALAPPDATA%\Programs).
     const invocation = `${executablePath} ${scriptPath} ${event}`;
-    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo ${fallback}) else (set ELECTRON_RUN_AS_NODE=1&& ${invocation})`;
+    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command ${win32FallbackHookJson(event)}) else (set ELECTRON_RUN_AS_NODE=1&& ${invocation})`;
   }
   const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
   return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '${fallback}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
@@ -411,7 +430,11 @@ function appendBoundedOutput(current: string, chunk: unknown): string {
 export async function runAntigravityHelperProcess(
   command: string,
   args: string[],
-  options: { cwd?: string; timeoutMs?: number } = {},
+  options: {
+    cwd?: string;
+    timeoutMs?: number;
+    environment?: Readonly<Record<string, string>>;
+  } = {},
 ): Promise<{
   stdout: string;
   stderr: string;
@@ -420,7 +443,10 @@ export async function runAntigravityHelperProcess(
   return await new Promise((resolve, reject) => {
     const child = spawnPlatformProcess(command, args, {
       cwd: options.cwd,
-      env: buildProviderChildEnvironment({ provider: PROVIDER }),
+      env: buildProviderChildEnvironment({
+        provider: PROVIDER,
+        ...(options.environment ? { baseEnv: { ...process.env, ...options.environment } } : {}),
+      }),
       stdio: ["ignore", "pipe", "pipe"],
       requireExecutable: true,
     }) as AntigravityChildProcess;
@@ -490,6 +516,7 @@ export async function ensureCapturePlugin(
   stdioProxy?: AcpStdioProxySpawn,
   options: {
     readonly homeDir?: string;
+    readonly environment?: Readonly<Record<string, string>>;
     readonly runHelper?: AntigravityHelperRunner;
   } = {},
 ): Promise<void> {
@@ -533,7 +560,10 @@ export async function ensureCapturePlugin(
   const installed = await (options.runHelper ?? runAntigravityHelperProcess)(
     binaryPath,
     ["plugin", "install", pluginDir],
-    { timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS },
+    {
+      timeoutMs: PLUGIN_INSTALL_TIMEOUT_MS,
+      ...(options.environment ? { environment: options.environment } : {}),
+    },
   );
   if (installed.code !== 0) {
     throw new Error(installed.stderr.trim() || installed.stdout.trim() || "Plugin install failed.");
@@ -2217,12 +2247,24 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               "Antigravity CLI print mode cannot pause for interactive approvals. Select Full access to use this provider.",
           });
         }
-        const binaryPath = trim(input.providerOptions?.antigravity?.binaryPath) ?? "agy";
+        const providerOptions = input.providerOptions?.antigravity;
+        const binaryPath = trim(providerOptions?.binaryPath) ?? "agy";
+        const environment = providerOptions?.environment
+          ? { ...process.env, ...providerOptions.environment }
+          : process.env;
+        const providerHomeDir =
+          trim(environment.HOME) ?? trim(environment.USERPROFILE) ?? os.homedir();
         yield* Effect.tryPromise({
           try: () =>
             (dependencies.ensurePlugin ?? ensureCapturePlugin)(
               binaryPath,
               agentGatewayCredentials?.stdioProxy,
+              {
+                homeDir: providerHomeDir,
+                ...(providerOptions?.environment
+                  ? { environment: providerOptions.environment }
+                  : {}),
+              },
             ),
           catch: (cause) =>
             new ProviderAdapterRequestError({
@@ -2252,6 +2294,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         const model = modelSelection?.model ?? DEFAULT_MODEL;
         const session: ProviderSession = {
           provider: PROVIDER,
+          ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
           status: "ready",
           runtimeMode: input.runtimeMode,
           cwd: trim(input.cwd) ?? serverConfig.cwd,
@@ -2269,11 +2312,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
           binaryPath,
+          environment,
           turns: [],
           ...(conversationId ? { conversationId } : {}),
           ...(modelSelection?.options ? { modelOptions: modelSelection.options } : {}),
           ...(conversationId
-            ? { transcriptPath: transcriptPathForConversation(conversationId) }
+            ? { transcriptPath: transcriptPathForConversation(conversationId, providerHomeDir) }
             : {}),
           processedHookBytes: 0,
           processedTranscriptBytes: 0,
@@ -2478,9 +2522,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 requireExecutable: true,
               }) as AntigravityChildProcess);
           child = spawnProcess(context.binaryPath, args, {
+            lowerPriority: yield* providerProcessPriorityEnabled,
             cwd: context.session.cwd ?? serverConfig.cwd,
             env: buildAntigravityTurnProcessEnvironment({
               eventFile,
+              baseEnv: context.environment,
               ...(gatewaySessionLease && gatewayBootstrapToken
                 ? {
                     gatewayConnection: gatewaySessionLease.connection,
@@ -2762,6 +2808,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             {
               ...(input.cwd ? { cwd: input.cwd } : {}),
               timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+              ...(input.environment ? { environment: input.environment } : {}),
             },
           );
           if (result.code !== 0) throw new Error(result.stderr || "agy models failed");

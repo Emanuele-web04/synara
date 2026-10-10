@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
-import { resolveThreadProjectLabel } from "./Sidebar.logic";
+
 import {
   buildActivityViewModel,
   collectActivityScopeOptions,
@@ -11,9 +11,10 @@ import {
   collectVisibleActivityThreadIds,
   groupActivityThreadsByProject,
   hasUnreadActivity,
-  isActivityThread,
   resolveActivityDateBucket,
   resolveActivityScope,
+  resolveActivitySectionRows,
+  resolveActivityThreadReadAt,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
@@ -71,6 +72,7 @@ function makeThread(input: {
     hasPendingUserInput: input.hasPendingUserInput ?? false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: input.hasLiveTailWork ?? false,
+    pendingBackgroundWorkCount: 0,
   } satisfies SidebarThreadSummary;
 }
 
@@ -84,31 +86,84 @@ function completedTurn(completedAt: string): SidebarThreadSummary["latestTurn"] 
   } as SidebarThreadSummary["latestTurn"];
 }
 
-describe("isActivityThread", () => {
-  it("excludes archived, subagent, and never-run threads", () => {
-    expect(isActivityThread(makeThread({ id: "a", archivedAt: "2026-08-01T00:00:00Z" }))).toBe(
-      false,
-    );
-    expect(isActivityThread(makeThread({ id: "b", parentThreadId: "parent" }))).toBe(false);
-    expect(isActivityThread(makeThread({ id: "c", latestTurn: null }))).toBe(false);
-  });
-
-  it("includes threads whose first turn is starting", () => {
-    expect(isActivityThread(makeThread({ id: "d", latestTurn: null, hasLiveTailWork: true }))).toBe(
-      true,
-    );
-  });
-
-  it("includes threads that ran at least once", () => {
-    expect(
-      isActivityThread(
-        makeThread({ id: "e", latestTurn: completedTurn("2026-08-01T09:30:00.000Z") }),
-      ),
-    ).toBe(true);
-  });
-});
-
 describe("buildActivityViewModel", () => {
+  it("keeps snoozed empty top-level threads accessible and restores them after expiry", () => {
+    const snoozed = { ...makeThread({ id: "empty" }), snoozedUntil: "2026-08-02T09:00:00.000Z" };
+    const archived = {
+      ...snoozed,
+      id: ThreadId.makeUnsafe("archived"),
+      archivedAt: "2026-08-01T12:00:00.000Z",
+    };
+    const child = { ...snoozed, id: ThreadId.makeUnsafe("child"), parentThreadId: snoozed.id };
+    const beforeExpiry = buildActivityViewModel({
+      threads: [snoozed, archived, child],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(beforeExpiry.snoozed.map((row) => row.id)).toEqual(["empty"]);
+    const returned = {
+      ...snoozed,
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-02T09:00:00.000Z",
+    };
+    const afterExpiry = buildActivityViewModel({
+      threads: [returned],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(afterExpiry.active.map((row) => row.id)).toEqual(["empty"]);
+    expect(
+      splitRecentActivityThreads(afterExpiry.active, {
+        nowMs: Date.parse("2026-08-02T10:00:00.000Z"),
+      }).recent.map((row) => row.id),
+    ).toEqual(["empty"]);
+  });
+
+  it("keeps snoozed threads separate before pinned and done, including overdue deadlines", () => {
+    const snoozed = {
+      ...makeThread({ id: "snoozed", latestTurn: completedTurn("2026-08-01T10:00:00.000Z") }),
+      snoozedUntil: "2026-08-01T08:00:00.000Z",
+      settledAt: "2026-08-01T11:00:00.000Z",
+    };
+    const later = {
+      ...snoozed,
+      id: ThreadId.makeUnsafe("later"),
+      snoozedUntil: "2026-08-02T09:00:00.000Z",
+    };
+    const model = buildActivityViewModel({
+      threads: [later, snoozed],
+      pinnedThreadIdSet: new Set([snoozed.id]),
+    });
+    expect(model.snoozed.map((thread) => thread.id)).toEqual(["snoozed", "later"]);
+    expect(model.pinned).toEqual([]);
+    expect(model.active).toEqual([]);
+    expect(model.settled).toEqual([]);
+  });
+
+  it("restores an older thread to recent activity using its reminder time", () => {
+    const reminded = {
+      ...makeThread({
+        id: "reminded",
+        latestHumanMessageAt: "2026-07-01T10:00:00.000Z",
+        latestTurn: completedTurn("2026-07-01T10:05:00.000Z"),
+      }),
+      snoozeReminderAt: "2026-08-02T11:30:00.000Z",
+    };
+    const newer = makeThread({
+      id: "newer",
+      latestHumanMessageAt: "2026-08-02T10:00:00.000Z",
+      latestTurn: completedTurn("2026-08-02T10:05:00.000Z"),
+    });
+    const model = buildActivityViewModel({
+      threads: [newer, reminded],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(model.active.map((thread) => thread.id)).toEqual(["reminded", "newer"]);
+    expect(
+      splitRecentActivityThreads(model.active, {
+        nowMs: Date.parse("2026-08-02T12:00:00.000Z"),
+      }).recent.map((thread) => thread.id),
+    ).toEqual(["reminded", "newer"]);
+  });
+
   it("keeps human-send order through startup, completion, attention, reads, and MCP sends", () => {
     const older = makeThread({
       id: "older",
@@ -198,45 +253,6 @@ describe("buildActivityViewModel", () => {
     expect(order("2026-08-01T09:32:00.000Z", "2026-08-01T09:31:00.000Z")).toEqual([
       "run-a",
       "run-b",
-    ]);
-  });
-
-  it("keeps attention rows ordered by human sends instead of approval timestamps", () => {
-    const pendingApproval = (id: string, startedAt: string, updatedAt: string) =>
-      makeThread({
-        id,
-        createdAt: "2026-08-01T04:00:00.000Z",
-        updatedAt,
-        latestHumanMessageAt: startedAt,
-        hasPendingApprovals: true,
-        session: makeSession("running"),
-        latestTurn: {
-          turnId: `turn-${id}`,
-          state: "running",
-          requestedAt: startedAt,
-          startedAt,
-          completedAt: null,
-        } as SidebarThreadSummary["latestTurn"],
-      });
-    const olderTurnWithNewerApproval = pendingApproval(
-      "older-turn-newer-approval",
-      "2026-08-01T09:00:00.000Z",
-      "2026-08-01T09:30:00.000Z",
-    );
-    const newerTurnWithOlderApproval = pendingApproval(
-      "newer-turn-older-approval",
-      "2026-08-01T09:15:00.000Z",
-      "2026-08-01T09:20:00.000Z",
-    );
-
-    const model = buildActivityViewModel({
-      threads: [newerTurnWithOlderApproval, olderTurnWithNewerApproval],
-      pinnedThreadIdSet: new Set(),
-    });
-
-    expect(model.active.map((thread) => thread.id)).toEqual([
-      "newer-turn-older-approval",
-      "older-turn-newer-approval",
     ]);
   });
 
@@ -342,6 +358,47 @@ describe("buildActivityViewModel", () => {
     });
     expect(resumed.active.map((thread) => thread.id)).toEqual(["reviewed"]);
     expect(resumed.settled).toEqual([]);
+  });
+
+  it("lifts unsent drafts to the top and keeps pinned drafts first within Pinned", () => {
+    const turn = completedTurn("2026-08-01T09:30:00.000Z");
+    const newest = makeThread({
+      id: "newest",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T12:00:00.000Z",
+    });
+    const oldDraft = makeThread({
+      id: "old-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T08:00:00.000Z",
+    });
+    const settledDraft = makeThread({
+      id: "settled-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T09:00:00.000Z",
+      settledAt: "2026-08-01T09:45:00.000Z",
+    });
+    const pinnedPlain = makeThread({
+      id: "pinned-plain",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T11:00:00.000Z",
+    });
+    const pinnedDraft = makeThread({
+      id: "pinned-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T07:00:00.000Z",
+    });
+
+    const model = buildActivityViewModel({
+      threads: [newest, oldDraft, settledDraft, pinnedPlain, pinnedDraft],
+      pinnedThreadIdSet: new Set([pinnedPlain.id, pinnedDraft.id]),
+      draftThreadIdSet: new Set([oldDraft.id, settledDraft.id, pinnedDraft.id]),
+    });
+
+    expect(model.drafts.map((thread) => thread.id)).toEqual(["settled-draft", "old-draft"]);
+    expect(model.active.map((thread) => thread.id)).toEqual(["newest"]);
+    expect(model.settled).toEqual([]);
+    expect(model.pinned.map((thread) => thread.id)).toEqual(["pinned-draft", "pinned-plain"]);
   });
 });
 
@@ -525,13 +582,6 @@ describe("resolveActivityScope", () => {
     { kind: "chats", projectIds: [OTHER_PROJECT_ID], threadCount: 1 },
   ];
 
-  it("filters to the selected project", () => {
-    expect(resolveActivityScope(PROJECT_ID, options)).toEqual({
-      scope: PROJECT_ID,
-      projectFilterIds: new Set([PROJECT_ID]),
-    });
-  });
-
   it("expands the Synara chats scope to its container projects", () => {
     expect(resolveActivityScope("chats", options)).toEqual({
       scope: "chats",
@@ -623,6 +673,7 @@ describe("collectVisibleActivityThreadIds", () => {
         groupMode: "time",
         pinnedOpen: false,
         pinned: [thread("pinned")],
+        drafts: [thread("draft")],
         recent: [thread("recent")],
         today: [thread("today")],
         yesterday: [thread("yesterday")],
@@ -632,49 +683,88 @@ describe("collectVisibleActivityThreadIds", () => {
         settledOpen: false,
         settled: [thread("done")],
       }),
-    ).toEqual(["recent", "today", "yesterday", "earlier-visible"]);
+    ).toEqual(["draft", "recent", "today", "yesterday", "earlier-visible"]);
   });
 
-  it("uses already-paged project groups in project mode", () => {
+  it("includes the open thread revealed under a collapsed section", () => {
     const thread = (id: string) => makeThread({ id });
-    expect(
-      collectVisibleActivityThreadIds({
-        groupMode: "project",
-        pinnedOpen: true,
-        pinned: [thread("pinned")],
-        recent: [],
-        today: [],
-        yesterday: [],
-        earlierOpen: false,
-        earlier: [],
-        projectGroups: [[thread("project-a")], [thread("project-b")]],
-        settledOpen: true,
-        settled: [thread("done")],
-      }),
-    ).toEqual(["pinned", "project-a", "project-b", "done"]);
-  });
-
-  it("deduplicates a pinned unread thread that also appears in Recent", () => {
-    const duplicated = makeThread({ id: "pinned-unread" });
     expect(
       collectVisibleActivityThreadIds({
         groupMode: "time",
         pinnedOpen: true,
-        pinned: [duplicated],
-        recent: [],
+        pinned: [],
+        drafts: [],
+        recent: [thread("recent")],
         today: [],
         yesterday: [],
         earlierOpen: false,
         earlier: [],
         projectGroups: [],
-        settledOpen: false,
-        settled: [],
+        settledOpen: true,
+        settled: [thread("done")],
+        revealed: { pinned: [], earlier: [thread("old-active")], settled: [] },
       }),
-    ).toEqual([duplicated.id]);
+    ).toEqual(["recent", "old-active", "done"]);
+  });
+});
+
+describe("resolveActivitySectionRows", () => {
+  const rows = ["a", "b", "c", "d"].map((id) => makeThread({ id }));
+  const ids = (threads: readonly SidebarThreadSummary[]) => threads.map((thread) => thread.id);
+
+  it("pages an open section normally when the open thread is on the page", () => {
+    const result = resolveActivitySectionRows(rows, {
+      open: true,
+      previewLimit: 2,
+      activeThreadId: ThreadId.makeUnsafe("b"),
+    });
+    expect(ids(result.visible)).toEqual(["a", "b"]);
+    expect(result.revealed).toEqual([]);
+  });
+
+  it("appends the open thread when it sits past the page cap", () => {
+    const result = resolveActivitySectionRows(rows, {
+      open: true,
+      previewLimit: 2,
+      activeThreadId: ThreadId.makeUnsafe("d"),
+    });
+    expect(ids(result.visible)).toEqual(["a", "b", "d"]);
+    expect(result.revealed).toEqual([]);
+  });
+
+  it("reveals only the open thread under a collapsed header", () => {
+    const result = resolveActivitySectionRows(rows, {
+      open: false,
+      previewLimit: 2,
+      activeThreadId: ThreadId.makeUnsafe("c"),
+    });
+    expect(result.visible).toEqual([]);
+    expect(ids(result.revealed)).toEqual(["c"]);
+  });
+
+  it("reveals nothing when the open thread is not in the section", () => {
+    for (const activeThreadId of [ThreadId.makeUnsafe("elsewhere"), null]) {
+      expect(
+        resolveActivitySectionRows(rows, { open: false, previewLimit: 2, activeThreadId }),
+      ).toEqual({ visible: [], revealed: [] });
+    }
   });
 });
 
 describe("collectUnreadActivityThreads", () => {
+  it("holds unread snoozed threads out of the activity bell and read sweep", () => {
+    const thread = {
+      ...makeThread({
+        id: "snoozed",
+        latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+        lastVisitedAt: "2026-08-01T09:00:00.000Z",
+      }),
+      snoozedUntil: "2026-08-01T08:00:00.000Z",
+    };
+    expect(collectUnreadActivityThreads([thread])).toEqual([]);
+    expect(hasUnreadActivity([thread], null)).toBe(false);
+  });
+
   it("collects only eligible threads with unseen completions", () => {
     const unread = makeThread({
       id: "unread",
@@ -698,6 +788,23 @@ describe("collectUnreadActivityThreads", () => {
     ]);
   });
 
+  it("reads a chat back from snooze at the reminder, or at a later completion", () => {
+    const returned = {
+      ...makeThread({
+        id: "returned",
+        latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+        lastVisitedAt: "2026-08-01T09:45:00.000Z",
+      }),
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-01T11:00:00.000Z",
+    };
+    // A turn left running when the chat was snoozed can finish after the reminder.
+    const finishedLater = { ...returned, latestTurn: completedTurn("2026-08-01T11:30:00.000Z") };
+
+    expect(resolveActivityThreadReadAt(returned)).toBe("2026-08-01T11:00:00.000Z");
+    expect(resolveActivityThreadReadAt(finishedLater)).toBe("2026-08-01T11:30:00.000Z");
+  });
+
   it("does not light the bell for the thread currently being read", () => {
     const activeUnread = makeThread({
       id: "active-unread",
@@ -712,17 +819,5 @@ describe("collectUnreadActivityThreads", () => {
 
     expect(hasUnreadActivity([activeUnread], activeUnread.id)).toBe(false);
     expect(hasUnreadActivity([activeUnread, otherUnread], activeUnread.id)).toBe(true);
-  });
-});
-
-describe("resolveThreadProjectLabel", () => {
-  it("uses the project name for real projects and Synara otherwise", () => {
-    expect(
-      resolveThreadProjectLabel({ kind: "project", name: "Synara App", folderName: "synara" }),
-    ).toBe("Synara App");
-    expect(resolveThreadProjectLabel({ kind: "chat", name: "Chats", folderName: "chats" })).toBe(
-      "Synara",
-    );
-    expect(resolveThreadProjectLabel(undefined)).toBe("Synara");
   });
 });

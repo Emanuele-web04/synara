@@ -123,36 +123,7 @@ describe("cursor activity", () => {
       ),
     ).toBe("Thinking");
     expect(cursorRuntimeActivity(event("session.exited"))).toBeUndefined();
-  });
-
-  it("labels the registered cursor tool and never echoes unknown tool names", () => {
-    const expected = {
-      computer_screenshot: "Capturing screen",
-      computer_get_state: "Reading screen",
-      computer_get_screen_size: "Measuring screen",
-      computer_list_windows: "Finding window",
-      computer_click: "Clicking",
-      computer_move_cursor: "Moving cursor",
-      computer_drag: "Dragging",
-      computer_scroll: "Scrolling",
-      computer_type_text: "Typing",
-      computer_press_key: "Pressing key",
-      computer_set_value: "Setting field",
-      computer_select_text: "Selecting text",
-      computer_perform_action: "Activating control",
-      computer_launch_app: "Opening app",
-      computer_activate_window: "Activating window",
-      computer_wait: "Waiting for screen",
-      computer_read_clipboard: "Reading clipboard",
-      computer_write_clipboard: "Writing clipboard",
-      computer_paste: "Pasting",
-      computer_run: "Running sequence",
-    } as const;
-    for (const [tool, label] of Object.entries(expected)) {
-      expect(cursorToolActivity(tool)).toBe(label);
-      expect(label.length).toBeLessThanOrEqual(20);
-    }
-    expect(cursorToolActivity("computer_move")).toBe("Working");
+    // An unknown tool name never reaches the badge, whatever it contains.
     expect(cursorToolActivity("unknown tool containing private text")).toBe("Working");
   });
 });

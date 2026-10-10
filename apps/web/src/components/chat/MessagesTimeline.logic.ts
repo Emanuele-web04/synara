@@ -5,6 +5,7 @@
 
 import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
+import type { WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
 import {
@@ -305,6 +306,14 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
+  | {
+      // An answered agent question shown as a question/answer exchange. Like
+      // the plan card it stays visible when the turn folds into "Worked for".
+      kind: "user-input";
+      id: string;
+      createdAt: string;
+      entry: WorkLogEntry & { userInputExchange: ReadonlyArray<WorkLogUserInputExchangeItem> };
+    }
   | { kind: "working"; id: string; createdAt: string | null }
   | {
       // Live-turn header that mirrors the settled "Worked for Xs" disclosure
@@ -598,6 +607,14 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
+// Server-posted coordinator notices and provider handoff boundaries keep their own
+// row: they are not turn work, so they never merge into or fold with a turn.
+export function isStandaloneWorkEntry(
+  entry: Pick<WorkLogEntry, "synaraWorkerNotice" | "providerHandoff" | "turnFailure">,
+): boolean {
+  return Boolean(entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure);
+}
+
 // Derives transcript rows from timeline entries while keeping live narration and
 // tool rows in visual chronology. Work already waiting when assistant text
 // arrives renders above that text; trailing work renders below it.
@@ -607,17 +624,29 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
+  // Background subagents still running after the parent turn ended: the parent
+  // turn is idle but its work is not done, so it must not fold yet.
+  subagentsRunning?: boolean;
+  // User setting: false keeps every finished turn expanded.
+  collapseFinishedTurns?: boolean;
   activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
+  conversationOnly?: boolean;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
-  const timelineMessages = input.timelineEntries.flatMap((entry) =>
-    entry.kind === "message" ? [entry.message] : [],
+  // A finished background task wakes the agent into a new response, so it ends
+  // the previous response and starts the next one's clock like a user message.
+  const responseMessages = input.timelineEntries.flatMap((entry): TimelineDurationMessage[] =>
+    entry.kind === "message"
+      ? [entry.message]
+      : entry.kind === "work" && entry.entry.backgroundTaskCompletion
+        ? [{ id: entry.id, role: "user", createdAt: entry.createdAt }]
+        : [],
   );
-  const durationStartByMessageId = computeMessageDurationStart(timelineMessages);
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineMessages);
+  const durationStartByMessageId = computeMessageDurationStart(responseMessages);
+  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(responseMessages);
   let pendingWorkGroup: Extract<MessagesTimelineRow, { kind: "work" }> | null = null;
 
   const groupedEntriesEqual = (
@@ -670,21 +699,52 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "work") {
-      const groupedEntries = [timelineEntry.entry];
+      const run = [
+        { entry: timelineEntry.entry, id: timelineEntry.id, createdAt: timelineEntry.createdAt },
+      ];
       let cursor = index + 1;
       while (cursor < input.timelineEntries.length) {
         const nextEntry = input.timelineEntries[cursor];
         if (!nextEntry || nextEntry.kind !== "work") break;
-        groupedEntries.push(nextEntry.entry);
+        run.push({ entry: nextEntry.entry, id: nextEntry.id, createdAt: nextEntry.createdAt });
         cursor += 1;
       }
-      flushPendingWorkGroup();
-      pendingWorkGroup = {
-        kind: "work",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        groupedEntries,
-      };
+      // Server-posted coordinator monitor rows keep their own work row: the
+      // leading/inline merges into an assistant message hide them on
+      // conversation-only surfaces, so they must never join a mergeable group.
+      // Background task completions do too: they separate two responses.
+      for (const runEntry of run) {
+        const userInputExchange = runEntry.entry.userInputExchange;
+        if (userInputExchange) {
+          flushPendingWorkGroup({ attachToPreviousAssistant: false });
+          nextRows.push({
+            kind: "user-input",
+            id: runEntry.id,
+            createdAt: runEntry.createdAt,
+            entry: { ...runEntry.entry, userInputExchange },
+          });
+        } else if (
+          isStandaloneWorkEntry(runEntry.entry) ||
+          runEntry.entry.backgroundTaskCompletion
+        ) {
+          flushPendingWorkGroup();
+          nextRows.push({
+            kind: "work",
+            id: runEntry.id,
+            createdAt: runEntry.createdAt,
+            groupedEntries: [runEntry.entry],
+          });
+        } else if (pendingWorkGroup) {
+          pendingWorkGroup.groupedEntries.push(runEntry.entry);
+        } else {
+          pendingWorkGroup = {
+            kind: "work",
+            id: runEntry.id,
+            createdAt: runEntry.createdAt,
+            groupedEntries: [runEntry.entry],
+          };
+        }
+      }
       index = cursor - 1;
       continue;
     }
@@ -777,11 +837,14 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  collapseSettledTurns(nextRows, {
-    terminalAssistantMessageIds,
-    activeTurnInProgress: input.activeTurnInProgress ?? false,
-    activeTurnId: input.activeTurnId ?? null,
-  });
+  if (input.conversationOnly !== true && input.collapseFinishedTurns !== false) {
+    collapseSettledTurns(nextRows, {
+      terminalAssistantMessageIds,
+      activeTurnInProgress:
+        (input.activeTurnInProgress ?? false) || (input.subagentsRunning ?? false),
+      activeTurnId: input.activeTurnId ?? null,
+    });
+  }
 
   // The live turn wears a "Working for Xs" header + divider — the counting-up
   // twin of a settled turn's "Worked for Xs" disclosure. It anchors to the top
@@ -789,6 +852,7 @@ export function deriveMessagesTimelineRows(input: {
   // real start time to count from; the trailing "Thinking" shimmer covers the
   // gap before one exists. Inserted after collapse so folding is untouched.
   if (
+    input.conversationOnly !== true &&
     input.isWorking &&
     input.activeTurnStartedAt &&
     !(input.worktreeSetup && input.worktreeSetupOpen)
@@ -818,12 +882,19 @@ function findLiveTurnHeaderInsertIndex(rows: ReadonlyArray<MessagesTimelineRow>)
 
 // Returns the terminal assistant only when it is still the transcript tail.
 // A newer user message means the next turn has begun but has not produced text yet.
+function isBackgroundTaskCompletionRow(row: MessagesTimelineRow): boolean {
+  return row.kind === "work" && row.groupedEntries.some((entry) => entry.backgroundTaskCompletion);
+}
+
 function findTailTerminalAssistantMessageId(
   rows: ReadonlyArray<MessagesTimelineRow>,
   terminalAssistantMessageIds: ReadonlySet<string>,
 ): string | null {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]!;
+    // A response woken by a background task has not produced its own terminal
+    // message yet; the previous response stays settled.
+    if (isBackgroundTaskCompletionRow(row)) return null;
     if (row.kind !== "message") {
       continue;
     }
@@ -892,7 +963,13 @@ function collapseSettledTurns(
     const foldIndices: number[] = [];
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
       const prev = rows[scan]!;
+      // The response started where a background task woke the agent.
+      if (isBackgroundTaskCompletionRow(prev)) break;
       if (prev.kind === "work") {
+        // Coordinator monitor rows are server-posted system pills, not turn
+        // work — folding them into a collapsed turn would hide them on
+        // conversation-only surfaces.
+        if (prev.groupedEntries.some(isStandaloneWorkEntry)) continue;
         foldIndices.push(scan);
         continue;
       }
@@ -909,8 +986,8 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
-      if (prev.kind === "proposed-plan") {
-        // The plan card stays visible, but it should not strand earlier
+      if (prev.kind === "proposed-plan" || prev.kind === "user-input") {
+        // The plan card and answered questions stay visible, but they should not strand earlier
         // narration/work outside the final "Worked for..." disclosure.
         continue;
       }
@@ -1182,7 +1259,8 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     workLogAutomationsEqual(a.automation, b.automation) &&
     workLogSynaraThreadCreationsEqual(a.synaraThreadCreation, b.synaraThreadCreation) &&
     workLogLiveActivitiesEqual(a.liveActivity, b.liveActivity) &&
-    workLogToolDetailsEqual(a.toolDetails, b.toolDetails)
+    workLogToolDetailsEqual(a.toolDetails, b.toolDetails) &&
+    a.userInputExchange === b.userInputExchange
   );
 }
 
@@ -1240,6 +1318,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
+
+    case "user-input":
+      return a.entry.userInputExchange === (b as typeof a).entry.userInputExchange;
 
     case "work":
       return (

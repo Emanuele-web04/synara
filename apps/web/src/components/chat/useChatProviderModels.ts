@@ -1,6 +1,7 @@
 import {
   ThreadId,
   type ModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
@@ -8,15 +9,24 @@ import { normalizeModelSlug } from "@synara/shared/model";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveAvailableProviderPreference } from "~/lib/providerAvailability";
+import { resolveUnsentComposerProvider } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
 } from "~/lib/serverReactQuery";
 import type { AppSettings } from "../../appSettings";
-import { getProviderStartOptions } from "../../appSettings";
-import { useComposerThreadDraft, useEffectiveComposerModelState } from "../../composerDraftStore";
+import {
+  getProviderInstanceOptions,
+  getProviderStartOptions,
+  mergeProviderStartOptions,
+  resolveSelectableProviderInstanceId,
+} from "../../appSettings";
+import {
+  providerInstanceModelSelectionKey,
+  useComposerThreadDraft,
+  useEffectiveComposerModelState,
+} from "../../composerDraftStore";
 import { buildSearchableModelOptions } from "../../hooks/useComposerCommandMenuItems";
 import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import { buildModelSelection } from "../../providerModelOptions";
@@ -26,7 +36,6 @@ import {
   shouldShowComposerModelBootstrapSkeleton,
   threadHasProviderLockingActivity,
 } from "../ChatView.logic";
-import { AVAILABLE_PROVIDER_OPTIONS } from "./ProviderModelPicker";
 import { getComposerProviderState } from "./composerProviderRegistry";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
@@ -36,8 +45,10 @@ interface ChatProviderModelsInput {
   activeProject: Project | undefined;
   composerDraft: ReturnType<typeof useComposerThreadDraft>;
   settings: AppSettings;
-  isModelPickerOpen: boolean;
   resolvedThreadWorktreePath: string | null;
+  // The picker may leave the thread's provider: picking another one hands the
+  // thread off to it in place when the next message is sent.
+  allowProviderHandoff?: boolean;
 }
 
 export function useChatProviderModels({
@@ -46,13 +57,21 @@ export function useChatProviderModels({
   activeProject,
   composerDraft,
   settings,
-  isModelPickerOpen,
   resolvedThreadWorktreePath,
+  allowProviderHandoff,
 }: ChatProviderModelsInput) {
   const queryClient = useQueryClient();
   const prompt = composerDraft.prompt;
   const sessionProvider = activeThread?.session?.provider ?? null;
-  const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceIdByThreadId = composerDraft.activeProvider ?? null;
+  const selectedProviderByThreadId = selectedProviderInstanceIdByThreadId
+    ? (composerDraft.modelSelectionByProvider[selectedProviderInstanceIdByThreadId]?.provider ??
+      providerInstances.find(
+        (instance) => instance.instanceId === selectedProviderInstanceIdByThreadId,
+      )?.provider ??
+      null)
+    : null;
   const threadProvider =
     activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
   const hasThreadStarted = Boolean(
@@ -66,45 +85,110 @@ export function useChatProviderModels({
   const hasProviderLockingActivity = Boolean(
     activeThread && threadHasProviderLockingActivity(activeThread),
   );
-  const lockedProvider: ProviderKind | null = hasProviderLockingActivity
+  // The provider the thread's conversation runs on.
+  const boundProvider: ProviderKind | null = hasProviderLockingActivity
     ? (sessionProvider ?? threadProvider ?? selectedProviderByThreadId ?? null)
     : null;
+  const boundProviderInstanceId: ProviderInstanceId | null =
+    boundProvider === null
+      ? null
+      : ((activeThread?.session?.provider === boundProvider
+          ? activeThread.session.providerInstanceId
+          : undefined) ??
+        (activeThread?.modelSelection.provider === boundProvider
+          ? activeThread.modelSelection.instanceId
+          : undefined) ??
+        boundProvider);
+  // A provider explicitly picked over the bound one is a pending handoff.
+  const handoffProvider: ProviderKind | null =
+    allowProviderHandoff === true &&
+    boundProvider !== null &&
+    selectedProviderByThreadId !== null &&
+    selectedProviderByThreadId !== boundProvider
+      ? selectedProviderByThreadId
+      : null;
+  const lockedProvider: ProviderKind | null = allowProviderHandoff === true ? null : boundProvider;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig();
-  const preferredDraftProvider =
-    selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const selectedProvider = useMemo<ProviderKind>(
     () =>
-      lockedProvider ??
-      // Keep an unstarted draft pinned to its explicit provider; availability is validated at send time.
-      selectedProviderByThreadId ??
-      resolveAvailableProviderPreference({
-        preferredProvider: preferredDraftProvider,
+      handoffProvider ??
+      boundProvider ??
+      resolveUnsentComposerProvider({
+        explicitProvider: selectedProviderByThreadId,
+        threadProvider,
+        defaultProvider: settings.defaultProvider,
         statuses: providerStatusesReconciled ? localProviderStatuses : EMPTY_PROVIDER_STATUSES,
         providerOrder: settings.providerOrder,
         hiddenProviders: settings.hiddenProviders,
       }),
     [
+      boundProvider,
+      handoffProvider,
       localProviderStatuses,
-      lockedProvider,
-      preferredDraftProvider,
       providerStatusesReconciled,
       selectedProviderByThreadId,
+      settings.defaultProvider,
       settings.hiddenProviders,
       settings.providerOrder,
+      threadProvider,
     ],
   );
+  const sessionInstanceId =
+    activeThread?.session?.provider === selectedProvider
+      ? activeThread.session.providerInstanceId
+      : undefined;
+  let candidateInstanceId: ProviderInstanceId | undefined =
+    selectedProviderByThreadId === selectedProvider
+      ? (selectedProviderInstanceIdByThreadId ?? undefined)
+      : undefined;
+  const draftSelection = candidateInstanceId
+    ? composerDraft.modelSelectionByProvider[candidateInstanceId]
+    : undefined;
+  if (draftSelection?.provider === selectedProvider && draftSelection.instanceId) {
+    candidateInstanceId = draftSelection.instanceId;
+  }
+  if (
+    !candidateInstanceId &&
+    activeThread?.modelSelection.provider === selectedProvider &&
+    activeThread.modelSelection.instanceId
+  ) {
+    candidateInstanceId = activeThread.modelSelection.instanceId;
+  }
+  if (
+    !candidateInstanceId &&
+    activeProject?.defaultModelSelection?.provider === selectedProvider &&
+    activeProject.defaultModelSelection.instanceId
+  ) {
+    candidateInstanceId = activeProject.defaultModelSelection.instanceId;
+  }
+  const selectedProviderInstanceId =
+    sessionInstanceId ??
+    resolveSelectableProviderInstanceId(settings, selectedProvider, candidateInstanceId);
 
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
     const draftSelections = composerDraft.modelSelectionByProvider;
 
-    const resolveHint = (provider: ProviderKind): string | null =>
-      draftSelections[provider]?.model ??
-      (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
-      (projectModelSelection?.provider === provider ? projectModelSelection.model : null);
+    const resolveHint = (provider: ProviderKind): string | null => {
+      const draftSelection =
+        draftSelections[
+          providerInstanceModelSelectionKey(
+            provider,
+            provider === selectedProvider ? selectedProviderInstanceId : provider,
+          )
+        ] ??
+        (provider === selectedProvider
+          ? undefined
+          : Object.values(draftSelections).find((selection) => selection?.provider === provider));
+      return (
+        draftSelection?.model ??
+        (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
+        (projectModelSelection?.provider === provider ? projectModelSelection.model : null)
+      );
+    };
 
     return {
       codex: resolveHint("codex"),
@@ -116,11 +200,14 @@ export function useChatProviderModels({
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
       devin: resolveHint("devin"),
+      omp: resolveHint("omp"),
     };
   }, [
     activeProject?.defaultModelSelection,
     activeThread?.modelSelection,
     composerDraft.modelSelectionByProvider,
+    selectedProvider,
+    selectedProviderInstanceId,
   ]);
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: resolvedThreadWorktreePath,
@@ -130,29 +217,51 @@ export function useChatProviderModels({
   const {
     customModelsByProvider,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
+    refreshModels,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
+    runtimeModelsByProviderInstance,
     selectedRuntimeAgents: dynamicAgents,
     selectedProviderModelsLoading,
     selectedProviderRuntimeModelDiscoveryPending,
   } = useProviderModelCatalog({
     selectedProvider,
-    discoveryEnabled: isModelPickerOpen,
+    selectedProviderInstanceId,
+    // Browsing a provider tab requests just that account through refreshModels.
+    discoveryEnabled: false,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: composerModelHintByProvider,
     agentDiscoveryPolicy: "eager-core",
   });
+  const selectedInstanceModelOptionsByProvider = useMemo(
+    () => ({
+      ...modelOptionsByProvider,
+      [selectedProvider]:
+        modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+        modelOptionsByProvider[selectedProvider],
+    }),
+    [
+      modelOptionsByProvider,
+      modelOptionsByProviderInstance,
+      selectedProvider,
+      selectedProviderInstanceId,
+    ],
+  );
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
     threadModelSelection: activeThread?.modelSelection,
     projectModelSelection: activeProject?.defaultModelSelection,
     customModelsByProvider,
-    availableModelOptionsByProvider: modelOptionsByProvider,
+    availableModelOptionsByProvider: selectedInstanceModelOptionsByProvider,
   });
   const draftModelSelectionForSelectedProvider =
-    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
+    composerDraft.modelSelectionByProvider[
+      providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
+    ] ?? null;
   const persistedClaudeSupportsAutoMode =
     selectedProvider === "claudeAgent"
       ? draftModelSelectionForSelectedProvider?.provider === "claudeAgent" &&
@@ -195,11 +304,15 @@ export function useChatProviderModels({
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(() => {
-    if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
+    if (
+      (selectedProvider === "pi" || selectedProvider === "omp") &&
+      draftModelSelectionForSelectedProvider?.provider === selectedProvider
+    ) {
       return buildModelSelection(
         selectedProvider,
         draftModelSelectionForSelectedProvider.model,
         selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
+        { instanceId: selectedProviderInstanceId },
       );
     }
     return buildModelSelection(
@@ -207,31 +320,55 @@ export function useChatProviderModels({
       selectedModel,
       selectedModelOptionsForDispatch,
       selectedProvider === "claudeAgent" ? selectedRuntimeModel?.supportsAutoMode : undefined,
+      { instanceId: selectedProviderInstanceId },
     );
   }, [
     draftModelSelectionForSelectedProvider,
     selectedModel,
     selectedModelOptionsForDispatch,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedRuntimeModel,
   ]);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    // A seeded overlay (group worker routing) sits on top of the user's own
+    // start options instead of replacing them wholesale, so a send on any
+    // provider the user picks still dispatches their configured options.
+    () =>
+      mergeProviderStartOptions(
+        getProviderStartOptions(settings, selectedProviderInstanceId),
+        composerDraft.providerOptionsForDispatch,
+      ),
+    [composerDraft.providerOptionsForDispatch, selectedProviderInstanceId, settings],
+  );
   const selectedModelForPicker =
     selectedModelSelection.provider === selectedProvider
       ? selectedModelSelection.model
       : selectedModel;
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
-    const currentOptions = modelOptionsByProvider[selectedProvider];
+    const currentOptions =
+      modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+      modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
       ? selectedModelForPicker
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
-  }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
+  }, [
+    modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    selectedModelForPicker,
+    selectedProvider,
+    selectedProviderInstanceId,
+  ]);
   const persistedComposerModelSelection =
     sessionProvider && activeThread?.modelSelection.provider !== sessionProvider
       ? activeProject?.defaultModelSelection?.provider === selectedProvider
         ? activeProject.defaultModelSelection
         : null
-      : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
+      : activeThread?.modelSelection.provider === selectedProvider
+        ? activeThread.modelSelection
+        : activeProject?.defaultModelSelection?.provider === selectedProvider
+          ? activeProject.defaultModelSelection
+          : null;
   const providerModelsLoading = selectedProviderModelsLoading;
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
@@ -239,7 +376,8 @@ export function useChatProviderModels({
     selectedProvider === "droid" ||
     selectedProvider === "opencode" ||
     selectedProvider === "pi" ||
-    selectedProvider === "devin";
+    selectedProvider === "devin" ||
+    selectedProvider === "omp";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -251,17 +389,39 @@ export function useChatProviderModels({
   const searchableModelOptions = useMemo(
     () =>
       buildSearchableModelOptions({
-        providerOptions: AVAILABLE_PROVIDER_OPTIONS,
+        providerOptions: providerInstances
+          // Search mirrors the picker: disabled instances are not actionable,
+          // and a started thread is locked to its exact provider instance.
+          .filter(
+            (instance) =>
+              instance.enabled &&
+              (lockedProvider === null || instance.instanceId === selectedProviderInstanceId) &&
+              // A handoff can change the provider, not the bound provider's account.
+              (boundProvider === null ||
+                instance.provider !== boundProvider ||
+                instance.instanceId === boundProviderInstanceId),
+          )
+          .map((instance) => ({
+            value: instance.provider,
+            label: instance.label,
+            instanceId: instance.instanceId,
+          })),
         modelOptionsByProvider,
+        modelOptionsByProviderInstance,
         providerOrder: settings.providerOrder,
         hiddenProviders: settings.hiddenProviders,
         protectedProviders: [selectedProvider],
         lockedProvider,
       }),
     [
+      boundProvider,
+      boundProviderInstanceId,
       lockedProvider,
       modelOptionsByProvider,
+      modelOptionsByProviderInstance,
+      providerInstances,
       selectedProvider,
+      selectedProviderInstanceId,
       settings.hiddenProviders,
       settings.providerOrder,
     ],
@@ -269,14 +429,21 @@ export function useChatProviderModels({
   return {
     hasThreadStarted,
     lockedProvider,
+    boundProvider,
+    boundProviderInstanceId,
     serverConfigQuery,
     selectedProvider,
+    providerInstances,
+    selectedProviderInstanceId,
     providerModelDiscoveryCwd,
     customModelsByProvider,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
+    refreshModels,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
+    runtimeModelsByProviderInstance,
     dynamicAgents,
     selectedProviderRuntimeModelDiscoveryPending,
     composerModelOptions,

@@ -5,14 +5,25 @@
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
+import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
+import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
+
+const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
+)}`;
+
+vi.mock("~/lib/wsHttpUrl", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/wsHttpUrl")>()),
+  resolveWsHttpUrl: () => projectFavicon,
+}));
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
 const PROJECT_B = ProjectId.makeUnsafe("activity-project-b");
@@ -63,6 +74,7 @@ function makeThread(
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: false,
+    pendingBackgroundWorkCount: 0,
     ...overrides,
   };
 }
@@ -77,14 +89,26 @@ function renderActivity(input: {
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
   onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
+  onReturnSnoozedThread?: (threadId: ThreadId) => void;
   onMarkThreadRead?: (threadId: ThreadId, completedAt?: string) => void;
   onRenameThread?: (threadId: ThreadId) => void;
   onThreadRenamePointerUp?: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
   onThreadContextMenu?: (threadId: ThreadId, position: { x: number; y: number }) => void;
   onProjectContextMenu?: (projectId: ProjectId, position: { x: number; y: number }) => void;
   resolveThreadStatus?: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
+  threadsHydrated?: boolean;
+  /** Controlled scope (the sidebar's role); omitted, the harness keeps it in local state. */
+  scope?: {
+    selection: ActivityScopeSelection;
+    onChange: (selection: ActivityScopeSelection) => void;
+  };
 }) {
+  return <ActivityHarness {...input} />;
+}
+
+function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
+  const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
   return (
     <SidebarActivityView
       threads={input.threads}
@@ -92,13 +116,17 @@ function renderActivity(input: {
       activeThreadId={input.activeThreadId ?? null}
       pinnedThreadIdSet={input.pinnedThreadIdSet ?? new Set()}
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
-      threadsHydrated
+      threadsHydrated={input.threadsHydrated ?? true}
+      scopeSelection={input.scope ? input.scope.selection : localScope}
+      onScopeSelectionChange={input.scope ? input.scope.onChange : setLocalScope}
       prByThreadId={input.prByThreadId ?? new Map()}
+      threadJumpLabelByThreadId={new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
       onOpenThreadPullRequest={() => {}}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
+      onReturnSnoozedThread={input.onReturnSnoozedThread ?? (() => {})}
       onToggleThreadPinned={() => {}}
       onArchiveThread={() => {}}
       onMarkThreadRead={input.onMarkThreadRead ?? (() => {})}
@@ -121,6 +149,96 @@ describe("SidebarActivityView", () => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
   });
+
+  it("keeps a snoozed pin out of normal rows and returns it through its own section", async () => {
+    const thread = makeThread(40, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
+    const onReturnSnoozedThread = vi.fn();
+    const onVisibleThreadIdsChange = vi.fn();
+    const onOpenThread = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads: [thread],
+        pinnedThreadIdSet: new Set([thread.id]),
+        onReturnSnoozedThread,
+        onVisibleThreadIdsChange,
+        onOpenThread,
+      }),
+    );
+    await expect
+      .element(mounted.getByRole("button", { name: "Snoozed", exact: true }))
+      .toBeVisible();
+    await expect
+      .element(mounted.getByRole("button", { name: "Pinned", exact: true }))
+      .not.toBeInTheDocument();
+    await expect.poll(() => onVisibleThreadIdsChange.mock.calls.at(-1)?.[0]).toEqual([]);
+    await mounted.getByRole("button", { name: "Snoozed", exact: true }).click();
+    await expect.element(mounted.getByTestId(`activity-thread-${thread.id}`)).toBeVisible();
+    await expect.element(mounted.getByText(/^Returns /)).toBeVisible();
+    await expect.poll(() => onVisibleThreadIdsChange.mock.calls.at(-1)?.[0]).toEqual([thread.id]);
+    // Scoping must not repeatedly report the same rows as its filter Set changes.
+    await page.getByRole("button", { name: "Filter activity by project" }).click();
+    await page.getByRole("menuitemradio", { name: /Project A/u }).click();
+    await expect.element(mounted.getByTestId(`activity-thread-${thread.id}`)).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await mounted.getByRole("button", { name: "Return now", exact: true }).click();
+    expect(onReturnSnoozedThread).toHaveBeenCalledWith(thread.id);
+    expect(onOpenThread).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
+
+  it.each([
+    { name: "favicon", appearance: null },
+    { name: "emoji", appearance: { kind: "emoji", emoji: "🚀" } },
+    { name: "icon", appearance: { kind: "icon", icon: "rocket", color: "blue" } },
+    { name: "color", appearance: { kind: "icon", icon: DEFAULT_PROJECT_ICON, color: "red" } },
+  ] satisfies ReadonlyArray<{ name: string; appearance: ProjectAppearance | null }>)(
+    "keeps the $name project identity and worktree indicator in recent rows",
+    async ({ name, appearance }) => {
+      const thread = makeThread(0, {
+        envMode: "worktree",
+        worktreePath: "/tmp/activity-worktree",
+        branch: "feature/sidebar-icons",
+      });
+      const mounted = await render(
+        renderActivity({
+          threads: [thread],
+          projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
+        }),
+      );
+      await vi.waitFor(() => {
+        const row = page.getByTestId(`activity-thread-${thread.id}`).element();
+        if (name === "favicon") {
+          const image = row.querySelector<HTMLImageElement>("img");
+          expect(image?.naturalWidth).toBeGreaterThan(0);
+        } else if (appearance?.kind === "emoji") {
+          expect(row.textContent).toContain(appearance.emoji);
+          expect(row.querySelector("img")).toBeNull();
+        } else if (appearance?.kind === "icon") {
+          // The default project icon is the shared Hugeicons folder (an svg); every other
+          // choice is a masked Central asset named after the icon.
+          const glyph =
+            appearance.icon === DEFAULT_PROJECT_ICON
+              ? row.querySelector<SVGElement>('[data-slot="hugeicon"]')
+              : [...row.querySelectorAll<HTMLElement>('[data-slot="central-icon"]')].find(
+                  (element) => element.style.maskImage.includes(`/${appearance.icon}.svg`),
+                );
+          expect(glyph).toBeDefined();
+          const reference = document.createElement("span");
+          reference.style.color = `var(--project-${appearance.color})`;
+          document.body.appendChild(reference);
+          const expectedColor = getComputedStyle(reference).color;
+          reference.remove();
+          expect(getComputedStyle(glyph!).color).toBe(expectedColor);
+          expect(row.querySelector("img")).toBeNull();
+        }
+        expect(row.querySelector('[aria-label="Worktree"]')?.getAttribute("aria-hidden")).not.toBe(
+          "true",
+        );
+      });
+      await expect.element(mounted.getByRole("img", { name: "Worktree" })).toBeVisible();
+      await mounted.unmount();
+    },
+  );
 
   it("keeps mounted rows and navigation order stable until a human sends a new message", async () => {
     const older = makeThread(500, {
@@ -381,6 +499,33 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
+  it("reads a chat back from snooze at its reminder with Mark all as read and Done", async () => {
+    // Its last reply was read before the reminder fired.
+    const returned = makeThread(104, {
+      lastVisitedAt: "2026-08-02T11:00:00.000Z",
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-02T12:01:00.000Z",
+    });
+    const onMarkThreadRead = vi.fn();
+    const mounted = await render(renderActivity({ threads: [returned], onMarkThreadRead }));
+    try {
+      await page.getByRole("button", { name: "Activity options" }).click();
+      await page.getByRole("menuitem", { name: "Mark all as read" }).click();
+      page
+        .getByTestId(`activity-thread-${returned.id}`)
+        .element()
+        .parentElement?.querySelector<HTMLButtonElement>('button[aria-label="Done"]')
+        ?.click();
+
+      expect(onMarkThreadRead.mock.calls).toEqual([
+        [returned.id, returned.snoozeReminderAt],
+        [returned.id, returned.snoozeReminderAt],
+      ]);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
   it("opens settled rows through the shared thread activation path", async () => {
     const settled = makeThread(103, {
       branch: "feature/finished",
@@ -430,6 +575,60 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
+  it("keeps a remembered project scope when the view remounts", async () => {
+    const projectA = makeProject(PROJECT_A, "Project A");
+    const projectB = makeProject(PROJECT_B, "Project B");
+    const threads = [makeThread(210), makeThread(211, { projectId: PROJECT_B })];
+    const projects = [projectA, projectB];
+    // Stands in for the sidebar, which owns the scope across Settings round-trips.
+    let selection: ActivityScopeSelection = null;
+    const scope = () => ({
+      selection,
+      onChange: (next: ActivityScopeSelection) => {
+        selection = next;
+      },
+    });
+    const first = await render(renderActivity({ threads, projects, scope: scope() }));
+    await page.getByRole("button", { name: "Filter activity by project" }).click();
+    await page.getByRole("menuitemradio", { name: /Project B/u }).click();
+    expect(selection).toBe(PROJECT_B);
+    await first.unmount();
+
+    const second = await render(renderActivity({ threads, projects, scope: scope() }));
+    await expect
+      .element(page.getByRole("button", { name: "Filter activity by project" }))
+      .toHaveTextContent("Project B");
+    await second.unmount();
+  });
+
+  it("does not drop a remembered scope while threads are still hydrating", async () => {
+    const projectA = makeProject(PROJECT_A, "Project A");
+    const onChange = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads: [],
+        projects: [projectA],
+        threadsHydrated: false,
+        scope: { selection: PROJECT_A, onChange },
+      }),
+    );
+    await expect.element(page.getByText("Loading activity...")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+
+    await mounted.rerender(
+      renderActivity({
+        threads: [makeThread(220)],
+        projects: [projectA],
+        scope: { selection: PROJECT_A, onChange },
+      }),
+    );
+    await expect
+      .element(page.getByRole("button", { name: "Filter activity by project" }))
+      .toHaveTextContent("Project A");
+    expect(onChange).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
+
   it("shows unread pins once in open Pinned and suppresses a stale dot on the open thread", async () => {
     const pinnedUnread = makeThread(300, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
     const openThread = makeThread(301, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
@@ -469,26 +668,36 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it("gives pulsing status glyphs an accessible name", async () => {
-    const running = makeThread(400, { hasLiveTailWork: true });
-    const mounted = await render(
-      renderActivity({
-        threads: [running],
-        resolveThreadStatus: () => ({
-          label: "Working",
-          colorClass: "text-sky-600",
-          dotClass: "bg-sky-500",
-          pulse: true,
-        }),
-      }),
+  it("keeps an old open thread on screen under collapsed Earlier until another thread opens", async () => {
+    const recent = makeThread(600);
+    const old = makeThread(601, {
+      latestHumanMessageAt: "2026-05-04T10:00:00.000Z",
+      updatedAt: "2026-05-04T10:00:00.000Z",
+      createdAt: "2026-05-04T09:00:00.000Z",
+    });
+    const onVisibleThreadIdsChange = vi.fn();
+    const oldRows = () => document.querySelectorAll(`[data-testid="activity-thread-${old.id}"]`);
+    const input = { threads: [recent, old], onVisibleThreadIdsChange };
+    const mounted = await render(renderActivity({ ...input, activeThreadId: old.id }));
+
+    const earlier = page.getByRole("button", { name: "Earlier", exact: true });
+    await expect.element(earlier).toHaveAttribute("aria-expanded", "false");
+    await expect.element(page.getByTestId(`activity-thread-${old.id}`)).toBeVisible();
+    expect(oldRows()).toHaveLength(1);
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([recent.id, old.id]),
     );
 
-    expect(
-      page
-        .getByTestId(`activity-thread-${running.id}`)
-        .element()
-        .parentElement?.querySelector('[role="img"][aria-label="Working"]'),
-    ).not.toBeNull();
+    // Expanding moves the row into the section instead of rendering it twice.
+    await earlier.click();
+    await expect.element(earlier).toHaveAttribute("aria-expanded", "true");
+    expect(oldRows()).toHaveLength(1);
+    await earlier.click();
+    await expect.element(earlier).toHaveAttribute("aria-expanded", "false");
+
+    await mounted.rerender(renderActivity({ ...input, activeThreadId: recent.id }));
+    await vi.waitFor(() => expect(oldRows()).toHaveLength(0));
+    await vi.waitFor(() => expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([recent.id]));
     await mounted.unmount();
   });
 });

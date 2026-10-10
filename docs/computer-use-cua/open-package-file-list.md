@@ -48,7 +48,7 @@ the Interfaces table. Each needs a written table addition before it ships.
 
 The listed source files import sibling files that are not in the table (for
 example `computerGeometry.ts`, `uiTreeTargeting.ts`, `screenshotFrames.ts`,
-`scrollUnits.ts`, `DesktopOperationQueue.ts` under `apps/server/src/computer/`,
+`DesktopOperationQueue.ts` under `apps/server/src/computer/`,
 and `packages/contracts` types). Whether the package compiles with only the
 listed files plus their import closure is unverified. The import closure needs a
 written audit before extraction. This is a file list only; no move is proposed.

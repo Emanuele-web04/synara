@@ -22,7 +22,7 @@ vi.mock("./terminalRuntime", () => ({
 import { removeOrphanedTerminalRuntimes } from "../../lib/terminalStateCleanup";
 import { buildTerminalRuntimeKey, terminalRuntimeRegistry } from "./terminalRuntimeRegistry";
 
-function attach(threadId: string) {
+function attach(threadId: string, providerAuthInstanceId?: string) {
   const runtimeKey = buildTerminalRuntimeKey(threadId, "terminal-1");
   terminalRuntimeRegistry.attach(
     {
@@ -31,6 +31,7 @@ function attach(threadId: string) {
       terminalId: "terminal-1",
       terminalLabel: "Terminal",
       cwd: "/tmp",
+      ...(providerAuthInstanceId ? { providerAuthInstanceId } : {}),
       callbacks: {
         onSessionExited: vi.fn(),
         onTerminalMetadataChange: vi.fn(),
@@ -64,6 +65,18 @@ describe("terminal runtime memory ownership", () => {
     expect(runtime.create).toHaveBeenCalledTimes(created);
     removeOrphanedTerminalRuntimes(new Set());
     expect(runtime.dispose).toHaveBeenCalledTimes(created);
+  });
+
+  it("keeps settings-owned authentication terminals alive when unrelated chats are removed", () => {
+    attach("provider-auth:work", "codex_work");
+    attach("removed-chat");
+    removeOrphanedTerminalRuntimes(new Set());
+    expect(runtime.dispose.mock.calls.map(([entry]) => entry.threadId)).toEqual(["removed-chat"]);
+    terminalRuntimeRegistry.disposeTerminal("provider-auth:work", "terminal-1");
+    expect(runtime.dispose.mock.calls.map(([entry]) => entry.threadId)).toEqual([
+      "removed-chat",
+      "provider-auth:work",
+    ]);
   });
 
   it("disposes only the exact scope when ids contain the runtime key separator", () => {

@@ -1,5 +1,7 @@
 import type { Writable } from "node:stream";
 
+import { ByteAccumulator } from "./byteAccumulator";
+
 /** Default byte budgets shared by the Codex and native helper transports. */
 export const JSONRPC_STDIO_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 export const JSONRPC_STDIO_MAX_QUEUED_STDIN_BYTES = 32 * 1024 * 1024;
@@ -62,9 +64,8 @@ function rethrowLineError(error: JsonRpcStdioTransportError): never {
 
 /** Raw-byte JSONL framing. Retaining bytes until newline keeps split UTF-8 safe. */
 export class JsonRpcStdioFramer {
-  private readonly chunks: Buffer[] = [];
+  private readonly pending = new ByteAccumulator();
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
-  private frameBytes = 0;
   private ended = false;
   /** Set while the remainder of a dropped line is being skipped to its newline. */
   private skipping = false;
@@ -92,7 +93,7 @@ export class JsonRpcStdioFramer {
       throw this.makeTransportError({
         reason: "unterminated-frame",
         maxBytes: this.maxFrameBytes,
-        observedBytes: this.frameBytes,
+        observedBytes: this.pending.byteLength,
       });
     }
 
@@ -134,11 +135,11 @@ export class JsonRpcStdioFramer {
 
   finish(): void {
     this.ended = true;
-    if (this.frameBytes > 0) {
+    if (this.pending.byteLength > 0) {
       throw this.makeTransportError({
         reason: "unterminated-frame",
         maxBytes: this.maxFrameBytes,
-        observedBytes: this.frameBytes,
+        observedBytes: this.pending.byteLength,
       });
     }
   }
@@ -151,7 +152,7 @@ export class JsonRpcStdioFramer {
   }
 
   get bufferedBytes(): number {
-    return this.frameBytes;
+    return this.pending.byteLength;
   }
 
   protected makeTransportError(input: {
@@ -164,14 +165,13 @@ export class JsonRpcStdioFramer {
   }
 
   private discardFrame(): void {
-    this.chunks.length = 0;
-    this.frameBytes = 0;
+    this.pending.clear();
   }
 
   /** Returns the overflow error instead of throwing, so the caller can resync. */
   private append(chunk: Buffer): JsonRpcStdioTransportError | undefined {
     if (chunk.length === 0) return undefined;
-    const observedBytes = this.frameBytes + chunk.length;
+    const observedBytes = this.pending.byteLength + chunk.length;
     if (observedBytes > this.maxFrameBytes) {
       return this.makeTransportError({
         reason: "frame-too-large",
@@ -179,16 +179,14 @@ export class JsonRpcStdioFramer {
         observedBytes,
       });
     }
-    this.chunks.push(Buffer.from(chunk));
-    this.frameBytes = observedBytes;
+    this.pending.append(chunk);
     return undefined;
   }
 
   /** The decoded line, or the decode failure. Either way the bytes are consumed. */
   private takeFrame(): string | JsonRpcStdioTransportError {
-    let frame = Buffer.concat(this.chunks, this.frameBytes);
+    let frame = this.pending.take(this.pending.byteLength);
     if (frame.at(-1) === 0x0d) frame = frame.subarray(0, -1);
-    this.discardFrame();
     try {
       return this.decoder.decode(frame);
     } catch (cause) {

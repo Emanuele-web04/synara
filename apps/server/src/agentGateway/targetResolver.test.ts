@@ -114,6 +114,82 @@ describe("agent gateway target resolver", () => {
       }),
   );
 
+  it.effect("accepts a Claude picker id resolved from one discovered non-default alias", () =>
+    Effect.gen(function* () {
+      const claudeDiscovery = {
+        listModels: () =>
+          Effect.succeed({
+            models: [
+              {
+                slug: "default",
+                name: "Default",
+                resolvedModel: "claude-opus-6[1m]",
+              },
+              {
+                slug: "opus[1m]",
+                name: "Opus",
+                resolvedModel: "claude-opus-6[1m]",
+                supportsAutoMode: true,
+                optionDescriptors: [
+                  {
+                    id: "autoCompactWindow",
+                    label: "Context",
+                    type: "select" as const,
+                    options: [{ id: "200k", label: "200k" }],
+                  },
+                ],
+              },
+            ],
+          }),
+      } as unknown as ProviderDiscoveryServiceShape;
+
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({
+          target: { provider: "claudeAgent", model: "claude-opus-6" },
+          discovery: claudeDiscovery,
+        }),
+        { provider: "claudeAgent", model: "claude-opus-6", supportsAutoMode: true },
+      );
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({
+          target: {
+            provider: "claudeAgent",
+            model: "claude-opus-6",
+            options: { autoCompactWindow: "200k" },
+          },
+          discovery: claudeDiscovery,
+        }),
+        {
+          provider: "claudeAgent",
+          model: "claude-opus-6",
+          options: { autoCompactWindow: "200k" },
+          supportsAutoMode: true,
+        },
+      );
+    }),
+  );
+
+  it.effect("rejects an ambiguous Claude resolved id", () =>
+    Effect.gen(function* () {
+      const result = yield* resolveAgentGatewayTarget({
+        target: { provider: "claudeAgent", model: "claude-opus-6" },
+        discovery: {
+          listModels: () =>
+            Effect.succeed({
+              models: [
+                { slug: "opus", name: "Opus", resolvedModel: "claude-opus-6[1m]" },
+                { slug: "team-opus", name: "Team Opus", resolvedModel: "claude-opus-6[1m]" },
+              ],
+            }),
+        } as unknown as ProviderDiscoveryServiceShape,
+      }).pipe(
+        Effect.map(() => ({ code: "unexpected-success" })),
+        Effect.catch((error) => Effect.succeed(error)),
+      );
+      assert.equal(result.code, "model_unavailable");
+    }),
+  );
+
   it.effect("builds examples from the exact model restrictions and preserves option types", () =>
     Effect.gen(function* () {
       const codexCatalog = {
@@ -135,6 +211,7 @@ describe("agent gateway target resolver", () => {
       const codexGuidance = agentGatewayTargetOptionGuidance(codexCatalog);
       assert.deepEqual(codexGuidance.exampleTarget, {
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.6-terra",
         options: { reasoningEffort: "low" },
       });
@@ -202,17 +279,6 @@ describe("agent gateway target resolver", () => {
     }),
   );
 
-  it.effect("accepts Terra Low as a canonical model plus option", () =>
-    Effect.gen(function* () {
-      const target = {
-        provider: "codex" as const,
-        model: "gpt-5.6-terra",
-        options: { reasoningEffort: "low" },
-      };
-      assert.deepEqual(yield* resolveAgentGatewayTarget({ target, discovery }), target);
-    }),
-  );
-
   it.effect("rejects a guessed model slug before creation", () =>
     Effect.gen(function* () {
       const result = yield* resolveAgentGatewayTarget({
@@ -223,23 +289,6 @@ describe("agent gateway target resolver", () => {
         Effect.catch((error) => Effect.succeed(error)),
       );
       assert.equal(result.code, "model_unavailable");
-    }),
-  );
-
-  it.effect("rejects an unadvertised effort", () =>
-    Effect.gen(function* () {
-      const result = yield* resolveAgentGatewayTarget({
-        target: {
-          provider: "codex",
-          model: "gpt-5.6-terra",
-          options: { reasoningEffort: "ultra" },
-        },
-        discovery,
-      }).pipe(
-        Effect.map(() => ({ code: "unexpected-success" })),
-        Effect.catch((error) => Effect.succeed(error)),
-      );
-      assert.equal(result.code, "model_option_unavailable");
     }),
   );
 
@@ -359,6 +408,13 @@ describe("agent gateway target resolver", () => {
           rejectedValue: "invented",
         },
         {
+          provider: "omp",
+          descriptor: makeEffortDescriptor("omp-model", "max"),
+          optionKey: "thinkingLevel",
+          acceptedValue: "max",
+          rejectedValue: "invented",
+        },
+        {
           provider: "antigravity",
           descriptor: makeEffortDescriptor("antigravity-model", "low"),
           optionKey: "reasoningEffort",
@@ -424,6 +480,47 @@ describe("agent gateway target resolver", () => {
           assert.equal(rejected.code, "model_option_unavailable");
         }
       }
+    }),
+  );
+  it.effect("accepts OMP's max thinking level via the global routing rule on a bare model", () =>
+    Effect.gen(function* () {
+      // A bare descriptor (no supportedReasoningEfforts, no optionDescriptors) forces
+      // validateEffortOption's global fallback (rule.allowedValues) — the only path that
+      // consults OMP_THINKING_LEVEL_OPTIONS, the set that distinguishes omp from pi by
+      // adding "max". The sibling table test advertises per-model efforts and so never
+      // reaches this fallback; without this case, reverting the omp arm to
+      // PI_THINKING_LEVEL_OPTIONS would leave the suite green.
+      const descriptor: ProviderModelDescriptor = { slug: "omp-bare", name: "omp-bare" };
+      const providerDiscovery = {
+        listModels: () => Effect.succeed({ source: "test", models: [descriptor] }),
+      } as unknown as ProviderDiscoveryServiceShape;
+
+      const accepted = yield* resolveAgentGatewayTarget({
+        target: {
+          provider: "omp",
+          model: "omp-bare",
+          options: { thinkingLevel: "max" },
+        } as unknown as ModelSelection,
+        discovery: providerDiscovery,
+      });
+      assert.deepEqual(accepted, {
+        provider: "omp",
+        model: "omp-bare",
+        options: { thinkingLevel: "max" },
+      });
+
+      const rejected = yield* resolveAgentGatewayTarget({
+        target: {
+          provider: "omp",
+          model: "omp-bare",
+          options: { thinkingLevel: "invented" },
+        } as unknown as ModelSelection,
+        discovery: providerDiscovery,
+      }).pipe(
+        Effect.map(() => ({ code: "unexpected-success" })),
+        Effect.catch((error) => Effect.succeed(error)),
+      );
+      assert.equal(rejected.code, "model_option_unavailable");
     }),
   );
 

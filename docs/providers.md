@@ -6,17 +6,18 @@ consistent workspace.
 
 ## Supported providers
 
-| Provider                                                                | What Synara connects to                                      |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [Claude Code](https://www.trysynara.com/docs/providers/claude-code)     | Your installed Claude Code runtime and authenticated account |
-| [Codex](https://www.trysynara.com/docs/providers/codex)                 | Your installed and authenticated Codex CLI                   |
-| [OpenCode](https://www.trysynara.com/docs/providers/opencode)           | Your local OpenCode runtime and configured model providers   |
-| [Cursor](https://www.trysynara.com/docs/providers/cursor)               | Your local Cursor agent runtime and account                  |
-| [Devin](https://docs.devin.ai)                                          | Your installed and authenticated Devin CLI                   |
-| [Antigravity](https://www.trysynara.com/docs/providers/antigravity)     | Your installed and authenticated Antigravity CLI             |
-| [Grok Build](https://www.trysynara.com/docs/providers/grok)             | Your configured Grok Build runtime and access                |
-| [Pi](https://www.trysynara.com/docs/providers/pi)                       | Pi and the model providers configured through it             |
-| [Factory Droid](https://www.trysynara.com/docs/providers/factory-droid) | Your installed and authenticated Droid runtime               |
+| Provider                                                                | What Synara connects to                                        |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [Claude Code](https://www.trysynara.com/docs/providers/claude-code)     | Your installed Claude Code runtime and authenticated account   |
+| [Codex](https://www.trysynara.com/docs/providers/codex)                 | Your installed and authenticated Codex CLI                     |
+| [OpenCode](https://www.trysynara.com/docs/providers/opencode)           | Your local OpenCode runtime and configured model providers     |
+| [Cursor](https://www.trysynara.com/docs/providers/cursor)               | Your local Cursor agent runtime and account                    |
+| [Devin](https://docs.devin.ai)                                          | Your installed and authenticated Devin CLI                     |
+| [Antigravity](https://www.trysynara.com/docs/providers/antigravity)     | Your installed and authenticated Antigravity CLI               |
+| [Grok Build](https://www.trysynara.com/docs/providers/grok)             | Your configured Grok Build runtime and access                  |
+| [Pi](https://www.trysynara.com/docs/providers/pi)                       | Pi and the model providers configured through it               |
+| [Oh My Pi](https://www.trysynara.com/docs/providers/omp)                | Your installed Oh My Pi runtime and configured model providers |
+| [Factory Droid](https://www.trysynara.com/docs/providers/factory-droid) | Your installed and authenticated Droid runtime                 |
 
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
@@ -34,6 +35,75 @@ Synara provides the shared operating surface around each provider:
 - Session continuation where supported
 - Provider handoffs
 - Usage information where the provider exposes it
+
+Commands remain ordered within a task, while independent tasks use separate delivery lanes
+with bounded concurrency. A command receipt confirms durable acceptance; provider execution
+continues in the background. After restart, Synara resumes from the settled event prefix and
+the delivery journal, preserving completed deliveries and requiring reconciliation for ambiguous
+provider calls. A task waiting on a slow provider operation does not hold another task's lane.
+
+Checkpoint capture and undo remain ordered for tasks sharing the same physical workspace.
+Slow Git work in one workspace leaves other workspaces free to progress. Recovery preserves
+completed captures and undo outcomes; an interrupted operation with an uncertain outcome
+is reported for inspection instead of automatically changing the workspace again.
+
+Pi preserves separate assistant messages within a turn, including progress before tool calls
+and the final response. Reasoning items also end with their SDK message. Retries start new
+message items while the overall turn remains active until Pi settles. This applies to newly
+received messages; previously stored concatenated replies are not rewritten.
+
+Claude's readable reasoning appears as compact progress text between tool actions while it works.
+Open a reasoning row to read its available detail. This text comes from the running provider;
+Synara does not make another model request to generate it. Models that do not return readable
+reasoning continue to show their normal tool activity and assistant messages.
+Claude's tool-use summaries also appear as expandable text between tool groups. API retries
+show their attempt count and reported delay. Authentication displays its latest state, including
+between turns, with a Settings hint when attention is required; raw login output is not shown.
+These rows use events already supplied by the provider and do not trigger extra model requests.
+
+The Environment panel's Usage section shows enabled accounts for the active provider, with a
+separate row and detail menu for each account. Providers with multiple accounts show account names
+beside the provider label. Settings → Usage uses the same account-specific snapshots.
+In Settings → Usage → Sidebar, select up to two enabled accounts for the rail rings, including
+two accounts of the same provider (for example, personal and work Claude accounts). Each ring's
+hover card identifies the account and shows its own usage. The rings use the same account color
+dots as the model picker. Existing provider selections keep
+their default accounts selected. Temporarily disabled accounts keep their saved selection;
+only the first two available selected accounts appear in the rail.
+Usage checks follow each account's configured credentials; unassigned thread telemetry and
+provider-wide local totals are not used as a fallback for an individual account.
+
+## Keep Synara responsive
+
+Settings → Agent providers → **Keep Synara responsive** is enabled by default in Stable and Beta.
+Synara gives newly launched local agent processes a moderate CPU scheduling priority:
+nice +5 on macOS/Linux and Below Normal on Windows. Their children normally inherit it,
+including tests, compilers, and browsers. Processes that explicitly change their own priority
+can override that inheritance. This does not use background I/O or network throttling.
+Resolved native macOS/Linux executables and WSL workspaces adjust nice before executing the agent, so its initial threads
+and immediate children inherit the lower priority. Native launches preserve an already lower
+inherited priority. Windows applies Below Normal immediately after spawn; a launcher or `.cmd`
+shim that creates a child before that call can race the adjustment. The Effect runtime applies
+it when its spawner returns, after spawn-event and stream setup; that window remains a Windows
+limitation. Changing only the Windows launcher would not change WSL guest scheduling.
+
+The setting is read at process launch; already running agents and their children are not
+reprioritized. Restart existing sessions after changing it to apply consistently. Providers
+that launch a process per turn pick it up on the next launch. Pi's SDK runs inside the server,
+so its supervised shell commands receive the priority selected when that session started.
+An externally managed OpenCode server must be configured by its operator.
+
+The Synara server, terminals opened by the user, Git checkpoint helpers, and brief version,
+authentication, and dedicated Codex/Claude model-list probes keep their existing priority.
+ACP/OpenCode discovery uses the shared agent process/server and retains its agent priority.
+Auxiliary Codex/Claude model-generation processes use the agent priority. Priority changes are best effort: an OS
+failure is logged and the agent launch continues. Lower CPU priority improves scheduling
+under contention; it does not impose a CPU quota or guarantee response times under overload.
+Unresolved native executables launch directly to preserve startup errors such as ENOENT;
+if that direct launch succeeds, priority is adjusted after spawn as a best-effort fallback.
+If the native system `/bin/sh` is unavailable, Synara logs a warning and uses the same
+direct-spawn fallback. These fallback paths can race initial threads/children; actual shell-less
+Linux images and WSL guests without `/bin/sh` have not been verified.
 
 ## What remains provider-owned
 
@@ -54,15 +124,29 @@ provider feature is supported through Synara.
 ## Connect a provider
 
 1. **Install the official runtime.** Use the provider's official installation instructions.
-2. **Authenticate outside Synara.** Complete the provider's normal sign-in or credential setup.
-   Verify the runtime from a fresh terminal.
-3. **Open Synara provider settings.** Confirm that the provider is detected and enabled. When
-   necessary, configure a custom path to the provider executable.
+2. **Open Settings → Providers.** Confirm that the provider is detected and enabled, then select
+   its account and choose **Sign in**. Synara starts the provider's authentication flow in the
+   account environment. Complete any browser, Apple, enterprise, device-code, or credential prompts.
+3. **Check authentication.** Synara rechecks provider status when the login process exits; for
+   interactive CLIs, choose **Check authentication** after completing the prompts. A successful
+   process exit alone does not establish authentication. A custom executable path is only needed
+   when the installation cannot be discovered automatically.
 4. **Check model discovery.** Open the model picker and confirm that the expected models and options
    appear. Synara discovers many provider capabilities at runtime; the result can depend on the
    installed CLI version, account, subscription, and provider configuration.
 5. **Start a small test task.** Use a harmless objective in a test repository before relying on a
    newly configured provider for important work.
+
+## Enable or disable providers
+
+In **Settings → Providers → Enabled providers**, turn a provider off to hide it
+from provider and model pickers, ordering, CLI tools, custom model settings, usage
+options, and the plugin library. Its accounts, saved configuration, custom models,
+starred models, and existing threads are preserved; running turns are not interrupted.
+
+Expand **Disabled providers** in the same section to turn it back on. Its saved
+preferences return, including its position and whether it was hidden from the
+provider picker. Enabling a provider does not install its CLI or sign it in.
 
 ## Models and effort options
 
@@ -77,21 +161,73 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+Claude Code may discover a model under an alias while reporting its concrete model ID separately.
+For a release newer than Synara's catalog, the picker shows the concrete ID. Agent Gateway accepts
+that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
+advertised alias.
+
+Claude model discovery caches catalogs by the detected CLI version as well as the executable
+path. A detected CLI update refreshes the picker even when the path stays the same, including
+after a restart. Catalog revalidation uses a temporary Claude process because running sessions
+retain the model metadata returned when they initialized. Ordinary picker reads share the
+server cache rather than starting a process each time.
+
 For Codex, successful model discovery determines the built-in choices, including when the returned
 catalog is empty. Models absent from that catalog are not added back from Synara's static list.
 Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
 refresh keeps the last successful catalog. The shared discovery cache refreshes catalogs in the
-background after its ten-minute fresh window.
+background after its thirty-minute fresh window. Opening a provider/account tab in the composer
+checks that catalog on demand and delivers any refreshed list directly to the picker. Other tabs
+are not refreshed just because the picker opens, and there is no periodic timer for these checks.
+Existing models remain visible while checks run silently, without a persistent refresh row.
+If a check fails, an inline error offers **Retry**; a successful retry removes the entire row,
+including when the catalog has not changed. The server shares concurrent requests, reuses successful
+manual retries for at least one minute, and backs off failures. Checks for the viewed account take
+priority over queued background catalog loads.
+Failed refreshes retain the last successful catalog. Refreshing does not change the
+selected model or restart running sessions, and availability still comes from the provider runtime.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
-saves it together with its current effort and speed, so one click (or `mod+1`…`mod+9` while the
-picker is open) restores the whole combination. A task that has started stays on its provider: only
+saves it together with its current effort, speed, and provider account, so one click (or
+`mod+1`…`mod+9` while the picker is open) restores the whole combination, including the account.
+Presets of a non-default account show the account name; presets of a removed or disabled account
+are hidden. Model cycling prefers the active account's stars. A task that has started stays on its provider: only
 that provider's tab and starred entries are offered. Supported provider executables can be pointed
 at custom binary locations.
 
 Starred models absent from the current catalog remain saved and can be removed, but cannot be
 selected. They become selectable again when discovery or custom model settings add them to the
 catalog.
+
+## OpenCode V2
+
+Synara selects the native `@opencode/client` API after a read-only `/api/info` probe;
+`@opencode-ai/sdk/v2` remains the V1-server fallback (its package subpath is not the V2
+server protocol). Managed and external servers use the same adapter boundary. V2 session
+permissions, model/agent selection, prompt receipts, messages, execution events, forms,
+MCP configuration, and pagination use their native contracts.
+
+Scoped root dependency overrides keep Synara's Effect platform, SQLite, and test packages on
+the catalog runtime. OpenCode's protocol/schema dependencies retain their own Effect version.
+
+Install V2 following the [official guide](https://opencode.ai/v2/docs/), then select its
+`opencode` executable in the existing provider account. Restart provider sessions and refresh
+model discovery. V2 uses `@opencode/cli` or `anomalyco/tap/opencode-v2` for package updates;
+V1 retains its own packages. External-server updates belong to that server's operator.
+
+Preserve the OpenCode account/data directories to retain native session IDs. OpenCode owns
+migration of its history and credentials. Synara does not copy provider databases or silently
+replace missing resumed sessions. Existing supported V1 configuration remains readable by V2;
+V1 plugins need migration. See [OpenCode's migration guide](https://opencode.ai/v2/docs/migrate-v1/).
+
+The task-scoped Agent Gateway retains its existing credentials, capabilities, cancellation,
+and ownership checks. V2 uses MCP PUT registration followed by status discovery. Computer
+Use still requires a connected gateway on a managed server. V2 execution terminal events,
+not individual assistant steps, settle turns; disconnect recovery checks native outcomes and
+replays message snapshots before accepting a terminal event. Failed snapshot reads leave the
+turn active for recovery to retry.
+Rollback commits a cut at a user-turn boundary with provider file restoration disabled because
+Synara owns workspace checkpoints.
 
 ## Provider sessions
 
@@ -113,6 +249,19 @@ The session may preserve provider-specific behavior such as:
 - Provider-native subagents or workflows
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
+
+After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
+Once native background work settles, it keeps the app-server process alive, unsubscribes the
+native conversation, verifies that Codex unloaded it, and resumes the same conversation with
+a fresh credential. The credential is sent through the app-server pipe as thread configuration;
+Synara does not put it in the shared Codex config or the child process environment.
+This avoids process startup and initialization between ordinary replies while preserving
+the rejection of stale tool requests. It still reloads the native conversation and its MCP clients.
+
+If additional native threads remain loaded, native unloading or resume cannot be verified, or
+a turn was interrupted, failed, or aborted for inactivity, Synara uses the full process-restart
+recovery path. You can continue in the same task. Idle provider processes still shut down after
+10 minutes by default.
 
 ### Claude Auto / 200k / 1M selection
 
@@ -156,6 +305,10 @@ session restoration, and automatic compaction. Resuming a saved conversation res
 it does not restore an expired server-side cache. An unchanged prefix can still be reused after a
 process restart while its cache remains valid. Leaving a process open does not refresh that cache.
 
+A fresh Claude session becomes resumable only after the runtime emits conversation output.
+If a handoff session needs a settings restart before its first message, Synara starts another
+fresh session and keeps the prior transcript queued for that message.
+
 The main-conversation cache policy applies to both CLI and SDK turns. The effective lifetime depends
 on the account and Claude settings; Synara does not force a lifetime or change the selected model,
 effort, or compaction threshold to reduce usage. See Anthropic's
@@ -179,6 +332,13 @@ Creating a hold and marking its session ready is one atomic operation: a stop, a
 or rollback recorded after the original request prevents a delayed cache check from restoring it.
 
 This check also covers long pauses in an existing process and model changes on the next send.
+Selecting a different model or provider from an existing Claude conversation shows a dismissible
+tip above the composer, using the same strip as Auto-fix CI. It appears only for a pending
+selection before sending, including follow-ups during an active turn. It disappears once the
+composer accepts the message for sending or queues it, or when switching back. A blocked
+handoff keeps it available for a later send. The wording distinguishes Claude model changes
+from context transferred to another provider; it does not predict a percentage of the
+subscription allowance or require confirmation. A pending large-context review takes precedence.
 A warm observation for the previous model cannot bypass the review for a different requested model;
 checking does not switch the native model or overwrite its cache evidence. It uses saved observations because some
 Claude runtimes provide their resume hook only after the first prompt has been delivered. Older or
@@ -197,6 +357,19 @@ keeps the message on hold. If delivery is uncertain, Synara does not automatical
 See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
 boundaries and remaining live validation.
 
+### OpenCode
+
+Synara detects the server protocol with a read-only `GET /api/info` request.
+V2 uses native `/api` session and MCP endpoints. V1 retains the legacy `/session`
+endpoint family and must pass a `GET /provider` readiness check. An HTML app shell
+is not API readiness. The V1 SDK (`1.18.31`) and V2 client (`2.0.25`) are pinned
+exactly — bump them deliberately, never by range.
+
+The `opencode` executable resolves from `PATH` first, then the standard install
+locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
+Volta, asdf, mise, proto, Deno, nvm/fnm). Set an explicit binary path in
+provider settings only when the install lives somewhere else entirely.
+
 ### Claude Artifacts, `/design` and `/slides`
 
 Claude Code keeps [Artifacts](https://code.claude.com/docs/en/artifacts) off by default for Agent
@@ -207,6 +380,107 @@ Pro, Max, Team, or Enterprise plan, Claude Code 2.1.234 or later, and an organiz
 allows Artifacts. While Artifacts are off or unavailable, the composer marks both commands with a
 warning that explains what is missing. Published pages are hosted on claude.ai; Claude returns the
 link in its reply.
+
+## Provider profiles and terminal commands
+
+Provider settings can define multiple independently routed instances of any supported provider.
+Each enabled instance receives a stable command in newly opened or restarted Synara terminals, for
+example `claude-work`, `codex-personal`, or `pi-team`. The command is an executable shim on `PATH`,
+not a zsh or bash function, so it behaves consistently from zsh, bash, fish, shell scripts, and
+child processes. Bare commands such as `claude` and `codex` keep their existing meaning.
+
+The generated name comes from the provider and stable instance ID. A portable command override can
+be configured without tying terminal behavior to the editable display label. Profile shims are
+scoped to Synara terminals; Synara does not edit `.zshrc`, `.bashrc`, or other global shell files.
+
+Use **Import directory** in the desktop provider settings to reference an existing provider account
+directory. Import is non-destructive: Synara does not move or copy the selected directory. Known
+provider roots use their native setting (`CODEX_HOME`, Claude's config directory, or Pi's agent
+directory); other providers use the profile-directory mapping shown in settings. Remote browser
+sessions can create the same profile manually because a browser cannot safely pick a directory on
+the server machine.
+
+A non-default Oh My Pi instance, or one with its own environment, runs under a private home in the
+Synara state directory and does not inherit ambient provider credentials, like Pi. **Agent
+directory** (or the profile directory) sets `PI_CODING_AGENT_DIR`. Sessions, forks, model and command
+discovery, imported history, and the instance's terminal command all use that account.
+
+With `SYNARA_CLAUDE_KEEPALIVE=1` on macOS, the Claude OAuth keepalive runs `claude auth status` for
+every enabled Claude account in that account's own environment, so each account's Keychain token
+stays fresh.
+
+Sensitive environment values are never serialized into terminal shim files. Directory-backed
+authentication works directly. A profile that depends only on a secret environment credential
+still works for managed Synara runs, but its named terminal command requires that credential to be
+available through a secure runtime mechanism rather than an on-disk shim.
+
+### Sign in from account settings
+
+**Sign in** opens Synara's existing interactive terminal in a settings dialog. It launches the
+resolved provider executable directly with the account environment; it does not rely on a profile
+shim being available in an external shell. Account edits already being saved settle before launch.
+The login runs in an empty directory on the Synara server machine, rather than in your project.
+Browser/remote clients still need to complete the provider's browser or device authorization on the
+appropriate machine. Synara never submits browser credentials or accepts consent prompts for you.
+
+| Provider      | Entry point                     | Human steps                                                 |
+| ------------- | ------------------------------- | ----------------------------------------------------------- |
+| Codex         | `codex login`                   | Browser/account authorization                               |
+| Claude        | `claude auth login`             | Login method, browser/Apple/organization authorization      |
+| Cursor        | `cursor-agent login`            | Cursor browser authorization                                |
+| Devin         | `devin auth login`              | Devin/Windsurf/enterprise login selection and authorization |
+| Antigravity   | `agy`                           | Startup sign-in and any system credential-store consent     |
+| Grok          | `grok login`                    | Browser or displayed authorization steps                    |
+| Factory Droid | `droid`                         | Startup prompts and browser/device pairing                  |
+| OpenCode      | `opencode auth login`           | Model provider selection and OAuth or API-key onboarding    |
+| Pi            | `pi`, then **Sign-in options**  | Startup prompts followed by model provider selection        |
+| Oh My Pi      | `omp`, then **Sign-in options** | Startup prompts followed by OAuth/key selection             |
+
+Pi-family **Sign-in options** sends the native `/login` TUI command after you have completed startup
+prompts. It is never passed as a model prompt. OpenCode accounts configured for an external server
+must authenticate on that server; Synara reports this instead of changing a local account.
+
+For non-default native Devin, Antigravity, and Droid accounts, the first launch saves isolated home
+and credential-directory environment settings so later managed sessions and health checks use the
+same account as the login. Imported directories and explicit environment values retain precedence.
+These account environments block ambient API credentials; explicitly configured secrets remain
+available to managed sessions and the selected login process, and are never written into terminal shims.
+
+On macOS, managed Claude accounts keep the system home and username for Keychain access.
+Separate `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` values isolate each account;
+login, chats, health checks, and usage use the same resolved account directories. Explicit home
+overrides remain supported, but a private home can select a different macOS Keychain. Prefer the
+system home with separate config and secure-storage directories. Existing credential files are
+left in place. If an older sign-in saved credentials under `unknown` or in a private Keychain,
+sign in again from the account settings; Synara does not copy or delete Keychain entries.
+
+Claude's account status says **Signed in locally** when the CLI reports stored authentication.
+This is not a guarantee that Anthropic will accept the next request. Usage authentication errors
+are shown on the matching account in Settings. Inference-only tokens, including tokens from
+`claude setup-token`, can run chats without the `user:profile` scope required for live usage.
+Tokens injected inside wrapper scripts are not visible to the usage reader.
+Restoring an account's appearance and enablement defaults preserves its display name.
+
+**Cancel / close** stops the login process and deletes its terminal history. Sign-in output is kept
+in memory while the window is active and is not persisted as a terminal log. Cancellation does not
+log out or remove credentials already saved by the provider. Closing errors stay visible and can be
+retried. Reconnecting to a completed attempt does not launch it again; use a new **Sign in** attempt
+to retry. Synara only reports **Authenticated** when the account's server health check confirms it;
+providers without a verifiable login-status probe can continue to show an unknown status.
+
+Entry points checked against provider documentation and the installed Pi CLI source on 2026-10-02:
+[Codex](https://developers.openai.com/codex/cli/reference#codex-login),
+[Claude](https://code.claude.com/docs/en/cli-reference),
+[Cursor](https://cursor.com/docs/cli/reference/authentication),
+[Devin](https://docs.devin.ai/cli/enterprise/devin-auth),
+[Antigravity](https://www.antigravity.google/docs/cli/install/),
+[Grok](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md),
+[Droid](https://docs.factory.com/droid-cli/quickstart),
+[OpenCode](https://opencode.ai/docs/cli/),
+[Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md),
+[Oh My Pi](https://github.com/can1357/oh-my-pi/blob/main/docs/providers.md).
+Actual provider authentication and packaged Windows behavior require separate qualification; the
+launch tests use disposable CLI fixtures and do not authenticate personal accounts.
 
 ## Switching providers
 
@@ -240,9 +514,10 @@ failure checks.
 Blocking questions show **Cancel** whether or not they offer choices. Cancel applies to
 the whole pending request, including any later questions in the same set. Once an
 answer or cancellation is being submitted, the form disables Cancel until the
-request settles. For OpenCode, cancellation uses its `question.reject` operation;
-submitting completed answers uses `question.reply`. Both requests are scoped to
-the task's OpenCode working directory.
+request settles. For OpenCode V1, cancellation uses `question.reject` and answers use `question.reply`.
+V2 uses the owning session’s native form cancellation/reply endpoints. External, hidden,
+or conditional V2 fields remain visible with a cancellation action and a direction to
+complete the form in OpenCode. Requests retain their task and provider-session scope.
 
 ## Codex asynchronous questions
 
@@ -324,3 +599,11 @@ they have no authenticated creating task.
 Delivery survives restart and duplicate events. An archived or deleted creator
 is not reopened; the result remains in the child and delivery is recorded as
 unavailable. Delivery is checked approximately once per second.
+
+## Keep Awake on macOS
+
+Keep Awake is off by default. On supported macOS hosts, Settings can keep the
+computer awake either for the server lifetime or while an agent turn is running.
+The server owns a `caffeinate -dims -w <server PID>` assertion; switching off or
+shutting down terminates it, deleting the last active thread releases its agent
+lease, and the native PID watch releases it if the server crashes. It does not change persistent macOS power settings.

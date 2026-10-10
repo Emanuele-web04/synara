@@ -64,10 +64,23 @@ export const ProviderBlockingDeliveryEvidence = Schema.Struct({
 });
 export type ProviderBlockingDeliveryEvidence = typeof ProviderBlockingDeliveryEvidence.Type;
 
+/** Private provider recovery fence; it never participates in the global ACK. */
+export const providerThreadProcessedConsumerName = (threadId: string) =>
+  `provider-command-reactor.thread-processed.v1:${JSON.stringify(threadId)}`;
+
 export interface OrchestrationEventDeliveryRepositoryShape {
   readonly getConsumerState: (
     consumerName: string,
   ) => Effect.Effect<Option.Option<OrchestrationConsumerState>, PersistenceSqlError>;
+  /**
+   * Records already-processed quarantined work after validating its journal owner.
+   * One retained row per blocked thread; a journaled thread.deleted clears it.
+   */
+  readonly recordThreadProcessedSequence: (input: {
+    readonly threadId: string;
+    readonly eventSequence: number;
+    readonly updatedAt: string;
+  }) => Effect.Effect<boolean, PersistenceSqlError>;
   readonly getDelivery: (input: {
     readonly consumerName: string;
     readonly eventSequence: number;

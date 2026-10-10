@@ -31,7 +31,7 @@ import {
 import { PlusIcon, RefreshCwIcon, ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
-import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
+import { createProjectSelector, createThreadWorkspaceMetadataSelector } from "~/storeSelectors";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
@@ -199,13 +199,15 @@ export function GitPanel(props: {
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme as "light" | "dark";
-  const thread = useStore(
-    useMemo(() => createThreadSelector(props.hostThreadId), [props.hostThreadId]),
+  // Shell-only, like DockTerminalPane: only `worktreePath` is read here, and the
+  // full thread selector would re-render the pane on every streamed token.
+  const threadWorkspace = useStore(
+    useMemo(() => createThreadWorkspaceMetadataSelector(props.hostThreadId), [props.hostThreadId]),
   );
   const project = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
-  const cwd = thread?.worktreePath ?? project?.cwd ?? null;
+  const cwd = threadWorkspace.worktreePath ?? project?.cwd ?? null;
 
   const [selected, setSelected] = useState<SelectedFile | null>(null);
 
@@ -215,10 +217,15 @@ export function GitPanel(props: {
   const stagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "staged" }));
   const unstagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "unstaged" }));
 
-  const stagedFiles = parsePatchToSortedFiles(stagedQuery.data?.patch, `git-pane:staged:${theme}`);
-  const unstagedFiles = parsePatchToSortedFiles(
-    unstagedQuery.data?.patch,
-    `git-pane:unstaged:${theme}`,
+  const stagedPatch = stagedQuery.data?.patch;
+  const unstagedPatch = unstagedQuery.data?.patch;
+  const stagedFiles = useMemo(
+    () => parsePatchToSortedFiles(stagedPatch, `git-pane:staged:${theme}`),
+    [stagedPatch, theme],
+  );
+  const unstagedFiles = useMemo(
+    () => parsePatchToSortedFiles(unstagedPatch, `git-pane:unstaged:${theme}`),
+    [theme, unstagedPatch],
   );
 
   const stageMutation = useMutation(gitStageFilesMutationOptions({ cwd, queryClient }));

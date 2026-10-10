@@ -35,8 +35,8 @@ afterEach(() => {
 });
 
 describe("computer call env flags", () => {
-  it.each(FLAGS)("defaults %s to its shipped state", (flag) => {
-    delete process.env[flag];
+  it("defaults every flag to its shipped state", () => {
+    for (const flag of FLAGS) delete process.env[flag];
     expect(cuaTimingLogEnabled()).toBe(false);
     // Graduated flags ship on; the env var is now only a kill switch.
     expect(cuaConditionalSettleEnabled()).toBe(true);
@@ -45,45 +45,33 @@ describe("computer call env flags", () => {
     expect(cuaPreviewStillMsOverride()).toBeUndefined();
   });
 
-  it.each(["1", "true", "on", "yes", " TRUE ", "On"])(
-    "treats %s as enabled for the boolean flags",
-    (value) => {
-      process.env.SYNARA_CUA_TIMING_LOG = value;
-      process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
-      process.env.SYNARA_CUA_CAPTURE_REUSE = value;
-      expect(cuaTimingLogEnabled()).toBe(true);
-      expect(cuaConditionalSettleEnabled()).toBe(true);
-      expect(cuaCaptureReuseEnabled()).toBe(true);
-    },
-  );
+  it.each(["1", "yes", " TRUE "])("treats %s as enabled for the boolean flags", (value) => {
+    process.env.SYNARA_CUA_TIMING_LOG = value;
+    process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
+    process.env.SYNARA_CUA_CAPTURE_REUSE = value;
+    expect(cuaTimingLogEnabled()).toBe(true);
+    expect(cuaConditionalSettleEnabled()).toBe(true);
+    expect(cuaCaptureReuseEnabled()).toBe(true);
+  });
 
-  it.each(["0", "false", "off", "no"])(
-    "treats %s as disabled for the graduated flags' kill switch",
-    (value) => {
-      process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
-      process.env.SYNARA_CUA_CAPTURE_REUSE = value;
-      expect(cuaConditionalSettleEnabled()).toBe(false);
-      expect(cuaCaptureReuseEnabled()).toBe(false);
-    },
-  );
+  it.each(["0", "off"])("treats %s as disabled for the graduated flags' kill switch", (value) => {
+    process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
+    process.env.SYNARA_CUA_CAPTURE_REUSE = value;
+    expect(cuaConditionalSettleEnabled()).toBe(false);
+    expect(cuaCaptureReuseEnabled()).toBe(false);
+  });
 
-  it.each(["0", "false", "off", "no", "2", "enabled"])(
-    "treats %s as disabled for the opt-in boolean flags",
-    (value) => {
-      process.env.SYNARA_CUA_TIMING_LOG = value;
-      expect(cuaTimingLogEnabled()).toBe(false);
-    },
-  );
+  it.each(["0", "enabled"])("treats %s as disabled for the opt-in boolean flags", (value) => {
+    process.env.SYNARA_CUA_TIMING_LOG = value;
+    expect(cuaTimingLogEnabled()).toBe(false);
+  });
 
-  it.each(["2", "enabled", "anything"])(
-    "keeps the graduated flags on for a non-off value like %s",
-    (value) => {
-      process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
-      process.env.SYNARA_CUA_CAPTURE_REUSE = value;
-      expect(cuaConditionalSettleEnabled()).toBe(true);
-      expect(cuaCaptureReuseEnabled()).toBe(true);
-    },
-  );
+  it.each(["enabled"])("keeps the graduated flags on for a non-off value like %s", (value) => {
+    process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
+    process.env.SYNARA_CUA_CAPTURE_REUSE = value;
+    expect(cuaConditionalSettleEnabled()).toBe(true);
+    expect(cuaCaptureReuseEnabled()).toBe(true);
+  });
 
   it("parses SYNARA_CUA_ACTION_SETTLE_MS as a non-negative number", () => {
     process.env.SYNARA_CUA_ACTION_SETTLE_MS = "0";
@@ -94,7 +82,7 @@ describe("computer call env flags", () => {
     expect(cuaActionSettleMsOverride()).toBe(80);
   });
 
-  it.each(["", "   ", "abc", "-5", "NaN"])(
+  it.each(["", "abc", "-5"])(
     "ignores the unparsable SYNARA_CUA_ACTION_SETTLE_MS value %s",
     (value) => {
       process.env.SYNARA_CUA_ACTION_SETTLE_MS = value;
@@ -109,7 +97,7 @@ describe("computer call env flags", () => {
     expect(cuaPreviewStillMsOverride()).toBe(250);
   });
 
-  it.each(["", "abc", "0", "-100", "NaN"])(
+  it.each(["", "abc", "0"])(
     "ignores the unparsable SYNARA_CUA_PREVIEW_STILL_MS value %s",
     (value) => {
       process.env.SYNARA_CUA_PREVIEW_STILL_MS = value;

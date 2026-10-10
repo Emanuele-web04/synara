@@ -11,11 +11,6 @@ import {
   makeAgentGatewayComputerTools,
   type AgentGatewayComputerToolsOptions,
 } from "./computerTools.ts";
-import {
-  canonicalSynaraComputerToolName,
-  isSynaraComputerToolFamilyName,
-  SYNARA_COMPUTER_TOOL_NAMES,
-} from "./computerToolPermission.ts";
 import type { McpToolCallResult } from "./protocol.ts";
 import type { ToolContext } from "./toolRuntime.ts";
 
@@ -180,43 +175,6 @@ describe("computer_set_window_minimized", () => {
     expect(backend.callsFor("setWindowMinimized")).toEqual([]);
   });
 
-  it("hides another app's window without asking", async () => {
-    const approval = vi.fn(async () => true);
-    const backend = new FakeComputerBackend();
-    const { manager, call } = await setup(backend, approval);
-    try {
-      // Both windows minimize: only the denylist can refuse a drive.
-      const first = await call("computer_set_window_minimized", {
-        window_id: "fake-terminal",
-        minimized: true,
-      });
-      expect(first.isError).not.toBe(true);
-      const second = await call("computer_set_window_minimized", {
-        window_id: "fake-calculator",
-        minimized: true,
-      });
-      expect(second.isError).not.toBe(true);
-      expect(backend.callsFor("setWindowMinimized").length).toBe(2);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("dispatches nothing when approval is refused", async () => {
-    const approval = vi.fn(async () => false);
-    const backend = new FakeComputerBackend();
-    const { call } = await setup(backend, approval);
-    const result = await call("computer_set_window_minimized", {
-      window_id: "fake-calculator",
-      minimized: true,
-    });
-    expect(result.isError).toBe(true);
-    expect(backend.callsFor("setWindowMinimized")).toEqual([]);
-    expect(
-      (await backend.listWindows()).find((window) => window.id === "fake-calculator"),
-    ).toMatchObject({ minimized: false, visible: true });
-  });
-
   it("refuses cleanly on a backend without the write and carries the unavailable message", async () => {
     const approval = vi.fn(async () => true);
     const { call } = await setup(withoutVisibility(new FakeComputerBackend()), approval);
@@ -306,25 +264,6 @@ describe("computer_set_app_visibility", () => {
     expect(backend.callsFor("setAppVisibility")).toEqual([]);
   });
 
-  it("hides the app a pid resolves to without asking", async () => {
-    const approval = vi.fn(async () => true);
-    const backend = new FakeComputerBackend();
-    const { manager, call } = await setup(backend, approval);
-    try {
-      const first = await call("computer_set_window_minimized", {
-        window_id: "fake-terminal",
-        minimized: true,
-      });
-      expect(first.isError).not.toBe(true);
-      // pid 1002 resolves to the calculator: an ordinary drive, so it hides.
-      const second = await call("computer_set_app_visibility", { pid: 1_002, hidden: true });
-      expect(second.isError).not.toBe(true);
-      expect(backend.callsFor("setAppVisibility")).toHaveLength(1);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
   it("reaches the backend refusal for a pid that names no running app", async () => {
     const approval = vi.fn(async () => true);
     const backend = new FakeComputerBackend();
@@ -336,15 +275,6 @@ describe("computer_set_app_visibility", () => {
     expect(result.isError).toBe(true);
     expect(resultText(result)).toContain("No running application has pid 9999");
     expect(backend.callsFor("setAppVisibility")).toHaveLength(1);
-  });
-
-  it("dispatches nothing when approval is refused", async () => {
-    const approval = vi.fn(async () => false);
-    const backend = new FakeComputerBackend();
-    const { call } = await setup(backend, approval);
-    const result = await call("computer_set_app_visibility", { pid: 1_002, hidden: true });
-    expect(result.isError).toBe(true);
-    expect(backend.callsFor("setAppVisibility")).toEqual([]);
   });
 
   it("refuses cleanly on a backend without the write and carries the unavailable message", async () => {
@@ -390,40 +320,6 @@ describe("computer_launch_app hidden", () => {
     });
     expect(backend.callsFor("raiseWindow")).toEqual([]);
   });
-
-  it("creates an available background window without foreground authorization", async () => {
-    const backend = new FakeComputerBackend({ agentDialect: "macos" });
-    const { call } = await setup(
-      backend,
-      vi.fn(async () => true),
-      async () => ({
-        userRequestedVisibleUse: false,
-      }),
-    );
-    const before = await backend.listWindows();
-    for (const options of [{}, { hidden: false }]) {
-      const result = await call("computer_launch_app", {
-        app: "TextEdit",
-        wait_for_window: false,
-        ...options,
-      });
-      expect(result.isError).not.toBe(true);
-    }
-    expect(backend.callsFor("launchApp").map((call) => call.args)).toEqual([
-      ["TextEdit", []],
-      ["TextEdit", [], { hidden: false }],
-    ]);
-    const after = await backend.listWindows();
-    expect(after.filter((window) => window.appName === "TextEdit")).toEqual([
-      expect.objectContaining({ focused: false, visible: true }),
-      expect.objectContaining({ focused: false, visible: true }),
-    ]);
-    for (const existing of before) {
-      expect(after.find((window) => window.id === existing.id)?.visible).toBe(existing.visible);
-    }
-    expect(backend.callsFor("raiseWindow")).toEqual([]);
-    expect(backend.callsFor("focusWindow")).toEqual([]);
-  });
 });
 
 describe("hidden-workspace run steps", () => {
@@ -464,18 +360,5 @@ describe("hidden-workspace run steps", () => {
     }
     expect(backend.callsFor("setWindowMinimized")).toEqual([]);
     expect(backend.callsFor("setAppVisibility")).toEqual([]);
-  });
-});
-
-describe("tool-name registry", () => {
-  it("owns the visibility lifecycle names in all three provider spellings", async () => {
-    const { byName } = await setup();
-    for (const name of ["computer_set_window_minimized", "computer_set_app_visibility"]) {
-      expect(byName.has(name), `gateway serves ${name}`).toBe(true);
-      expect(SYNARA_COMPUTER_TOOL_NAMES).toContain(name);
-      expect(canonicalSynaraComputerToolName(`synara_${name}`)).toBe(name);
-      expect(canonicalSynaraComputerToolName(`mcp__synara__${name}`)).toBe(name);
-      expect(isSynaraComputerToolFamilyName(name)).toBe(true);
-    }
   });
 });

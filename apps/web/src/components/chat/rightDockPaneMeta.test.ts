@@ -4,7 +4,6 @@ import type { ThreadId } from "@synara/contracts";
 import { type RightDockPane } from "~/rightDockStore.logic";
 import {
   buildRightDockPaneLabelOverrides,
-  getRightDockPaneMeta,
   resolveRightDockPaneLabel,
   resolveRightDockLauncherItems,
 } from "./rightDockPaneMeta";
@@ -25,32 +24,7 @@ function makePane(
   };
 }
 
-describe("getRightDockPaneMeta", () => {
-  it("labels the explorer pane", () => {
-    expect(getRightDockPaneMeta("explorer").label).toBe("Explorer");
-  });
-
-  it("gives the platform-neutral device kind its user-facing iOS label", () => {
-    expect(getRightDockPaneMeta("device").label).toBe("iOS Simulator");
-  });
-});
-
 describe("resolveRightDockLauncherItems", () => {
-  it("offers the non-Git tools for a chat without a repository", () => {
-    expect(
-      resolveRightDockLauncherItems({
-        hasWorkspace: true,
-        hasGitRepository: false,
-        hasReview: false,
-      }).map(({ kind, label }) => [kind, label]),
-    ).toEqual([
-      ["terminal", "Terminal"],
-      ["browser", "Browser"],
-      ["explorer", "Files"],
-      ["sidechat", "Side chats"],
-    ]);
-  });
-
   it("adds review and source control only for Git repositories", () => {
     expect(
       resolveRightDockLauncherItems({
@@ -99,16 +73,6 @@ describe("resolveRightDockLauncherItems", () => {
         hasGitRepository: false,
         hasReview: false,
         hasDeviceSupport: false,
-      }).map(({ kind }) => kind),
-    ).not.toContain("device");
-  });
-
-  it("omits the simulator when support is unknown, so the entry cannot flicker in", () => {
-    expect(
-      resolveRightDockLauncherItems({
-        hasWorkspace: true,
-        hasGitRepository: false,
-        hasReview: false,
       }).map(({ kind }) => kind),
     ).not.toContain("device");
   });

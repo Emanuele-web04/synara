@@ -1,5 +1,6 @@
 import type { WebContents } from "electron";
 import {
+  SYNARA_BETA_DESKTOP_SCHEME,
   SYNARA_CANARY_DESKTOP_SCHEME,
   SYNARA_CUA_DESKTOP_SCHEME,
   SYNARA_DESKTOP_SCHEME,
@@ -26,7 +27,8 @@ export function isClipboardWritePermission(
     const trustedScheme =
       page.protocol === `${SYNARA_DESKTOP_SCHEME}:` ||
       page.protocol === `${SYNARA_CANARY_DESKTOP_SCHEME}:` ||
-      page.protocol === `${SYNARA_CUA_DESKTOP_SCHEME}:`;
+      page.protocol === `${SYNARA_CUA_DESKTOP_SCHEME}:` ||
+      page.protocol === `${SYNARA_BETA_DESKTOP_SCHEME}:`;
     if (
       page.protocol !== "https:" &&
       !trustedScheme &&

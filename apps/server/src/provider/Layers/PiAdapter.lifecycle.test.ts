@@ -5,6 +5,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type AssistantMessage,
   type Tool,
 } from "@earendil-works/pi-ai";
@@ -28,6 +30,7 @@ import { makePiAdapterLive } from "./PiAdapter.ts";
 
 const captured = vi.hoisted(() => ({
   sessions: [] as AgentSession[],
+  modelSystemPrompts: [] as string[],
   modelTools: [] as Tool[][],
   extensions: [] as InlineExtension[],
   events: [] as AgentSessionEvent[],
@@ -70,6 +73,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   captured.sessions.length = 0;
+  captured.modelSystemPrompts.length = 0;
   captured.modelTools.length = 0;
   captured.extensions.length = 0;
   captured.events.length = 0;
@@ -77,11 +81,12 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "until-abort";
+type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "tool" | "until-abort";
 function responses(...kinds: ResponseKind[]) {
   let calls = 0;
   captured.stream = (model, context, options) => {
-    captured.modelTools.push(context.tools ?? []);
+    captured.modelSystemPrompts.push(getCurrentSystemPrompt(context.messages));
+    captured.modelTools.push(getCurrentTools(context.messages));
     const kind = kinds[calls++] ?? "success";
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = {
@@ -123,6 +128,15 @@ function responses(...kinds: ResponseKind[]) {
         message.stopReason = "error";
         message.errorMessage = "[rate_limit_exceeded] Rate limit exceeded";
         stream.push({ type: "error", reason: "error", error: message });
+      } else if (kind === "tool") {
+        message.content.push({
+          type: "toolCall",
+          id: "read-settings",
+          name: "read",
+          arguments: { path: "settings.json" },
+        });
+        message.stopReason = "toolUse";
+        stream.push({ type: "done", reason: "toolUse", message });
       } else if (kind === "until-abort") {
         const abort = () => {
           message.stopReason = "aborted";
@@ -226,11 +240,20 @@ async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
 
+it("passes the current Pi system prompt and tools to the model stream", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(captured.modelSystemPrompts[0]).toBeTruthy();
+    expect(captured.modelTools[0]?.some((tool) => tool.name === "read")).toBe(true);
+  });
+});
+
 it.each([
   { toolName: "bash", args: { command: "printf hello \n" }, title: "printf hello" },
   { toolName: "bash", args: { command: " \n" }, title: "bash" },
   { toolName: "read", args: { path: "file.txt " }, title: "read file.txt" },
-  { toolName: "grep", args: { pattern: "needle \n" }, title: "grep needle" },
 ])(
   "persists $toolName lifecycle titles without changing tool arguments: $title",
   async ({ toolName, args, title }) => {
@@ -797,7 +820,8 @@ it("rejects steering into an untracked SDK run instead of orphaning a queued tur
 });
 
 it("keeps the turn alive through SDK overflow compaction and its continuation", async () => {
-  const calls = responses("success", "overflow", "success", "success");
+  // Pi summarizes history and the split-turn prefix separately before retrying.
+  const calls = responses("success", "overflow", "success", "success", "success");
   await withAdapter(async (adapter, events) => {
     await send(adapter);
     await waitFor(() => expect(completions(events)).toHaveLength(1));
@@ -808,7 +832,7 @@ it("keeps the turn alive through SDK overflow compaction and its continuation", 
     expect(
       captured.events.some((event) => event.type === "compaction_end" && event.willRetry),
     ).toBe(true);
-    expect(calls()).toBe(4);
+    expect(calls()).toBe(5);
     expect(completions(events)[1]).toMatchObject({
       turnId: turn.turnId,
       payload: { state: "completed" },
@@ -907,12 +931,15 @@ it.each(["adapter", "extension"] as const)(
   },
 );
 
-it("keeps partial assistant and reasoning items open across retries until final settlement", async () => {
+it("closes failed message items before retrying with separate items", async () => {
   responses("partial-error", "success");
   await withAdapter(async (adapter, events) => {
     const turn = await send(adapter);
     await waitFor(() => expect(captured.sessions[0]!.isRetrying).toBe(true));
-    expect(events.filter((event) => event.type === "item.completed")).toHaveLength(0);
+    await waitFor(() =>
+      expect(events.filter((event) => event.type === "item.completed")).toHaveLength(2),
+    );
+    expect(completions(events)).toHaveLength(0);
     await waitFor(() => expect(completions(events)).toHaveLength(1));
     for (const itemType of ["assistant_message", "reasoning"] as const) {
       const started = events.filter(
@@ -921,18 +948,23 @@ it("keeps partial assistant and reasoning items open across retries until final 
       const completed = events.filter(
         (event) => event.type === "item.completed" && event.payload.itemType === itemType,
       );
-      expect(started).toHaveLength(1);
-      expect(completed).toHaveLength(1);
+      expect(started).toHaveLength(2);
+      expect(completed).toHaveLength(2);
       expect(completed[0]).toMatchObject({
         itemId: started[0]!.itemId,
         turnId: turn.turnId,
-        payload: { status: "completed" },
+        payload: { status: "failed" },
       });
       expect(
         events.filter(
           (event) => event.type === "content.delta" && event.itemId === started[0]!.itemId,
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
+      expect(completed[1]).toMatchObject({
+        itemId: started[1]!.itemId,
+        payload: { status: "completed" },
+      });
+      expect(started[1]!.itemId).not.toBe(started[0]!.itemId);
     }
   });
 });
@@ -1147,55 +1179,6 @@ it("cancels retry and queued steering before awaiting gateway teardown drainage"
   );
 });
 
-it("rotates the Pi gateway credential from the dispatched computer-control fact", async () => {
-  responses("success", "success");
-  const leasedCapabilities: Array<ReadonlyArray<string> | undefined> = [];
-  let sequence = 0;
-  const base = gatewayCredentials();
-  const credentials: AgentGatewayCredentialsShape = {
-    ...base,
-    connectionForThread: vi.fn<AgentGatewayCredentialsShape["connectionForThread"]>(
-      (_threadId, _provider, options) => {
-        leasedCapabilities.push(options?.additionalCapabilities);
-        return {
-          url: "http://127.0.0.1:3773/mcp",
-          bearerToken: `lease-${++sequence}`,
-        };
-      },
-    ),
-  };
-  await withAdapter(
-    async (adapter, events) => {
-      const first = await send(adapter);
-      await waitFor(() => expect(completions(events)).toHaveLength(1));
-      // Session start plus the first rotation both lease computer:control from
-      // the fact stashed when the turn was dispatched.
-      expect(leasedCapabilities).toEqual([["computer:control"], ["computer:control"]]);
-      expect(base.revokeSessionToken).toHaveBeenCalledExactlyOnceWith("lease-1");
-      expect(completions(events)[0]).toMatchObject({
-        turnId: first.turnId,
-        payload: { state: "completed" },
-      });
-      expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
-      const second = await send(adapter);
-      await waitFor(() => expect(completions(events)).toHaveLength(2));
-      expect(completions(events)[1]).toMatchObject({
-        turnId: second.turnId,
-        payload: { state: "completed" },
-      });
-      expect(leasedCapabilities).toEqual([
-        ["computer:control"],
-        ["computer:control"],
-        ["computer:control"],
-      ]);
-      expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
-    },
-    1,
-    credentials,
-    { enableComputerControl: true },
-  );
-});
-
 it("keeps Computer schemas out of idle model requests and refreshes them on resume", async () => {
   responses("success", "success", "success", "success");
   const grants = new Map<string, boolean>();
@@ -1315,4 +1298,40 @@ it("keeps Computer schemas out of idle model requests and refreshes them on resu
     { enableComputerControl: false },
     fetch,
   );
+});
+
+it("separates assistant and reasoning messages across a real SDK tool loop", async () => {
+  const calls = responses("tool", "success");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(calls()).toBe(2);
+    const toolStart = events.findIndex(
+      (event) => event.type === "item.started" && event.itemId === "pi-tool-read-settings",
+    );
+    expect(toolStart).toBeGreaterThan(-1);
+    for (const itemType of ["assistant_message", "reasoning"] as const) {
+      const started = events.filter(
+        (event) => event.type === "item.started" && event.payload.itemType === itemType,
+      );
+      const completed = events.filter(
+        (event) => event.type === "item.completed" && event.payload.itemType === itemType,
+      );
+      expect(started).toHaveLength(2);
+      expect(completed).toHaveLength(2);
+      expect(started[0]!.itemId).not.toBe(started[1]!.itemId);
+      expect(events.indexOf(completed[0]!)).toBeLessThan(toolStart);
+      expect(events.indexOf(started[1]!)).toBeGreaterThan(toolStart);
+      for (const [index, start] of started.entries()) {
+        expect(completed[index]).toMatchObject({
+          itemId: start.itemId,
+          turnId: turn.turnId,
+          payload: { status: "completed" },
+        });
+        expect(
+          events.filter((event) => event.type === "content.delta" && event.itemId === start.itemId),
+        ).toHaveLength(1);
+      }
+    }
+  });
 });

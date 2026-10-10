@@ -18,9 +18,13 @@ import {
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "~/appSettings";
 import type { Thread } from "~/types";
 import {
   ComposerPickerMenuPopup,
@@ -87,7 +91,7 @@ import {
   automationFailurePolicyOptions,
   type AutomationFailurePolicyValue,
 } from "~/lib/automationFailurePolicy";
-import { SkillCubeIcon, WorktreeIcon } from "~/lib/icons";
+import { ClockIcon, FolderIcon, SkillCubeIcon, WorktreeIcon } from "~/lib/icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCapabilities";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
@@ -105,6 +109,7 @@ import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useStore } from "~/store";
 import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 export const automationQueryKey = ["automations"] as const;
 export const EMPTY_AUTOMATION_LIST: AutomationListResult = {
@@ -117,11 +122,9 @@ const AUTOMATION_DEFINITION_UPDATE_SCOPE = {
 } as const;
 
 export function automationTargetThreads<
-  TThread extends Pick<Thread, "projectId" | "sidechatSourceThreadId">,
+  TThread extends Pick<Thread, "projectId" | "sidechatSourceThreadId" | "sidechatContext">,
 >(threads: readonly TThread[], projectId: string): readonly TThread[] {
-  return threads.filter(
-    (thread) => thread.projectId === projectId && !thread.sidechatSourceThreadId,
-  );
+  return threads.filter((thread) => thread.projectId === projectId && !isSidechatThread(thread));
 }
 
 export function automationDefinitionUpdateMutationOptions(
@@ -866,9 +869,15 @@ export function AutomationModelPicker({
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
-  const modelHintByProvider: Partial<Record<ProviderKind, string | null>> = {
-    [value.provider]: value.model,
-  };
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceId = useMemo(
+    () => resolveSelectableProviderInstanceId(settings, value.provider, value.instanceId),
+    [settings, value.instanceId, value.provider],
+  );
+  const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
+    () => ({ [value.provider]: value.model }),
+    [value.model, value.provider],
+  );
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: null,
     activeProjectCwd: projectCwd,
@@ -876,17 +885,23 @@ export function AutomationModelPicker({
   });
   const {
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
     selectedRuntimeModel,
   } = useProviderModelCatalog({
     selectedProvider: value.provider,
+    selectedProviderInstanceId,
     discoveryEnabled: open,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider,
   });
-  const providerStatus = findProviderStatus(providerStatuses, value.provider);
+  const providerStatus = findProviderStatus(
+    providerStatuses,
+    value.provider,
+    selectedProviderInstanceId,
+  );
   const persistedRuntimeModel =
     value.provider === "claudeAgent" && typeof value.supportsAutoMode === "boolean"
       ? {
@@ -912,6 +927,7 @@ export function AutomationModelPicker({
       lockedProvider={null}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
@@ -919,13 +935,22 @@ export function AutomationModelPicker({
       disabled={disabled ?? false}
       open={open}
       onOpenChange={setOpen}
-      onProviderModelChange={(provider, model) => {
+      onProviderModelChange={(provider, model, instanceId) => {
         const runtimeModel = resolveRuntimeModelDescriptor({
           provider,
           model,
           runtimeModels: runtimeModelsByProvider[provider],
         });
-        onChange(buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode));
+        onChange(
+          buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode, {
+            instanceId: instanceId ?? provider,
+          }),
+        );
+      }}
+      providerInstances={providerInstances}
+      selectedProviderInstanceId={selectedProviderInstanceId}
+      onProviderModelRoleSelect={(model, options, instanceId) => {
+        onChange(buildModelSelection("omp", model, options, { instanceId }));
       }}
     />
   );
@@ -963,7 +988,9 @@ export function AutomationDialog({
   readonly open: boolean;
   readonly form: AutomationFormState;
   readonly projects: ReturnType<typeof useStore.getState>["projects"];
-  readonly threads: readonly Thread[];
+  readonly threads: ReadonlyArray<
+    Pick<Thread, "id" | "projectId" | "title" | "sidechatSourceThreadId" | "sidechatContext">
+  >;
   readonly warnings?: readonly AutomationDraftWarning[];
   readonly acknowledgedWarningIds?: ReadonlySet<AutomationDraftWarningId>;
   readonly onOpenChange: (open: boolean) => void;
@@ -1172,7 +1199,7 @@ export function AutomationDialog({
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
-                <CentralIcon name="folder-2" className="size-4" />
+                <FolderIcon className="size-4" />
                 <span className="max-w-[10rem] truncate">
                   {selectedProject?.name ?? "Select project"}
                 </span>
@@ -1204,7 +1231,7 @@ export function AutomationDialog({
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
-                <CentralIcon name="clock" className="size-4" />
+                <ClockIcon className="size-4" />
                 <span>{formatCadence(schedule)}</span>
                 <CentralIcon name="chevron-down-small" className="size-3.5 opacity-60" />
               </MenuTrigger>

@@ -6,6 +6,7 @@ import type {
   ServerListProviderUsageInput,
   ServerProviderStatus,
   ServerStopLocalServerInput,
+  StatsGetRecapInput,
   ThreadId,
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
@@ -31,6 +32,8 @@ export const serverQueryKeys = {
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
     ["server", "profileTokenStats", utcOffsetMinutes] as const,
+  recap: (input: StatsGetRecapInput) =>
+    ["server", "recap", input.from, input.to, input.slotBoundaries.join(",")] as const,
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
   computerStatus: () => ["server", "computerStatus"] as const,
@@ -398,9 +401,36 @@ export function serverProfileTokenStatsQueryOptions(input: { enabled?: boolean }
   });
 }
 
+// Inbox recap of one window (a working day and its slots), from Synara's local DB. A recap
+// generated after its window ended is final and stays fresh. Anything earlier is refetched,
+// including yesterday's entry when it is the one "today" left behind after the day rolled
+// over (same window, same key). The current window refreshes while the Inbox is open.
+export function serverRecapQueryOptions(
+  input: StatsGetRecapInput,
+  options: { enabled?: boolean; live?: boolean } = {},
+) {
+  const live = options.live ?? true;
+  const windowEndMs = Date.parse(input.to);
+  return queryOptions({
+    queryKey: serverQueryKeys.recap(input),
+    enabled: options.enabled ?? true,
+    staleTime: (query) => {
+      const generatedAtMs = Date.parse(query.state.data?.generatedAt ?? "");
+      if (generatedAtMs >= windowEndMs) return Number.POSITIVE_INFINITY;
+      return live ? 60_000 : 0;
+    },
+    // Opening the Inbox always shows today's latest numbers.
+    refetchOnMount: live ? "always" : true,
+    refetchInterval: live ? 5 * 60_000 : false,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: async () => ensureNativeApi().stats.getRecap(input),
+  });
+}
+
 // Live remaining-usage for every provider. Always fetches the full batch under a single query
 // key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-provider snapshots, so the batch is cheap.
+// and one request cycle; the server caches per-account snapshots, so the batch is cheap.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean

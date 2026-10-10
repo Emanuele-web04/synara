@@ -14,7 +14,7 @@ import {
   type ProviderModelOption,
   type ProviderModelOptionGroup,
 } from "../../providerModelOptions";
-import type { ProviderKind } from "@synara/contracts";
+import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { MenuGroup, MenuGroupLabel, MenuRadioItem } from "../ui/menu";
@@ -31,9 +31,14 @@ type ProviderModelOptionGroupListProps = {
   provider: ProviderKind;
   activeModel: string;
   isSearching: boolean;
+  instanceId: ProviderInstanceId;
   favoriteProvider: FavoriteModelProvider | null;
   favoriteModelSlugSet: ReadonlySet<string> | undefined;
-  onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
+  onToggleFavorite: (
+    provider: FavoriteModelProvider,
+    instanceId: ProviderInstanceId,
+    slug: string,
+  ) => void;
   onAfterSelection?: () => void;
 };
 
@@ -41,16 +46,22 @@ function ProviderModelRadioItem(
   props: Readonly<{
     provider: ProviderKind;
     modelOption: ProviderModelOption;
+    instanceId: ProviderInstanceId;
     favoriteProvider: FavoriteModelProvider | null;
     isFavorite: boolean;
     showProvenance: boolean;
-    onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
+    onToggleFavorite: (
+      provider: FavoriteModelProvider,
+      instanceId: ProviderInstanceId,
+      slug: string,
+    ) => void;
     onAfterSelection?: () => void;
   }>,
 ) {
   const {
     provider,
     modelOption,
+    instanceId,
     favoriteProvider,
     isFavorite,
     showProvenance,
@@ -84,7 +95,7 @@ function ProviderModelRadioItem(
                 ? `Remove ${accessibleModelName} from favourites`
                 : `Add ${accessibleModelName} to favourites`
             }
-            onToggle={() => onToggleFavorite(favoriteProvider, modelOption.slug)}
+            onToggle={() => onToggleFavorite(favoriteProvider, instanceId, modelOption.slug)}
           />
         ) : costMultiplierLabel && modelOption.description ? (
           <span
@@ -168,6 +179,7 @@ export function ProviderModelOptionGroupList(props: ProviderModelOptionGroupList
             key={`${props.provider}:${modelOption.slug}`}
             provider={props.provider}
             modelOption={modelOption}
+            instanceId={props.instanceId}
             favoriteProvider={props.favoriteProvider}
             isFavorite={props.favoriteModelSlugSet?.has(modelOption.slug) ?? false}
             showProvenance={group.key === "__favorites__"}

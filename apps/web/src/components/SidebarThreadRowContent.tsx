@@ -7,6 +7,7 @@ import { useMemo, type ReactNode } from "react";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { pluralize } from "@synara/shared/text";
 
+import { useThreadHasPendingDraft } from "../composerDraftStore";
 import { createThreadSelector } from "../storeSelectors";
 import { useStore } from "../store";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
@@ -17,6 +18,7 @@ import { TerminalIcon } from "../lib/icons";
 import { cn } from "../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarGlyph } from "./sidebarGlyphs";
+import { SidebarDraftGlyph } from "./SidebarStatusTrailingGlyph";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export interface SidebarThreadTerminalStatus {
@@ -200,6 +202,7 @@ export function SidebarThreadRowContent({
         })
       : null;
   const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
+  const hasPendingDraft = useThreadHasPendingDraft(thread.id);
 
   return (
     <>
@@ -233,7 +236,9 @@ export function SidebarThreadRowContent({
       >
         <span
           className={cn(
-            "min-w-0 flex-1 truncate-fade text-ui",
+            // Pinned rows size the title from its text so the suffix yields width first.
+            "min-w-0 truncate-fade text-ui",
+            variant === "pinned" ? "flex-auto" : "flex-1",
             isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
             variant === "standard" && isSubagentThread
               ? "leading-[18px] text-foreground/80"
@@ -250,6 +255,7 @@ export function SidebarThreadRowContent({
             thread.title
           )}
         </span>
+        {hasPendingDraft ? <SidebarDraftGlyph /> : null}
         {!isSubagentThread && pendingStatusColorClass ? (
           <span
             aria-label="Pending approval"
@@ -258,8 +264,9 @@ export function SidebarThreadRowContent({
             Pending
           </span>
         ) : null}
+        {variant === "pinned" ? suffix : null}
       </div>
-      {suffix}
+      {variant === "pinned" ? null : suffix}
     </>
   );
 }

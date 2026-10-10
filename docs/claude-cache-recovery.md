@@ -13,6 +13,13 @@ Main-conversation observations exclude subagent usage.
 
 The lifetime comes from native cache-creation usage, when available. The estimate uses the earliest
 local observation of the request, so streaming a long answer does not keep moving the expiry time.
+Mixed five-minute and one-hour prefixes retain both lifetimes, including when later requests read
+the longer-lived prefix and append a shorter-lived tail. Between those expiry boundaries, overall
+warmth is unknown: partial expiry does not establish a full-context cache miss or require a choice.
+The context meter displays the observed lifetime range. New native response evidence replaces
+older request timing; its request start and lifetime remain unknown until usage supplies them.
+Metadata for the same response retains its known request start, allowing genuine expiry during a
+long response to remain visible.
 An explicit expired observation takes precedence over a local warm estimate. Missing values, old
 sessions without timing evidence, and invalid clocks remain unknown.
 
@@ -46,6 +53,25 @@ Waiting for a choice releases the delivery lock. Other tasks continue normally; 
 the affected task waits. A response identifies the review and message, and stale or duplicate
 responses cannot authorize a different send. Relevant session, model, or context changes require
 revalidation. Archive, stop, and delete revoke pending authorization.
+Accepted choices also release the ordered delivery source after acquiring a durable claim. A scoped
+worker owns compaction preparation and the subsequent send, without the ordinary two-minute command
+deadline. Slow compaction or a slow follow-up therefore does not become an uncertain delivery merely
+because time elapsed, and other tasks can still send. Advancing the source cursor is only admission;
+the delivery stays inflight until its actual result is persisted. Startup recovers unfinished cache
+responses even when their sequence is behind that cursor, without replaying an ambiguous send.
+Recovery registers the same cancellation state while awaiting an earlier owner's inflight claim,
+so a claim that becomes safely retryable still observes later cancellation. Lease expiry alone
+continues to leave ambiguous saved-message delivery uncertain; cancellation does not prove rejection.
+Stop and other cancellation commands can interrupt a pending follow-up; an interrupted send whose
+acceptance cannot be proven still requires reconciliation rather than automatic replay.
+Continue checks the cancellation journal before starting its worker and immediately before enqueue,
+including interrupts, rollback, and edited resends that arrived before live cancellation registration.
+Same-thread model and runtime changes remain projected but defer session reconfiguration while the
+cache worker owns it. An explicit handoff reports failure until that saved operation finishes or is
+cancelled, preserving its reviewed session and providing a settled handoff outcome.
+An operator-authorized safe retry uses the same reactor-owned worker. Reconciliation waits for its
+receipt outside the ordered source lock, so a slow retry does not block other tasks or inherit the
+ordinary command deadline.
 Installing a hold and marking the session ready happen in one command. Admission checks the
 conversation journal for cancellation after the source request, including cancellation during a
 cache observation, so a delayed hold cannot revive a stopped task.
@@ -58,7 +84,42 @@ existing edit-and-resend action is available for a message with no provider turn
 ## Native compaction
 
 Command discovery is local and bounded. Unsupported runtimes leave compaction unavailable. The
-adapter treats discovery failures as pre-dispatch rejections, so they leave the saved send retryable. The
+adapter allows up to five seconds for command discovery, including fresh or resumed processes,
+so initialization does not hold the ordered provider dispatch source for a minute. A timeout reports
+a retryable discovery failure rather than claiming the runtime does not support compaction; the
+same runtime can finish initializing before a retry. A UI stop, interrupt, archive, or delete cancels
+active discovery through a separate local signal, so it does not wait behind discovery in the
+ordered delivery queue. Conversation rollback and edit-and-resend use the same signal before
+changing history.
+The compaction response owns its signal before the provider handoff. Startup replay checks the
+durable journal for cancellations after that response, so an old choice cannot dispatch after an
+interrupt and a later retry remains valid. The signal stays active through preparation until prompt
+enqueue. Direct `/compact` turns use the same request-owned signal before session startup and
+cache preflight, pass it through local dispatch options to the adapter, and fence startup replay
+against later cancellations. The signal is never serialized into provider input or saved history.
+Steered `/compact` requests retain the same signal when a live turn settles during preparation.
+Direct and cache-review compaction also cancel pending session startup and cache preflight, waiting for startup
+cleanup and preserving unproven-exit failures instead of reporting them as safe rejections.
+All native compaction entry points preserve the established model, settings, and permission mode;
+pending selection, access-mode, and Computer profile changes apply to the next ordinary prompt.
+Native compaction does not admit a new Computer intent. Compaction does not wait on model or
+settings control requests or persist an unapplied selection as the active runtime model. Spawn-fixed
+choices are also deferred before session preparation, so native compaction does not restart to apply
+them or change the established session's access mode. The journal fence is refreshed at provider dispatch to cover a delayed live subscriber; the
+adapter checks the signal and enqueues native compaction in one synchronous admission step.
+Cancelled direct compaction defers queue promotion until the ordered cancelling control settles.
+Its optimistic session status is restored from the runtime before interrupt handling, preserving
+an established idle session for retry. Rollback keeps its existing queue policy and does not trigger
+an additional cancellation-recovery drain.
+Session teardown and native interrupts still run in their original order. Compaction reuses its validated command list rather
+than issuing another lookup after turn admission. Cancellation or dispatch interruption during
+runtime-event publication settles the local reservation without dispatching the prompt. An
+adapter-owned producer retains the ordered start, progress, and cancelled terminal events until
+the bounded event queue can accept them. Further dispatch and reconfiguration wait for that
+publication, keeping it bounded. Ordinary sends wait for that producer rather than being rejected;
+another native compaction remains a retryable rejection until publication settles. Stopping the
+session also ends discovery and publication waits immediately.
+The adapter treats discovery failures as pre-dispatch rejections, so they leave the saved send retryable. The
 adapter requires an idle session with no pending interactions or tasks that share the context, and
 rechecks that condition after asynchronous preparation. It preserves the current model, permission
 mode, and settings. Plan and Ultrathink prompt prefixes must not be prepended to a native command.

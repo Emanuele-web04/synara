@@ -8,6 +8,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   clearRemovedAsyncUserInputResponses,
   mergeAsyncUserInput,
@@ -19,7 +20,10 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { deriveThreadSummaryMetadata, resolveHumanMessageAt } from "@synara/shared/threadSummary";
-import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
+import {
+  createStalePendingInteractionMatcher,
+  isPendingInteractionResponseClaimable,
+} from "@synara/shared/pendingInteractions";
 
 import { isSessionRunningTurn } from "./session-logic";
 import {
@@ -179,22 +183,27 @@ function reconcilePendingInteractionsFromActivity(
     activity.kind === "provider.user-input.respond.failed"
   ) {
     const responseCommandId = payload?.responseCommandId;
-    if (typeof responseCommandId !== "string" || responseCommandId.length === 0) {
-      return pendingInteractions;
-    }
+    const hasResponseCommand =
+      typeof responseCommandId === "string" && responseCommandId.length > 0;
+    const isStale = createStalePendingInteractionMatcher([activity]);
     const settlementStatus: OrchestrationPendingInteraction["status"] =
       payload?.settlementStatus === "retryable" ? "retryable" : "uncertain";
     let changed = false;
     const next = existing.map((interaction) => {
       if (
         !matchesIdentity(interaction) ||
-        interaction.status !== "responding" ||
-        interaction.responseCommandId !== responseCommandId
+        interaction.status === "confirmed" ||
+        (hasResponseCommand
+          ? interaction.status !== "responding" ||
+            interaction.responseCommandId !== responseCommandId
+          : !isStale(interaction))
       ) {
         return interaction;
       }
       changed = true;
-      return { ...interaction, status: settlementStatus, resolvedAt: null };
+      return isStale(interaction)
+        ? { ...interaction, status: "confirmed" as const, resolvedAt: activity.createdAt }
+        : { ...interaction, status: settlementStatus, resolvedAt: null };
     });
     return changed ? next : pendingInteractions;
   }
@@ -851,6 +860,7 @@ function applyOrchestrationEvent(
           scripts: event.payload.scripts,
           isPinned: event.payload.isPinned ?? false,
           spaceId: event.payload.spaceId ?? null,
+          additionalFolders: event.payload.additionalFolders ?? [],
           createdAt: event.payload.createdAt,
           updatedAt: event.payload.updatedAt,
         },
@@ -881,6 +891,7 @@ function applyOrchestrationEvent(
             event.payload.spaceId !== undefined
               ? event.payload.spaceId
               : (existingProject.spaceId ?? null),
+          additionalFolders: existingProject.additionalFolders,
           createdAt: existingProject.createdAt ?? event.payload.updatedAt,
           updatedAt: event.payload.updatedAt,
         },
@@ -969,6 +980,13 @@ function applyOrchestrationEvent(
               event.payload.isPinned === (thread.isPinned ?? false)) &&
             (event.payload.settledAt === undefined ||
               (event.payload.settledAt ?? null) === (thread.settledAt ?? null)) &&
+            (event.payload.snoozedUntil === undefined ||
+              (event.payload.snoozedUntil ?? null) === (thread.snoozedUntil ?? null)) &&
+            (event.payload.snoozeReminderAt === undefined ||
+              (event.payload.snoozeReminderAt ?? null) === (thread.snoozeReminderAt ?? null)) &&
+            ((event.payload.snoozedUntil === undefined &&
+              event.payload.snoozeReminderAt === undefined) ||
+              thread.snoozeSequence === event.sequence) &&
             (event.payload.parentThreadId === undefined ||
               (event.payload.parentThreadId ?? null) === (thread.parentThreadId ?? null)) &&
             (event.payload.subagentAgentId === undefined ||
@@ -1011,6 +1029,16 @@ function applyOrchestrationEvent(
             ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
             ...(event.payload.settledAt !== undefined
               ? { settledAt: event.payload.settledAt }
+              : {}),
+            ...(event.payload.snoozedUntil !== undefined
+              ? { snoozedUntil: event.payload.snoozedUntil }
+              : {}),
+            ...(event.payload.snoozeReminderAt !== undefined
+              ? { snoozeReminderAt: event.payload.snoozeReminderAt }
+              : {}),
+            ...(event.payload.snoozedUntil !== undefined ||
+            event.payload.snoozeReminderAt !== undefined
+              ? { snoozeSequence: event.sequence }
               : {}),
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
@@ -1219,7 +1247,7 @@ function applyOrchestrationEvent(
             session === thread.session &&
             error === thread.error &&
             latestTurn === thread.latestTurn &&
-            (!thread.sidechatSourceThreadId ||
+            (!isSidechatThread(thread) ||
               thread.sidechatExpiredAt ||
               thread.sidechatLastActivityAt === event.payload.session.updatedAt)
           ) {
@@ -1230,7 +1258,7 @@ function applyOrchestrationEvent(
             session,
             error,
             latestTurn,
-            ...(thread.sidechatSourceThreadId && !thread.sidechatExpiredAt
+            ...(isSidechatThread(thread) && !thread.sidechatExpiredAt
               ? { sidechatLastActivityAt: event.payload.session.updatedAt }
               : {}),
             updatedAt:
@@ -1359,7 +1387,7 @@ function applyOrchestrationEvent(
             thread.runtimeMode === runtimeMode &&
             thread.interactionMode === interactionMode &&
             thread.pendingSourceProposedPlan === event.payload.sourceProposedPlan &&
-            (!thread.sidechatSourceThreadId ||
+            (!isSidechatThread(thread) ||
               thread.sidechatLastActivityAt === event.payload.createdAt) &&
             (thread.updatedAt ?? thread.createdAt) >= event.payload.createdAt
           ) {
@@ -1371,7 +1399,7 @@ function applyOrchestrationEvent(
             runtimeMode,
             interactionMode,
             pendingSourceProposedPlan: event.payload.sourceProposedPlan,
-            ...(thread.sidechatSourceThreadId
+            ...(isSidechatThread(thread)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
             updatedAt:
@@ -1680,6 +1708,9 @@ function applyOrchestrationEvent(
         (thread) => ({
           ...thread,
           archivedAt: event.payload.archivedAt ?? event.occurredAt,
+          snoozedUntil: null,
+          snoozeReminderAt: null,
+          snoozeSequence: event.sequence,
           updatedAt: event.payload.updatedAt ?? event.occurredAt,
         }),
         {

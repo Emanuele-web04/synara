@@ -129,7 +129,7 @@ describe("macOS Electron launcher signature", () => {
       signingCommands.every(({ options }) => options.timeout === 60_000),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 6);
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 7);
     assert.equal(
       readFileSync(join(bundle, "Contents", "Resources", "icon.icns"), "utf8"),
       "synara icon",
@@ -218,20 +218,28 @@ describe("macOS Electron launcher signature", () => {
     assert.deepEqual(fixture.commands, []);
   });
 
-  it("rebuilds launchers cached before generated bundles were signed", (t) => {
-    const fixture = createLauncherFixture(t);
-    const executable = fixture.build();
-    const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
-    writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, launcherVersion: 2 }));
-    fixture.commands.length = 0;
+  for (const [version, reason] of [
+    [2, "generated bundles were signed"],
+    [6, "the audio capture usage description was added"],
+  ]) {
+    it(`rebuilds launchers cached before ${reason}`, (t) => {
+      const fixture = createLauncherFixture(t);
+      const executable = fixture.build();
+      const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
+      writeFileSync(
+        fixture.metadataPath,
+        JSON.stringify({ ...metadata, launcherVersion: version }),
+      );
+      fixture.commands.length = 0;
 
-    assert.equal(fixture.build(), executable);
-    assert.equal(
-      fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
-      true,
-    );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 6);
-  });
+      assert.equal(fixture.build(), executable);
+      assert.equal(
+        fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
+        true,
+      );
+      assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 7);
+    });
+  }
 
   for (const [label, cdhashes, expectReset] of [
     [

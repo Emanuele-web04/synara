@@ -26,6 +26,9 @@ export const SIDEBAR_ROW_ACTIVE_CLASS_NAME =
 
 export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
 
+/** A chat back from snooze and not yet opened: outlined so it stands out until read. */
+export const SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME = "bg-info/8 ring-1 ring-info/50 ring-inset";
+
 /**
  * Resting foreground for primary sidebar item labels and their accompanying
  * leading/pin icons (inactive thread name, project/folder name, folder + pin
@@ -34,8 +37,17 @@ export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
  */
 export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
 
+/** A project's display name in sidebar project rows and headers. */
+export const SIDEBAR_PROJECT_NAME_CLASS_NAME = [
+  "min-w-0 flex-1 truncate font-system-ui text-ui font-normal",
+  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+].join(" ");
+
 /** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
-export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground/58";
+/** Soft grey of section labels ("Projects", "Chats"); also the rail's resting glyph tone. */
+export const SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME = "text-muted-foreground/58";
+
+export const SIDEBAR_SECTION_LABEL_CLASS_NAME = `text-ui font-normal ${SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME}`;
 
 /** Project/chat/settings header rows and settings sidebar nav items. */
 export const SIDEBAR_HEADER_ROW_CLASS_NAME = [

@@ -165,13 +165,7 @@ describe("brand identity guard", () => {
 
   it.each([
     ["apps/desktop/src/cuaFixtures/electron.ts", "cua-fixture"],
-    ["scripts/computer-use-fixtures/build-canary.mjs", "cua-canary"],
-    ["scripts/computer-use-fixtures/multi-display-cert.ts", "cua-display-cert"],
     ["apps/server/src/computer/computerSignatureChange.test.ts", "test"],
-    ["docs/computer-use-cua/evidence/native-fixture-report.json", "cua-fixture"],
-    ["docs/computer-use-cua/evidence/rev17-native-2026-09-17-notes.md", "cua-fixture-external"],
-    ["docs/computer-use-cua/evidence/latency-rev17-probe.ts", "latency-probe"],
-    ["docs/computer-use-cua/belief-canary-runbook.md", "cua-canary"],
   ])("preserves only the reviewed fixture identity at %s", (path, suffix) => {
     const bundleId = `${fixtureBundleDomain}.${suffix}`;
     expect(

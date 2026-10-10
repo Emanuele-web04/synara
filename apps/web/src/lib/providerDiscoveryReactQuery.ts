@@ -1,5 +1,6 @@
 import type {
   ProviderComposerCapabilities,
+  ProviderInstanceId,
   ProviderKind,
   ProviderListAgentsResult,
   ProviderListCommandsResult,
@@ -74,6 +75,11 @@ const PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK: Record<ProviderModelDiscoveryPrior
   foreground: 2,
 };
 
+// The queue slot is single and discovery runs over IPC into CLI subprocesses
+// that can hang indefinitely. Without a bound, one stuck provider discovery
+// starves every other provider's catalog loads.
+const PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS = 90_000;
+
 function queryKeysMatch(left: readonly unknown[], right: readonly unknown[]): boolean {
   return (
     left.length === right.length && left.every((value, index) => Object.is(value, right[index]))
@@ -119,13 +125,38 @@ function drainProviderModelDiscoveryQueue(): void {
   }
 
   providerModelDiscoveryRunning = true;
-  void Promise.resolve()
-    .then(task.discover)
-    .then(task.resolve, task.reject)
-    .finally(() => {
+  let taskSettled = false;
+  const finishTask = (settle: () => void) => {
+    if (taskSettled) return;
+    taskSettled = true;
+    clearTimeout(timeoutId);
+    task.signal.removeEventListener("abort", onTaskAbort);
+    settle();
+    const releaseSlot = () => {
       providerModelDiscoveryRunning = false;
       drainProviderModelDiscoveryQueue();
-    });
+    };
+    // Let React Query settle and enqueue an interactive follow-up before the
+    // next speculative catalog takes the slot. Promise settlement alone is
+    // earlier than the refresh caller's continuation, even on success.
+    if ([...foregroundModelDiscoveryOwners].some((key) => queryKeysMatch(key, task.queryKey))) {
+      setTimeout(releaseSlot, 0);
+    } else {
+      releaseSlot();
+    }
+  };
+  const onTaskAbort = () => finishTask(() => task.reject(abortReason(task.signal)));
+  const timeoutId = setTimeout(
+    () => finishTask(() => task.reject(new Error("Provider model discovery timed out."))),
+    PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS,
+  );
+  task.signal.addEventListener("abort", onTaskAbort, { once: true });
+  void Promise.resolve()
+    .then(task.discover)
+    .then(
+      (value) => finishTask(() => task.resolve(value)),
+      (reason) => finishTask(() => task.reject(reason)),
+    );
 }
 
 export function prioritizeProviderModelDiscovery(
@@ -207,13 +238,7 @@ function requireDiscoveredModels(
   // Initial degraded discovery can still expose an adapter's usable static
   // fallback. During a background refresh, however, keep a previously good
   // dynamic catalog and let React Query retry the transient failure.
-  if (
-    provider === "devin" &&
-    result.error &&
-    previous &&
-    !previous.error &&
-    previous.models.length > 0
-  ) {
+  if (result.error && previous && !previous.error && previous.models.length > 0) {
     throw new Error(result.error);
   }
   const isAuthoritativeEmptyCatalog =
@@ -236,52 +261,109 @@ function requireDiscoveredModels(
 export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
   modelsAll: ["provider-discovery", "models"] as const,
-  composerCapabilities: (provider: ProviderKind) =>
-    ["provider-discovery", "composer-capabilities", provider] as const,
+  composerCapabilities: (provider: ProviderKind, instanceId: ProviderInstanceId | null) =>
+    ["provider-discovery", "composer-capabilities", provider, instanceId] as const,
   commands: (
     provider: ProviderKind,
     cwd: string | null,
     agentDir: string | null,
     connectionKey: string | null,
-  ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
+    instanceId: ProviderInstanceId | null = null,
+  ) =>
+    ["provider-discovery", "commands", provider, instanceId, cwd, agentDir, connectionKey] as const,
   // The skill list is query-independent (filtering is client-side), so the key
   // deliberately excludes the typed filter to avoid a refetch per keystroke.
-  skills: (provider: ProviderKind, cwd: string | null, agentDir: string | null) =>
-    ["provider-discovery", "skills", provider, cwd, agentDir] as const,
+  skills: (
+    provider: ProviderKind,
+    cwd: string | null,
+    agentDir: string | null,
+    instanceId: ProviderInstanceId | null = null,
+  ) => ["provider-discovery", "skills", provider, instanceId, cwd, agentDir] as const,
   skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
-  plugins: (provider: ProviderKind, cwd: string | null, threadId: string | null) =>
-    ["provider-discovery", "plugins", provider, cwd, threadId] as const,
+  plugins: (
+    provider: ProviderKind,
+    cwd: string | null,
+    threadId: string | null,
+    instanceId: ProviderInstanceId | null = null,
+  ) => ["provider-discovery", "plugins", provider, instanceId, cwd, threadId] as const,
   plugin: (
     provider: ProviderKind,
     marketplacePath: string,
     pluginName: string,
     cwd: string | null,
     threadId: string | null,
+    instanceId: ProviderInstanceId | null = null,
   ) =>
-    ["provider-discovery", "plugin", provider, marketplacePath, pluginName, cwd, threadId] as const,
+    [
+      "provider-discovery",
+      "plugin",
+      provider,
+      instanceId,
+      marketplacePath,
+      pluginName,
+      cwd,
+      threadId,
+    ] as const,
   models: (
     provider: ProviderKind,
     binaryPath: string | null,
     apiEndpoint: string | null,
     agentDir: string | null,
     cwd: string | null,
-  ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
-  agentsForProvider: (provider: ProviderKind) =>
-    ["provider-discovery", "agents", provider] as const,
-  agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
-    [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
+    homePath: string | null = null,
+    shadowHomePath: string | null = null,
+    accountId: string | null = null,
+    instanceId: ProviderInstanceId | null = null,
+  ) =>
+    [
+      "provider-discovery",
+      "models",
+      provider,
+      instanceId,
+      binaryPath,
+      apiEndpoint,
+      agentDir,
+      cwd,
+      homePath,
+      shadowHomePath,
+      accountId,
+    ] as const,
+  agentsForProvider: (provider: ProviderKind, instanceId?: ProviderInstanceId | null) =>
+    instanceId === undefined
+      ? (["provider-discovery", "agents", provider] as const)
+      : (["provider-discovery", "agents", provider, instanceId] as const),
+  agents: (
+    provider: ProviderKind,
+    instanceId: ProviderInstanceId | null,
+    binaryPath: string | null,
+    cwd: string | null,
+  ) =>
+    [
+      ...providerDiscoveryQueryKeys.agentsForProvider(provider, instanceId),
+      binaryPath,
+      cwd,
+    ] as const,
 };
 
 export function providerModelDiscoveryRetry(provider: ProviderKind): number {
   return provider === "cursor" ? 0 : provider === "droid" ? 2 : 3;
 }
 
-export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
+export function providerComposerCapabilitiesQueryOptions(
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null,
+) {
+  // The default instance shares the provider-level key so new-thread prefetches
+  // (which warm by provider) serve the composer's first read.
+  const keyInstanceId = instanceId && instanceId !== provider ? instanceId : null;
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider),
+    queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider, keyInstanceId),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.provider.getComposerCapabilities({ provider });
+      return api.provider.getComposerCapabilities({
+        provider,
+        ...(instanceId ? { instanceId } : {}),
+      });
     },
     staleTime: Infinity,
   });
@@ -289,13 +371,19 @@ export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind)
 
 export function providerSkillsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   agentDir?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.skills(input.provider, input.cwd, input.agentDir ?? null),
+    queryKey: providerDiscoveryQueryKeys.skills(
+      input.provider,
+      input.cwd,
+      input.agentDir ?? null,
+      input.instanceId ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -303,6 +391,7 @@ export function providerSkillsQueryOptions(input: {
       }
       return api.provider.listSkills({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
@@ -333,6 +422,7 @@ export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled
 
 export function providerCommandsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   binaryPath?: string | null;
@@ -356,6 +446,7 @@ export function providerCommandsQueryOptions(input: {
       input.cwd,
       input.agentDir ?? null,
       connectionKey,
+      input.instanceId ?? null,
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
@@ -364,6 +455,7 @@ export function providerCommandsQueryOptions(input: {
       }
       return api.provider.listCommands({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
@@ -403,19 +495,34 @@ export function isInitialModelDiscoveryPending(query: {
 
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
+  refresh?: "if-stale" | "now";
+  instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
+  homePath?: string | null;
+  shadowHomePath?: string | null;
+  accountId?: string | null;
   apiEndpoint?: string | null;
   agentDir?: string | null;
   cwd?: string | null;
   enabled?: boolean;
   priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
+  // The OMP catalog is global (`omp models --json` is not project-scoped), but
+  // `modelRoles` merge a project layer (`<cwd>/.omp/config.yml`), so cwd stays
+  // in the query key for roles to reflect the active project. The server still
+  // shares one catalog cache across cwds, so a per-cwd entry only pays for the
+  // role config reads.
+  const cwd = input.cwd ?? null;
   const queryKey = providerDiscoveryQueryKeys.models(
     input.provider,
     input.binaryPath ?? null,
     input.apiEndpoint ?? null,
     input.agentDir ?? null,
-    input.cwd ?? null,
+    cwd,
+    input.homePath ?? null,
+    input.shadowHomePath ?? null,
+    input.accountId ?? null,
+    input.instanceId ?? null,
   );
   return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
     queryKey,
@@ -428,10 +535,15 @@ export function providerModelsQueryOptions(input: {
           const api = ensureNativeApi();
           const result = await api.provider.listModels({
             provider: input.provider,
+            ...(input.refresh ? { refresh: input.refresh } : {}),
+            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.homePath ? { homePath: input.homePath } : {}),
+            ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+            ...(input.accountId ? { accountId: input.accountId } : {}),
             ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
             ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(cwd ? { cwd } : {}),
           });
           const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
           return requireDiscoveredModels(input.provider, result, previous);
@@ -442,32 +554,60 @@ export function providerModelsQueryOptions(input: {
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
     retry: providerModelDiscoveryRetry(input.provider),
+    // The server caches catalogs (30min fresh, then stale-while-revalidate,
+    // persisted across restarts), so a refetch is a cheap RPC — but there is no
+    // value in asking more often than the cache can change. Changes to paths,
+    // endpoints, or cwd select a new key; CLI/account changes at the same paths
+    // become visible on revalidation.
+    // OMP bypasses the server cache entirely: file-backed modelRoles are
+    // re-resolved per request, so role/config edits must reach the adapter on
+    // the ordinary focus/mount refetch cadence.
     staleTime:
       input.provider === "devin"
-        ? (query) => (query.state.data?.error ? 0 : 30_000)
+        ? (query) => (query.state.data?.error ? 0 : 15 * 60_000)
         : input.provider === "droid"
-          ? 5 * 60_000
-          : 30_000,
+          ? 30 * 60_000
+          : input.provider === "omp"
+            ? 30_000
+            : 15 * 60_000,
     // Devin deliberately returns a usable static catalog when CLI discovery
     // fails. Keep it visible, but retry while observed instead of treating the
-    // degraded result as a successful 30-minute cache entry. A failed refresh
-    // retains healthy data, so the query error must also keep recovery polling alive.
+    // degraded result as fresh — a failed refresh retains healthy data, so the
+    // query error must also keep recovery polling alive.
     ...(input.provider === "devin"
       ? {
           refetchInterval: (query) =>
             query.state.data?.error || query.state.error ? 30_000 : false,
         }
       : {}),
+    // Droid discovery starts a disposable ACP session, so it must not refetch
+    // on focus. OMP discovery is a cheap `omp models` subprocess (server-cached
+    // 5min; modelRoles are re-read per request), so it refetches on focus and,
+    // where the renderer's timers allow, on an interval while observed —
+    // otherwise config/role edits only appear after an app restart.
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
-    // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
-    // providerModelPrefetch.ts (not imported: that module imports from here).
-    gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
+    ...(input.provider === "omp"
+      ? { refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: true }
+      : {}),
+    // Retain catalogs a full day — the server serves them stale-while-revalidate
+    // for the same window, so an idle reopen paints instantly instead of
+    // skeletoning while the (cache-answered) refetch lands.
+    gcTime: 24 * 60 * 60_000,
+    // OMP has no static model fallback, so masking its first `omp models` fetch
+    // with an empty placeholder would surface a false "No matches" during the
+    // ~3s discovery. Omit placeholderData for OMP so React Query reports a
+    // genuine `isLoading` pending state and the catalog renders the loading
+    // skeleton instead. Other providers keep the placeholder to suppress
+    // refetch flicker against their static catalogs.
+    ...(input.provider !== "omp"
+      ? { placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT }
+      : {}),
   });
 }
 
 export function providerAgentsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
   cwd?: string | null;
   enabled?: boolean;
@@ -475,6 +615,7 @@ export function providerAgentsQueryOptions(input: {
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.agents(
       input.provider,
+      input.instanceId ?? null,
       input.binaryPath ?? null,
       input.cwd ?? null,
     ),
@@ -482,28 +623,40 @@ export function providerAgentsQueryOptions(input: {
       const api = ensureNativeApi();
       return api.provider.listAgents({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },
     enabled: input.enabled ?? true,
-    staleTime: 60_000,
+    // Claude can answer "pending" while its SDK fills the agent inventory in
+    // the background. Retry that temporary result while the picker is observed;
+    // only completed catalogs should keep the longer freshness window.
+    staleTime: (query) => (query.state.data?.source === "pending" ? 0 : 15 * 60_000),
+    refetchInterval: (query) => (query.state.data?.source === "pending" ? 30_000 : false),
     placeholderData: (previous) => previous ?? EMPTY_AGENTS_RESULT,
   });
 }
 
 export function providerPluginsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.plugins(input.provider, input.cwd, input.threadId ?? null),
+    queryKey: providerDiscoveryQueryKeys.plugins(
+      input.provider,
+      input.cwd,
+      input.threadId ?? null,
+      input.instanceId ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.provider.listPlugins({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
       });

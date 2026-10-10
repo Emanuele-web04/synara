@@ -40,15 +40,22 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   --diffs-header-font-family: var(--font-ui-family);
   /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
   --diffs-font-size: var(--app-font-size-chat-code, 11px);
-  /* Match the app chrome — set on :host so hunk rows/gutters/separators inherit. */
-  --diffs-bg: var(--background) !important;
-  --diffs-light-bg: var(--background) !important;
-  --diffs-dark-bg: var(--background) !important;
+  /* Match the app chrome — set on :host so hunk rows/gutters/separators inherit. The fill
+     is the theme background unless the host surface clears it (--app-code-viewer-surface,
+     whole-window glass in the right dock; see index.css). */
+  --synara-code-surface: var(--app-code-viewer-surface, var(--background));
+  /* Sticky chrome that content scrolls under stays dense even on a clear viewer. */
+  --synara-code-sticky-surface: var(--app-code-viewer-sticky-surface, var(--synara-code-surface));
+  --diffs-bg: var(--synara-code-surface) !important;
+  --diffs-light-bg: var(--synara-code-surface) !important;
+  --diffs-dark-bg: var(--synara-code-surface) !important;
   --diffs-token-light-bg: transparent;
   --diffs-token-dark-bg: transparent;
 
-  --diffs-bg-context-override: var(--background) !important;
-  --diffs-bg-context-number-override: var(--background) !important;
+  --diffs-bg-context-override: var(--synara-code-surface) !important;
+  --diffs-bg-context-number-override: var(--synara-code-surface) !important;
+  /* Change/hover tints keep their theme backing: mixing a clear context surface would
+     reduce the accent to a nearly invisible alpha over arbitrary window backdrops. */
   --diffs-bg-hover-override: color-mix(in srgb, var(--background) 96%, var(--foreground)) !important;
   --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
   --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
@@ -69,8 +76,8 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 
   /* Force the derived tokens Pierre reads for hunk rows (not only the *-override knobs).
      Do not pin --diffs-line-bg on :host — addition/deletion rows set that per line-type. */
-  --diffs-bg-context: var(--background) !important;
-  --diffs-bg-context-number: var(--background) !important;
+  --diffs-bg-context: var(--synara-code-surface) !important;
+  --diffs-bg-context-number: var(--synara-code-surface) !important;
   --diffs-bg-buffer: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
   --diffs-bg-separator: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
   --diffs-bg-addition: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
@@ -84,7 +91,18 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 
   font-family: var(--font-chat-code-family) !important;
   font-size: var(--app-font-size-chat-code, 11px) !important;
-  background-color: var(--background) !important;
+  background-color: var(--synara-code-surface) !important;
+}
+
+/* Pierre blends each changed row against --diffs-bg again, so a clear context surface would
+   wash the change tint out. Rows are backed by the theme, or on a clear viewer by a sheer
+   accent tint of their own (--app-code-viewer-*-row, index.css) so they stay glass. */
+[data-line-type="change-addition"] {
+  --diffs-bg: var(--app-code-viewer-addition-row, var(--background)) !important;
+}
+
+[data-line-type="change-deletion"] {
+  --diffs-bg: var(--app-code-viewer-deletion-row, var(--background)) !important;
 }
 
 [data-diffs-header],
@@ -93,12 +111,12 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-error-wrapper],
 [data-virtualizer-buffer] {
   --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
-  --diffs-bg: var(--background) !important;
-  --diffs-light-bg: var(--background) !important;
-  --diffs-dark-bg: var(--background) !important;
-  --diffs-bg-context: var(--background) !important;
-  --diffs-bg-context-number: var(--background) !important;
-  background-color: var(--background) !important;
+  --diffs-bg: var(--synara-code-surface) !important;
+  --diffs-light-bg: var(--synara-code-surface) !important;
+  --diffs-dark-bg: var(--synara-code-surface) !important;
+  --diffs-bg-context: var(--synara-code-surface) !important;
+  --diffs-bg-context-number: var(--synara-code-surface) !important;
+  background-color: var(--synara-code-surface) !important;
 }
 
 /* Unmodified hunk chrome — pin to theme background without wiping +/- tints. */
@@ -109,8 +127,8 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-separator],
 [data-separator-wrapper],
 [data-separator-content] {
-  --diffs-line-bg: var(--background) !important;
-  background-color: var(--background) !important;
+  --diffs-line-bg: var(--synara-code-surface) !important;
+  background-color: var(--synara-code-surface) !important;
 }
 
 [data-diff],
@@ -126,7 +144,7 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-file-info] {
   font-family: var(--font-ui-family) !important;
   font-size: var(--app-font-size-ui, 12px) !important;
-  background-color: var(--background) !important;
+  background-color: var(--synara-code-surface) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
 }
@@ -140,7 +158,7 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   position: sticky !important;
   top: 0;
   z-index: 4;
-  background-color: var(--background) !important;
+  background-color: var(--synara-code-sticky-surface) !important;
   border-bottom: 1px solid var(--border) !important;
   cursor: pointer;
 }
@@ -157,6 +175,27 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   width: 100% !important;
   min-width: 0 !important;
   flex: 1 1 auto !important;
+}
+
+/* On a clear viewer the sticky gutter has no fill to hide the code that scrolls under it,
+   so it takes the dense one as soon as the row scrolls sideways. Inert on an opaque viewer:
+   the host leaves the animation name unset. */
+@keyframes synara-code-gutter-backing {
+  from {
+    background-color: transparent;
+  }
+  to {
+    background-color: var(--synara-code-sticky-surface);
+  }
+}
+
+[data-overflow="scroll"] [data-gutter] {
+  /* Longhands: in the shorthand a fallback \`none\` would parse as the fill mode. */
+  animation-name: var(--app-code-viewer-gutter-animation, none);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+  animation-timeline: scroll(inline nearest);
+  animation-range: 0 1px;
 }
 
 /* Give gutters a little air so line numbers aren't clipped by the card edge. */

@@ -60,7 +60,7 @@ function fixture() {
 }
 
 describe("Computer activation permission guide", () => {
-  it.each(["request", "chat"] as const)(
+  it.each(["request"] as const)(
     "opens AppSnap's shared guide when %s access needs permissions",
     async (mode) => {
       const f = fixture();

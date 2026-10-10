@@ -83,106 +83,115 @@ layer("gateway completion outbox", (it) => {
     }),
   );
 
-  for (const state of ["completed", "error", "interrupted", "running"] as const) {
-    for (const parentState of ["idle", "running", "archived", "missing"] as const) {
-      it.effect(
-        `${state}: passive delivery with ${parentState} creator and later unrelated turns`,
-        () =>
-          Effect.gen(function* () {
-            const id = `${state}-${parentState}`;
-            const sequence =
-              100 +
-              ["completed", "error", "interrupted", "running"].indexOf(state) * 4 +
-              ["idle", "running", "archived", "missing"].indexOf(parentState);
-            const repository = yield* reserve(id);
-            const sql = yield* SqlClient.SqlClient;
-            yield* sql`INSERT INTO provider_runtime_events
+  // Delivery reads only the child's pinned-run state and whether the creator
+  // still exists unarchived (completionDelivery.ts:42,109); parent session status
+  // is never consulted and completed/interrupted share the summary path. One row
+  // per distinct branch: each creator availability, the error-text path, and the
+  // not-yet-terminal skip.
+  for (const [state, parentState] of [
+    ["completed", "idle"],
+    ["completed", "archived"],
+    ["completed", "missing"],
+    ["error", "idle"],
+    ["running", "idle"],
+  ] as const) {
+    it.effect(
+      `${state}: passive delivery with ${parentState} creator and later unrelated turns`,
+      () =>
+        Effect.gen(function* () {
+          const id = `${state}-${parentState}`;
+          const sequence =
+            100 +
+            ["completed", "error", "interrupted", "running"].indexOf(state) * 4 +
+            ["idle", "running", "archived", "missing"].indexOf(parentState);
+          const repository = yield* reserve(id);
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO provider_runtime_events
             (event_id, thread_id, turn_id, event_type, event_json, persisted_at)
             VALUES (${id}, ${id}, 'initial-run', 'turn.completed', '{"payload":{"state":"completed"}}', ${now})`;
-            yield* sql`UPDATE provider_runtime_event_consumers SET last_acked_sequence = (SELECT MAX(sequence) FROM provider_runtime_events)`;
-            const commands: OrchestrationCommand[] = [];
-            const child = {
-              id: ThreadId.makeUnsafe(id),
-              modelSelection: { provider: "codex", model: "test-model" },
-              latestTurn: { turnId: "later-run" },
-              session: { status: "error", lastError: "unrelated later error" },
-              messages: [
-                { role: "assistant", turnId: "initial-run", text: "x".repeat(30_000) },
-                { role: "assistant", turnId: "later-run", text: "wrong result" },
-              ],
-            };
-            const dependencies = {
-              repository,
-              snapshotQuery: {
-                getThreadDetailById: () => Effect.succeed(Option.some(child)),
-                getThreadShellById: (threadId: string) =>
-                  threadId === id
-                    ? Effect.succeed(Option.some(child))
-                    : Effect.succeed(
-                        parentState === "missing"
-                          ? Option.none()
-                          : Option.some({
-                              id: "parent",
-                              archivedAt: parentState === "archived" ? now : null,
-                              session: { status: parentState },
-                            }),
-                      ),
-              } as unknown as ProjectionSnapshotQueryShape,
-              projectionTurns: {
-                listByThreadId: () =>
-                  Effect.succeed([
-                    {
-                      pendingMessageId: `${id}:initial`,
-                      turnId: "initial-run",
-                      state,
-                      completedAt: now,
-                    },
-                    {
-                      pendingMessageId: "later-message",
-                      turnId: "later-run",
-                      state: "completed",
-                      completedAt: now,
-                    },
-                  ]),
-              } as unknown as ProjectionTurnRepositoryShape,
-              orchestrationEngine: {
-                dispatch: (command: OrchestrationCommand) =>
-                  Effect.sync(() => {
-                    commands.push(command);
-                    return { sequence: commands.length };
-                  }),
-              } as unknown as OrchestrationEngineShape,
-            };
-            yield* deliverGatewayCompletions(dependencies);
-            yield* deliverGatewayCompletions(dependencies);
-            if (state === "running") {
-              expect(commands).toHaveLength(0);
-              expect(yield* repository.pending()).toHaveLength(1);
-              yield* repository.delivered(id, false);
-              return;
-            }
-            expect(commands).toHaveLength(1);
-            expect(commands[0]?.type).toBe("thread.activity.append");
-            const command = commands[0];
-            if (command?.type !== "thread.activity.append") throw new Error("missing activity");
-            const unavailable = parentState === "archived" || parentState === "missing";
-            expect(command.threadId).toBe(unavailable ? id : "parent");
-            expect(command.activity.turnId).toBeNull();
-            expect(command.activity.payload).toMatchObject({
-              runId: "initial-run",
-              status: state,
-              summaryTruncated: true,
-            });
-            expect(JSON.stringify(command.activity.payload)).not.toContain("wrong result");
-            expect(JSON.stringify(command.activity.payload)).not.toContain("unrelated later error");
-            expect(yield* repository.pending()).toHaveLength(0);
-            expect((yield* repository.claimContext("parent", sequence, 16000)).length > 0).toBe(
-              !unavailable,
-            );
-            yield* repository.settleContext(sequence, true, Effect.succeed(true));
-          }),
-      );
-    }
+          yield* sql`UPDATE provider_runtime_event_consumers SET last_acked_sequence = (SELECT MAX(sequence) FROM provider_runtime_events)`;
+          const commands: OrchestrationCommand[] = [];
+          const child = {
+            id: ThreadId.makeUnsafe(id),
+            modelSelection: { provider: "codex", model: "test-model" },
+            latestTurn: { turnId: "later-run" },
+            session: { status: "error", lastError: "unrelated later error" },
+            messages: [
+              { role: "assistant", turnId: "initial-run", text: "x".repeat(30_000) },
+              { role: "assistant", turnId: "later-run", text: "wrong result" },
+            ],
+          };
+          const dependencies = {
+            repository,
+            snapshotQuery: {
+              getThreadDetailById: () => Effect.succeed(Option.some(child)),
+              getThreadShellById: (threadId: string) =>
+                threadId === id
+                  ? Effect.succeed(Option.some(child))
+                  : Effect.succeed(
+                      parentState === "missing"
+                        ? Option.none()
+                        : Option.some({
+                            id: "parent",
+                            archivedAt: parentState === "archived" ? now : null,
+                            session: { status: parentState },
+                          }),
+                    ),
+            } as unknown as ProjectionSnapshotQueryShape,
+            projectionTurns: {
+              listByThreadId: () =>
+                Effect.succeed([
+                  {
+                    pendingMessageId: `${id}:initial`,
+                    turnId: "initial-run",
+                    state,
+                    completedAt: now,
+                  },
+                  {
+                    pendingMessageId: "later-message",
+                    turnId: "later-run",
+                    state: "completed",
+                    completedAt: now,
+                  },
+                ]),
+            } as unknown as ProjectionTurnRepositoryShape,
+            orchestrationEngine: {
+              dispatch: (command: OrchestrationCommand) =>
+                Effect.sync(() => {
+                  commands.push(command);
+                  return { sequence: commands.length };
+                }),
+            } as unknown as OrchestrationEngineShape,
+          };
+          yield* deliverGatewayCompletions(dependencies);
+          yield* deliverGatewayCompletions(dependencies);
+          if (state === "running") {
+            expect(commands).toHaveLength(0);
+            expect(yield* repository.pending()).toHaveLength(1);
+            yield* repository.delivered(id, false);
+            return;
+          }
+          expect(commands).toHaveLength(1);
+          expect(commands[0]?.type).toBe("thread.activity.append");
+          const command = commands[0];
+          if (command?.type !== "thread.activity.append") throw new Error("missing activity");
+          const unavailable = parentState === "archived" || parentState === "missing";
+          expect(command.threadId).toBe(unavailable ? id : "parent");
+          expect(command.activity.turnId).toBeNull();
+          expect(command.activity.payload).toMatchObject({
+            runId: "initial-run",
+            status: state,
+            summaryTruncated: true,
+          });
+          expect(JSON.stringify(command.activity.payload)).not.toContain("wrong result");
+          expect(JSON.stringify(command.activity.payload)).not.toContain("unrelated later error");
+          expect(yield* repository.pending()).toHaveLength(0);
+          expect((yield* repository.claimContext("parent", sequence, 16000)).length > 0).toBe(
+            !unavailable,
+          );
+          yield* repository.settleContext(sequence, true, Effect.succeed(true));
+        }),
+    );
   }
 
   it.effect(

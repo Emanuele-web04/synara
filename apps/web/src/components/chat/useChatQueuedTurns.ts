@@ -409,6 +409,16 @@ export function useChatQueuedTurns({
     threadId,
   ]);
 
+  // A server thread that has never run (a side chat created with its first question queued) has
+  // no session yet, which reads as "disconnected"; its first send is the normal start, not a
+  // reconnect to wait for, so it drains like a draft does.
+  const isUnstartedThread =
+    !isLocalDraftThread &&
+    activeThread != null &&
+    activeThread.session == null &&
+    activeThread.messages.length === 0 &&
+    activeLatestTurn == null;
+
   useEffect(() => {
     if (hasPendingCacheReview) {
       clearQueuedComposerAutoDispatchRetry(threadId);
@@ -419,7 +429,7 @@ export function useChatQueuedTurns({
       resolveQueuedComposerAutoDispatchHold({
         localDispatch,
         // A mini-composer submission queues the first turn before the draft has a session.
-        phase: isLocalDraftThread ? "ready" : phase,
+        phase: isLocalDraftThread || isUnstartedThread ? "ready" : phase,
         latestTurn: activeLatestTurn,
         session: activeThread?.session ?? null,
         messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -501,6 +511,7 @@ export function useChatQueuedTurns({
     hasPendingCacheReview,
     isConnecting,
     isLocalDraftThread,
+    isUnstartedThread,
     localDispatch,
     pendingUserInputs.length,
     phase,

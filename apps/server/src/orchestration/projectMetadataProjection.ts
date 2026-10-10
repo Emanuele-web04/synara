@@ -37,6 +37,7 @@ export const applyProjectMetadataProjection = (input: {
           scripts: input.event.payload.scripts,
           isPinned: input.event.payload.isPinned ?? false,
           spaceId: input.event.payload.spaceId ?? null,
+          additionalFolders: input.event.payload.additionalFolders ?? [],
           createdAt: input.event.payload.createdAt,
           updatedAt: input.event.payload.updatedAt,
           deletedAt: null,

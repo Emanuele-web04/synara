@@ -1,4 +1,4 @@
-import type { MessageId, ProviderKind, ThreadId } from "@synara/contracts";
+import type { MessageId, ModelSelection, ProviderKind, ThreadId } from "@synara/contracts";
 import type { QueryClient, UseMutationResult } from "@tanstack/react-query";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
@@ -61,6 +61,20 @@ export interface LateComposerSendHandlers {
 export interface ChatTurnSubmissionInput {
   threadId: ThreadId;
   hasLiveTurn: boolean;
+  /**
+   * Refuses a live send up front (before the message is shown) when the
+   * composer picked another provider but the thread cannot hand off yet.
+   */
+  canSendWithProviderHandoff?: (() => boolean) | undefined;
+  /**
+   * Runs right before the turn is dispatched, once the message is already on
+   * screen. When the composer picked another provider it hands the thread off
+   * in place first, and throws if that failed so the send rolls back and the
+   * message returns to the composer instead of reaching the wrong provider.
+   */
+  prepareProviderHandoffForSend?:
+    | ((thread: Thread, modelSelection: ModelSelection) => Promise<void>)
+    | undefined;
   lateComposerSendHandlersRef: RefObject<LateComposerSendHandlers | null>;
   activeThread: Thread | undefined;
   isConnecting: boolean;
@@ -78,7 +92,7 @@ export interface ChatTurnSubmissionInput {
   hasNativeUserMessages: boolean;
   chatWorkspaceRoot: string | null;
   isHomeChatContainer: boolean;
-  isStudioContainer: boolean;
+  isGroupContainer: boolean;
   resolvedThreadWorktreePath: string | null;
   resolvedThreadWorkingDirectory: string | null;
   currentActiveGitBranch: string | null;

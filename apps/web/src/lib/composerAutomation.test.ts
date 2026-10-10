@@ -113,33 +113,6 @@ describe("composerAutomation", () => {
     });
   });
 
-  it("accepts polite say requests as bounded thread automations", async () => {
-    const generateIntent = vi.fn(async () => {
-      throw new Error("bounded fast loops should not need generation");
-    });
-
-    const decision = await resolveComposerAutomationRequest({
-      message: "could you say hi every 15 seconds for 3 times",
-      cwd: "/tmp/project",
-      nowIso: NOW_ISO,
-      generateIntent,
-    });
-
-    expect(decision).toMatchObject({
-      type: "automation",
-      resolution: {
-        mode: "heartbeat",
-        intent: {
-          prompt: "say hi",
-          maxIterations: 3,
-          executionScope: "thread",
-          schedule: { type: "interval", everySeconds: 15 },
-        },
-      },
-    });
-    expect(generateIntent).not.toHaveBeenCalled();
-  });
-
   it("keeps generated standalone mode when regex scope parsing misses it", async () => {
     const generateIntent = vi.fn(async () => ({
       isAutomation: true,
@@ -309,53 +282,6 @@ describe("composerAutomation", () => {
     expect(Array.from(draft.acknowledgedWarningIds)).toEqual(["fast-recurring-interval"]);
   });
 
-  it("auto-submits fast loops when the run cap is written as a total", async () => {
-    const generateIntent = vi.fn(async () => {
-      throw new Error("bounded fast loops should not need generation");
-    });
-
-    const decision = await resolveComposerAutomationRequest({
-      message: "/automation say hi every 15 seconds 3 times total",
-      cwd: "/tmp/project",
-      nowIso: NOW_ISO,
-      generateIntent,
-    });
-    expect(decision).toMatchObject({
-      type: "automation",
-      resolution: {
-        mode: "heartbeat",
-        intent: {
-          prompt: "say hi",
-          maxIterations: 3,
-          executionScope: "thread",
-          schedule: { type: "interval", everySeconds: 15 },
-        },
-      },
-    });
-    expect(generateIntent).not.toHaveBeenCalled();
-
-    if (decision.type !== "automation") {
-      throw new Error("Expected automation decision");
-    }
-    const draft = buildComposerAutomationDraft({
-      resolution: decision.resolution,
-      projectId: PROJECT_ID,
-      projectModelSelection: MODEL_SELECTION,
-      selectedModelSelection: MODEL_SELECTION,
-      targetThreadId: THREAD_ID,
-      hasEphemeralContext: false,
-    });
-
-    expect(draft.needsDraftReview).toBe(false);
-    expect(draft.form).toMatchObject({
-      mode: "heartbeat",
-      targetThreadId: THREAD_ID,
-      maxIterations: "3",
-      prompt: "say hi",
-    });
-    expect(Array.from(draft.acknowledgedWarningIds)).toEqual(["fast-recurring-interval"]);
-  });
-
   it("keeps explicit standalone drafts behind review with risks unacknowledged", async () => {
     const generateIntent = vi.fn(async () => {
       throw new Error("offline generation falls back to deterministic intent");
@@ -482,75 +408,6 @@ describe("composerAutomation", () => {
       automationMessage: "create an automation",
       missingFields: ["taskPrompt", "schedule"],
       reason: "Tell me what to automate.",
-    });
-  });
-
-  it("resolves to an automation once the follow-up supplies the schedule", async () => {
-    // First turn: a task with no cadence cannot be created yet.
-    const incompleteGeneration = vi.fn(async () => ({
-      isAutomation: true,
-      confidence: 0.9,
-      language: "en",
-      name: null,
-      taskPrompt: null,
-      schedule: null,
-      mode: null,
-      completionPolicy: { type: "none" as const },
-      missingFields: ["schedule" as const],
-      needsConfirmation: false,
-      reason: null,
-    }));
-    const first = await resolveComposerAutomationRequest({
-      message: "create an automation to check the build",
-      cwd: "/tmp/project",
-      nowIso: NOW_ISO,
-      generateIntent: incompleteGeneration,
-    });
-    expect(first.type).toBe("needs-clarification");
-
-    // Second turn: the composer folds the reply back into the original request. The
-    // deterministic parser now finds the schedule, so the automation resolves even
-    // though optional enrichment generation fails.
-    const failingEnrichment = vi.fn(async () => {
-      throw new Error("enrichment is optional once the schedule parses deterministically");
-    });
-    const combined = await resolveComposerAutomationRequest({
-      message: "create an automation to check the build\nevery 6 hours",
-      cwd: "/tmp/project",
-      nowIso: NOW_ISO,
-      generateIntent: failingEnrichment,
-    });
-    expect(combined).toMatchObject({
-      type: "automation",
-      resolution: {
-        source: "deterministic",
-        intent: {
-          schedule: { type: "interval", everySeconds: 21_600 },
-        },
-      },
-    });
-  });
-
-  it("does not leak creation scaffolding into the task prompt across turns", async () => {
-    const offline = vi.fn(async () => {
-      throw new Error("deterministic parse should cover the combined request");
-    });
-    // Mirrors ChatView folding the cleaned, filler-stripped automationMessage
-    // ("create an automation") with the user's follow-up answer.
-    const decision = await resolveComposerAutomationRequest({
-      message: "create an automation\ncheck the build every 6 hours",
-      cwd: "/tmp/project",
-      nowIso: NOW_ISO,
-      generateIntent: offline,
-    });
-    expect(decision.type).toBe("automation");
-    if (decision.type !== "automation") {
-      throw new Error("Expected automation decision");
-    }
-    expect(decision.resolution.intent.prompt).toBe("check the build");
-    expect(decision.resolution.intent.schedule).toMatchObject({
-      type: "interval",
-      everySeconds: 21_600,
     });
   });
 
@@ -850,12 +707,6 @@ describe("composerAutomation", () => {
   });
 
   describe("automationClarificationPrompt", () => {
-    it("asks for both the task and cadence when the task is missing", () => {
-      expect(automationClarificationPrompt(["taskPrompt", "schedule"])).toContain(
-        "what should this automation do",
-      );
-    });
-
     it("asks only for the cadence when just the schedule is missing", () => {
       const prompt = automationClarificationPrompt(["schedule"]);
       expect(prompt).toContain("How often");

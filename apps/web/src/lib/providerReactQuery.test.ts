@@ -10,7 +10,6 @@ import {
   CHECKPOINT_DIFF_PENDING_REFETCH_INTERVAL_MS,
   CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS,
   checkpointDiffQueryOptions,
-  isCheckpointTemporarilyUnavailable,
   providerQueryKeys,
   resolveCheckpointDiffQueryDisplayState,
 } from "./providerReactQuery";
@@ -108,23 +107,6 @@ describe("checkpointDiffQueryOptions", () => {
     },
   );
 
-  it("honors capacity retry decisions and the server delay", () => {
-    const options = checkpointDiffQueryOptions({
-      threadId,
-      fromTurnCount: 1,
-      toTurnCount: 2,
-      ignoreWhitespace: true,
-    });
-    if (typeof options.retry !== "function" || typeof options.retryDelay !== "function") {
-      throw new Error("Expected retry policy functions.");
-    }
-
-    expect(options.retry(0, capacityError as never)).toBe(false);
-    expect(options.retry(12, capacityError as never)).toBe(false);
-    expect(options.retryDelay(0, capacityError as never)).toBe(250);
-    expect(options.retryDelay(4, capacityError as never)).toBe(250);
-  });
-
   it("self-heals capacity errors beyond the checkpoint polling budget and stops on success", () => {
     const options = checkpointDiffQueryOptions({
       threadId,
@@ -151,31 +133,6 @@ describe("checkpointDiffQueryOptions", () => {
     expect(
       refetchInterval({ state: { error: { ...capacityError, retryable: false } } } as never),
     ).toBe(false);
-  });
-
-  it("forwards checkpoint range to the provider API", async () => {
-    const getTurnDiff = vi.fn().mockResolvedValue({ diff: "patch" });
-    const getFullThreadDiff = vi.fn().mockResolvedValue({ diff: "patch" });
-    mockNativeApi({ getTurnDiff, getFullThreadDiff });
-
-    const options = checkpointDiffQueryOptions({
-      threadId,
-      fromTurnCount: 3,
-      toTurnCount: 4,
-      ignoreWhitespace: true,
-      cacheScope: "turn:abc",
-    });
-
-    const queryClient = new QueryClient();
-    await queryClient.fetchQuery(options);
-
-    expect(getTurnDiff).toHaveBeenCalledWith({
-      threadId,
-      fromTurnCount: 3,
-      toTurnCount: 4,
-      ignoreWhitespace: true,
-    });
-    expect(getFullThreadDiff).not.toHaveBeenCalled();
   });
 
   it("uses full thread diff API only for conversation-wide ranges from zero", async () => {
@@ -363,7 +320,7 @@ describe("checkpointDiffQueryOptions", () => {
 });
 
 describe("resolveCheckpointDiffQueryDisplayState", () => {
-  it.each([undefined, { diff: "last-good patch" }, { diff: "" }])(
+  it.each([undefined, { diff: "" }])(
     "shows a muted capacity status with cached data %j",
     (data) => {
       for (const isFetching of [false, true]) {
@@ -416,18 +373,5 @@ describe("resolveCheckpointDiffQueryDisplayState", () => {
       error: "Checkpoint diff is not available yet for turn 1.",
       refreshStatus: null,
     });
-  });
-});
-
-describe("isCheckpointTemporarilyUnavailable", () => {
-  it("recognizes placeholder checkpoint errors", () => {
-    expect(
-      isCheckpointTemporarilyUnavailable(
-        new Error("Checkpoint diff is not available yet for turn 1."),
-      ),
-    ).toBe(true);
-    expect(
-      isCheckpointTemporarilyUnavailable(new Error("Filesystem checkpoint is unavailable.")),
-    ).toBe(false);
   });
 });

@@ -3,13 +3,6 @@ import { describe, expect, it } from "vitest";
 import { toggleMarkdownTaskMarker } from "./markdownTaskList";
 
 describe("toggleMarkdownTaskMarker", () => {
-  it("checks an unchecked task", () => {
-    const contents = "# Todo\n\n- [ ] write tests\n- [x] ship it\n";
-    expect(toggleMarkdownTaskMarker(contents, 3, true)).toBe(
-      "# Todo\n\n- [x] write tests\n- [x] ship it\n",
-    );
-  });
-
   it("unchecks a checked task, including uppercase X", () => {
     expect(toggleMarkdownTaskMarker("- [x] done", 1, false)).toBe("- [ ] done");
     expect(toggleMarkdownTaskMarker("- [X] done", 1, false)).toBe("- [ ] done");

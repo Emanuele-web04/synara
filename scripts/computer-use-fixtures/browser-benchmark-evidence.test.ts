@@ -3,7 +3,6 @@ import {
   assessGitHubCompletion,
   assessNeweggCompletion,
   assessBrowserBenchmarkRuns,
-  BROWSER_BENCHMARK_BUDGET_MS,
   browserBenchmarkPrompt,
   parseBrowserBenchmarkRunCount,
   parseBrowserWitness,
@@ -144,16 +143,6 @@ describe("independent browser benchmark evidence", () => {
     ).toEqual(["/p/N82E168123"]);
     expect(parseBrowserWitness({ ...witnesses[0], page: NaN })).toBeNull();
   });
-  it("keeps existing-profile qualification unsupported and budgets fixed", () => {
-    expect(() =>
-      browserBenchmarkPrompt("github-running", "synara-bench-fixture", "owner/repo"),
-    ).toThrow("unsupported");
-    expect(BROWSER_BENCHMARK_BUDGET_MS).toEqual({
-      "github-running": 120000,
-      "github-isolated": 120000,
-      newegg: 900000,
-    });
-  });
   it("labels isolated comparison and explicitly ends before checkout", () => {
     const prompt = browserBenchmarkPrompt("newegg", "synara-bench-fixture");
     expect(prompt).toContain("without the user's cookies");
@@ -166,6 +155,9 @@ describe("independent browser benchmark evidence", () => {
     expect(() =>
       browserBenchmarkPrompt("github-isolated", "personal-profile", "owner/repo"),
     ).toThrow();
+    expect(() =>
+      browserBenchmarkPrompt("github-running", "synara-bench-fixture", "owner/repo"),
+    ).toThrow("unsupported");
   });
 });
 

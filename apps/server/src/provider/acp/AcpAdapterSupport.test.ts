@@ -280,4 +280,37 @@ describe("AcpAdapterSupport", () => {
     expect(error.message).toContain("Path not found.");
     expect(error.message).toContain("No such file or directory (os error 2)");
   });
+
+  it("surfaces transport detail and never emits an untrimmed blank message", () => {
+    const error = mapAcpToAdapterError(
+      "omp",
+      "thread-1" as never,
+      "session/prompt",
+      new AcpErrors.AcpTransportError({
+        detail: "ACP transport closed mid-request",
+        cause: new Error("socket closed"),
+      }),
+    );
+
+    expect(error._tag).toBe("ProviderAdapterRequestError");
+    expect(error.message).toBe(
+      "Provider adapter request failed (omp) for session/prompt: ACP transport closed mid-request",
+    );
+    expect(error.message).toBe(error.message.trim());
+  });
+
+  it("falls back to a non-empty detail when the error message is blank", () => {
+    const error = mapAcpToAdapterError(
+      "omp",
+      "thread-1" as never,
+      "session/prompt",
+      new AcpErrors.AcpTransportError({
+        detail: "",
+        cause: new Error("socket closed"),
+      }),
+    );
+
+    expect(error.message).toBe(error.message.trim());
+    expect(error.message).toContain("ACP request failed");
+  });
 });

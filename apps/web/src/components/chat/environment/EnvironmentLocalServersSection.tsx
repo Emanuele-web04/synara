@@ -17,6 +17,7 @@ import {
   serverLocalServersQueryOptions,
   serverStopLocalServerMutationOptions,
 } from "~/lib/serverReactQuery";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
@@ -139,9 +140,7 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
         <RefreshCwIcon className="size-3 animate-spin text-[var(--color-text-foreground-secondary)]" />
       ) : (
         <span className="flex items-center gap-1.5">
-          {serverCount > 0 ? (
-            <span className="size-1.5 rounded-full bg-success" aria-hidden />
-          ) : null}
+          {serverCount > 0 ? <StatusDot className="bg-success" aria-hidden /> : null}
           <span className="text-ui-sm tabular-nums text-[var(--color-text-foreground-secondary)]">
             {serverCount}
           </span>

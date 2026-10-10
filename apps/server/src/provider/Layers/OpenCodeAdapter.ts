@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   forgetOpenCodeMessage,
   forgetOpenCodePart,
   openCodeSnapshotKey,
   type OpenCodeMessageState,
+  OpenCodePartIndex,
 } from "../openCodeMessageState.ts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -19,6 +20,7 @@ import {
   type RuntimeMode,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeTaskId,
   type ThreadTokenUsageSnapshot,
   ThreadId,
   type ToolLifecycleItemType,
@@ -49,7 +51,10 @@ import {
   SYNARA_HARNESS_POLICY_VERSION,
   takeSynaraHarnessPolicyForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
-import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/computerToolPermission.ts";
+import {
+  isSynaraGatewayToolCall,
+  shouldAllowSynaraComputerProviderTool,
+} from "../../agentGateway/computerToolPermission.ts";
 import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
@@ -59,7 +64,10 @@ import {
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
-import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
+import {
+  PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  resolveProviderSessionInstanceId,
+} from "../Services/ProviderAdapter.ts";
 import {
   buildOpenCodePermissionRules,
   type OpenCodeCliModelDescriptor,
@@ -80,8 +88,13 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import { canUseDefaultOpenCodeServerPassword } from "../openCodeServerPassword.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 import { makeRuntimeTaskListItem, nonEmptyRuntimeTaskListPayload } from "../runtimeTaskList.ts";
+import {
+  detectOpenCodeBackgroundTaskSettlement,
+  detectOpenCodeBackgroundTaskStart,
+} from "../openCodeBackgroundTasks.ts";
 import {
   buildOpenCodeModelContextLimitMap,
   emptyOpenCodeModelInventory,
@@ -94,6 +107,11 @@ import {
   resolvePreferredOpenCodeModelProviders,
 } from "../OpenCodeDiscovery.ts";
 import { nonNegativeFiniteNumber, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
+import type {
+  OpenCodeExecutionEvent,
+  OpenCodeExecutionStartedEvent,
+} from "../openCodeV2Messages.ts";
+import { isOpenCodeV2Client, openCodeV2ExecutionOutcome } from "../openCodeV2Client.ts";
 
 export { flattenOpenCodeCliModels, flattenOpenCodeModels, resolvePreferredOpenCodeModelProviders };
 
@@ -102,6 +120,8 @@ export function resolveOpenCodePermissionPolicyReply(input: {
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly activeTurn: boolean;
   readonly computerControlEnabled: boolean;
+  readonly autoApproveSynaraTools?: boolean;
+  readonly gatewaySessionActive?: boolean;
   readonly permission: unknown;
   readonly metadata: unknown;
 }): "once" | "reject" | undefined {
@@ -116,6 +136,16 @@ export function resolveOpenCodePermissionPolicyReply(input: {
       runtimeMode: input.runtimeMode,
       permission: { name: input.permission, metadata: input.metadata },
     })
+  ) {
+    return "once";
+  }
+  // Gateway tools are server-authorized by the session token; a session opted
+  // into `autoApproveSynaraTools` (e.g. a group coordinator) must not stall on
+  // an interactive prompt for them. Everything else keeps the ordinary path.
+  if (
+    input.autoApproveSynaraTools === true &&
+    input.gatewaySessionActive === true &&
+    isSynaraGatewayToolCall({ name: input.permission, metadata: input.metadata })
   ) {
     return "once";
   }
@@ -156,13 +186,16 @@ const OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS = 500;
 const OPENCODE_EVENT_RECONNECT_DELAYS_MS = [250, 1_000, 2_500, 5_000] as const;
 const OPENCODE_PERMISSION_REPLY_ACK_DELAYS_MS = [50, 150, 300, 500] as const;
 const OPENCODE_MAX_RELATED_SESSIONS = 256;
+export const resolveOpenCodeStartInstanceId = resolveProviderSessionInstanceId;
 
 type OpenCodeSubscribedEvent =
-  Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
-    readonly stream: AsyncIterable<infer TEvent>;
-  }
-    ? TEvent
-    : never;
+  | OpenCodeExecutionEvent
+  | OpenCodeExecutionStartedEvent
+  | (Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
+      readonly stream: AsyncIterable<infer TEvent>;
+    }
+      ? TEvent
+      : never);
 
 interface OpenCodeHarnessPolicyDelivery {
   readonly sessionId: string;
@@ -182,12 +215,14 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   pendingHarnessPolicyTurnId: TurnId | undefined;
   readonly gatewayControlAvailable: boolean;
   readonly enableComputerControl?: boolean;
+  readonly autoApproveSynaraTools?: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   readonly lifecycleGeneration?: string;
   readonly client: OpencodeClient;
   readonly server: OpenCodeServerConnection;
   readonly directory: string;
+  readonly discoveryEnvironmentKey: string;
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
   readonly replyingPermissions: Map<string, "once" | "always" | "reject">;
@@ -198,6 +233,19 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   readonly locallyResolvedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
   readonly relatedSessionIds: Set<string>;
+  // Background subagent tasks launched via OpenCode's task tool (or the retired
+  // delegate plugin). Unlike relatedSessionIds these outlive the owning turn so
+  // child-session lifecycle events keep routing after the parent turn settles.
+  readonly backgroundTasks: Map<
+    string,
+    {
+      readonly childSessionId: string | null;
+      readonly toolUseId: string;
+      settled: boolean;
+      settlementStatus?: "completed" | "failed" | "stopped";
+    }
+  >;
+  readonly backgroundTaskIdBySessionId: Map<string, string>;
   readonly modelContextLimitBySlug: Map<string, number>;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastEmittedTokenUsageKey: string | undefined;
@@ -215,6 +263,10 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   activeAgent: string | undefined;
   activeVariant: string | undefined;
   readonly stopped: Ref.Ref<boolean>;
+  readonly eventsAbortController: AbortController;
+  readonly eventsReady: Deferred.Deferred<void>;
+  nativeTranscriptNeedsReconciliation: boolean;
+  allowNativeContinuation: boolean;
   readonly sessionScope: Scope.Closeable;
 }
 
@@ -228,6 +280,28 @@ function serverPasswordForOpenCodeClient(
 function releaseOpenCodeGatewayLease(context: OpenCodeSessionContext): void {
   context.gatewaySessionLease?.release();
   delete context.gatewaySessionLease;
+}
+
+function normalizeDiscoveryEnvironment(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | undefined {
+  if (environment === undefined) return undefined;
+  return Object.fromEntries(
+    Object.entries(environment)
+      .map(([name, value]) => [name.trim(), value] as const)
+      .filter(([name]) => name.length > 0)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [
+        name,
+        createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16),
+      ]),
+  );
+}
+
+function openCodeDiscoveryEnvironmentKey(
+  environment: Readonly<Record<string, string>> | undefined,
+): string {
+  return JSON.stringify(normalizeDiscoveryEnvironment(environment) ?? null);
 }
 
 const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(function* (input: {
@@ -893,12 +967,7 @@ function isOpenCodeAssistantMessageTextSettled(
   context: OpenCodeSessionContext,
   messageId: string,
 ): boolean {
-  const messageParts: Array<Part> = [];
-  for (const part of context.partById.values()) {
-    if (part.messageID === messageId) {
-      messageParts.push(part);
-    }
-  }
+  const messageParts = context.partById.partsForMessage(messageId);
   return (
     areOpenCodeAssistantTextPartsSettled(messageParts) &&
     messageParts.every(
@@ -1082,6 +1151,16 @@ function shouldHandleRelatedOpenCodeSessionEvent(event: OpenCodeSubscribedEvent)
   );
 }
 
+function isOpenCodeBackgroundSessionLifecycleEvent(event: OpenCodeSubscribedEvent): boolean {
+  return (
+    event.type === "session.status" ||
+    event.type === "synara.opencode.execution" ||
+    event.type === "synara.opencode.execution.started" ||
+    event.type === "session.idle" ||
+    event.type === "session.error"
+  );
+}
+
 function shouldHandleSubscribedEvent(
   context: OpenCodeSessionContext,
   event: OpenCodeSubscribedEvent,
@@ -1090,7 +1169,10 @@ function shouldHandleSubscribedEvent(
   if (sessionId !== undefined) {
     return (
       sessionId === context.openCodeSessionId ||
-      (context.relatedSessionIds.has(sessionId) && shouldHandleRelatedOpenCodeSessionEvent(event))
+      (context.relatedSessionIds.has(sessionId) &&
+        shouldHandleRelatedOpenCodeSessionEvent(event)) ||
+      (context.backgroundTaskIdBySessionId.has(sessionId) &&
+        isOpenCodeBackgroundSessionLifecycleEvent(event))
     );
   }
 
@@ -1256,8 +1338,18 @@ function buildOpenCodeThreadSnapshot(input: {
 
 const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResources")(function* (
   context: OpenCodeSessionContext,
+  beforeRelease?: Effect.Effect<void>,
 ) {
-  yield* clearActiveTurnState(context).pipe(
+  // Abort the network reader before closing the scope whose fibers await it.
+  context.eventsAbortController.abort();
+  yield* Effect.gen(function* () {
+    if (beforeRelease !== undefined) {
+      yield* beforeRelease;
+    }
+    yield* clearActiveTurnState(context);
+    context.backgroundTasks.clear();
+    context.backgroundTaskIdBySessionId.clear();
+  }).pipe(
     Effect.ensuring(
       Scope.close(context.sessionScope, Exit.void).pipe(
         Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
@@ -1268,6 +1360,7 @@ const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResourc
 
 const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   context: OpenCodeSessionContext,
+  beforeRelease?: Effect.Effect<void>,
 ) {
   if (yield* Ref.getAndSet(context.stopped, true)) {
     return;
@@ -1277,7 +1370,7 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
   ).pipe(Effect.ignore({ log: true }));
 
-  yield* releaseOpenCodeSessionResources(context);
+  yield* releaseOpenCodeSessionResources(context, beforeRelease);
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -1335,7 +1428,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           sessions.clear();
           yield* Effect.forEach(
             contexts,
-            (context) => Effect.ignoreCause(stopOpenCodeContext(context)),
+            (context) =>
+              Effect.ignoreCause(
+                stopOpenCodeContext(
+                  context,
+                  settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+                ),
+              ),
             { concurrency: "unbounded", discard: true },
           );
           if (managedNativeEventLogger !== undefined) {
@@ -1347,6 +1446,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const emit = (context: OpenCodeSessionContext, event: ProviderRuntimeEvent) =>
         Queue.offer(runtimeEvents, {
           ...event,
+          ...(context.session.providerInstanceId &&
+          event.providerInstanceId !== context.session.providerInstanceId
+            ? { providerInstanceId: context.session.providerInstanceId }
+            : {}),
           ...(context.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: context.lifecycleGeneration }
             : {}),
@@ -1365,6 +1468,57 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly event: Record<string, unknown>;
         },
       ) => writeNativeEvent(threadId, event).pipe(Effect.catchCause(() => Effect.void));
+
+      const settleOpenCodeBackgroundTask = Effect.fn("settleOpenCodeBackgroundTask")(function* (
+        context: OpenCodeSessionContext,
+        input: {
+          readonly taskId: string;
+          readonly status: "completed" | "failed" | "stopped";
+          readonly summary?: string | undefined;
+          readonly raw?: unknown;
+        },
+      ) {
+        const task = context.backgroundTasks.get(input.taskId);
+        if (
+          task === undefined ||
+          (task.settled && !(task.settlementStatus === "completed" && input.status === "failed"))
+        ) {
+          return false;
+        }
+        // Child idle can precede task.ts checking its final tool result. Keep
+        // a later authoritative failure visible instead of freezing success.
+        task.settled = true;
+        task.settlementStatus = input.status;
+        yield* emit(context, {
+          ...buildEventBase({
+            threadId: context.session.threadId,
+            turnId: context.activeTurnId,
+            raw: input.raw,
+          }),
+          type: "task.completed",
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe(input.taskId),
+            status: input.status,
+            ...(input.summary !== undefined ? { summary: input.summary } : {}),
+          },
+        });
+        return true;
+      });
+
+      const settleAllOpenCodeBackgroundTasks = (
+        context: OpenCodeSessionContext,
+        input: { readonly status: "stopped" | "failed"; readonly raw?: unknown },
+      ) =>
+        Effect.forEach(
+          context.backgroundTasks.keys(),
+          (taskId) =>
+            settleOpenCodeBackgroundTask(context, {
+              taskId,
+              status: input.status,
+              raw: input.raw,
+            }),
+          { discard: true },
+        );
 
       const emitContextCompactionProgress = Effect.fn("emitContextCompactionProgress")(function* (
         context: OpenCodeSessionContext,
@@ -1450,7 +1604,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             sessionID: context.openCodeSessionId,
           }),
         ).pipe(Effect.ignore({ log: true }));
-        yield* releaseOpenCodeSessionResources(context);
+        yield* releaseOpenCodeSessionResources(
+          context,
+          settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+        );
       });
 
       const emitAssistantTextDelta = Effect.fn("emitAssistantTextDelta")(function* (
@@ -1640,6 +1797,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly raw: unknown;
           readonly totalCostUsd?: number | undefined;
           readonly errorMessage?: string | undefined;
+          readonly interrupted?: boolean;
         },
       ) {
         if (context.activeTurnId !== input.turnId) {
@@ -1666,7 +1824,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 errorMessage: input.errorMessage,
               }
             : {
-                state: "completed",
+                state: input.interrupted ? "interrupted" : "completed",
                 ...(input.totalCostUsd !== undefined ? { totalCostUsd: input.totalCostUsd } : {}),
               },
         });
@@ -1953,8 +2111,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       ) {
         const settled = yield* Deferred.make<ProviderAdapterRequestError | null, never>();
-        yield* runOpenCodeSdk("session.promptAsync", () =>
-          context.client.session.promptAsync(input.promptInput),
+        yield* runOpenCodeSdk("session.promptAsync", (signal) =>
+          context.client.session.promptAsync(input.promptInput, { signal }),
         ).pipe(
           Effect.mapError(toAdapterRequestError),
           Effect.tap(() =>
@@ -2114,10 +2272,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context: OpenCodeSessionContext,
         event: OpenCodeSubscribedEvent,
       ) {
+        const eventSessionId = subscribedEventSessionId(event);
         if (!shouldHandleSubscribedEvent(context, event)) {
-          const sessionId = subscribedEventSessionId(event);
           const canBelongToUndiscoveredChild =
-            sessionId !== undefined &&
+            eventSessionId !== undefined &&
             (event.type === "permission.asked" || event.type === "question.asked");
           if (!canBelongToUndiscoveredChild) {
             return;
@@ -2135,6 +2293,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
 
         const turnId = context.activeTurnId;
+        const backgroundTaskId =
+          eventSessionId !== undefined
+            ? context.backgroundTaskIdBySessionId.get(eventSessionId)
+            : undefined;
         if (turnId) {
           context.activeTurnEventSerial += 1;
           // User-message echoes should not disable prompt recovery; track provider-side
@@ -2157,6 +2319,81 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         });
 
         switch (event.type) {
+          case "synara.opencode.execution.started": {
+            if (backgroundTaskId !== undefined || turnId) break;
+            if (!context.allowNativeContinuation) {
+              // A late background report after Stop must not restart work.
+              yield* runOpenCodeSdk("session.abort", (signal) =>
+                context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
+              ).pipe(Effect.ignore({ log: true }));
+              break;
+            }
+            const continuationId = TurnId.makeUnsafe(
+              `${adapterConfig.turnIdPrefix}-${randomUUID()}`,
+            );
+            context.activeTurnId = continuationId;
+            context.activeInteractionMode = context.appliedPermissionInteractionMode;
+            updateProviderSession(context, { status: "running", activeTurnId: continuationId });
+            yield* emit(context, {
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                turnId: continuationId,
+                raw: event,
+              }),
+              type: "turn.started",
+              payload: { model: context.session.model },
+            });
+            yield* startTurnSnapshotWatchdog(
+              context,
+              continuationId,
+              new Set(context.messageRoleById.keys()),
+            );
+            break;
+          }
+          case "synara.opencode.execution": {
+            const outcome = event.properties.outcome;
+            if (backgroundTaskId !== undefined) {
+              yield* settleOpenCodeBackgroundTask(context, {
+                taskId: backgroundTaskId,
+                status:
+                  outcome === "succeeded"
+                    ? "completed"
+                    : outcome === "failed"
+                      ? "failed"
+                      : "stopped",
+                ...(event.properties.message ? { summary: event.properties.message } : {}),
+                raw: event,
+              });
+            } else if (turnId) {
+              if (context.nativeTranscriptNeedsReconciliation) {
+                const snapshotsExit = yield* Effect.exit(loadCurrentMessageSnapshots(context));
+                if (Exit.isFailure(snapshotsExit)) {
+                  yield* Effect.logWarning(
+                    `${adapterConfig.displayName} terminal transcript reconciliation failed`,
+                    Cause.squash(snapshotsExit.cause),
+                  );
+                  // Keep the turn active so a later terminal or the watchdog can retry.
+                  break;
+                }
+                if (context.activeTurnId !== turnId) break;
+                yield* replayOpenCodeMessageSnapshots(context, snapshotsExit.value, turnId);
+                if (context.activeTurnId !== turnId) break;
+                context.nativeTranscriptNeedsReconciliation = false;
+              }
+              // V2 has an authoritative execution terminal. Step/text completion
+              // can precede tools, retries, and later steps and must not settle it.
+              yield* completeOpenCodeTurn(context, {
+                turnId,
+                raw: event,
+                totalCostUsd: context.latestTurnCostUsd,
+                ...(outcome === "failed"
+                  ? { errorMessage: event.properties.message ?? "OpenCode execution failed." }
+                  : {}),
+                interrupted: outcome === "interrupted",
+              });
+            }
+            break;
+          }
           case "message.updated": {
             context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
             context.messageSnapshotKeyById.set(
@@ -2213,10 +2450,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 });
               }
 
-              for (const part of context.partById.values()) {
-                if (part.messageID !== event.properties.info.id) {
-                  continue;
-                }
+              for (const part of context.partById.partsForMessage(event.properties.info.id)) {
                 const resolvedPart = applyPendingTextDeltaToPart(context, part);
                 if (resolvedPart !== part) {
                   context.partById.set(resolvedPart.id, resolvedPart);
@@ -2313,6 +2547,21 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             context.partSnapshotKeyById.set(part.id, openCodeSnapshotKey(part));
             const messageRole = messageRoleForPart(context, part);
 
+            // OpenCode injects background-task settlement into the parent
+            // session as a synthetic user text part. Read it before the
+            // synthetic-text filter drops it from the transcript.
+            if (part.type === "text" && part.synthetic === true && messageRole !== "assistant") {
+              const settlement = detectOpenCodeBackgroundTaskSettlement(part.text);
+              if (settlement !== null) {
+                yield* settleOpenCodeBackgroundTask(context, {
+                  taskId: settlement.taskId,
+                  status: settlement.status,
+                  summary: settlement.summary,
+                  raw: event,
+                });
+              }
+            }
+
             if (messageRole === "assistant") {
               if (
                 turnId !== undefined &&
@@ -2329,6 +2578,66 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
             if (part.type === "tool") {
               rememberRelatedOpenCodeSession(context, part);
+              const backgroundTaskStart = detectOpenCodeBackgroundTaskStart(part);
+              const previousBackgroundTask =
+                backgroundTaskStart === null
+                  ? undefined
+                  : context.backgroundTasks.get(backgroundTaskStart.taskId);
+              if (
+                backgroundTaskStart !== null &&
+                (previousBackgroundTask === undefined ||
+                  (previousBackgroundTask.settled &&
+                    previousBackgroundTask.toolUseId !== part.callID))
+              ) {
+                context.backgroundTasks.set(backgroundTaskStart.taskId, {
+                  childSessionId: backgroundTaskStart.childSessionId,
+                  toolUseId: part.callID,
+                  settled: false,
+                });
+                if (backgroundTaskStart.childSessionId !== null) {
+                  context.relatedSessionIds.add(backgroundTaskStart.childSessionId);
+                  context.backgroundTaskIdBySessionId.set(
+                    backgroundTaskStart.childSessionId,
+                    backgroundTaskStart.taskId,
+                  );
+                }
+                const backgroundTaskRuntimeId = RuntimeTaskId.makeUnsafe(
+                  backgroundTaskStart.taskId,
+                );
+                yield* emit(context, {
+                  ...buildEventBase({
+                    threadId: context.session.threadId,
+                    turnId,
+                    raw: event,
+                  }),
+                  type: "task.started",
+                  payload: {
+                    taskId: backgroundTaskRuntimeId,
+                    ...(backgroundTaskStart.description !== undefined
+                      ? { description: backgroundTaskStart.description }
+                      : {}),
+                    taskType: "subagent",
+                    ...(backgroundTaskStart.subagentType !== undefined
+                      ? { subagentType: backgroundTaskStart.subagentType }
+                      : {}),
+                    toolUseId: part.callID,
+                  },
+                });
+                yield* emit(context, {
+                  ...buildEventBase({
+                    threadId: context.session.threadId,
+                    turnId,
+                    raw: event,
+                  }),
+                  type: "task.updated",
+                  payload: {
+                    taskId: backgroundTaskRuntimeId,
+                    status: "running",
+                    isBackgrounded: true,
+                    toolUseId: part.callID,
+                  },
+                });
+              }
               const itemType = toToolLifecycleItemType(part.tool);
               const title =
                 part.state.status === "running" ? part.state.title?.trim() || part.tool : part.tool;
@@ -2403,6 +2712,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               interactionMode: context.activeInteractionMode,
               activeTurn: turnId !== undefined && context.activeTurnId === turnId,
               computerControlEnabled: context.enableComputerControl === true,
+              autoApproveSynaraTools: context.autoApproveSynaraTools === true,
+              gatewaySessionActive: context.gatewaySessionLease !== undefined,
               permission: event.properties.permission,
               metadata: event.properties.metadata,
             });
@@ -2562,6 +2873,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "session.status": {
+            if (backgroundTaskId !== undefined) {
+              // A background subagent's session going idle means the task is
+              // done; it must never complete the parent turn below.
+              if (event.properties.status.type === "idle") {
+                yield* settleOpenCodeBackgroundTask(context, {
+                  taskId: backgroundTaskId,
+                  status: "completed",
+                  raw: event,
+                });
+              }
+              break;
+            }
             if (event.properties.status.type === "busy") {
               updateProviderSession(context, {
                 status: "running",
@@ -2599,6 +2922,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "session.idle": {
+            if (backgroundTaskId !== undefined) {
+              yield* settleOpenCodeBackgroundTask(context, {
+                taskId: backgroundTaskId,
+                status: "completed",
+                raw: event,
+              });
+              break;
+            }
             if (turnId) {
               if (yield* deferPrematureIdleCompletion(context, turnId, event)) {
                 break;
@@ -2986,6 +3317,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "session.error": {
+            if (backgroundTaskId !== undefined) {
+              yield* settleOpenCodeBackgroundTask(context, {
+                taskId: backgroundTaskId,
+                status: "failed",
+                summary: sessionErrorMessage(event.properties.error),
+                raw: event,
+              });
+              break;
+            }
             const message = sessionErrorMessage(event.properties.error);
             if (isOpenCodeContextOverflowError(event.properties.error)) {
               updateProviderSession(
@@ -3168,12 +3508,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       );
 
-      const replayOpenCodeMessageSnapshots = Effect.fn("replayOpenCodeMessageSnapshots")(function* (
+      const replayOpenCodeMessageSnapshots: (
+        context: OpenCodeSessionContext,
+        snapshots: ReadonlyArray<OpenCodeMessageSnapshot>,
+        turnId: TurnId,
+      ) => Effect.Effect<void> = Effect.fn("replayOpenCodeMessageSnapshots")(function* (
         context: OpenCodeSessionContext,
         snapshots: ReadonlyArray<OpenCodeMessageSnapshot>,
         turnId: TurnId,
       ) {
         for (const snapshot of snapshots) {
+          if (context.activeTurnId !== turnId) return;
           const messageKey = openCodeSnapshotKey(snapshot.info);
           if (context.messageSnapshotKeyById.get(snapshot.info.id) !== messageKey) {
             yield* handleSubscribedEvent(context, {
@@ -3186,6 +3531,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           for (const part of snapshot.parts) {
+            if (context.activeTurnId !== turnId) return;
             const partKey = openCodeSnapshotKey(part);
             if (context.partSnapshotKeyById.get(part.id) === partKey) {
               continue;
@@ -3213,7 +3559,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       // synthesizes the idle event so the turn completes. Messages are only pulled
       // once the session is no longer busy — fetching a large transcript every
       // 500ms would be wasteful on big turns.
-      const startTurnSnapshotWatchdog = Effect.fn("startTurnSnapshotWatchdog")(function* (
+      const startTurnSnapshotWatchdog: (
+        context: OpenCodeSessionContext,
+        turnId: TurnId,
+        baselineMessageIds: ReadonlySet<string>,
+      ) => Effect.Effect<void> = Effect.fn("startTurnSnapshotWatchdog")(function* (
         context: OpenCodeSessionContext,
         turnId: TurnId,
         baselineMessageIds: ReadonlySet<string>,
@@ -3252,6 +3602,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
             if (!statusKnown || sessionBusy) {
               idlePollsWithFinalMessage = 0;
+              continue;
+            }
+
+            if (isOpenCodeV2Client(context.client)) {
+              const outcome = yield* runOpenCodeSdk("session.outcome", (signal) =>
+                openCodeV2ExecutionOutcome(context.client, context.openCodeSessionId, signal),
+              ).pipe(Effect.catch(() => Effect.succeed(undefined)));
+              if (outcome) yield* handleSubscribedEvent(context, outcome);
               continue;
             }
 
@@ -3294,7 +3652,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const startEventPump = Effect.fn("startEventPump")(function* (
         context: OpenCodeSessionContext,
       ) {
-        const eventsAbortController = new AbortController();
+        const eventsAbortController = context.eventsAbortController;
         yield* Scope.addFinalizer(
           context.sessionScope,
           Effect.sync(() => eventsAbortController.abort()),
@@ -3310,6 +3668,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     signal: eventsAbortController.signal,
                   }),
                 );
+                yield* Deferred.succeed(context.eventsReady, undefined);
                 yield* reconcilePendingOpenCodeInteractions(context).pipe(
                   Effect.catchCause((cause) =>
                     Effect.logWarning(
@@ -3333,6 +3692,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               return;
             }
 
+            // A new V2 subscription has no mapper state for pre-disconnect messages,
+            // and events may also have been missed while disconnected.
+            context.nativeTranscriptNeedsReconciliation = true;
             const delayMs =
               OPENCODE_EVENT_RECONNECT_DELAYS_MS[
                 Math.min(reconnectAttempt, OPENCODE_EVENT_RECONNECT_DELAYS_MS.length - 1)
@@ -3392,6 +3754,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
         function* (input) {
+          const resolvedProviderInstanceId = resolveOpenCodeStartInstanceId(input);
           const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
@@ -3402,9 +3765,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               issue: `Computer Use requires a Synara-managed ${adapterConfig.displayName} server with a thread-scoped gateway. It is unavailable with an external server URL.`,
             });
           }
-          const serverPassword = options?.resolveServerPassword
-            ? yield* options.resolveServerPassword(provider)
-            : undefined;
+          const serverPassword =
+            providerOptions?.serverPassword?.trim() ||
+            (options?.resolveServerPassword &&
+            canUseDefaultOpenCodeServerPassword(provider, resolvedProviderInstanceId)
+              ? yield* options.resolveServerPassword(provider)
+              : undefined);
+          const environment = providerOptions?.environment;
           const experimentalWebSockets = providerOptions?.experimentalWebSockets;
           const resumeDirectory = extractResumeCwd(input.resumeCursor);
           const directory = input.cwd ?? resumeDirectory ?? serverConfig.cwd;
@@ -3424,7 +3791,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const persistedHarnessPolicyDelivery = extractHarnessPolicyDelivery(input.resumeCursor);
           const existing = sessions.get(input.threadId);
           if (existing) {
-            yield* stopOpenCodeContext(existing);
+            yield* stopOpenCodeContext(
+              existing,
+              settleAllOpenCodeBackgroundTasks(existing, { status: "stopped" }),
+            );
             sessions.delete(input.threadId);
           }
 
@@ -3461,7 +3831,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       binaryPath,
                       cliSpec: adapterConfig.cliSpec,
                       cwd: directory,
+                      homeDir: serverConfig.homeDir,
+                      isolationRootDir: serverConfig.stateDir,
+                      ...(resolvedProviderInstanceId !== undefined
+                        ? { instanceId: resolvedProviderInstanceId }
+                        : {}),
                       ...(serverUrl ? { serverUrl } : {}),
+                      ...(environment !== undefined ? { environment } : {}),
                       ...(experimentalWebSockets ? { experimentalWebSockets: true } : {}),
                       ...(poolIsolationKey ? { poolIsolationKey } : {}),
                     });
@@ -3629,6 +4005,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 const createdAt = nowIso();
                 const session: ProviderSession = {
                   provider,
+                  ...(resolvedProviderInstanceId
+                    ? { providerInstanceId: resolvedProviderInstanceId }
+                    : {}),
                   status: "ready",
                   runtimeMode: input.runtimeMode,
                   cwd: directory,
@@ -3651,6 +4030,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   session,
                   gatewayControlAvailable: started.gatewayControlAvailable,
                   enableComputerControl: input.enableComputerControl === true,
+                  autoApproveSynaraTools: input.autoApproveSynaraTools === true,
                   ...(started.gatewayControlAvailable && agentGatewaySessionLease
                     ? {
                         gatewaySessionLease: agentGatewaySessionLease,
@@ -3662,6 +4042,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   client: started.client,
                   server: started.server,
                   directory,
+                  discoveryEnvironmentKey: openCodeDiscoveryEnvironmentKey(environment),
                   openCodeSessionId: started.openCodeSessionId,
                   pendingPermissions: new Map(),
                   replyingPermissions: new Map(),
@@ -3670,13 +4051,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   locallyResolvedPermissionIds: new Set(),
                   pendingQuestions: new Map(),
                   pendingTextDeltasByPartId: new Map(),
-                  partById: new Map(),
+                  partById: new OpenCodePartIndex(),
                   partSnapshotKeyById: new Map(),
                   emittedTextByPartId: new Map(),
                   messageRoleById: new Map(),
                   messageSnapshotKeyById: new Map(),
                   completedAssistantPartIds: new Set(),
                   relatedSessionIds: new Set(),
+                  backgroundTasks: new Map(),
+                  backgroundTaskIdBySessionId: new Map(),
                   modelContextLimitBySlug: started.modelContextLimitBySlug,
                   lastKnownTokenUsage: undefined,
                   lastEmittedTokenUsageKey: undefined,
@@ -3695,6 +4078,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   activeVariant: undefined,
                   stopped: yield* Ref.make(false),
                   sessionScope: started.sessionScope,
+                  eventsAbortController: new AbortController(),
+                  eventsReady: yield* Deferred.make<void>(),
+                  nativeTranscriptNeedsReconciliation: false,
+                  allowNativeContinuation: false,
                 };
                 sessions.set(input.threadId, context);
                 sessionScopeTransferred = true;
@@ -3747,6 +4134,23 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         turnId: TurnId,
       ) {
         const context = ensureAdapterSessionContext(input.threadId);
+        if (isOpenCodeV2Client(context.client)) {
+          // V2 admits a prompt asynchronously. Subscribe first so a fast
+          // execution cannot finish before the session-owned reader exists.
+          yield* Deferred.await(context.eventsReady).pipe(
+            Effect.timeout("10 seconds"),
+            Effect.mapError((cause) =>
+              toAdapterRequestError(
+                new OpenCodeRuntimeError({
+                  operation: "event.subscribe",
+                  detail:
+                    "OpenCode event subscription is not ready. Retry when the connection recovers.",
+                  cause,
+                }),
+              ),
+            ),
+          );
+        }
         const modelSelection =
           input.modelSelection ??
           (context.session.model ? { provider, model: context.session.model } : undefined);
@@ -3795,7 +4199,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
           },
         );
-        const providerText = [harnessPolicy, text].filter(Boolean).join("\n\n");
+        const nativeV2 = isOpenCodeV2Client(context.client);
+        const providerText = nativeV2 ? text : [harnessPolicy, text].filter(Boolean).join("\n\n");
 
         const requestedAgent =
           input.modelSelection?.provider === provider
@@ -3811,6 +4216,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         yield* applyPermissionInteractionMode(context, permissionInteractionMode);
 
         context.activeTurnId = turnId;
+        context.allowNativeContinuation = true;
         context.pendingHarnessPolicyTurnId = harnessPolicy === null ? undefined : turnId;
         context.activeTurnEventSerial = 0;
         context.activeTurnProviderActivitySerial = 0;
@@ -3863,6 +4269,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           turnId,
           promptInput: {
             sessionID: context.openCodeSessionId,
+            ...(nativeV2 && harnessPolicy ? { system: harnessPolicy } : {}),
             model: parsedModel,
             ...(context.activeAgent ? { agent: context.activeAgent } : {}),
             ...(context.activeVariant ? { variant: context.activeVariant } : {}),
@@ -3930,6 +4337,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             return;
           }
           const activeTurnId = turnId ?? context.activeTurnId;
+          context.allowNativeContinuation = false;
           yield* withAgentGatewayTurnCancellation(
             context.gatewaySessionLease,
             activeTurnId,
@@ -4110,7 +4518,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const context = sessions.get(threadId);
           if (!context) return;
           const wasStopped = yield* Ref.get(context.stopped);
-          yield* stopOpenCodeContext(context);
+          yield* stopOpenCodeContext(
+            context,
+            settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+          );
           sessions.delete(threadId);
           if (!wasStopped) {
             yield* emit(context, {
@@ -4165,18 +4576,41 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.scoped(
           Effect.gen(function* () {
             const directory = input.cwd ?? serverConfig.cwd;
+            const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
+            const binaryPath =
+              providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+            const serverUrl = providerOptions?.serverUrl?.trim();
+            const serverPassword = providerOptions?.serverPassword?.trim();
+            const environment = providerOptions?.environment;
+            const experimentalWebSockets =
+              adapterConfig.providerOptionsKey === "opencode"
+                ? input.providerOptions?.opencode?.experimentalWebSockets
+                : undefined;
             const server = yield* openCodeRuntime
               .connectToOpenCodeServer({
-                binaryPath: adapterConfig.defaultBinaryPath,
+                binaryPath,
                 cliSpec: adapterConfig.cliSpec,
                 cwd: directory,
+                homeDir: serverConfig.homeDir,
+                isolationRootDir: serverConfig.stateDir,
+                ...(input.providerInstanceId !== undefined
+                  ? { instanceId: input.providerInstanceId }
+                  : {}),
+                ...(serverUrl ? { serverUrl } : {}),
+                ...(environment !== undefined ? { environment } : {}),
+                ...(provider === "opencode" && experimentalWebSockets
+                  ? { experimentalWebSockets: true }
+                  : {}),
               })
               .pipe(Effect.mapError(toAdapterRequestError));
+            // Managed servers carry their generated password; external servers
+            // authenticate with the instance-configured one.
+            const clientServerPassword = server.external ? serverPassword : server.serverPassword;
             const client = openCodeRuntime.createOpenCodeSdkClient({
               baseUrl: server.url,
               directory,
               cliSpec: adapterConfig.cliSpec,
-              ...(server.serverPassword ? { serverPassword: server.serverPassword } : {}),
+              ...(clientServerPassword ? { serverPassword: clientServerPassword } : {}),
             });
             const session = yield* runOpenCodeSdk("session.get", () =>
               client.session.get({
@@ -4222,7 +4656,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             (entry) => entry.info.role === "assistant",
           );
           const targetIndex = assistantMessages.length - numTurns - 1;
-          const target = targetIndex >= 0 ? assistantMessages[targetIndex] : null;
+          // A V2 execution may contain many assistant steps. Rollback counts
+          // user turns, including interrupted turns with no assistant message.
+          const userMessages = (messages.data ?? []).filter((entry) => entry.info.role === "user");
+          const target = isOpenCodeV2Client(context.client)
+            ? userMessages[Math.max(0, userMessages.length - numTurns)]
+            : targetIndex >= 0
+              ? assistantMessages[targetIndex]
+              : null;
           yield* runOpenCodeSdk("session.revert", () =>
             context.client.session.revert({
               sessionID: context.openCodeSessionId,
@@ -4237,6 +4678,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const compactThread: NonNullable<OpenCodeAdapterShape["compactThread"]> = (threadId) =>
         Effect.gen(function* () {
           const context = ensureAdapterSessionContext(threadId);
+          if (isOpenCodeV2Client(context.client)) context.allowNativeContinuation = true;
           const parsedModel = parseOpenCodeModelSlug(context.session.model);
           if (!parsedModel) {
             return yield* new ProviderAdapterValidationError({
@@ -4258,6 +4700,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const forkThread: NonNullable<OpenCodeAdapterShape["forkThread"]> = (input) =>
         Effect.gen(function* () {
           const sourceContext = sessions.get(input.sourceThreadId);
+          const providerInstanceId =
+            sourceContext?.session.providerInstanceId ?? input.modelSelection?.instanceId;
           // Forking mid-turn would branch from incomplete in-flight state, so
           // let the retained-transcript fallback handle busy sources.
           if (sourceContext?.activeTurnId !== undefined) {
@@ -4280,9 +4724,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
-          const serverPassword = options?.resolveServerPassword
-            ? yield* options.resolveServerPassword(provider)
-            : undefined;
+          const serverPassword =
+            providerOptions?.serverPassword?.trim() ||
+            (options?.resolveServerPassword &&
+            canUseDefaultOpenCodeServerPassword(provider, providerInstanceId)
+              ? yield* options.resolveServerPassword(provider)
+              : undefined);
+          const environment = providerOptions?.environment;
           const persistedSourceDirectory =
             sourceContext?.directory ??
             input.sourceCwd ??
@@ -4308,7 +4756,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     binaryPath,
                     cliSpec: adapterConfig.cliSpec,
                     cwd: sourceDirectory,
+                    homeDir: serverConfig.homeDir,
+                    isolationRootDir: serverConfig.stateDir,
+                    ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
                     ...(serverUrl ? { serverUrl } : {}),
+                    ...(environment !== undefined ? { environment } : {}),
                   })
                   .pipe(Effect.mapError(toAdapterRequestError));
                 const clientServerPassword = serverPasswordForOpenCodeClient(
@@ -4353,10 +4805,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const withDiscoveryClient = <A>(
         input: {
           readonly threadId?: string | null;
+          readonly instanceId?: string | null;
           readonly binaryPath?: string | null;
           readonly cwd?: string | null;
           readonly serverUrl?: string | null;
+          readonly serverPassword?: string | null;
           readonly experimentalWebSockets?: boolean;
+          readonly environment?: Readonly<Record<string, string>>;
           readonly reuseAnyActiveContext?: boolean;
         },
         fn: (input: {
@@ -4367,15 +4822,21 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.gen(function* () {
           const requestedCwd = input.cwd?.trim();
           const requestedServerUrl = input.serverUrl?.trim();
+          const requestedEnvironmentKey = openCodeDiscoveryEnvironmentKey(input.environment);
           const activeContext = input.threadId
             ? sessions.get(ThreadId.makeUnsafe(input.threadId))
             : input.reuseAnyActiveContext
-              ? [...sessions.values()][0]
+              ? [...sessions.values()].find(
+                  (context) =>
+                    !input.instanceId || context.session.providerInstanceId === input.instanceId,
+                )
               : undefined;
           if (
             activeContext &&
+            (!input.instanceId || activeContext.session.providerInstanceId === input.instanceId) &&
             (!requestedCwd || requestedCwd === activeContext.directory) &&
-            (!requestedServerUrl || requestedServerUrl === activeContext.server.url)
+            (!requestedServerUrl || requestedServerUrl === activeContext.server.url) &&
+            requestedEnvironmentKey === activeContext.discoveryEnvironmentKey
           ) {
             return yield* fn({
               client: activeContext.client,
@@ -4386,25 +4847,32 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           return yield* Effect.scoped(
             Effect.gen(function* () {
               const serverUrl = input.serverUrl?.trim();
-              const serverPassword = options?.resolveServerPassword
-                ? yield* options.resolveServerPassword(provider).pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new ProviderAdapterRequestError({
-                          provider,
-                          method: cause.operation,
-                          detail: cause.issue,
-                          cause,
-                        }),
-                    ),
-                  )
-                : undefined;
+              const serverPassword =
+                input.serverPassword?.trim() ||
+                (options?.resolveServerPassword &&
+                canUseDefaultOpenCodeServerPassword(provider, input.instanceId ?? undefined)
+                  ? yield* options.resolveServerPassword(provider).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new ProviderAdapterRequestError({
+                            provider,
+                            method: cause.operation,
+                            detail: cause.issue,
+                            cause,
+                          }),
+                      ),
+                    )
+                  : undefined);
               const server = yield* openCodeRuntime
                 .connectToOpenCodeServer({
                   binaryPath: input.binaryPath?.trim() || adapterConfig.defaultBinaryPath,
                   cliSpec: adapterConfig.cliSpec,
                   cwd: input.cwd?.trim() || serverConfig.cwd,
+                  homeDir: serverConfig.homeDir,
+                  isolationRootDir: serverConfig.stateDir,
+                  ...(input.instanceId != null ? { instanceId: input.instanceId } : {}),
                   ...(serverUrl ? { serverUrl } : {}),
+                  ...(input.environment !== undefined ? { environment: input.environment } : {}),
                   ...(input.experimentalWebSockets ? { experimentalWebSockets: true } : {}),
                 })
                 .pipe(Effect.mapError(toAdapterRequestError));
@@ -4422,8 +4890,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const withDiscoveryInventory = <A>(
         input: {
+          readonly instanceId?: string | null;
           readonly binaryPath?: string | null;
           readonly cwd?: string | null;
+          readonly serverUrl?: string | null;
+          readonly serverPassword?: string | null;
+          readonly experimentalWebSockets?: boolean;
+          readonly environment?: Readonly<Record<string, string>>;
         },
         fn: (input: {
           readonly client: OpencodeClient;
@@ -4467,7 +4940,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             .listOpenCodeCliModels({
               binaryPath,
               cliSpec: adapterConfig.cliSpec,
+              homeDir: serverConfig.homeDir,
+              isolationRootDir: serverConfig.stateDir,
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
               ...(input.cwd ? { cwd: input.cwd } : {}),
+              ...(input.environment !== undefined ? { environment: input.environment } : {}),
             })
             .pipe(
               Effect.catch((error) =>
@@ -4478,7 +4955,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ),
             );
           const inventoryEffect = withDiscoveryInventory(
-            { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+            {
+              ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+              binaryPath,
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+              ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+              ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+              ...(input.experimentalWebSockets !== undefined
+                ? { experimentalWebSockets: input.experimentalWebSockets }
+                : {}),
+              ...(input.environment !== undefined ? { environment: input.environment } : {}),
+            },
             ({ inventory, credentialProviderIDs }) =>
               Effect.succeed({
                 inventory,
@@ -4491,23 +4978,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           if (Exit.isSuccess(inventoryExit)) {
             const { inventory, credentialProviderIDs } = inventoryExit.value;
-            const preferredProviderIDs = new Set(
-              resolvePreferredOpenCodeModelProviders({
-                inventory,
-                credentialProviderIDs,
-              }).map((provider) => provider.id),
-            );
             const inventoryModels = flattenOpenCodeModels({
               inventory,
               credentialProviderIDs,
             });
-            const preferredCliModels = cliModels.filter((model) =>
-              preferredProviderIDs.has(model.providerID),
-            );
             const models = mergeOpenCodeCliModelDescriptors({
               inventory,
               models: inventoryModels,
-              cliModels: preferredCliModels.length > 0 ? preferredCliModels : cliModels,
+              cliModels,
             });
             yield* Effect.logDebug(`${adapterConfig.displayName} model discovery resolved`, {
               binaryPath,
@@ -4564,7 +5042,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listAgents: NonNullable<OpenCodeAdapterShape["listAgents"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         return withDiscoveryInventory(
-          { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+          {
+            ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+            binaryPath,
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+            ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+            ...(input.experimentalWebSockets !== undefined
+              ? { experimentalWebSockets: input.experimentalWebSockets }
+              : {}),
+            ...(input.environment !== undefined ? { environment: input.environment } : {}),
+          },
           ({ inventory }) =>
             Effect.succeed({
               agents: flattenOpenCodeAgents(inventory.agents),
@@ -4577,12 +5065,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listCommands: NonNullable<OpenCodeAdapterShape["listCommands"]> = (input) => {
         const discoveryInput = {
           ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+          ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
           ...(input.binaryPath !== undefined ? { binaryPath: input.binaryPath } : {}),
           cwd: input.cwd,
           ...(input.serverUrl !== undefined ? { serverUrl: input.serverUrl } : {}),
+          ...(input.serverPassword !== undefined ? { serverPassword: input.serverPassword } : {}),
           ...(input.experimentalWebSockets !== undefined
             ? { experimentalWebSockets: input.experimentalWebSockets }
             : {}),
+          ...(input.environment !== undefined ? { environment: input.environment } : {}),
         };
 
         return withDiscoveryClient(discoveryInput, ({ client }) =>
@@ -4630,7 +5121,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           sessions.clear();
           yield* Effect.forEach(
             contexts,
-            (context) => Effect.ignoreCause(stopOpenCodeContext(context)),
+            (context) =>
+              Effect.ignoreCause(
+                stopOpenCodeContext(
+                  context,
+                  settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+                ),
+              ),
             { concurrency: "unbounded", discard: true },
           );
         });

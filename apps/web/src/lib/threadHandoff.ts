@@ -9,12 +9,13 @@ import {
   type OrchestrationThreadActivity,
   PROVIDER_DISPLAY_NAMES,
   type ModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
-  type ServerSettingsView,
   type ThreadHandoffImportedMessage,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
+import type { ProviderInstanceOption } from "../appSettings";
 import { type Thread } from "../types";
 import { DEFAULT_PROVIDER_ORDER } from "../providerOrdering";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
@@ -30,6 +31,12 @@ const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
   "context-window.updated",
 ]);
 
+export interface ThreadHandoffTarget {
+  readonly provider: ProviderKind;
+  readonly instanceId: ProviderInstanceId;
+  readonly label: string;
+}
+
 function isImportableThreadMessage(
   message: Thread["messages"][number],
 ): message is Thread["messages"][number] & {
@@ -38,39 +45,53 @@ function isImportableThreadMessage(
   return (message.role === "user" || message.role === "assistant") && message.streaming === false;
 }
 
+/** True when a handoff or fork of this thread would carry at least one message. */
+export function hasImportableThreadMessages(thread: Pick<Thread, "messages">): boolean {
+  return thread.messages.some(isImportableThreadMessage);
+}
+
 function isImportableThreadActivity(
   activity: Thread["activities"][number],
 ): activity is OrchestrationThreadActivity {
   return IMPORTABLE_THREAD_ACTIVITY_KINDS.has(activity.kind);
 }
 
-export function isEligibleHandoffTargetProvider(input: {
+export function resolveAvailableHandoffTargets(input: {
   readonly sourceProvider: ProviderKind;
-  readonly targetProvider: ProviderKind;
-  readonly targetProviderEnabled: boolean | null | undefined;
-  readonly targetProviderStatus: ServerProviderStatus | null | undefined;
-}): boolean {
-  return (
-    input.targetProvider !== input.sourceProvider &&
-    input.targetProviderEnabled === true &&
-    input.targetProviderStatus?.provider === input.targetProvider &&
-    isProviderUsable(input.targetProviderStatus)
-  );
-}
-
-export function resolveAvailableHandoffTargetProviders(input: {
-  readonly sourceProvider: ProviderKind;
-  readonly providerSettings: ServerSettingsView["providers"] | null | undefined;
+  readonly sourceProviderInstanceId?: ProviderInstanceId | null | undefined;
+  readonly providerInstances: ReadonlyArray<ProviderInstanceOption>;
   readonly providerStatuses: readonly ServerProviderStatus[];
-}): ReadonlyArray<ProviderKind> {
-  return DEFAULT_PROVIDER_ORDER.filter((targetProvider) =>
-    isEligibleHandoffTargetProvider({
-      sourceProvider: input.sourceProvider,
-      targetProvider,
-      targetProviderEnabled: input.providerSettings?.[targetProvider].enabled,
-      targetProviderStatus: findProviderStatus(input.providerStatuses, targetProvider),
-    }),
-  );
+}): ReadonlyArray<ThreadHandoffTarget> {
+  const sourceInstanceId = input.sourceProviderInstanceId ?? input.sourceProvider;
+  const providerRank = new Map(DEFAULT_PROVIDER_ORDER.map((provider, index) => [provider, index]));
+  return input.providerInstances
+    .filter((instance) => instance.enabled)
+    .filter((instance) =>
+      isProviderUsable(
+        findProviderStatus(input.providerStatuses, instance.provider, instance.instanceId),
+      ),
+    )
+    .filter(
+      (instance) =>
+        instance.provider !== input.sourceProvider || instance.instanceId !== sourceInstanceId,
+    )
+    .toSorted((left, right) => {
+      const providerDelta =
+        (providerRank.get(left.provider) ?? DEFAULT_PROVIDER_ORDER.length) -
+        (providerRank.get(right.provider) ?? DEFAULT_PROVIDER_ORDER.length);
+      if (providerDelta !== 0) {
+        return providerDelta;
+      }
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
+      }
+      return left.label.localeCompare(right.label);
+    })
+    .map((instance) => ({
+      provider: instance.provider,
+      instanceId: instance.instanceId,
+      label: instance.label,
+    }));
 }
 
 export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">): string | null {
@@ -205,31 +226,119 @@ export function canCreateThreadHandoff(input: {
   return true;
 }
 
+/**
+ * Continuing in the same thread rebinds its session to another provider. A
+ * live session cannot move between accounts of one provider in place, so
+ * those targets only offer a new thread (the server enforces the same rule).
+ */
+export function canContinueThreadHandoff(input: {
+  readonly sourceProvider: ProviderKind;
+  readonly targetProvider: ProviderKind;
+}): boolean {
+  return input.targetProvider !== input.sourceProvider;
+}
+
+// Mirrors the outcome rows ProviderCommandReactor appends for a same-thread
+// handoff, keyed by the requesting command so the caller can await its result.
+export function providerHandoffOutcomeActivityIds(commandId: string): {
+  readonly completed: string;
+  readonly failed: string;
+} {
+  return {
+    completed: `provider-handoff:${commandId}`,
+    failed: `provider-handoff-failed:${commandId}`,
+  };
+}
+
+export type ProviderHandoffOutcome =
+  | { readonly status: "completed" }
+  | { readonly status: "failed"; readonly detail: string }
+  | { readonly status: "pending" };
+
+/**
+ * Reads a same-thread handoff's outcome from the thread's activities. The
+ * failure row carries the target's start error; "pending" means neither row
+ * has arrived yet.
+ */
+export function resolveProviderHandoffOutcome(
+  thread: Pick<Thread, "activities"> | undefined,
+  commandId: string,
+): ProviderHandoffOutcome {
+  const ids = providerHandoffOutcomeActivityIds(commandId);
+  for (const activity of thread?.activities ?? []) {
+    if (activity.id === ids.completed) {
+      return { status: "completed" };
+    }
+    if (activity.id === ids.failed) {
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as { detail?: unknown })
+          : null;
+      return {
+        status: "failed",
+        detail: typeof payload?.detail === "string" ? payload.detail : activity.summary,
+      };
+    }
+  }
+  return { status: "pending" };
+}
+
+export interface ThreadHandoffAvailability {
+  // "Hand off thread" — create a new thread on another provider.
+  readonly providerHandoff: boolean;
+  // "Hand off to new worktree" / "Hand off to local" — move the same thread's workspace.
+  readonly workspaceHandoff: boolean;
+}
+
+/**
+ * Single gating decision for every Hand off surface (chat header, sidebar
+ * context menu, composer "Work in" menu). Group chats hand off between
+ * providers like ordinary threads but have no repo checkout to move, and the
+ * coordinator is a single per-group identity — a hand-off copy would read as a
+ * second coordinator.
+ */
+export function resolveThreadHandoffAvailability(input: {
+  readonly isGroupContainer: boolean;
+  readonly isCoordinatorThread: boolean;
+}): ThreadHandoffAvailability {
+  return {
+    providerHandoff: !input.isCoordinatorThread,
+    workspaceHandoff: !input.isGroupContainer && !input.isCoordinatorThread,
+  };
+}
+
 export function resolveThreadHandoffModelSelection(input: {
   readonly sourceThread: Pick<Thread, "modelSelection">;
   readonly targetProvider: ProviderKind;
+  readonly targetProviderInstanceId?: ProviderInstanceId | null | undefined;
   readonly projectDefaultModelSelection: ModelSelection | null | undefined;
-  readonly stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
+  readonly stickyModelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
 }): ModelSelection {
+  const targetInstanceId = input.targetProviderInstanceId ?? input.targetProvider;
   const isCompatibleSelection = (
     selection: ModelSelection | null | undefined,
   ): selection is ModelSelection => {
     return Boolean(selection && selection.provider === input.targetProvider);
   };
 
-  const stickySelection = input.stickyModelSelectionByProvider[input.targetProvider];
+  const stickySelection = input.stickyModelSelectionByProvider[targetInstanceId];
+  const withTargetInstance = (selection: ModelSelection): ModelSelection => ({
+    ...selection,
+    ...(input.targetProviderInstanceId ? { instanceId: input.targetProviderInstanceId } : {}),
+  });
+
   if (isCompatibleSelection(stickySelection)) {
-    return stickySelection;
+    return withTargetInstance(stickySelection);
   }
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
-    return input.projectDefaultModelSelection;
+    return withTargetInstance(input.projectDefaultModelSelection);
   }
   const defaultModel = getDefaultModel(input.targetProvider);
   if (!defaultModel) {
     throw new Error("Select a Pi model before handing off to Pi.");
   }
-  return {
+  return withTargetInstance({
     provider: input.targetProvider,
     model: defaultModel,
-  };
+  });
 }

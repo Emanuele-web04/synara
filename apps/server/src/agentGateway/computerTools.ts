@@ -141,7 +141,7 @@ const COMPUTER_TOOL_REFRESH_GUIDANCE =
  * matters, and the description alone does not stop a relaunch loop.
  */
 const INPUT_PAUSE_REQUERY_HINT =
-  "Observe a usable window of the affected app after physical input stops; never replay an uncertain action.";
+  "To resume, call computer_get_state with the paused window_id, or with include_screenshot: true when no window is named; never replay an uncertain action.";
 
 const LAUNCH_NULL_WINDOW_GUIDANCE =
   "No usable window was established. The launch may already have started the app; never launch again automatically. Inspect computer_list_windows once using the returned app identity. If no usable target exists, report the limitation instead of looping. An isolated browser via computer_browser_prepare is an alternative only when compatible with the requested task; do not silently replace a requested personal browser or incognito window.";
@@ -359,6 +359,48 @@ export interface AgentGatewayComputerToolsOptions {
   readonly resolveForegroundAuthorization?: (
     context: ToolContext,
   ) => Promise<ComputerForegroundAuthorization>;
+  /**
+   * Ask the user, on the approval card, whether this task may bring windows
+   * to the front. Called before the desktop queue for a raise-shaped call the
+   * task text did not authorize; an approval makes the resolver above answer
+   * yes for the rest of the turn. Absent means the refusal stands.
+   */
+  readonly requestForegroundConsent?: (
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolContext,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
+}
+
+/**
+ * Whether a call can move a window in front of the user, mirroring every site
+ * that resolves foreground authorization — including the steps of a run, so
+ * consent is asked once up front rather than refused halfway through. A step
+ * behind if_element/unless_element still asks: a run that stops partway
+ * leaves the app half-changed, which costs more than one card.
+ */
+function callNeedsForeground(
+  name: string,
+  args: Record<string, unknown>,
+  dialect: string,
+): boolean {
+  if (args.delivery_mode === "foreground") return true;
+  // Standalone tools and run steps share names once the prefix is dropped.
+  const raises = (type: unknown, step: Record<string, unknown>): boolean =>
+    type === "activate_window" ||
+    type === "invoke_menu" ||
+    (type === "launch_app" && dialect !== "macos" && step.hidden === false);
+  if (name !== "computer_run") return raises(name.replace(/^computer_/, ""), args);
+  return (
+    Array.isArray(args.steps) &&
+    args.steps.some(
+      (step: unknown) =>
+        typeof step === "object" &&
+        step !== null &&
+        raises((step as Record<string, unknown>).type, step as Record<string, unknown>),
+    )
+  );
 }
 
 /**
@@ -1879,6 +1921,30 @@ export function makeAgentGatewayComputerTools(
                 signal: undefined,
               };
             }
+          }
+          // Visible-use consent is collected here, before the desktop queue, so
+          // a prompt the user has not answered yet never holds the desktop.
+          if (
+            options.requestForegroundConsent !== undefined &&
+            callNeedsForeground(name, args, manager.agentDialect) &&
+            !(await foregroundAuthorization(context)).userRequestedVisibleUse &&
+            !(await options.requestForegroundConsent(name, args, context, abortSignal))
+          ) {
+            audit({ effect: "refused", code: COMPUTER_FOREGROUND_NOT_REQUESTED_CODE });
+            return {
+              result: {
+                ...mcpToolResultJson({
+                  error: COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+                  message:
+                    "Showing windows on screen was declined, cancelled or left unanswered for " +
+                    "this task, so no window was raised and no input was sent. Do not ask again " +
+                    "in this turn: continue with background input, or report what cannot be " +
+                    "done without the foreground.",
+                }),
+                isError: true,
+              },
+              signal: undefined,
+            };
           }
           // Any non-scroll call breaks an unchanged-scroll streak: the model
           // looked or did something else instead of scrolling blindly on.
@@ -4394,7 +4460,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_activate_window",
       "Activate window",
-      "Bring a window into view and aim the agent keyboard at it — only when the user's own task text asked to see the screen; otherwise refused with foreground_not_requested (naming an app is not asking to see it). Ordinary background targeting does not activate a window. A desktop that cannot raise the window refuses. It returns no screenshot; observe with computer_screenshot or computer_get_state when needed.",
+      "Bring a window into view and aim the agent keyboard at it. Unless the user's own task text asked to see the screen (naming an app is not), Synara asks them on an approval card; a decline returns foreground_not_requested. Ordinary background targeting does not activate a window. A desktop that cannot raise the window refuses. It returns no screenshot; observe with computer_screenshot or computer_get_state when needed.",
       {
         type: "object",
         properties: {

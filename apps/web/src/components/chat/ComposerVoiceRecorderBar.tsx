@@ -14,6 +14,8 @@ interface ComposerVoiceRecorderBarProps {
   disabled?: boolean;
   durationLabel: string;
   isRecording: boolean;
+  // Recording has started but the device has not delivered real audio yet.
+  isWaitingForAudio?: boolean;
   isTranscribing: boolean;
   waveformLevels: readonly number[];
   onDiscard: () => void;
@@ -59,6 +61,7 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
     BAR_GAP_PX,
     (trackWidth - MAX_WAVEFORM_SAMPLES * BAR_WIDTH_PX) / (MAX_WAVEFORM_SAMPLES - 1),
   );
+  const isWaitingForAudio = props.isWaitingForAudio === true && !props.isTranscribing;
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -92,9 +95,19 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
         </div>
       </div>
 
-      <span className="shrink-0 text-ui leading-snug font-medium tabular-nums tracking-[0.02em] text-zinc-500 dark:text-zinc-400">
-        {props.durationLabel}
-      </span>
+      {isWaitingForAudio ? (
+        <span
+          role="status"
+          className="flex shrink-0 items-center gap-1.5 text-ui-sm leading-snug text-zinc-500 dark:text-zinc-400"
+        >
+          <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
+          Waiting for microphone…
+        </span>
+      ) : (
+        <span className="shrink-0 text-ui leading-snug font-medium tabular-nums tracking-[0.02em] text-zinc-500 dark:text-zinc-400">
+          {props.durationLabel}
+        </span>
+      )}
 
       <button
         type="button"
