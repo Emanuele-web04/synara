@@ -18,7 +18,7 @@ const PROJECT_ID = ProjectId.makeUnsafe("project-fork-turn");
 const SOURCE_THREAD_ID = ThreadId.makeUnsafe("thread-fork-turn-source");
 const FORK_THREAD_ID = ThreadId.makeUnsafe("thread-fork-turn-target");
 const APPLE_MESSAGE_ID = MessageId.makeUnsafe("assistant:apple");
-const MODEL_SELECTION = { provider: "claudeAgent" as const, model: "claude-haiku-4-5" };
+const MODEL_SELECTION = { provider: "claudeAgent" as const, model: "claude-sonnet-4-6" };
 
 const eventBase = (sequence: number, aggregateKind: "project" | "thread", aggregateId: string) => ({
   sequence,

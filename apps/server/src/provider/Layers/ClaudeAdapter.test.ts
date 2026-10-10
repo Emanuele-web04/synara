@@ -1564,6 +1564,60 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("publishes the effective fast mode state when a result changes it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const fastModeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "session.configured" &&
+            (event.payload.config as { fast_mode_state?: unknown }).fast_mode_state !== undefined,
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: { fastMode: true },
+        },
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "hello", attachments: [] });
+
+      const emitResult = (uuid: string, fastMode: Record<string, string>) =>
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-1",
+          uuid,
+          ...fastMode,
+        } as unknown as SDKMessage);
+      const blocked = { fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" };
+      emitResult("result-1", blocked);
+      // An unchanged state is not republished.
+      emitResult("result-2", blocked);
+      emitResult("result-3", { fast_mode_state: "cooldown" });
+
+      const events = Array.from(yield* Fiber.join(fastModeEventsFiber));
+      assert.deepEqual(
+        events.map((event) => (event.type === "session.configured" ? event.payload.config : null)),
+        [blocked, { fast_mode_state: "cooldown" }],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("ignores claude fast mode for non-opus models", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -2067,6 +2121,119 @@ describe("ClaudeAdapterLive", () => {
       );
     },
   );
+
+  it.effect("classifies exact image generation tools while preserving other tool kinds", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Exercise image tool classification",
+        attachments: [],
+      });
+      const cases = [
+        ["generate_image", "image_generation"],
+        ["image_gen", "image_generation"],
+        ["image_edit", "image_generation"],
+        ["mcp__visuals__generate_image", "image_generation"],
+        ["mcp__agent_image__image_edit", "image_generation"],
+        ["mcp__image_gen__view_image", "mcp_tool_call"],
+        ["mcp__visuals__render__generate_image", "mcp_tool_call"],
+        ["view_image", "image_view"],
+        ["generate_image_thumbnail", "image_view"],
+        ["Edit", "file_change"],
+        ["Bash", "command_execution"],
+      ] as const;
+      const input = { prompt: "Generate an image", path: "/tmp/example.png" };
+      for (const [index, [name]] of cases.entries()) {
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-image-kinds",
+          uuid: `stream-image-kind-${index}`,
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_start",
+            index,
+            content_block: { type: "tool_use", id: `image-kind-${index}`, name, input },
+          },
+        } as unknown as SDKMessage);
+      }
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-image-kinds",
+        uuid: "assistant-image-kinds",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-image-kinds",
+          content: cases.map(([name], index) => ({
+            type: "tool_use",
+            id: `image-kind-${index}`,
+            name,
+            input,
+          })),
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-image-kinds",
+        uuid: "user-image-kinds",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: cases.map(([name], index) => ({
+            type: "tool_result",
+            tool_use_id: `image-kind-${index}`,
+            content: name === "image_edit" ? "Image edit failed" : "Tool finished",
+            is_error: name === "image_edit",
+          })),
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-image-kinds",
+        uuid: "result-image-kinds",
+      } as unknown as SDKMessage);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      for (const [index, [name, itemType]] of cases.entries()) {
+        const toolEvents = events.filter(
+          (event) =>
+            (event.type === "item.started" || event.type === "item.completed") &&
+            event.itemId === `image-kind-${index}`,
+        );
+        assert.lengthOf(toolEvents, 2, name);
+        for (const event of toolEvents) {
+          if (event.type !== "item.started" && event.type !== "item.completed") {
+            assert.fail("expected a tool lifecycle event");
+            continue;
+          }
+          assert.equal(event.payload.itemType, itemType, name);
+          assert.deepInclude(event.payload.data, { toolName: name, input });
+          if (itemType === "image_generation") {
+            assert.equal(event.payload.title, "Image generation");
+          }
+          if (event.type === "item.completed") {
+            assert.equal(event.payload.status, name === "image_edit" ? "failed" : "completed");
+          }
+        }
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("maps Claude stream/runtime messages to canonical provider runtime events", () => {
     const harness = makeHarness();
@@ -7947,9 +8114,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect(
-    "keeps later command prompts supervised after always allowing a tool for the session",
-    () => {
+  it.effect.each(["mcp__docs__search", "image_edit", "mcp__visuals__generate_image"])(
+    "keeps later command prompts supervised after always allowing %s for the session",
+    (toolName) => {
       const harness = makeHarness();
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
@@ -7971,13 +8138,13 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         const toolSuggestions: PermissionUpdate[] = [
           {
             type: "addRules",
-            rules: [{ toolName: "mcp__docs__search" }],
+            rules: [{ toolName }],
             behavior: "allow",
             destination: "session",
           },
         ];
         const toolPermissionPromise = canUseTool(
-          "mcp__docs__search",
+          toolName,
           { query: "release notes" },
           {
             signal: new AbortController().signal,
@@ -12091,48 +12258,79 @@ describe("ClaudeAdapterLive forkThread", () => {
   });
   const SOURCE_SESSION_ID = "7f9c2f60-1111-4a2b-9c3d-8e5f6a7b8c9d";
 
-  it.effect.each(["end_turn", "max_tokens", undefined])(
-    "pins external imports to the completed assistant uuid (%s)",
-    (stopReason) => {
-      const forkNativeSession = vi.fn(async () => ({ sessionId: "independent-copy" }));
-      const layer = makeClaudeAdapterLive({
-        forkNativeSession,
-        readNativeSessionMessages: async () => [
-          {
-            type: "assistant",
-            uuid: "completed-uuid",
-            session_id: SOURCE_SESSION_ID,
-            message: {
-              ...(stopReason === undefined ? {} : { stop_reason: stopReason }),
-              content: [{ type: "text", text: "Finished" }],
-            },
-            parent_tool_use_id: null,
-            parent_agent_id: null,
+  it.effect.each([
+    { stopReason: "end_turn", selected: false },
+    { stopReason: "max_tokens", selected: false },
+    { stopReason: undefined, selected: false },
+    { stopReason: "end_turn", selected: true },
+  ])("pins external imports to the completed assistant uuid (%j)", ({ stopReason, selected }) => {
+    const forkNativeSession = vi.fn(async () => ({ sessionId: "independent-copy" }));
+    const layer = makeClaudeAdapterLive({
+      forkNativeSession,
+      readNativeSessionMessages: async () => [
+        {
+          type: "assistant",
+          uuid: "completed-uuid",
+          session_id: SOURCE_SESSION_ID,
+          message: {
+            ...(stopReason === undefined ? {} : { stop_reason: stopReason }),
+            content: [{ type: "text", text: "Finished" }],
           },
-        ],
-      }).pipe(
-        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
-        Layer.provideMerge(NodeServices.layer),
-      );
-      return Effect.gen(function* () {
-        const adapter = yield* ClaudeAdapter;
-        const copied = yield* adapter.forkThread!({
-          sourceThreadId: THREAD_ID,
-          threadId: RESUME_THREAD_ID,
-          sourceCwd: "/repo/source",
-          sourceResumeCursor: { resume: SOURCE_SESSION_ID },
-          runtimeMode: "full-access",
-          requireCompletedSource: true,
-        });
-        assert.deepEqual(forkNativeSession.mock.calls[0], [
-          SOURCE_SESSION_ID,
-          { dir: "/repo/source", upToMessageId: "completed-uuid" },
-        ]);
-        assert.equal((copied.resumeCursor as { resume: string }).resume, "independent-copy");
-        assert.equal((yield* adapter.listSessions()).length, 0);
-      }).pipe(Effect.provide(layer));
-    },
-  );
+          parent_tool_use_id: null,
+          parent_agent_id: null,
+        },
+        ...(selected
+          ? [
+              {
+                type: "assistant" as const,
+                uuid: "future-uuid",
+                session_id: SOURCE_SESSION_ID,
+                message: {
+                  stop_reason: "end_turn",
+                  content: [{ type: "text", text: "Unseen later response" }],
+                },
+                parent_tool_use_id: null,
+                parent_agent_id: null,
+              },
+            ]
+          : []),
+      ],
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const copied = yield* adapter.forkThread!({
+        sourceThreadId: THREAD_ID,
+        threadId: RESUME_THREAD_ID,
+        sourceCwd: "/repo/source",
+        ...(selected ? { throughTurnId: TurnId.makeUnsafe("selected-turn") } : {}),
+        sourceResumeCursor: {
+          resume: SOURCE_SESSION_ID,
+          ...(selected
+            ? {
+                turnBoundaries: [
+                  {
+                    turnId: "selected-turn",
+                    sessionId: SOURCE_SESSION_ID,
+                    assistantUuid: "completed-uuid",
+                  },
+                ],
+              }
+            : {}),
+        },
+        runtimeMode: "full-access",
+        requireCompletedSource: true,
+      });
+      assert.deepEqual(forkNativeSession.mock.calls[0], [
+        SOURCE_SESSION_ID,
+        { dir: "/repo/source", upToMessageId: "completed-uuid" },
+      ]);
+      assert.equal((copied.resumeCursor as { resume: string }).resume, "independent-copy");
+      assert.equal((yield* adapter.listSessions()).length, 0);
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect.each([
     { stopReason: "max_tokens", content: [{ type: "tool_use", id: "pending" }] },
@@ -12400,6 +12598,19 @@ describe("ClaudeAdapterLive forkThread", () => {
         });
       const appleTurnId = yield* runTurn("Remember APPLE", "assistant-apple");
       const bananaTurnId = yield* runTurn("Remember BANANA", "assistant-banana");
+
+      const thirdCompleted = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "Command with no assistant message",
+        attachments: [],
+      });
+      emitSuccessResult(query, SOURCE_SESSION_ID, "no-assistant-result", { input_tokens: 0 });
+      yield* Fiber.join(thirdCompleted);
 
       const cursor = (yield* adapter.listSessions())[0]?.resumeCursor as
         | { readonly turnBoundaries?: unknown }

@@ -164,6 +164,23 @@ export function holdQueuedComposerTurnsForStop(threadId: ThreadId): () => void {
   };
 }
 
+/** Releases the stop acknowledged by a successful manual send, preserving newer queue controls. */
+export function prepareQueuedComposerResumeAfterSend(threadId: ThreadId): () => void {
+  const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+  const stoppedTurnId = draft?.queueStoppedTurnId ?? null;
+  const resumedTurnId = draft?.queueResumedTurnId ?? null;
+  return () => {
+    const drafts = useComposerDraftStore.getState();
+    const current = drafts.draftsByThreadId[threadId];
+    if (
+      (current?.queueStoppedTurnId ?? null) === stoppedTurnId &&
+      (current?.queueResumedTurnId ?? null) === resumedTurnId
+    ) {
+      drafts.resumeQueuedTurns(threadId, null);
+    }
+  };
+}
+
 export function claimQueuedComposerAutoDispatch(threadId: ThreadId): void {
   claimedThreadIds.add(threadId);
 }

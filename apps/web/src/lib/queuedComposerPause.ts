@@ -46,6 +46,9 @@ function turnHitUsageLimit(
       // Activities are chronological; nothing older can belong to this turn.
       break;
     }
+    // Delayed delivery does not transfer an older turn's rejection to this turn.
+    // Providers without turn attribution still use the time boundary above.
+    if (activity.turnId != null && activity.turnId !== latestTurn.turnId) continue;
     if (activity.kind !== "account.rate-limited") continue;
     if (asRecord(activity.payload)?.status === "rejected") {
       return true;
