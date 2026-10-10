@@ -99,6 +99,7 @@ const latestProviderStatusSnapshotByQueryClient = new WeakMap<
 >();
 
 const configRefreshRevisionByQueryClient = new WeakMap<QueryClient, number>();
+const providerConfigHydrationByQueryClient = new WeakMap<QueryClient, Promise<ServerConfig>>();
 
 export function hasReconciledServerProviderStatuses(queryClient: QueryClient): boolean {
   return latestProviderStatusSnapshotByQueryClient.get(queryClient)?.reconciled === true;
@@ -194,11 +195,19 @@ export async function reconcileServerProviderStatuses(
 
   const loadConfig =
     options?.loadConfig ??
-    (() =>
-      queryClient.fetchQuery({
-        ...serverConfigQueryOptions(),
-        staleTime: 0,
-      }));
+    (async () => {
+      const inFlight = providerConfigHydrationByQueryClient.get(queryClient);
+      if (inFlight) return inFlight;
+      // Coalesce initial stream hydration without fetchQuery's automatic cache
+      // write, which would erase a newer cache writer before reconciliation.
+      const request = ensureNativeApi().server.getConfig();
+      providerConfigHydrationByQueryClient.set(queryClient, request);
+      try {
+        return await request;
+      } finally {
+        providerConfigHydrationByQueryClient.delete(queryClient);
+      }
+    });
   const hydratedConfig = await loadConfig();
   const latestSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient) ?? snapshot;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {

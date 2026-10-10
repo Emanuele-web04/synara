@@ -49,6 +49,57 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
 }
 
 describe("server provider status reconciliation", () => {
+  it("keeps a newer config cache write during native initial hydration", async () => {
+    const queryClient = new QueryClient();
+    let resolveConfig!: (config: ServerConfig) => void;
+    nativeApiMocks.getConfig.mockReset();
+    nativeApiMocks.getConfig.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveConfig = resolve;
+        }),
+    );
+    const warningStatus = {
+      ...READY_CODEX_STATUS,
+      status: "warning",
+      checkedAt: "2026-07-26T16:40:00.000Z",
+    } satisfies ServerProviderStatus;
+    const newestStatus = {
+      ...READY_CODEX_STATUS,
+      checkedAt: "2026-07-26T16:42:00.000Z",
+    } satisfies ServerProviderStatus;
+    const hydration = reconcileServerProviderStatuses(queryClient, [warningStatus]);
+    queryClient.setQueryData(serverQueryKeys.config(), {
+      ...makeServerConfig([newestStatus]),
+      cwd: "new-workspace",
+    });
+    resolveConfig(makeServerConfig([READY_CODEX_STATUS]));
+    await hydration;
+
+    const config = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+    expect(config?.providers).toEqual([newestStatus]);
+    expect(config?.cwd).toBe("new-workspace");
+  });
+
+  it("shares native hydration while applying the latest stream membership", async () => {
+    const queryClient = new QueryClient();
+    let resolveConfig!: (config: ServerConfig) => void;
+    nativeApiMocks.getConfig.mockReset();
+    nativeApiMocks.getConfig.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveConfig = resolve;
+        }),
+    );
+    const first = reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+    const second = reconcileServerProviderStatuses(queryClient, []);
+    resolveConfig(makeServerConfig([READY_CODEX_STATUS]));
+    await Promise.all([first, second]);
+
+    expect(nativeApiMocks.getConfig).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([]);
+  });
+
   it("does not restore a removed account when reconnects overlap an older config request", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([READY_CODEX_STATUS]));
