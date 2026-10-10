@@ -69,8 +69,9 @@ describe("deriveTurnStartSession", () => {
   it.each(["starting", "ready", "running"] as const)(
     "does not replace an established %s session with a false Starting state",
     (status) => {
-    expect(derive(makeSession(status))).toBeNull();
-  });
+      expect(derive(makeSession(status))).toBeNull();
+    },
+  );
 
   it("does not overwrite newer terminal state with a delayed start request", () => {
     const recentError = {

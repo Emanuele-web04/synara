@@ -100,9 +100,15 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
     const eventJson = yield* encodeEvent(event).pipe(
       Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.encode")),
     );
+    // Decode the serialized representation before indexing it. Encoders may
+    // normalize branded strings; indexing the pre-encode object can make the
+    // event ID and turn lookup disagree with event_json.
+    const canonicalEvent = yield* decodeEvent(eventJson).pipe(
+      Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.normalize")),
+    );
     const originalBytes = Buffer.byteLength(eventJson, "utf8");
     if (originalBytes <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-      return { event, eventJson };
+      return { event: canonicalEvent, eventJson };
     }
 
     // Shrink oversized string leaves so one huge tool output no longer strands
@@ -110,15 +116,17 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
     // marker (its own copy of the tool output would otherwise re-blow the
     // budget), while source/method/messageType survive for diagnostics.
     const compactedEvent = {
-      ...event,
-      payload: shrinkRuntimeEventStrings(event.payload),
-      ...(event.raw !== undefined
+      ...canonicalEvent,
+      payload: shrinkRuntimeEventStrings(canonicalEvent.payload),
+      ...(canonicalEvent.raw !== undefined
         ? {
             raw: {
-              source: event.raw.source,
-              ...(event.raw.method !== undefined ? { method: event.raw.method } : {}),
-              ...(event.raw.messageType !== undefined
-                ? { messageType: event.raw.messageType }
+              source: canonicalEvent.raw.source,
+              ...(canonicalEvent.raw.method !== undefined
+                ? { method: canonicalEvent.raw.method }
+                : {}),
+              ...(canonicalEvent.raw.messageType !== undefined
+                ? { messageType: canonicalEvent.raw.messageType }
                 : {}),
               payload: {
                 synaraTruncated: true,
@@ -133,7 +141,10 @@ const encodePersistableEvent = (event: ProviderRuntimeEvent) =>
       Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.compact")),
     );
     if (Buffer.byteLength(compactedJson, "utf8") <= PROVIDER_RUNTIME_EVENT_MAX_BYTES) {
-      return { event: compactedEvent, eventJson: compactedJson };
+      const normalizedCompactedEvent = yield* decodeEvent(compactedJson).pipe(
+        Effect.mapError(toPersistenceDecodeError("ProviderRuntimeEvent.append.normalizeCompacted")),
+      );
+      return { event: normalizedCompactedEvent, eventJson: compactedJson };
     }
 
     return yield* new PersistenceDecodeError({

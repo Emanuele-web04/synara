@@ -10,7 +10,13 @@ import {
 } from "./claudeTokenUsage";
 
 describe("Claude explicit compact overrides", () => {
-  it.each(["claude-opus-4-6", "claude-sonnet-4-6", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-5-5"])(
+  it.each([
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-fable-5-1",
+    "claude-sonnet-5",
+    "claude-haiku-5-5",
+  ])(
     "preserves both explicit budgets on %s and can return to auto",
     (model) => {
       for (const [value, tokens] of [

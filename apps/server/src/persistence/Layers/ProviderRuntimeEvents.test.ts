@@ -41,6 +41,34 @@ const runtimeEvent = (eventId: string, delta: string): ProviderRuntimeEvent => (
   },
 });
 
+it.effect("indexes the same canonical event identity that the journal serializes", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    const persisted = yield* repository.append(runtimeEvent("index-canonical-1", "Hello"));
+    const rows = yield* sql<{
+      eventId: string;
+      threadId: string;
+      turnId: string;
+      eventType: string;
+      eventJson: string;
+    }>`
+      SELECT event_id AS "eventId", thread_id AS "threadId",
+        turn_id AS "turnId", event_type AS "eventType", event_json AS "eventJson"
+      FROM provider_runtime_events
+      WHERE sequence = ${persisted.sequence}
+    `;
+    assert.lengthOf(rows, 1);
+    const row = rows[0]!;
+    const stored = JSON.parse(row.eventJson);
+    assert.deepEqual(
+      [row.eventId, row.threadId, row.turnId, row.eventType],
+      [stored.eventId, stored.threadId, stored.turnId, stored.type],
+    );
+    assert.strictEqual(row.eventId, persisted.event.eventId);
+  }).pipe(Effect.provide(layer)),
+);
+
 const insertLiveProjectionThread = (threadId: string, createdAt: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

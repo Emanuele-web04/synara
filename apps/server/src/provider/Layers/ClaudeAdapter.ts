@@ -1105,7 +1105,10 @@ function mapClaudeModelInfo(model: ModelInfo): ProviderListModelsResult["models"
             ),
           ],
         };
-  const optionDescriptors = getProviderOptionDescriptors({ provider: PROVIDER, caps: capabilities });
+  const optionDescriptors = getProviderOptionDescriptors({
+    provider: PROVIDER,
+    caps: capabilities,
+  });
   return {
     slug: model.value,
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
