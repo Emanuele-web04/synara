@@ -431,6 +431,21 @@ function instanceUsageContext(
   };
 }
 
+/** Uses the same account-scoped context and cache as Settings. */
+export function getProviderInstanceUsageSnapshot(
+  instance: ResolvedProviderInstance,
+  ctx: ProviderUsageContext,
+  stateDir: string,
+  baseDir: string,
+  forceRefresh = false,
+): Promise<ServerProviderUsageSnapshot | null> {
+  return getProviderUsageSnapshot(
+    instance.driver,
+    instanceUsageContext(instance, ctx, stateDir, baseDir),
+    forceRefresh,
+  );
+}
+
 export const listProviderUsage = Effect.fn(function* (input: ServerListProviderUsageInput) {
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
@@ -460,9 +475,11 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
       };
       const settled = await Promise.allSettled(
         selected.map(async (instance) =>
-          getProviderUsageSnapshot(
-            instance.driver,
-            instanceUsageContext(instance, ctx, serverConfig.stateDir, serverConfig.baseDir),
+          getProviderInstanceUsageSnapshot(
+            instance,
+            ctx,
+            serverConfig.stateDir,
+            serverConfig.baseDir,
             input.forceRefresh === true,
           ),
         ),
