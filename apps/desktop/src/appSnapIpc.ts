@@ -1,8 +1,3 @@
-// FILE: appSnapIpc.ts
-// Purpose: Centralizes the desktop AppSnap IPC contract and renderer push events.
-// Layer: Desktop IPC adapter
-// Depends on: Electron IPC and DesktopAppSnapManager.
-
 import type { IpcMain, WebContents } from "electron";
 import type {
   DesktopAppSnapCapture,

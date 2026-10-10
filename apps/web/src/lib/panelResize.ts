@@ -1,25 +1,11 @@
-// FILE: panelResize.ts
-// Purpose: Pure DOM helpers for chat/split panel resizing — the drag overlay that
-//          keeps pointer events in the React layer over Electron <webview>s, the
-//          cross-surface occlusion notification, and the composer width feasibility
-//          probe. Extracted from the chat route so the route file holds
-//          orchestration, not low-level DOM measurement.
-// Layer: Web panel layout utilities
-
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "./chatPaneScope";
 import { findNearestMeasurableAncestor } from "./domLayout";
 import { notifyNativeSurfaceOcclusionChange } from "./nativeSurfaceOcclusion";
 
-// Minimum width (px) the composer's left controls cluster needs before it overflows.
-// Kept intentionally lean: this is only a soft buffer, since canComposerHandlePanelWidth
-// also blocks on real overflow (hasComposerOverflow / overflowsViewport). A smaller value
-// lets the right dock and split panes resize across a much wider range before the probe
-// stops the drag, while the overflow checks still prevent the composer from clipping.
+// intentionally lean soft buffer — the real overflow checks still block clipping; a smaller value lets panes resize across a wider range before the probe stops the drag
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 160;
 
-// Probe whether the composer can render at `nextWidth` without overflowing its
-// viewport or violating its minimum control width. Applies the width, measures,
-// then resets — callers own the real commit.
+// apply the width, measure, reset — callers own the real commit
 export function canComposerHandlePanelWidth(input: {
   nextWidth: number;
   paneScopeId?: string;
@@ -30,9 +16,7 @@ export function canComposerHandlePanelWidth(input: {
   const composerForm = findComposerForm(paneScopeId);
   if (!composerForm) return true;
 
-  // The form can be nested inside boxless wrappers (e.g. ChatView's
-  // `display: contents` landing wrapper); measuring those as the viewport would
-  // reject every width and freeze dock/split resizing.
+  // the form can sit inside boxless wrappers (display:contents landing wrapper); measuring those as viewport would reject every width and freeze resizing
   const composerViewport = findNearestMeasurableAncestor(composerForm);
   if (!composerViewport) return true;
 
@@ -69,7 +53,6 @@ export function canComposerHandlePanelWidth(input: {
   return !hasComposerOverflow && !overflowsViewport && !violatesMinimumComposerWidth;
 }
 
-// Finds the composer for one pane without depending on CSS selector escaping.
 function findComposerForm(paneScopeId: string): HTMLElement | null {
   const composerForms = document.querySelectorAll<HTMLElement>("[data-chat-composer-form='true']");
   for (const composerForm of composerForms) {
@@ -80,7 +63,7 @@ function findComposerForm(paneScopeId: string): HTMLElement | null {
   return null;
 }
 
-// Electron <webview> can swallow pointermove during drag; this keeps resizing in the React layer.
+// Electron <webview> can swallow pointermove during drag — keeps resizing in the React layer
 export function createPanelResizeOverlay(cursor = "col-resize"): HTMLDivElement {
   const overlay = document.createElement("div");
   overlay.setAttribute("data-panel-resize-overlay", "true");

@@ -10,16 +10,9 @@ type OpenedConnection = Awaited<ReturnType<typeof openBetterwrightConnection>>;
 
 export interface SynaraHostTarget extends HostTarget {
   run: NonNullable<HostTarget["run"]>;
-  /** Immediately revoke every transport this adapter vended; callers race worker shutdown. */
   revokeAll(cancel?: boolean): Promise<void>;
 }
 
-/**
- * Synara's HostTarget adapter. Browser tabs share a persistent Electron
- * session, so the guard proxy is installed on the session for the duration of
- * each lease. This covers navigations, subresources, WebSockets, and workers;
- * the proxy resolves and dials the validated address itself.
- */
 export function synaraHostTarget(
   contents: WebContents,
   options: {
@@ -73,9 +66,6 @@ export function synaraHostTarget(
 
   return {
     connect({ proxyUrl }) {
-      // Serializing connects prevents parallel opens from overwriting lease
-      // ownership. Revocation uses the separate proxy queue so a stalled CDP
-      // open cannot prevent teardown.
       const result = connecting.then(async () => {
         if (!proxyUrl) throw new Error("Browser network guard is unavailable.");
         assertAvailable();
@@ -89,8 +79,6 @@ export function synaraHostTarget(
             } else if (networkGuardLease && networkGuardLease.proxyUrl !== proxyUrl) {
               await drainConnections(false);
               assertAvailable();
-              // Rotation belongs to the same run. Keep its session turn so a
-              // queued sibling cannot take over between worker generations.
               await networkGuardLease.lease.replace(proxyUrl, leaseSignal);
               networkGuardLease.proxyUrl = proxyUrl;
             }
@@ -125,7 +113,6 @@ export function synaraHostTarget(
             close: () => closeConnection(connection, false),
           };
         } catch (error) {
-          // Failed setup, rotation, or open must not strand the session's turn.
           await changeProxy(async () => {
             if (connections.size === 0) await releaseProxy();
           });
@@ -154,9 +141,6 @@ export function synaraHostTarget(
     revokeAll(cancel = true) {
       revoked = true;
       lifetime.abort(new Error("Browser control was interrupted."));
-      // Cancel in-flight leases without waiting for them: a never-settling
-      // open must not stall teardown. connect() refuses to vend once its
-      // opening settles. No later connect may revive this target.
       for (const opening of pending) {
         void opening.then(
           (connection) => connection.close(true).catch(() => {}),

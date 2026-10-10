@@ -1,9 +1,3 @@
-// FILE: SettingControls.tsx
-// Purpose: Reusable settings row controls (reset button, select, segmented control).
-// Layer: Settings UI components
-// Exports: SettingResetButton, SettingsSelectControl, SettingsSegmentedControl,
-//          useSettingsRestoreSignal
-
 import { type ReactNode, useEffect, useEffectEvent, useRef } from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";

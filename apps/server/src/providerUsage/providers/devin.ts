@@ -1,8 +1,3 @@
-// FILE: providerUsage/providers/devin.ts
-// Purpose: Live Devin usage fetcher. Reads WINDSURF_API_KEY / DEVIN_API_KEY or the
-// API key stored by `devin auth login`, then calls SeatManagementService/GetUserStatus
-// on the configured Devin/Windsurf API server (default server.codeium.com).
-
 import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/contracts";
 
 import {

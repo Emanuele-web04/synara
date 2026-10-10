@@ -1,7 +1,3 @@
-// FILE: storeState.ts
-// Purpose: Defines the normalized web-store state shape and stable empty slice sentinels.
-// Exports: AppState, its initial value, and immutable empty normalized records.
-
 import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
 
 import type {
@@ -52,8 +48,7 @@ export interface AppState {
   deletedThreadIdsById?: Record<ThreadId, number>;
 }
 
-// These references are shared by selectors and projection writes. Keep them stable
-// so empty fallbacks cannot create render loops or needless outer-record churn.
+// These references are shared by selectors and projection writes. Keep them stable so empty fallbacks cannot create render loops or needless outer-record churn.
 export const EMPTY_THREAD_IDS: ThreadId[] = [];
 Object.freeze(EMPTY_THREAD_IDS);
 export const EMPTY_THREAD_SHELL_BY_ID: Record<ThreadId, ThreadShell> = {};

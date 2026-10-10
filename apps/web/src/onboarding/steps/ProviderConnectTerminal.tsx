@@ -1,9 +1,3 @@
-// FILE: ProviderConnectTerminal.tsx
-// Purpose: Inline terminal that runs a provider's sign-in command inside the welcome tour.
-//          Uses a synthetic thread scope so nothing leaks into real thread terminal state,
-//          and disposes every session on unmount.
-// Layer: Web UI component
-
 import type { ProviderKind } from "@synara/contracts";
 import { useEffect, useRef } from "react";
 

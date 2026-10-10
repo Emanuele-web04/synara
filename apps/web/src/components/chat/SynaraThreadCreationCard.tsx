@@ -1,7 +1,3 @@
-// FILE: SynaraThreadCreationCard.tsx
-// Purpose: End-of-turn recap for threads created through the Synara MCP harness.
-// Layer: Chat transcript UI
-
 import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
 import { formatModelDisplayName } from "@synara/shared/model";
 import { memo } from "react";

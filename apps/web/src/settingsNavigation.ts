@@ -27,11 +27,7 @@ export const SETTINGS_SECTION_IDS = [
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
 export type SettingsNavGroupId = "personal" | "integrations" | "coding" | "system" | "archived";
 
-/**
- * Deep-link scroll targets inside settings panels. Each id is shared by its DOM owner and callers
- * that navigate with `?target=…`; the settings route resolves every target after the active panel
- * mounts.
- */
+// deep-link targets shared by the DOM owner and `?target=…` callers — the route resolves them after the active panel mounts
 export const SETTINGS_TARGETS = {
   providerUpdates: "provider-updates",
   providerInstalls: "provider-installs",
@@ -43,7 +39,6 @@ export type SettingsNavItem = {
   group: SettingsNavGroupId;
   label: string;
   description: string;
-  /** Basename of a SVG under `/central-icons-reversed`. */
   icon: string;
   eyebrow: string;
   /**
@@ -198,12 +193,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
 ] as const;
 
-/**
- * Stable DOM id for a settings row, derived from its (string) title. Shared by the row that
- * renders the anchor and by the search index that deep-links to it via `?target=…`, so the
- * two can't drift. Panels stay mounted and render null while inactive, so the slug only needs
- * to be unique within a section.
- */
+// DOM id shared by the row and the search index so they can't drift; panels stay mounted, so unique-within-section suffices
 export function settingRowAnchorId(title: string): string {
   const slug = title
     .toLowerCase()

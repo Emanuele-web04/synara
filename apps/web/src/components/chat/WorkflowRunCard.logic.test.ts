@@ -1,10 +1,3 @@
-// FILE: WorkflowRunCard.logic.test.ts
-// Purpose: Locks workflow run panel derivation to task-activity folding: workflow
-// identity, agent rows from progress descriptions and tagged member tasks, phase
-// rail grouping, pause/resume identifiers, and settled-card visibility.
-// Layer: Web chat composer tests
-// Depends on: deriveWorkflowRunState
-
 import { EventId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

@@ -1,8 +1,3 @@
-// FILE: browserDownload.test.ts
-// Purpose: Verifies blob-backed downloads do not fall back to top-level navigation on failures.
-// Layer: Web utility tests
-// Depends on: browserDownload helpers with mocked Fetch and DOM anchor APIs.
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { downloadUrlAsBlob } from "./browserDownload";

@@ -54,8 +54,7 @@ function DialogViewport({ className, ...props }: DialogPrimitive.Viewport.Props)
 const dialogPopupClassName =
   "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-3xl border border-[color:var(--color-border-light)] bg-popover text-[var(--color-text-foreground)] shadow-[0_16px_50px_-12px_rgba(0,0,0,0.34)] dark:shadow-[0_16px_50px_-12px_rgba(0,0,0,0.7)] opacity-[calc(1-0.1*var(--nested-dialogs))] transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0";
 
-// Capsule-shaped buttons (class contains `rounded-full`) keep their own pill
-// geometry in footers, so they are excluded from the sizing override.
+// capsule buttons (rounded-full) keep their own pill geometry in footers — excluded from the sizing override
 const dialogFooterButtonSlotSelector =
   "[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7']):not([class*='rounded-full'])]";
 

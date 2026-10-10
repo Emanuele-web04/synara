@@ -1,6 +1,3 @@
-// Reproducible Mic post-processing benchmark. Run with:
-// bun apps/web/scripts/voice-processing-benchmark.ts
-
 import { encodeVoiceRecordingWav } from "../src/lib/voiceRecorderEncoding";
 
 const TARGET_SAMPLE_RATE = 24_000;

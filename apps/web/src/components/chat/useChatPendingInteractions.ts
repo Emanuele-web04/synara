@@ -167,9 +167,7 @@ export function useChatPendingInteractions({
         : null,
     [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
   );
-  // Read once here for the same reason as `activeLatestTurnId`: an `activePendingProgress?.x`
-  // read inside a memo body makes React Compiler infer `activePendingProgress` as the
-  // dependency, which no longer matches the hand-written property-path dep.
+  // read once here: a `activePendingProgress?.x` read inside the memo makes React Compiler infer a dep that doesn't match the hand-written property-path dep
   const activePendingQuestion = activePendingProgress?.activeQuestion ?? null;
   const activePendingResolvedAnswers = useMemo(
     () =>
@@ -294,8 +292,7 @@ export function useChatPendingInteractions({
             ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
             createdAt: new Date().toISOString(),
           });
-          // Refresh identities and settlement after command acceptance; acceptance
-          // alone does not mean Claude received the answer.
+          // refresh identities and settlement after acceptance; acceptance alone doesn't mean Claude received the answer
           clearThreadDetailResumeCursor(activeThreadId);
           await api.orchestration.subscribeThread(buildThreadSubscribeInput(activeThreadId));
         })

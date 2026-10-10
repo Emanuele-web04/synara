@@ -1,7 +1,3 @@
-// FILE: composerDraftActions.ts
-// Purpose: Constructs the ComposerDraftStoreState actions while preserving granular thread identity.
-// Exports: Zustand state creator consumed by the public facade.
-
 import {
   type ModelSelection,
   type ProviderKind,
@@ -929,7 +925,6 @@ export const createComposerDraftStoreState =
         const base = existing ?? createEmptyThreadDraft();
         const nextMap = { ...base.modelSelectionByProvider };
         for (const provider of COMPOSER_PROVIDER_KINDS) {
-          // Only touch providers explicitly present in the input
           if (!normalizedOpts || !(provider in normalizedOpts)) continue;
           const opts = normalizedOpts[provider];
           const selectionKey = providerInstanceModelSelectionKey(provider);
@@ -979,7 +974,6 @@ export const createComposerDraftStoreState =
       if (normalizedProvider === null) {
         return;
       }
-      // Normalize just this provider's options
       const normalizedOpts = normalizeProviderModelOptions(
         { [normalizedProvider]: nextProviderOptions },
         normalizedProvider,
@@ -993,7 +987,6 @@ export const createComposerDraftStoreState =
         const existing = state.draftsByThreadId[threadId];
         const base = existing ?? createEmptyThreadDraft();
 
-        // Update the map entry for this provider
         const nextMap = { ...base.modelSelectionByProvider };
         const selectionKey = providerInstanceModelSelectionKey(
           normalizedProvider,
@@ -1026,7 +1019,6 @@ export const createComposerDraftStoreState =
           );
         }
 
-        // Handle sticky persistence
         let nextStickyMap = state.stickyModelSelectionByProvider;
         let nextStickyActiveProvider = state.stickyActiveProvider;
         if (options?.persistSticky === true) {
@@ -1881,8 +1873,7 @@ export const createComposerDraftStoreState =
       }
       set((state) => {
         const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
-        // Same PR + scope replaces the older card in place so a re-click refreshes the
-        // snapshot instead of stacking duplicate bubbles.
+        // same PR+scope replaces the older card in place so a re-click refreshes the snapshot instead of stacking duplicates
         const dedupKey = pullRequestContextDedupKey(normalized);
         const kept = existing.pullRequestContexts.filter(
           (entry) => pullRequestContextDedupKey(entry) !== dedupKey && entry.id !== normalized.id,

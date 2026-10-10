@@ -50,7 +50,7 @@ export interface AgentGatewayProviderCatalog {
 
 export interface AgentGatewayProviderAvailability {
   readonly enabled: boolean;
-  /** Undefined means health has not produced a trustworthy snapshot yet. */
+  /** undefined means health hasn't produced a trustworthy snapshot yet */
   readonly available?: boolean;
   readonly authStatus?: ServerProviderAuthStatus;
   readonly message?: string;
@@ -409,8 +409,7 @@ function modelTargetOptionRules(
 
   const discoveredEfforts = model.supportedReasoningEfforts?.map((entry) => entry.value) ?? [];
   const primaryOptionKey = providerPrimaryOptionKey(provider);
-  // A custom-value primary option (e.g. Devin modelVariant) accepts arbitrary
-  // values, so the discovered reasoning-effort list must not constrain it.
+  // a custom-value primary option accepts arbitrary values — the discovered effort list must not constrain it
   if (rules.find((rule) => rule.key === primaryOptionKey)?.allowsCustomValue !== true) {
     replaceAllowedValues(primaryOptionKey, discoveredEfforts);
   }
@@ -470,7 +469,7 @@ function exampleOptionsForRules(
   return value === null ? {} : { [exampleRule.key]: value };
 }
 
-/** Compact, typed construction guidance returned before the full model catalog. */
+/** compact typed guidance returned before the full model catalog */
 export function agentGatewayTargetOptionGuidance(
   catalog: AgentGatewayProviderCatalog,
 ): AgentGatewayTargetOptionGuidance {
@@ -674,7 +673,7 @@ function validateAdvertisedOption(
   }
 }
 
-/** Resolve an exact advertised target before any git/orchestration side effect. */
+/** resolve an exact advertised target before any git/orchestration side effect */
 export function resolveAgentGatewayTarget(input: {
   readonly target: ModelSelection;
   readonly discovery: ProviderDiscoveryServiceShape;
@@ -824,8 +823,7 @@ export function resolveAgentGatewayTarget(input: {
       if (error instanceof AgentGatewayTargetError) return yield* Effect.fail(error);
       throw error;
     }
-    // Explicit Claude windows must reach the runtime with the same concrete model
-    // whose capabilities were discovered; custom SDK aliases have no static caps.
+    // explicit Claude windows must reach the runtime with the concrete model whose capabilities were discovered
     if (
       input.target.provider === "claudeAgent" &&
       (input.target.options?.autoCompactWindow !== undefined ||

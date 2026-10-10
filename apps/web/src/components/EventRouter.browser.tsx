@@ -86,8 +86,7 @@ import {
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { createWsNativeApi, resetWsNativeApiForTest } from "../wsNativeApi";
 import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
-// Pre-transform the compiler-heavy component before the first hydration deadline.
-// This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
+// pre-transform the compiler-heavy component before the first hydration deadline — this suite runs on its own CI shard so ChatView's suite can't warm it first
 import "./ChatView";
 import { toastManager } from "./ui/toast";
 
@@ -479,8 +478,7 @@ async function mountApp(options?: {
           expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         ).toBe(true);
       },
-      // The first Chromium/MSW mount can spend more than 40 seconds compiling
-      // the full desktop route graph on a cold Windows dev cache.
+      // The first Chromium/MSW mount can spend more than 40 seconds compiling the full desktop route graph on a cold Windows dev cache.
       { timeout: 60_000, interval: 16 },
     );
   } catch (cause) {
@@ -1581,8 +1579,7 @@ describe("EventRouter scoped orchestration sync", () => {
         expect(getThreadDetailSnapshotRequestCount).toBe(1);
       }
 
-      // Each replay was empty, but skipped reconciles must not move the real-fetch
-      // deadline to 135 seconds by adding their backoff delays together.
+      // Each replay was empty, but skipped reconciles must not move the real-fetch deadline to 135 seconds by adding their backoff delays together.
       now = lastSnapshotAt + 72_000;
       await vi.waitFor(() => expect(getThreadDetailSnapshotRequestCount).toBe(2), {
         timeout: 4_000,
@@ -1732,9 +1729,7 @@ describe("EventRouter scoped orchestration sync", () => {
   }, 120_000);
 
   it("keeps the terminal fence until a post-settle snapshot includes the assistant reply", async () => {
-    // Mirrors #548: session-set lands (and a premature detail snapshot is taken)
-    // before buffered assistant finals are projected. Clearing the fence on that
-    // first snapshot left the UI spinning until a full reload.
+    // Mirrors #548: session-set lands (and a premature detail snapshot is taken) before buffered assistant finals are projected. Clearing the fence on that first snapshot left the UI spinning until a full reload.
     const turnId = TurnId.makeUnsafe("turn-fence-premature-snapshot");
     const finalMessageId = MessageId.makeUnsafe("msg-fence-premature-final");
     const startedAt = "2026-03-04T12:00:04.000Z";
@@ -1766,8 +1761,7 @@ describe("EventRouter scoped orchestration sync", () => {
 
     try {
       const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
-      // Premature authoritative projection: terminal at the session-set sequence,
-      // with an assistantMessageId that has not been projected into messages yet.
+      // Premature authoritative projection: terminal at the session-set sequence, with an assistantMessageId that has not been projected into messages yet.
       fixture = {
         ...fixture,
         snapshot: {
@@ -2013,10 +2007,7 @@ describe("EventRouter scoped orchestration sync", () => {
         },
       };
 
-      // Deliver only the terminal session transition, not the final message.
-      // The reducer now considers the session and turn terminal, but the stale
-      // streaming message must keep projection repair eligible until the
-      // authoritative detail snapshot closes it.
+      // deliver only the terminal session transition, not the final message — the reducer now considers session+turn terminal but the stale streaming message must keep projection repair eligible until the authoritative detail snapshot closes it
       sendThreadEventPush({
         sequence: 3,
         eventId: EventId.makeUnsafe("event-missed-completion-session-ready"),
@@ -2151,8 +2142,7 @@ describe("EventRouter scoped orchestration sync", () => {
       });
 
       sendPendingThreadDetailSnapshotResponse();
-      // Let the RPC continuation run before asserting that the older snapshot
-      // did not roll back the just-applied stream event.
+      // Let the RPC continuation run before asserting that the older snapshot did not roll back the just-applied stream event.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
 
       expect(pendingThreadDetailSnapshotResponse).toBeNull();
@@ -2512,8 +2502,7 @@ describe("EventRouter scoped orchestration sync", () => {
         ],
       };
 
-      // Deliberately do not push either a shell upsert or a thread stream item.
-      // The periodic direct projection read must promote the visible draft.
+      // Deliberately do not push either a shell upsert or a thread stream item. The periodic direct projection read must promote the visible draft.
       await vi.waitFor(
         () => {
           expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(

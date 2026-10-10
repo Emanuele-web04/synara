@@ -1,8 +1,3 @@
-// FILE: terminalCloseConfirmation.test.ts
-// Purpose: Verifies shared terminal close confirmation copy and dialog behavior.
-// Layer: UI logic helper tests
-// Depends on: terminalCloseConfirmation helpers and Vitest mocks.
-
 import { describe, expect, it, vi } from "vitest";
 
 import {

@@ -1,10 +1,4 @@
-// GFM rejects an entire table when the delimiter row's cell count differs from
-// the header row's, so the block falls back to a paragraph — and there soft line
-// breaks render as spaces, collapsing the table into one run-on wall of pipes.
-// Models emit this malformation regularly (e.g. a three-column header over a
-// `|---|---|` delimiter), so before rendering we repair the delimiter row to the
-// header's cell count: pad missing cells with `---`, drop extras. Only the
-// delimiter row is ever rewritten; header and body rows stay byte-for-byte.
+// GFM rejects a table when the delimiter row's cell count differs from the header's — it then renders as a paragraph where line breaks collapse into a run-on wall of pipes. Models emit this regularly, so repair the delimiter row to the header's count (pad with ---, drop extras); only the delimiter row is rewritten
 
 const DELIMITER_CELL_REGEX = /^:?-+:?$/;
 const CODE_FENCE_REGEX = /^ {0,3}(`{3,}|~{3,})(.*)$/;
@@ -38,9 +32,7 @@ function leadingIndentWidth(line: string): number {
   return width;
 }
 
-// Splits a table row into cells the way GFM does: any unescaped pipe divides
-// cells (even inside inline code — GFM requires `\|` there too), and the
-// leading/trailing pipes do not delimit extra empty cells.
+// GFM: any unescaped pipe divides cells (even inside inline code — `\|` is required there); leading/trailing pipes don't delimit empty cells
 function splitRowCells(line: string): string[] | null {
   const trimmed = line.trim();
   if (!trimmed.includes("|")) {
@@ -94,8 +86,7 @@ export function repairMarkdownTableDelimiters(value: string): string {
     const line = lines[index] ?? "";
     const fenceMatch = matchCodeFence(line);
     if (fence) {
-      // A closing fence uses the same marker, at least the opening length, and
-      // carries no info string.
+      // A closing fence uses the same marker, at least the opening length, and carries no info string.
       if (
         fenceMatch &&
         fenceMatch.marker === fence.marker &&
@@ -120,8 +111,7 @@ export function repairMarkdownTableDelimiters(value: string): string {
     }
 
     const header = lines[index - 1] ?? "";
-    // Indented code, blockquotes, and delimiter-shaped headers are not the
-    // header row of a table this delimiter belongs to.
+    // Indented code, blockquotes, and delimiter-shaped headers are not the header row of a table this delimiter belongs to.
     if (leadingIndentWidth(header) >= 4 || header.trimStart().startsWith(">")) {
       continue;
     }
@@ -133,9 +123,7 @@ export function repairMarkdownTableDelimiters(value: string): string {
     ) {
       continue;
     }
-    // Only the first row of a block can be a table header: a pipe-delimited
-    // line above means `header` is a body row of an ongoing table (or part of
-    // a pipe-heavy paragraph) and this dashed line is content, not a delimiter.
+    // only a block's first row can be a table header — a pipe-delimited line above means `header` is a body row and this dashed line is content
     const preceding = index >= 2 ? (lines[index - 2] ?? "") : "";
     if (preceding.trim() !== "" && preceding.includes("|")) {
       continue;

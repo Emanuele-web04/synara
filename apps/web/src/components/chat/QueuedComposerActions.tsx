@@ -1,10 +1,3 @@
-// FILE: QueuedComposerActions.tsx
-// Purpose: Inline action cluster (Steer / Delete / Menu) rendered on each queued
-// composer row. Used in both the compact and expanded composer layouts so the
-// action chrome stays in lockstep across surfaces.
-// Layer: Chat composer UI primitive
-// Exports: QueuedComposerActions
-
 import { EllipsisIcon, SteerIcon, Trash2 } from "~/lib/icons";
 
 import type { QueuedComposerTurn } from "../../composerDraftStore";

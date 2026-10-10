@@ -1,7 +1,3 @@
-// FILE: robots.ts
-// Purpose: Generates /robots.txt for search, AI discovery, and sitemap hints.
-// Layer: Next.js metadata route.
-
 import type { MetadataRoute } from "next";
 import {
   AI_DISCOVERY_PATHS,

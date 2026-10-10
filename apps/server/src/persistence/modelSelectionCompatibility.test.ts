@@ -1,8 +1,3 @@
-// FILE: modelSelectionCompatibility.test.ts
-// Purpose: Protects provider inference and option normalization for persisted model selections.
-// Layer: Persistence compatibility tests
-// Depends on: modelSelectionCompatibility.
-
 import { assert, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 

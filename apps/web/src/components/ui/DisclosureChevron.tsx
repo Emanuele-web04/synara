@@ -1,8 +1,3 @@
-// FILE: DisclosureChevron.tsx
-// Purpose: Shared rotating chevron used by collapsible headers across chat and sidebar surfaces.
-// Layer: UI primitive
-// Exports: DisclosureChevron
-
 import { ChevronRightIcon } from "~/lib/icons";
 import { disclosureChevronClassName } from "~/lib/disclosureMotion";
 import { cn } from "~/lib/utils";

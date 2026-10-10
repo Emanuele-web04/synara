@@ -1,7 +1,3 @@
-// FILE: platformEnvironment.ts
-// Purpose: Resolves platform-owned executable locations from an already hydrated environment.
-// Layer: Shared platform runtime
-
 import * as Path from "node:path";
 
 function trimNonEmpty(value: string | null | undefined): string | null {

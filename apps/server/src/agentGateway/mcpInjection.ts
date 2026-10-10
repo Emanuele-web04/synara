@@ -84,12 +84,7 @@ export interface OpenCodeMcpRemoteServerConfig {
   readonly oauth: false;
 }
 
-/**
- * OpenCode's dynamic `mcp.add` endpoint is server/directory scoped rather
- * than session scoped. Callers must install this config through either a
- * provider process dedicated to the owning Synara thread or an exclusive
- * external-server/directory lock held for the full agent turn.
- */
+/** mcp.add is server/directory scoped — callers must use a dedicated provider process or an exclusive directory lock for the turn */
 export function buildOpenCodeMcpServer(
   connection: AgentGatewayMcpConnection,
 ): OpenCodeMcpRemoteServerConfig {
@@ -158,7 +153,7 @@ async function postAgentGatewayJsonRpc(input: {
   return payload.result;
 }
 
-/** Load the canonical gateway tool descriptors for native-tool providers. */
+/** canonical gateway tool descriptors for native-tool providers */
 export async function listAgentGatewayMcpTools(input: {
   readonly connection: AgentGatewayMcpConnection;
   readonly fetch?: AgentGatewayMcpFetch;
@@ -188,7 +183,7 @@ export async function listAgentGatewayMcpTools(input: {
   });
 }
 
-/** Invoke the canonical gateway dispatcher through its authenticated MCP route. */
+/** invoke the canonical dispatcher through the authenticated MCP route */
 export function callAgentGatewayMcpTool(input: {
   readonly connection: AgentGatewayMcpConnection;
   readonly name: string;
@@ -232,17 +227,7 @@ export interface AntigravityMcpPluginConfig {
   >;
 }
 
-/**
- * Build the secret-free MCP fragment installed with Synara's Antigravity
- * plugin. Antigravity expands the endpoint plus a one-shot bootstrap value
- * from each `agy` process. The stdio proxy consumes that value during MCP
- * initialization and keeps the exchanged session bearer in its own memory,
- * so `run_command` descendants never inherit the bearer.
- *
- * `ELECTRON_RUN_AS_NODE` keeps the generated proxy runnable when a packaged
- * desktop uses its Electron executable as `process.execPath`; it is harmless
- * for regular Node and Bun executables.
- */
+/** one-shot bootstrap exchange: the stdio proxy consumes it during MCP init so run_command descendants never inherit the bearer; ELECTRON_RUN_AS_NODE keeps the proxy runnable under a packaged desktop's execPath */
 export function buildAntigravityMcpPluginConfig(
   stdioProxy: AcpStdioProxySpawn,
 ): AntigravityMcpPluginConfig {
@@ -263,8 +248,7 @@ export function buildAntigravityMcpPluginConfig(
   };
 }
 
-// Structural view of an ACP initialize response so callers with untyped
-// (raw JSON) responses can reuse the same transport negotiation.
+// structural view of an ACP initialize response so raw-JSON callers reuse the same negotiation
 export interface AcpInitializeCapabilitiesView {
   readonly agentCapabilities?: {
     readonly mcpCapabilities?: {
@@ -273,12 +257,7 @@ export interface AcpInitializeCapabilitiesView {
   } | null;
 }
 
-/**
- * Build the `mcpServers` entries for an ACP `session/new` / `session/load`
- * payload. Prefers the HTTP transport when the agent advertises support and
- * falls back to the stdio->HTTP proxy script otherwise (stdio is the ACP
- * baseline every agent must accept).
- */
+/** prefer HTTP when the agent advertises support, else the stdio→HTTP proxy (stdio is the ACP baseline every agent must accept) */
 export function buildAcpSynaraMcpServers(input: {
   readonly connection: AgentGatewayMcpConnection;
   readonly initializeResult: AcpInitializeCapabilitiesView;

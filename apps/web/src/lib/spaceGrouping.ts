@@ -1,9 +1,4 @@
-// FILE: spaceGrouping.ts
-// Purpose: One ordering, naming, and labelling rule for every list that groups projects by Space.
-// Layer: Spaces presentation utility
-// Why: The composer project picker, the sidebar project menu, and the bulk move dialog each
-//      rebuilt "active space first, then Void, then the rest" plus the `Name · Active` label by
-//      hand. Three copies drift; this is the single source they all read from.
+// the composer picker, sidebar menu, and bulk-move dialog each rebuilt "active space first, then Void, then the rest" by hand — three copies drift, this is the single source
 
 import {
   RESERVED_VOID_SPACE_ID,
@@ -14,18 +9,11 @@ import {
 
 import type { Space } from "~/types";
 
-/**
- * Void is not a stored Space, so its name and icon are defaults here rather than a row.
- * "Void" is Synara's word, not the user's — the presentation is overridable per install
- * (see `voidSpaceStore`), and every list renders whatever the user settled on instead of
- * these constants.
- */
+// Void is not a stored Space — its name/icon are defaults; "Void" is Synara's word, overridable per install (voidSpaceStore), and lists render whatever the user settled on
 export const DEFAULT_VOID_SPACE_NAME = "Void";
 export const DEFAULT_VOID_SPACE_ICON = "black-hole";
-/** Fallback for a Space whose icon is unknown, and what the editor opens on. */
 export const DEFAULT_SPACE_ICON: SpaceIconName = "bag";
 
-/** Void may also wear its own black hole, which is not part of the curated Space set. */
 export type VoidSpaceIconName = SpaceIconName | typeof DEFAULT_VOID_SPACE_ICON;
 
 export interface VoidSpacePresentation {
@@ -44,19 +32,10 @@ export function isVoidSpaceIconName(value: string): value is VoidSpaceIconName {
   );
 }
 
-/**
- * Narrows an icon that may be Void's to one a stored Space can hold. Only reachable if a
- * caller hands a Void icon to a Space; the Space editor never offers the black hole.
- */
 export function toSpaceIconName(icon: VoidSpaceIconName): SpaceIconName {
   return icon === DEFAULT_VOID_SPACE_ICON ? DEFAULT_SPACE_ICON : icon;
 }
-/**
- * Void's stand-in wherever a `SpaceId | null` has to survive as a plain string — React
- * keys, menu radio values, storage records. `null` cannot fill any of those roles, and a
- * sentinel that three modules each spell out by hand is a sentinel that eventually only
- * two of them agree on.
- */
+// Void's stand-in wherever SpaceId|null must survive as a string — a sentinel three modules each spell by hand is one only two eventually agree on
 export const VOID_SPACE_KEY = RESERVED_VOID_SPACE_ID;
 
 /**
@@ -74,12 +53,10 @@ export function resolveActiveSpaceId(
     : null;
 }
 
-/** Narrows a `SpaceId | null` to the string key that stands in for it. */
 export function spaceKey(spaceId: SpaceId | null): string {
   return spaceId ?? VOID_SPACE_KEY;
 }
 
-/** Shown when a project points at a Space that is not in the snapshot (mid-delete, stale route). */
 const UNKNOWN_SPACE_NAME = "Unknown space";
 
 export interface SpaceGroup<T> {
@@ -87,10 +64,8 @@ export interface SpaceGroup<T> {
   readonly name: string;
   readonly icon: VoidSpaceIconName;
   readonly isActive: boolean;
-  /** Group heading copy, including the active-space marker. */
   readonly label: string;
   readonly items: ReadonlyArray<T>;
-  /** Stable React key — `null` (Void) is not usable as one. */
   readonly key: string;
 }
 
@@ -126,21 +101,16 @@ export function orderedSpaceIdsForPicker(
   return [activeSpaceId, ...rest];
 }
 
-/** Groups any project-shaped list by Space, dropping empty groups. */
 export function groupItemsBySpace<T>(input: {
   items: ReadonlyArray<T>;
   spaces: ReadonlyArray<Space>;
   activeSpaceId: SpaceId | null;
   spaceIdOf: (item: T) => SpaceId | null;
-  /** How the unfiled group presents itself; defaults to the built-in "Void". */
   voidSpace?: VoidSpacePresentation;
 }): ReadonlyArray<SpaceGroup<T>> {
   const { activeSpaceId, items, spaceIdOf, spaces } = input;
   const voidSpace = input.voidSpace ?? DEFAULT_VOID_SPACE;
 
-  // Bucket in one pass, preserving each item's incoming order within its group. Insertion
-  // order also records the orphans (see below) in the order they were met, so the ordered
-  // ids below only have to describe the groups we actually want to place.
   const itemsBySpaceId = new Map<SpaceId | null, T[]>();
   for (const item of items) {
     const spaceId = spaceIdOf(item);
@@ -150,9 +120,7 @@ export function groupItemsBySpace<T>(input: {
   }
 
   const orderedSpaceIds = orderedSpaceIdsForPicker(spaces, activeSpaceId);
-  // An item can point at a space the snapshot has not caught up with (a delete still in
-  // flight). Grouping strictly by known spaces would drop it from the list entirely, so
-  // stragglers get their own trailing group rather than disappearing.
+  // an item can point at a space the snapshot hasn't caught up with (delete in flight) — strict grouping would drop it, so stragglers get their own trailing group
   const knownSpaceIds = new Set(orderedSpaceIds);
   const orphanSpaceIds = [...itemsBySpaceId.keys()].filter(
     (spaceId) => !knownSpaceIds.has(spaceId),

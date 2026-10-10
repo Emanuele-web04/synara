@@ -119,8 +119,7 @@ export function KanbanProjectBoardView({
   const needsReviewFilter = useKanbanUiStore((state) => state.kanbanNeedsReviewFilter);
   const setHasRevealedReviewFold = useKanbanUiStore((state) => state.setHasRevealedReviewFold);
   const [activeCard, setActiveCard] = useState<KanbanCard | null>(null);
-  // A completed drag still emits a click on the source card; swallow exactly that one
-  // so dropping a card never also opens its chat.
+  // a completed drag still emits a click on the source card — swallow exactly that one so dropping never also opens its chat
   const suppressClickRef = useRef(false);
 
   const sensors = useSensors(
@@ -255,8 +254,7 @@ export function KanbanProjectBoardView({
   };
 
   const releaseClickSuppression = () => {
-    // The trailing click (if any) fires synchronously after dragend; release on the
-    // next tick so regular clicks keep working when the drop happens off-card.
+    // the trailing click fires synchronously after dragend — release on the next tick so regular clicks keep working when the drop lands off-card
     window.setTimeout(() => {
       suppressClickRef.current = false;
     }, 0);

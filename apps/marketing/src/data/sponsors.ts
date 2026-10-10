@@ -1,35 +1,16 @@
-// FILE: data/sponsors.ts
-// Purpose: The public sponsor roll rendered on /sponsors and previewed on /sponsor.
-// Layer: static content (server/client importable).
-// Note: Maintained by hand — add an entry when GitHub reports a new sponsor.
-//       ONLY list sponsors who are public on GitHub. Sponsorship can be private,
-//       and a private sponsor must never be published here.
-//       Never store a sponsor's contribution amount. GitHub keeps amounts to the
-//       maintainer dashboard and does not publish them, so neither do we — `top`
-//       records which side of the $49 line someone falls on, nothing more.
+// ONLY sponsors public on GitHub — a private sponsorship must never be published here; never store amounts (GitHub doesn't publish them) — `top` only records which side of $49 they fall on
 
 export type Sponsor = {
-  /** GitHub login; also builds the profile link and the dedupe key. */
   login: string;
-  /** Display name — falls back to the login when someone has no name set. */
   name: string;
   avatarUrl: string;
-  /**
-   * True for the tiers that buy visible recognition: $49/mo and up, or a
-   * one-time gift of $49 or more. Drives the listing order and the
-   * "Top donors" group. Leave it off for everyone else, including sponsors
-   * whose tier you haven't looked up yet.
-   */
+  // top = $49/mo+ or a $49+ one-time gift — drives listing order and the Top donors group; leave off for everyone else
   top?: boolean;
-  /** Display date the sponsorship started, e.g. "Aug 2, 2026". */
   since?: string;
-  /** Optional company link used instead of the GitHub profile. */
   websiteUrl?: string;
-  /** Logo for top donors, served from /public. Falls back to the avatar. */
   logoUrl?: string;
 };
 
-/** Newest first. */
 export const SPONSORS: readonly Sponsor[] = [
   {
     login: "sandeshapparala",

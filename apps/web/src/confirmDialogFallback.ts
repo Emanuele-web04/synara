@@ -8,24 +8,20 @@ import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "./surfaceStyles";
 
 export function showConfirmDialogFallback(message: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    // Split message into title (first line) and description (rest)
     const lines = message.split("\n");
     const title = lines[0] ?? message;
     const description = lines.slice(1).join("\n").trim();
 
-    // Backdrop
     const backdrop = document.createElement("div");
     backdrop.className = "fixed inset-0 z-50 bg-black/50";
     // The data-slot markers let native surfaces (the browser panel) hide under this dialog.
     backdrop.dataset.slot = "alert-dialog-backdrop";
     backdrop.style.cssText = "animation:fadeIn .15s ease-out";
 
-    // Viewport (centers the dialog)
     const viewport = document.createElement("div");
     viewport.className = "fixed inset-0 z-50 flex items-center justify-center p-4";
     viewport.dataset.slot = "alert-dialog-viewport";
 
-    // Popup
     const popup = document.createElement("div");
     popup.dataset.slot = "alert-dialog-popup";
     popup.setAttribute("role", "alertdialog");
@@ -34,7 +30,6 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
       "flex w-full max-w-[22rem] flex-col rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xl";
     popup.style.cssText = "animation:scaleIn .15s ease-out";
 
-    // Header
     const header = document.createElement("div");
     header.className = "flex flex-col gap-1.5 px-4 py-3.5 text-center sm:text-left";
 
@@ -52,7 +47,6 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
 
     popup.appendChild(header);
 
-    // Footer
     const footer = document.createElement("div");
     footer.className = "flex flex-col-reverse gap-2 px-4 py-3 sm:flex-row sm:justify-end";
 
@@ -77,7 +71,6 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     document.addEventListener("keydown", onKeyDown);
     backdrop.addEventListener("mousedown", () => cleanup(false));
 
-    // Cancel button (outline style)
     const cancelBtn = document.createElement("button");
     cancelBtn.type = "button";
     cancelBtn.textContent = "Cancel";
@@ -86,7 +79,6 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
       ELEVATED_HOVER_SURFACE_CLASS_NAME;
     cancelBtn.addEventListener("click", () => cleanup(false));
 
-    // Confirm button mirrors the chat send action's foreground-on-background treatment.
     const confirmBtn = document.createElement("button");
     confirmBtn.type = "button";
     confirmBtn.textContent = "Confirm";
@@ -104,7 +96,6 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     document.body.appendChild(viewport);
     notifyNativeSurfaceOcclusionChange();
 
-    // Auto-focus confirm button
     requestAnimationFrame(() => confirmBtn.focus());
   });
 }

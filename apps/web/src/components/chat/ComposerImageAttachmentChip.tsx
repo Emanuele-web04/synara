@@ -1,8 +1,3 @@
-// FILE: ComposerImageAttachmentChip.tsx
-// Purpose: Renders image attachments, including source-aware AppSnap cards.
-// Layer: Chat composer presentation
-// Depends on: composer draft image metadata, shared chip styles, and expanded image preview helpers.
-
 import { WindowIcon } from "~/lib/icons";
 import { type ComposerImageAttachment } from "../../composerDraftStore";
 import { normalizeComposerImageSource } from "../../lib/composerImageSource";
@@ -40,8 +35,7 @@ export function ComposerImageAttachmentChip({
   if (appSnapSource) {
     const appName = appSnapSource.appName?.trim() || "Captured app";
     const windowTitle = appSnapSource.windowTitle?.trim() || null;
-    // Lead with the captured window title, but avoid repeating an app whose title
-    // merely echoes its name (e.g. "ChatGPT / ChatGPT").
+    // Lead with the captured window title, but avoid repeating an app whose title merely echoes its name (e.g. "ChatGPT / ChatGPT").
     const provenance =
       windowTitle && windowTitle.localeCompare(appName, undefined, { sensitivity: "accent" }) !== 0
         ? `${windowTitle} / ${appName}`

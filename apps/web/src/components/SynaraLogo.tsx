@@ -1,7 +1,3 @@
-// FILE: SynaraLogo.tsx
-// Purpose: Render the Synara mark as an inline SVG that follows theme foreground color.
-// Layer: Shared app branding primitive
-
 import type { SVGProps } from "react";
 import { SYNARA_LOGO_PATHS } from "~/assets/synaraLogoPath";
 import { cn } from "~/lib/utils";

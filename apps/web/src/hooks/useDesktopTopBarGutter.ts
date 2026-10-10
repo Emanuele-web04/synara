@@ -1,8 +1,3 @@
-// FILE: useDesktopTopBarGutter.ts
-// Purpose: Decide when desktop top bars must clear the macOS traffic light buttons.
-// Layer: Shared web shell chrome
-// Depends on: sidebar context, electron env detection.
-
 import {
   DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR,
   resolveMacDesktopTopBarTrafficLightGutterCssPx,
@@ -54,8 +49,7 @@ export function shouldReserveDesktopTopBarTrafficLightGutter(input: {
 }): boolean {
   if (!input.isElectron) return false;
   if (!input.isMacDesktop) return false;
-  // Mobile drawers float above content rather than reserving a column,
-  // so the chat header always owns the left edge in that mode.
+  // Mobile drawers float above content rather than reserving a column, so the chat header always owns the left edge in that mode.
   if (input.isMobile) return true;
   return !input.sidebarOpen;
 }
@@ -67,10 +61,6 @@ function applyTrafficLightGutterCssVar(zoomFactor: number): void {
   );
 }
 
-/**
- * Keeps the macOS traffic-light gutter CSS variable aligned with Electron page zoom.
- * Mount once near the app root (see `__root.tsx`).
- */
 export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
   const isMacDesktop = isMacNavigatorPlatform();
 

@@ -1,8 +1,3 @@
-// FILE: useDesktopTopBarGutter.test.ts
-// Purpose: Covers pure desktop top-bar gutter decision helpers.
-// Layer: Hook unit tests
-// Depends on: useDesktopTopBarGutter pure helpers and Vitest assertions.
-
 import { describe, expect, it } from "vitest";
 
 import {

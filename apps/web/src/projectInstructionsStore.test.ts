@@ -1,7 +1,3 @@
-// FILE: projectInstructionsStore.test.ts
-// Purpose: Verifies project instructions merge into thread notes without clobbering user text.
-// Layer: UI state store test
-
 import { describe, expect, it } from "vitest";
 
 import { mergeProjectInstructionsIntoThreadNotes } from "./projectInstructionsStore";

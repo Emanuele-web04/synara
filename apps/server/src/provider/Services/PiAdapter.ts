@@ -1,11 +1,4 @@
-/**
- * PiAdapter - Pi direct SDK implementation of the generic provider adapter contract.
- *
- * Pi is intentionally treated as an unopinionated harness: Synara does not add
- * permissions or plan-mode semantics on top of it.
- *
- * @module PiAdapter
- */
+/** Pi is intentionally an unopinionated harness: Synara adds no permissions or plan-mode semantics on top of it. */
 import { ServiceMap } from "effect";
 
 import type { ProviderAdapterError } from "../Errors.ts";

@@ -1,7 +1,3 @@
-// FILE: terminalThreads.test.ts
-// Purpose: Verifies shared terminal identity helpers.
-// Layer: Shared utility test
-
 import { describe, expect, it } from "vitest";
 
 import {

@@ -1,10 +1,3 @@
-// FILE: ComposerStackedPanelContent.tsx
-// Purpose: Semantic row primitives for content inside ComposerStackedPanel so plan
-// activity, queued follow-ups, and live file-change strips share one layout contract.
-// Layer: Chat composer layout
-// Exports: ComposerStackedPanelRow, ComposerStackedPanelHeaderRow,
-// ComposerStackedPanelRowMain, ComposerStackedPanelRowLabel
-
 import { memo, type HTMLAttributes, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";

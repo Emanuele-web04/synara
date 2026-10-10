@@ -1,10 +1,3 @@
-// FILE: ProjectStep.tsx
-// Purpose: First-project step of the welcome tour: drop a folder (anywhere in the window),
-//          browse (desktop) or type a path, create the project through the shared
-//          create-or-recover flow, and list what was added. Several folders can be added
-//          before continuing.
-// Layer: Web UI component
-
 import type { ProjectId } from "@synara/contracts";
 import { useEffect, useState, type FormEvent } from "react";
 

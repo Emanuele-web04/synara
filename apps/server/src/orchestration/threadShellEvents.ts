@@ -52,13 +52,7 @@ export function shouldApplyThreadsProjection(event: OrchestrationEvent): boolean
   return THREAD_PROJECTION_EVENT_TYPES.has(event.type);
 }
 
-/**
- * Events handled by the deferred shell-summary projector.
- *
- * Interaction counts are maintained atomically by the pending-interaction
- * projector, which already owns the before/after settlement state. Keeping
- * them out of the deferred projector avoids rescanning activity history.
- */
+/** interaction counts are maintained atomically by the pending-interaction projector which owns before/after settlement state — keeping them out avoids rescanning activity history */
 export function shouldApplyDeferredThreadShellSummary(event: OrchestrationEvent): boolean {
   if (!DEFERRED_THREAD_SHELL_SUMMARY_EVENT_TYPES.has(event.type)) {
     return false;
@@ -66,7 +60,7 @@ export function shouldApplyDeferredThreadShellSummary(event: OrchestrationEvent)
   return event.type !== "thread.message-sent" || event.payload.role === "user";
 }
 
-/** True only when an event can change the persisted thread shell sent to sidebar clients. */
+/** true only when an event can change the persisted thread shell sent to sidebar clients */
 export function shouldPublishThreadShellForEvent(event: OrchestrationEvent): boolean {
   if (shouldApplyThreadsProjection(event) || OTHER_THREAD_SHELL_EVENT_TYPES.has(event.type)) {
     return true;

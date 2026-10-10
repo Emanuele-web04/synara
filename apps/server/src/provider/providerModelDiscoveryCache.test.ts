@@ -1,9 +1,3 @@
-// FILE: providerModelDiscoveryCache.test.ts
-// Purpose: Locks the shared model discovery cache semantics: fresh hits,
-//          stale-while-revalidate, single-flight, project isolation, failure
-//          replay, the timeout ceiling, and detachment from caller interrupts.
-// Layer: Server provider tests
-
 import type { ProviderListModelsResult } from "@synara/contracts";
 import { Deferred, Effect, Exit, Fiber } from "effect";
 import { describe, expect, it } from "vitest";

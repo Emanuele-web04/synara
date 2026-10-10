@@ -1,8 +1,3 @@
-// FILE: promptReferenceProjection.ts
-// Purpose: Projects structured composer references for providers without native mention input items.
-// Layer: Provider prompt compatibility
-// Exports: appendProviderReferencesPromptBlock.
-
 import type { ProviderMentionReference } from "@synara/contracts";
 
 function referenceLine(reference: ProviderMentionReference): string {

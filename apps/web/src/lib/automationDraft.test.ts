@@ -1,8 +1,3 @@
-// FILE: automationDraft.test.ts
-// Purpose: Locks down automation creation draft warnings.
-// Layer: Web lib test
-// Depends on: automationDraft warning helpers.
-
 import { describe, expect, it } from "vitest";
 
 import {
@@ -182,8 +177,7 @@ describe("automationApprovalGaps", () => {
   });
 
   it("shows local-checkout approval for heartbeat updates without blocking the run", () => {
-    // Heartbeat reuses the target thread (no local env), so local-checkout never blocks
-    // dispatch. It is still surfaced so automation.update accepts a local heartbeat.
+    // Heartbeat reuses the target thread (no local env), so local-checkout never blocks dispatch. It is still surfaced so automation.update accepts a local heartbeat.
     const gaps = automationApprovalGaps({
       ...base,
       runtimeMode: "full-access",
@@ -211,8 +205,7 @@ describe("automationApprovalGaps", () => {
   });
 
   it("does not block an auto worktree but covers its fallback on approve", () => {
-    // worktreeMode "auto" is not a definite blocker, so Run now is blocked only by
-    // full-access. The banner still shows the local-checkout fallback risk that approval saves.
+    // worktreeMode "auto" is not a definite blocker, so Run now is blocked only by full-access. The banner still shows the local-checkout fallback risk that approval saves.
     const gaps = automationApprovalGaps({
       ...base,
       runtimeMode: "full-access",
@@ -240,9 +233,7 @@ describe("automationApprovalGaps", () => {
   });
 
   it("surfaces and persists the fast-loop risk when approving for another blocker", () => {
-    // fast-interval never blocks a run on its own, but when the banner is already shown for a
-    // run blocker, approving also persists fast-interval (or automation.update would reject
-    // the sub-minute schedule). It is therefore surfaced too, so consent is transparent.
+    // fast-interval never blocks alone, but when the banner already shows a blocker, approving persists it too (or update rejects the sub-minute schedule) — surfaced so consent is transparent
     const gaps = automationApprovalGaps({
       ...base,
       schedule: { type: "interval", everySeconds: 15 },

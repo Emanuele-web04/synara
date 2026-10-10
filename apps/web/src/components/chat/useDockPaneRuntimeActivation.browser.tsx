@@ -1,8 +1,3 @@
-// FILE: useDockPaneRuntimeActivation.browser.tsx
-// Purpose: Browser-runtime regressions for restored heavy dock pane hydration.
-// Layer: Web browser tests
-// Depends on: useDockPaneRuntimeActivation and a real React/browser event loop.
-
 import { ThreadId } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "vitest-browser-react";

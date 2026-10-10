@@ -1,8 +1,3 @@
-// FILE: -rootEventInvalidation.test.ts
-// Purpose: Covers root event cache invalidation decisions for streamed orchestration updates.
-// Layer: Route utility unit tests
-// Depends on: rootEventInvalidation predicates and Vitest assertions.
-
 import { ProjectId, ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

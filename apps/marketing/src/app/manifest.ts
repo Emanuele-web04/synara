@@ -1,7 +1,3 @@
-// FILE: manifest.ts
-// Purpose: Generates the web app manifest with Synara identity, icons, and screenshots.
-// Layer: Next.js metadata route.
-
 import type { MetadataRoute } from "next";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_IMAGES } from "@/lib/seo";
 

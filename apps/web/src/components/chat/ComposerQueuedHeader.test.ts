@@ -1,8 +1,3 @@
-// FILE: ComposerQueuedHeader.test.ts
-// Purpose: Locks the queued composer preview down to compact, inline markdown.
-// Layer: Web chat composer tests
-// Depends on: ComposerQueuedHeader preview sanitizer
-
 import { describe, expect, it } from "vitest";
 
 import { compactQueuedComposerPreviewMarkdown } from "./ComposerQueuedHeader";

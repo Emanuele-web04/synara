@@ -1,32 +1,4 @@
-// Resumable, stall-aware replacement for electron-updater's macOS file download.
-//
-// Why this exists:
-//   On macOS, electron-updater downloads the update .zip through Electron's
-//   `net.request` (Chromium's network stack). Its only stall protection is
-//   `httpExecutor.addTimeOutHandler`, which does `request.on("socket", s =>
-//   s.setTimeout(...))`. But Electron's `ClientRequest` never emits a `socket`
-//   event (it emits only abort/close/error/finish/login/redirect/response), so
-//   that timeout is dead code: the update download has no idle timeout at all.
-//   When the connection to GitHub's release CDN stalls mid-transfer, nothing
-//   aborts it; the transfer hangs until the OS socket recovers on its own
-//   (TCP retransmission), which can take minutes. electron-updater also never
-//   resumes from a byte offset — a retry re-downloads from 0%.
-//
-// This module installs a `download` implementation onto the updater's existing
-// `httpExecutor` that:
-//   - enforces a real idle timeout (aborts a connection that goes silent),
-//   - resumes from the last received byte via HTTP Range requests,
-//   - retries with bounded backoff while making progress,
-//   - follows redirects manually so it can strip the GitHub auth token before
-//     it ever reaches the cross-origin signed CDN URL,
-//   - discards any pre-existing temp bytes up front (so a failed differential
-//     download can never poison the full-download fallback),
-//   - verifies the sha512 published in latest-mac.yml before completing,
-//   - honours the shared CancellationToken exactly like the stock executor.
-//
-// It reuses the executor's `createRequest` (cached Electron net session + proxy
-// login wiring) so everything downstream — cache placement, the Squirrel.Mac
-// proxy server, `update-downloaded`, quitAndInstall — is unchanged.
+// stall-aware resumable replacement for electron-updater's macOS download: its idle timeout listens for a `socket` event Electron's net.request never emits (dead code), and retries restart from 0% — this wires a real idle timeout to events net.request actually emits, resumes via Range requests, strips the GitHub token before the cross-origin CDN hop, verifies the published sha512, and reuses the executor's createRequest so proxy/cache/Squirrel stay unchanged
 
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
@@ -66,8 +38,6 @@ export interface ResumableDownloadLogger {
   error?(message: string): void;
 }
 
-// Minimal structural views of the electron-updater / Electron objects we touch,
-// so this module needs no direct dependency on their concrete classes.
 interface CancellationTokenLike {
   readonly cancelled: boolean;
   createPromise<T>(
@@ -111,9 +81,7 @@ interface ElectronClientRequestLike {
   abort(): void;
 }
 
-// Structural view of the request/response the executor passes to its timeout
-// handler. We wire the idle timer to the events Electron's net.request actually
-// emits (response/data/end/error/abort/close) — never the dead `socket` event.
+// the idle timer wires to events Electron's net.request actually emits — never the dead `socket` event the stock handler targets
 interface IdleTimeoutResponseLike {
   on(event: "data", listener: () => void): void;
   on(event: "end", listener: () => void): void;
@@ -135,9 +103,6 @@ export interface UpdaterHttpExecutorLike {
     options: Record<string, unknown>,
     callback: (response: ElectronResponseLike) => void,
   ): ElectronClientRequestLike;
-  // electron-updater wires this for the differential-download and metadata
-  // request paths. The stock version targets a `socket` event that Electron's
-  // net.request never emits, so it is dead. We replace it with a working one.
   addTimeOutHandler?(
     request: IdleTimeoutRequestLike,
     callback: (error: Error) => void,
@@ -145,16 +110,10 @@ export interface UpdaterHttpExecutorLike {
   ): void;
 }
 
-// The structural slice of electron-updater's AppUpdater that we mutate. The
-// real `httpExecutor` field is runtime-only (absent from the public types), so
-// callers pass `autoUpdater` through a cast.
+// httpExecutor is a runtime-only field absent from the public types — callers pass autoUpdater through a cast
 export interface ResumableDownloaderTarget {
   httpExecutor: UpdaterHttpExecutorLike | null;
 }
-
-// ---------------------------------------------------------------------------
-// I/O
-// ---------------------------------------------------------------------------
 
 function headerString(value: string | string[] | undefined): string | null {
   if (value == null) {
@@ -214,8 +173,7 @@ function buildRequestOptions(url: URL, headers: Record<string, string>): Record<
     hostname: url.hostname,
     path: `${url.pathname}${url.search}`,
     headers,
-    // Follow redirects ourselves so we can strip the auth token before the
-    // request leaves GitHub's origin for the signed CDN URL.
+    // follow redirects ourselves so the auth token is stripped before the request leaves GitHub's origin for the signed CDN URL
     redirect: "manual",
   };
   if (url.port) {
@@ -242,12 +200,7 @@ interface SingleAttemptArgs {
   readonly onChunk: (transferred: number, total: number | null, delta: number) => void;
 }
 
-// One connection attempt (following redirects manually). Resolves with whether
-// the file is complete or was interrupted (idle timeout, dropped connection,
-// premature end, transient status). Rejects only on unrecoverable errors (fatal
-// status, too many redirects, disk write failure). Always flushes its write
-// stream before resolving so the caller can trust the on-disk file size as the
-// authoritative resume offset.
+// one connection attempt: resolves complete-or-interrupted, rejects only unrecoverable errors; always flushes the write stream first so on-disk size is the authoritative resume offset
 function runSingleAttempt(args: SingleAttemptArgs): Promise<AttemptResult> {
   const { url, destination, options, createRequest, config, startOffset, knownTotal } = args;
   return new Promise<AttemptResult>((resolve, reject) => {
@@ -268,8 +221,7 @@ function runSingleAttempt(args: SingleAttemptArgs): Promise<AttemptResult> {
       }
     };
 
-    // Stop the streaming response from re-arming the idle timer or writing after
-    // the stream is closed once this attempt has settled.
+    // Stop the streaming response from re-arming the idle timer or writing after the stream is closed once this attempt has settled.
     const detachResponse = (): void => {
       if (activeResponse != null) {
         try {
@@ -299,8 +251,7 @@ function runSingleAttempt(args: SingleAttemptArgs): Promise<AttemptResult> {
       detachResponse();
       args.setActiveRequest(null);
       if (writeStream != null) {
-        // Flush buffered writes before resolving so the file size on disk is
-        // exact for the next attempt's resume offset.
+        // flush buffered writes before resolving so the file size is exact for the next attempt's resume offset
         writeStream.end(() => resolve(result));
       } else {
         resolve(result);
@@ -324,8 +275,7 @@ function runSingleAttempt(args: SingleAttemptArgs): Promise<AttemptResult> {
     const armIdle = (): void => {
       clearIdle();
       idleTimer = setTimeout(() => {
-        // No bytes for idleTimeoutMs: abort this connection so we can resume on
-        // a fresh one (which usually lands on a healthy CDN edge).
+        // no bytes for idleTimeoutMs → abort and resume on a fresh connection, which usually lands on a healthy CDN edge
         abortCurrent();
         finish({ kind: "interrupted", reason: "idle-timeout", totalSize: discoveredTotal });
       }, config.idleTimeoutMs);
@@ -367,8 +317,7 @@ function runSingleAttempt(args: SingleAttemptArgs): Promise<AttemptResult> {
       if (action.total != null) {
         discoveredTotal = action.total;
       }
-      // "fromStart" means the body begins at byte 0: either the first attempt,
-      // or the server ignored our Range header — truncate and rewrite from 0.
+      // "fromStart" means byte 0 — first attempt or the server ignored Range → truncate and rewrite
       baseOffset = action.kind === "append" ? startOffset : 0;
       const flags = action.kind === "append" ? "a" : "w";
       writeStream = createWriteStream(destination, { flags });
@@ -405,16 +354,14 @@ function runSingleAttempt(args: SingleAttemptArgs): Promise<AttemptResult> {
       });
     };
 
-    // Open one hop. On a redirect we strip the auth token if we leave the feed
-    // origin, then reconnect to the redirect target carrying the same Range.
+    // one hop: on redirect strip the auth token if leaving the feed origin, then reconnect carrying the same Range
     const connect = (targetUrl: URL): void => {
       const headers = buildDownloadHeaders({
         callHeaders: options.headers,
         startOffset,
         attachAuth: !isCrossOrigin(url, targetUrl),
       });
-      // Per-hop guard: when we follow a redirect we abort this hop on purpose,
-      // and that abort/error must not be reported as a real interruption.
+      // a redirect-follow aborts this hop on purpose — that abort/error must not be reported as a real interruption
       let superseded = false;
       const request = createRequest(buildRequestOptions(targetUrl, headers), onResponse);
       currentRequest = request;
@@ -504,16 +451,13 @@ async function runResumableDownload(args: RunResumableDownloadArgs): Promise<voi
   });
 
   const startedAtMs = Date.now();
-  // Discard any pre-existing bytes (e.g. a checksum-bad temp file left behind by
-  // a failed differential download that shares this destination). The stock
-  // executor always truncates, so we never inherit foreign bytes either.
+  // discard pre-existing bytes (e.g. a checksum-bad temp left by a failed differential download sharing this destination) — the stock executor always truncates too
   await removeFileIfExists(destination);
 
   let totalSize: number | null = null;
   let verifyRetryUsed = false;
 
-  // Outer loop runs at most twice: once normally, then once more if the final
-  // sha512/size check fails (a one-shot clean re-download from byte 0).
+  // Outer loop runs at most twice: once normally, then once more if the final sha512/size check fails (a one-shot clean re-download from byte 0).
   for (;;) {
     if (cancelled || options.cancellationToken.cancelled) {
       return;
@@ -620,8 +564,7 @@ async function runResumableDownload(args: RunResumableDownloadArgs): Promise<voi
       return;
     }
 
-    // The bytes we have are bad. Re-download cleanly from zero exactly once
-    // before giving up, in case a CDN edge served corrupt bytes.
+    // bad bytes: one clean re-download from zero before giving up, in case a CDN edge served corrupt bytes
     if (verifyRetryUsed) {
       throw verifyError;
     }
@@ -656,12 +599,7 @@ async function verifyDownloadedFile(args: {
   return null;
 }
 
-// A working idle (inactivity) timeout for the executor's request-based paths
-// (differential block fetches, blockmap and update metadata). It aborts a
-// request that delivers no bytes for `timeoutMs`, wiring to events Electron's
-// net.request actually emits instead of the dead `socket` event. On a stalled
-// differential fetch this makes electron-updater fall back to the resumable
-// full download (see MacUpdater.doDownloadUpdate) instead of hanging.
+// working idle timeout for the executor's request-based paths (differential fetches, blockmap, metadata) — on a stalled differential electron-updater falls back to the resumable full download instead of hanging
 export function installIdleTimeout(
   request: IdleTimeoutRequestLike,
   onTimeout: (error: Error) => void,
@@ -701,10 +639,6 @@ export function installIdleTimeout(
   arm();
 }
 
-// Replaces `updater.httpExecutor.download` with the resumable implementation and
-// installs a working idle timeout on the executor's request-based paths.
-// Returns false if the executor is not yet available. Safe to call once during
-// updater configuration.
 export function installResumableUpdateDownloader(
   updater: ResumableDownloaderTarget,
   overrides: Partial<ResumableDownloadConfig> = {},
@@ -728,10 +662,7 @@ export function installResumableUpdateDownloader(
         registerCancel: onCancel,
       }).then(() => resolve(destination), reject);
     });
-  // Patch the dead `socket`-event timeout used by the differential and metadata
-  // request paths. `addErrorAndTimeoutHandlers` calls `this.addTimeOutHandler`,
-  // so this instance override is picked up there too. Never wait longer than our
-  // idle budget, but honour a shorter explicit timeout if one is ever passed.
+  // patch the dead `socket`-event timeout via an instance override that addErrorAndTimeoutHandlers picks up; never wait longer than our idle budget but honor a shorter explicit timeout
   executor.addTimeOutHandler = (request, callback, timeout) => {
     const idleMs = timeout > 0 ? Math.min(timeout, config.idleTimeoutMs) : config.idleTimeoutMs;
     installIdleTimeout(request, callback, idleMs);

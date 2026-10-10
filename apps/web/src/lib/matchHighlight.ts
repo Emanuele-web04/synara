@@ -1,24 +1,11 @@
-// FILE: matchHighlight.ts
-// Purpose: Split a label into matched/unmatched runs for a search query so result
-//          rows can emphasise the characters the search matched on. This is an
-//          independent client-side approximation of the server ranking in
-//          `workspaceEntries.ts` (contiguous substring preferred, then a
-//          left-to-right subsequence walk) — it is NOT guaranteed to reproduce
-//          the exact runs that earned the server score. Callers searching file
-//          entries must pass a query normalized with
-//          `normalizeWorkspaceEntrySearchQuery` (@synara/shared/searchQuery),
-//          matching what the server actually matched against.
-// Layer: Web UI utility
-// Exports: MatchSegment, buildMatchSegments
+// client-side approximation of the server ranking in workspaceEntries.ts — NOT guaranteed to reproduce the server's exact runs; callers must pass a query normalized with normalizeWorkspaceEntrySearchQuery
 
 export interface MatchSegment {
   text: string;
   matched: boolean;
-  /** Offset of this run inside the original text; doubles as a stable render key. */
   start: number;
 }
 
-/** Indices of `needle` inside `haystack` as a left-to-right subsequence, or null. */
 function findSubsequenceIndices(haystack: string, needle: string): number[] | null {
   const indices: number[] = [];
   let needleIndex = 0;
@@ -33,7 +20,6 @@ function findSubsequenceIndices(haystack: string, needle: string): number[] | nu
   return needleIndex === needle.length ? indices : null;
 }
 
-/** Collapse matched indices into runs so adjacent hits render as one emphasised span. */
 function segmentsFromIndices(text: string, indices: number[]): MatchSegment[] {
   const segments: MatchSegment[] = [];
   let cursor = 0;
@@ -62,17 +48,12 @@ function segmentsFromIndices(text: string, indices: number[]): MatchSegment[] {
   return segments;
 }
 
-/**
- * Returns the matched/unmatched runs of `text` for `query`, or null when the query
- * does not occur in the text at all (the caller then renders the label unemphasised).
- */
 export function buildMatchSegments(text: string, query: string): MatchSegment[] | null {
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0 || text.length === 0) return null;
 
   const normalizedText = text.toLowerCase();
-  // A few code points change length when lowercased (e.g. "İ"), which would desync
-  // the indices from the original string. Rare enough to simply skip emphasis.
+  // some code points change length when lowercased (İ) which would desync indices from the original — rare enough to skip emphasis
   if (normalizedText.length !== text.length) return null;
 
   const contiguousStart = normalizedText.indexOf(normalizedQuery);

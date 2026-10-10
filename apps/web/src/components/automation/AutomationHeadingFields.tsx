@@ -1,9 +1,4 @@
-// FILE: AutomationHeadingFields.tsx
-// Purpose: Inline-editable name/prompt heading for the automation detail page.
-// Layer: Web components (automation)
-// Exports: AutomationNameField, AutomationPromptField, AutomationSaveStatus.
-// The fields derive from the saved definition and commit on blur; a failed save rolls
-// back through the mutation's cache rollback, snapping the field to the server value.
+// fields derive from the saved definition and commit on blur; a failed save rolls back through the mutation's cache rollback
 
 import { useEffect, useRef, useState } from "react";
 
@@ -14,8 +9,7 @@ import { cn } from "~/lib/utils";
 const HEADING_FIELD_CLASS =
   "-mx-2 w-full rounded-md bg-transparent px-2 outline-none transition-colors hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.04] disabled:hover:bg-transparent";
 
-// Commits are trimmed before comparing to the saved value, so a whitespace-only edit
-// reverts instead of round-tripping a no-op update through the server.
+// Commits are trimmed before comparing to the saved value, so a whitespace-only edit reverts instead of round-tripping a no-op update through the server.
 const trimDraft = (value: string) => value.trim();
 
 /** The detail page's heading: an input styled as the page title. Enter commits, Escape reverts. */

@@ -1,7 +1,3 @@
-// FILE: providerUsageSnapshot.test.ts
-// Purpose: Locks down provider-usage snapshot normalization edge cases used by
-// compact usage surfaces and Settings usage cards.
-
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

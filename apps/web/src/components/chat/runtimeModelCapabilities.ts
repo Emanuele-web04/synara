@@ -1,8 +1,3 @@
-// FILE: runtimeModelCapabilities.ts
-// Purpose: Bridges runtime-discovered model metadata into composer capabilities without replacing static defaults wholesale.
-// Layer: Chat composer helpers
-// Exports: runtime model lookup and Codex capability overrides derived from provider discovery responses.
-
 import type {
   EffortOption,
   ModelCapabilities,

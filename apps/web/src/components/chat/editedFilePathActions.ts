@@ -1,7 +1,3 @@
-// FILE: editedFilePathActions.ts
-// Purpose: Resolve the absolute and workspace-relative forms used by edited-file actions.
-// Layer: Chat changed-files UI logic
-
 import {
   isLocalAbsolutePath,
   isWorkspaceRelativePathSafe,

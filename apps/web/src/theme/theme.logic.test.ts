@@ -1,8 +1,3 @@
-// FILE: theme.logic.test.ts
-// Purpose: Locks down Codex-style theme parsing, normalization, and CSS token derivation.
-// Layer: Web appearance domain tests
-// Exports: Vitest coverage for theme.logic.
-
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_THEME_STATE,

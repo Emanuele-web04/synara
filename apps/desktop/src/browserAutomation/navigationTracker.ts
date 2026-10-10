@@ -191,8 +191,6 @@ class BrowserNavigationTracker {
             this.matches(previousMark, event),
         );
         if (firstCommit) {
-          // A script can replace the document before it finishes loading. Follow
-          // that main frame's newest commit, never the old loader's late events.
           const latestCommit =
             this.events.findLast(
               (event) =>
@@ -225,9 +223,6 @@ class BrowserNavigationTracker {
       if (matching.some((event) => event.kind === "load")) state = "load";
       if (matching.some((event) => event.kind === "networkidle")) state = "networkidle";
 
-      // When there is no explicit navigation mark, readyState supplies only
-      // document lifecycle state. Network idleness itself comes from CDP's
-      // lifecycle signal or Network domain below, never ResourceTiming.
       if (!mark) {
         const page = await observePage(runtime, signal);
         this.mainFrameUrl = page.url;
@@ -279,8 +274,6 @@ class BrowserNavigationTracker {
   dispose = (): void => {
     if (this.disposed) return;
     this.disposed = true;
-    // A destroyed WebContents also invalidates Electron's debugger wrapper;
-    // Chromium has already released its listeners in that case.
     if (!this.webContents.isDestroyed()) {
       this.webContents.debugger.removeListener("message", this.onMessage);
       this.webContents.removeListener("destroyed", this.dispose);
@@ -299,8 +292,6 @@ class BrowserNavigationTracker {
     }>(runtime, "Page.getFrameTree", {}, signal);
     this.mainFrameId = frameTree.frameTree?.frame?.id;
     this.mainFrameUrl = frameTree.frameTree?.frame?.url ?? this.webContents.getURL();
-    // Sequential enabling avoids releasing an operation lock while a sibling
-    // command is still settling after cancellation.
     await sendCdpCommand(runtime, "Page.enable", {}, signal);
     await sendCdpCommand(runtime, "Page.setLifecycleEventsEnabled", { enabled: true }, signal);
     await sendCdpCommand(
@@ -330,8 +321,6 @@ class BrowserNavigationTracker {
       const document =
         params.type === "Document" &&
         (!this.mainFrameId || !params.frameId || params.frameId === this.mainFrameId);
-      // WebSockets are reported through their own Network events and should
-      // not keep an otherwise settled document permanently non-idle.
       if (params.type !== "WebSocket") {
         this.inFlight.delete(params.requestId);
         this.inFlight.set(params.requestId, {
@@ -368,9 +357,6 @@ class BrowserNavigationTracker {
       const nextLoaderId = params.frame.loaderId;
       let discardedStaleRequest = false;
       for (const [requestId, request] of this.inFlight) {
-        // A new main document invalidates unfinished requests owned by the
-        // previous loader. Chromium does not guarantee a loadingFailed event
-        // for every request when a reused WebView swaps documents/tabs.
         if (nextLoaderId && request.loaderId === nextLoaderId) continue;
         this.inFlight.delete(requestId);
         discardedStaleRequest = true;
@@ -396,10 +382,6 @@ class BrowserNavigationTracker {
         url: params.url,
         frameId: params.frameId,
       });
-      // Hash/history-API navigation reuses the already loaded document and
-      // therefore emits no new DOMContentLoaded/load lifecycle events. Treat
-      // the existing document lifecycle as complete so the default
-      // domcontentloaded wait cannot hang on a successfully committed URL.
       this.push({
         kind: "load",
         at: now,

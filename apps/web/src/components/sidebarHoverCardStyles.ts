@@ -1,16 +1,4 @@
-// FILE: sidebarHoverCardStyles.ts
-// Purpose: Single source of truth for the sidebar hover cards (thread + project) —
-//          their open/close timing, popup placement, surface chrome, and internal
-//          padding tokens. Both surfaces consume these so they open, sit, dismiss,
-//          and read identically and can never drift apart.
-// Layer: Sidebar UI styling
-// Exports: SIDEBAR_HOVER_CARD_TRIGGER_PROPS, SIDEBAR_HOVER_CARD_POPUP_PROPS,
-//          SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME,
-//          SIDEBAR_HOVER_CARD_CONTAINER_PADDING_CLASS_NAME,
-//          SIDEBAR_HOVER_CARD_ROW_PADDING_CLASS_NAME, SIDEBAR_HOVER_CARD_ROW_CLASS_NAME
-// Why: The thread card is a Base UI Tooltip and the project card a PreviewCard —
-//      two different primitives. Centralizing every shared characteristic here is
-//      what keeps the two reading as one component instead of two look-alikes.
+// the thread card is a Tooltip and the project card a PreviewCard — centralizing every shared characteristic keeps them reading as one component
 
 import { APP_TOOLTIP_SURFACE_CLASS_NAME } from "./chat/composerPickerStyles";
 

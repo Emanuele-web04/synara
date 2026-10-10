@@ -1,6 +1,4 @@
-// Flush editor drafts before route changes, including changes originating
-// outside the editor. Browser shutdown cannot await an RPC, so retain its
-// native unsaved-changes warning while any buffer is dirty.
+// Flush editor drafts before route changes, including changes originating outside the editor. Browser shutdown cannot await an RPC, so retain its native unsaved-changes warning while any buffer is dirty.
 import { useBlocker } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { flushWorkspaceEditors, hasUnsavedWorkspaceEditors } from "~/lib/workspaceEditorSession";

@@ -32,9 +32,7 @@ export function useWorkspaceFileEditorSession(input: {
   );
   const { dirty, reloadFromDisk, save, flush, pauseAutosave, resumeAutosave } = controller;
   const saving = controller.state.saving;
-  // A close or reload requested while a save is in flight waits for that save:
-  // unmounting immediately would let the write land after "discard" promised
-  // otherwise. A failed save keeps the buffer so its error stays visible.
+  // A close or reload requested while a save is in flight waits for that save: unmounting immediately would let the write land after "discard" promised otherwise. A failed save keeps the buffer so its error stays visible.
   const [afterSave, setAfterSave] = useState<WorkspaceFileEditorDiscardIntent | null>(null);
   useEffect(() => {
     if (afterSave === null || saving) {

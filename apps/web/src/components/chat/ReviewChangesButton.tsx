@@ -1,10 +1,3 @@
-// FILE: ReviewChangesButton.tsx
-// Purpose: Compact bordered "Review" action pill shared by the changed-files chrome —
-// the per-turn "Edited N files" card and the live composer changes header — so the
-// open-the-diff affordance stays visually identical across both surfaces.
-// Layer: Chat changed-files UI
-// Exports: ReviewChangesButton
-
 import type { CSSProperties } from "react";
 
 import { cn } from "~/lib/utils";

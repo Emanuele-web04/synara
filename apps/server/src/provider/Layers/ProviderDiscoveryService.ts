@@ -364,8 +364,7 @@ const make = Effect.gen(function* () {
       if (resolved.provider !== "claudeAgent") {
         return yield* adapter.listCommands(resolved);
       }
-      // Server-owned like the session start options, so discovery lists the
-      // same commands a new Claude session will actually have.
+      // Server-owned like the session start options, so discovery lists the same commands a new Claude session will actually have.
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.orElseSucceed(() => gateBetaOnlyProviders(DEFAULT_SERVER_SETTINGS)),
       );

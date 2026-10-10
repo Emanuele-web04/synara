@@ -93,9 +93,7 @@ function boundedString(
   options: { readonly allowEmpty?: boolean; readonly uppercase?: boolean } = {},
 ): string | null {
   if (typeof value !== "string") return null;
-  // Bound the untrusted structured-clone payload before normalization. Without
-  // this, megabytes of whitespace could collapse to a valid tiny value and be
-  // retained by the main-process marker projection.
+  // bound the untrusted structured-clone payload before normalization — megabytes of whitespace could collapse to a valid tiny value and be retained by the marker projection
   if (value.length > maximumLength) return null;
   const normalized = value
     .replace(/[\u0000-\u001f\u007f]+/g, " ")

@@ -71,8 +71,7 @@ function TimeColumn({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const selectedRef = useRef<HTMLButtonElement | null>(null);
 
-  // Center the active value when the picker opens, scrolling only this column
-  // (never the surrounding menu) so the selection is visible without a jump.
+  // center the active value on open, scrolling only this column (never the surrounding menu)
   useEffect(() => {
     const container = scrollRef.current;
     const item = selectedRef.current;

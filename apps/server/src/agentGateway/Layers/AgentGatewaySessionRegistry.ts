@@ -126,9 +126,7 @@ export function makeAgentGatewaySessionRegistry(options?: {
       if (registered.retiredWriteTurnId !== undefined) {
         return registered.retiredWriteTurnId === turnId;
       }
-      // Record A even when it never called a gateway tool. This is the
-      // critical case: a detached request from A must not arrive during B and
-      // become the first request to bind this credential.
+      // record A even if it never called a tool — a detached request from A must not arrive during B and bind the credential
       registered.retiredWriteTurnId = turnId;
       return true;
     },

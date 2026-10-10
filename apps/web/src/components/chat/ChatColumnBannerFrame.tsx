@@ -1,8 +1,3 @@
-// FILE: ChatColumnBannerFrame.tsx
-// Purpose: Shared transcript-width wrapper for chat status banners.
-// Layer: Chat status presentation
-// Exports: ChatColumnBannerFrame
-
 import type { ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import {

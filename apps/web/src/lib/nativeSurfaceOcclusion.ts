@@ -1,10 +1,4 @@
-// FILE: nativeSurfaceOcclusion.ts
-// Purpose: Notify native Electron surfaces when a DOM overlay starts or stops obscuring them.
-// Layer: Web cross-surface coordination
-
-// Electron WebContentsViews render above the DOM regardless of CSS z-index. DOM overlays
-// broadcast this event so BrowserPanel can hide or restore its native surface after the
-// overlay has been committed.
+// Electron WebContentsViews render above the DOM regardless of z-index — DOM overlays broadcast this so BrowserPanel hides/restores the native surface after the overlay commits
 export const NATIVE_SURFACE_OCCLUSION_SYNC_EVENT = "synara:native-surface-occlusion-sync";
 export const NATIVE_SURFACE_MENU_OVERLAY_SELECTOR = "[data-slot='menu-positioner']";
 
@@ -21,8 +15,7 @@ export function observeNativeSurfaceOverlay(element: HTMLElement | null): (() =>
   const resizeObserver = new ResizeObserver(notifyNativeSurfaceOcclusionChange);
   const mutationObserver = new MutationObserver(notifyNativeSurfaceOcclusionChange);
   resizeObserver.observe(element);
-  // Positioners can move or become hidden without resizing, including collision
-  // adjustments and keep-mounted menus. Their style changes must resync too.
+  // Positioners can move or become hidden without resizing, including collision adjustments and keep-mounted menus. Their style changes must resync too.
   mutationObserver.observe(element, { attributes: true });
   notifyNativeSurfaceOcclusionChange();
   return () => {

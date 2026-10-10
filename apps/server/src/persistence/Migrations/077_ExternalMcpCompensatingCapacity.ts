@@ -4,9 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // Reinstall the view for databases that already ran migration 76. An
-  // operation can enter compensation before its task row is registered, so
-  // durable operation state must retain capacity until compensation terminalizes.
+  // reinstall for DBs that ran 76 — an operation can enter compensation before its task row exists, so durable state must retain capacity until compensation terminalizes
   yield* sql`DROP VIEW IF EXISTS external_mcp_active_capacity_claims`;
   yield* sql`
     CREATE VIEW external_mcp_active_capacity_claims AS

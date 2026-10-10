@@ -1,8 +1,4 @@
-// FILE: windowsShellIco.ts
-// Purpose: Build BMP-in-ICO bytes that Explorer's taskbar can extract.
-// Layer: Desktop-native Windows shell integration
-// PNG-compressed ICO entries update window chrome but resolve to the generic
-// blank-page glyph on the Win11 taskbar.
+// PNG-compressed ICO entries update window chrome but resolve to the generic blank-page glyph on the Win11 taskbar
 
 export const WINDOWS_SHELL_ICO_BMP_SIZES = [16, 20, 24, 32, 40, 48] as const;
 

@@ -1,8 +1,4 @@
-// FILE: composerPickerSize.ts
-// Purpose: Size variant for composer picker open panels (density + opt-in fixed width).
-// Layer: UI styling config
-// Change COMPOSER_PICKER_SIZE to switch every composer picker between "small" and "normal".
-// Width is content-sized by default; only model/effort/provider pickers opt into a fixed width.
+// change COMPOSER_PICKER_SIZE to switch every composer picker between small and normal; width is content-sized by default, only model/effort/provider pickers opt into fixed width
 
 export type ComposerPickerSize = "small" | "normal";
 
@@ -15,8 +11,7 @@ export function resolveComposerPickerSize(
   return size ?? COMPOSER_PICKER_SIZE;
 }
 
-// Density-only shell. Panels shrink to their content (or honor an explicit
-// caller width) so non-model menus like git/header keep their own sizing.
+// Density-only shell. Panels shrink to their content (or honor an explicit caller width) so non-model menus like git/header keep their own sizing.
 export function composerPickerMenuShellClassName(
   size: ComposerPickerSize | undefined = COMPOSER_PICKER_SIZE,
 ): string {

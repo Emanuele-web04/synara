@@ -1,8 +1,3 @@
-// FILE: composerFocusRequestStore.ts
-// Purpose: Lets panels outside ChatView (diff headers, file explorer, preview)
-//          ask the active thread's composer to take focus after inserting text.
-// Layer: Web UI state store
-
 import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 

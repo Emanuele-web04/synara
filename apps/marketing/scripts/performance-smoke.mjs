@@ -27,11 +27,6 @@ const maximums = {
 function startServer() {
   return spawn(nextBinary, ["start", "-H", "127.0.0.1", "-p", String(port)], {
     cwd: process.cwd(),
-    // Deterministic fixture mode, matching tests/performance/summary.json
-    // ("fixtureMode": "VISUAL_TEST=1") and the e2e/visual/a11y webServers.
-    // Without it the homepage renders live tweets whose 20 lazy below-the-fold
-    // images are never requested within the measurement window, so every run
-    // reports incompleteImages: 20.
     env: { ...process.env, VISUAL_TEST: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });

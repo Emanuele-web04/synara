@@ -82,7 +82,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         createdAt: now,
       };
 
-      // Old callers omit the additive field when creating or updating a row.
+      // old callers omit the additive field on create/update
       yield* threads.upsert(thread);
       assert.isNull(Option.getOrNull(yield* threads.getById({ threadId }))?.claudeCacheReview);
       yield* threads.upsert({ ...thread, claudeCacheReview: review });

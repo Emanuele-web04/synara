@@ -1,9 +1,3 @@
-// FILE: terminalPerformance.ts
-// Purpose: Lightweight opt-in measurements for terminal output parse latency.
-// Layer: Terminal runtime diagnostics
-// Exports: observeTerminalWriteParsed
-// Depends on: Browser performance APIs and localStorage
-
 interface TerminalWriteSample {
   runtimeKey: string;
   bytes: number;

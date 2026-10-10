@@ -1,5 +1,4 @@
-// Counts request snapshots within a Claude turn, including later output updates.
-// Retains the last nonempty SDK turn to ignore its already-settled tail.
+// Counts request snapshots within a Claude turn, including later output updates. Retains the last nonempty SDK turn to ignore its already-settled tail.
 export class ClaudeRequestUsage {
   private requests = new Map<string, number>();
   private previousRequests = new Map<string, number>();

@@ -1,8 +1,3 @@
-// FILE: skillPromptInjection.test.ts
-// Purpose: Verifies which providers receive inlined portable skill instructions
-//          and that the inline text respects the turn character budget.
-// Layer: Server provider tests
-
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import * as os from "node:os";

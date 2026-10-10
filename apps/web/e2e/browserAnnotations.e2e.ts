@@ -190,11 +190,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       width: number;
       height: number;
     };
-    /**
-     * Runs a script inside the annotated guest page. MCP browser tools refuse to
-     * act while an annotation session holds the page, so page-side setup and
-     * inspection has to go through the runtime the main process already owns.
-     */
+    /** MCP browser tools refuse to act while an annotation session holds the page — page-side setup goes through the main process */
     const runInGuest = async (script: string): Promise<unknown> =>
       electronApp.evaluate(
         (_electron, input) => {
@@ -215,10 +211,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
         },
         { threadId, tabId, script },
       );
-    /**
-     * Calls a method on the main-process browser manager. Rejects when the call
-     * throws, so a caller that expects a not-ready failure has to say so.
-     */
+    /** calls a main-process browser-manager method; rejects on throw, so an expected not-ready failure must be explicit */
     const callBrowserManager = async (
       method: "startAnnotation" | "cancelAnnotation" | "syncAnnotationMarkers",
       payload: unknown,
@@ -236,7 +229,6 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
         },
         { method, payload },
       );
-    /** Every annotation event the host has observed, oldest first. */
     const annotationEvents = async (): Promise<BrowserAnnotationEvent[]> =>
       electronApp.evaluate(() => {
         const fixture = (
@@ -259,8 +251,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     await expect
       .poll(
         () =>
-          // The guest keeps refusing until its preload has attached, so a throw
-          // here is a retry signal rather than a failure.
+          // the guest refuses until its preload attaches — a throw here is a retry signal
           callBrowserManager("startAnnotation", {
             threadId,
             tabId,
@@ -270,11 +261,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       )
       .not.toBeNull();
 
-    // The overlay host is discoverable in the page's DOM, so a hostile page can
-    // aim synthetic events at it. None of them may steer the picker: the
-    // session hides the native cursor, so a page that could drive the bubble
-    // would highlight one element while the real pointer sat on another, and a
-    // synthetic Enter would publish a half-typed comment.
+    // the overlay host lives in the page DOM — synthetic events from a hostile page must never steer the picker
     const spoofingReachedOverlayHost = await runInGuest(
       "(() => { const host = document.querySelector('[data-synara-browser-annotations]'); document.dispatchEvent(new PointerEvent('pointermove', { clientX: 3, clientY: 3, bubbles: true })); document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); host?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return host !== null; })()",
     );
@@ -283,10 +270,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     expect(kindsAfterSpoofing).not.toContain("cancelled");
     expect(kindsAfterSpoofing).not.toContain("committed");
 
-    // An element buried too deep to address within the selector bound can never
-    // be committed. The picker has to refuse it up front instead of opening a
-    // composer whose save would silently turn into a cancel and throw the typed
-    // comment away.
+    // an element too deep for the selector bound can never commit — refuse up front instead of losing the typed comment
     const unanchorableRect = (await runInGuest(
       "(() => { const root = document.createElement('div'); root.setAttribute('data-unanchorable', ''); root.style.cssText = 'position:fixed;left:8px;top:8px;z-index:999;background:rgb(230,230,230)'; let node = root; for (let index = 0; index < 90; index += 1) { const child = document.createElement('div'); node.append(child); node = child; } node.style.cssText = 'padding:14px'; node.textContent = 'deep'; document.body.append(root); const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
     )) as { x: number; y: number; width: number; height: number };
@@ -349,9 +333,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "Private draft must not be captured",
     );
 
-    // A target can stop being addressable between selection and save. That must
-    // not end the session as a cancel: the comment the user already typed has to
-    // survive so they can re-pick and save it.
+    // a target can become unaddressable between pick and save — must not end as cancel; the typed comment survives
     const staleRect = (await runInGuest(
       "(() => { const root = document.createElement('div'); root.setAttribute('data-stale-chain', ''); root.style.cssText = 'position:fixed;left:8px;top:8px;z-index:999;background:rgb(230,230,230)'; let node = root; for (let index = 0; index < 90; index += 1) { const child = document.createElement('div'); node.append(child); node = child; } node.id = 'stale-leaf'; node.style.cssText = 'padding:14px'; node.textContent = 'stale'; document.body.append(root); const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
     )) as { x: number; y: number; width: number; height: number };
@@ -360,8 +342,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     };
     await clickStaleTarget();
     await insertNativeText("Kept through a stale target");
-    // Dropping the id leaves only the structural selector, which this chain is
-    // far too deep to fit inside the contract's bound.
+    // dropping the id leaves a structural selector too deep for the contract's bound
     await runInGuest(
       "(() => { document.getElementById('stale-leaf')?.removeAttribute('id'); return true; })()",
     );
@@ -390,9 +371,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "(() => { document.querySelector('[data-stale-chain]')?.remove(); return true; })()",
     );
 
-    // If a selected element collapses without disconnecting, the hidden
-    // composer must release it without allowing Enter to publish an invisible
-    // annotation. The typed comment still carries into the next valid pick.
+    // collapsed-without-disconnect: release the element without letting Enter publish an invisible annotation
     const collapsingRect = (await runInGuest(
       "(() => { const target = document.createElement('button'); target.id = 'collapsing-target'; target.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:999;padding:14px'; target.textContent = 'collapse'; document.body.append(target); const rect = target.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
     )) as { x: number; y: number; width: number; height: number };
@@ -407,8 +386,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
     await runInGuest(
       "(() => { document.getElementById('collapsing-target').style.display = 'none'; return true; })()",
     );
-    // Submit immediately, before relying on the next overlay animation frame
-    // to notice the collapsed box.
+    // submit immediately rather than relying on the next overlay animation frame
     await pressNativeKey("Enter");
     expect(await committedAnnotations()).toHaveLength(3);
     await runInGuest(
@@ -429,9 +407,7 @@ test("a real Electron guest commits and reprojects a continuous annotation sessi
       "(() => { document.getElementById('collapsing-target')?.remove(); return true; })()",
     );
 
-    // A long unique ancestor id can make its anchored selector exceed the
-    // contract even though the ordinary structural path remains short. Keep
-    // walking in that case, and preserve the existing Cmd/Ctrl+Enter shortcut.
+    // a long ancestor id can overflow the bound while the structural path stays short — keep walking
     const fallbackSelectorRect = (await runInGuest(
       "(() => { const root = document.createElement('div'); root.id = `anchor-${'x'.repeat(490)}`; root.setAttribute('data-long-anchor', ''); root.style.cssText = 'position:fixed;right:8px;top:8px;z-index:999;background:rgb(230,230,230)'; const target = document.createElement('button'); target.style.cssText = 'padding:14px'; target.textContent = 'fallback'; root.append(target); document.body.append(root); const rect = target.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()",
     )) as { x: number; y: number; width: number; height: number };

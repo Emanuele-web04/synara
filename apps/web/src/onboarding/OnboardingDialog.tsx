@@ -1,10 +1,4 @@
-// FILE: OnboardingDialog.tsx
-// Purpose: First-run welcome tour: intro → feature tour → agents → appearance → project → done.
-//          Owns step navigation and the per-run results the final summary reads.
-// Layer: Web UI overlay (mounted once from the root route)
-//
-// The popup is a fixed 800×540 frame for every step so the window never resizes as the
-// user moves through the tour; hero steps (welcome, done) center their content in it.
+// fixed 800×540 frame for every step so the window never resizes through the tour
 
 import { VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { useEffect, useState } from "react";

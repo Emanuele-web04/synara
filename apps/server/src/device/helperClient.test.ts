@@ -150,8 +150,7 @@ describe("helper frame prefix parser", () => {
     const payloads = parser.push(record({ sequence: 7, keyframe: true }));
 
     expect(payloads).toHaveLength(1);
-    // The payload is passed through untouched: it is already the envelope the
-    // transport and the browser decode.
+    // the payload passes through untouched — it is already the envelope the transport and browser decode
     expect(payloads[0]!.byteLength).toBeGreaterThan(17);
   });
 
@@ -373,13 +372,11 @@ describe("helper frame envelope handling", () => {
     const [helperRecord] = parser.push(record({ payload: accessUnit, keyframe: true }));
     if (!helperRecord) throw new Error("expected one record");
 
-    // What the socket handler does before handing the frame to the transport.
     const decoded = decodeDeviceFrame(helperRecord);
     expect(decoded.ok).toBe(true);
     if (!decoded.ok) return;
     expect(Array.from(decoded.frame.payload)).toEqual(Array.from(accessUnit));
 
-    // What the transport then puts on the wire, and what the browser decodes.
     const republished = decodeDeviceFrame(
       encodeDeviceFrame({ header: decoded.frame.header, payload: decoded.frame.payload }),
     );
@@ -402,7 +399,6 @@ describe("device point bounds", () => {
     accessibilityAvailable: true,
   };
 
-  /** A client with a fixed attachment, so normalize() can be exercised alone. */
   const attachedClient = () => {
     const client = new HelperClient({ binaryPath: "/nonexistent" });
     (client as unknown as { attachment: typeof attachment }).attachment = attachment;
@@ -416,8 +412,7 @@ describe("device point bounds", () => {
   });
 
   it("rejects a coordinate past the right edge instead of clamping it", () => {
-    // 1019 is a frame pixel on a 1206px canvas. Clamping pinned this to the
-    // screen edge and reported success, which hid the whole pixel-vs-point bug.
+    // 1019 is a frame pixel on a 1206px canvas — clamping pinned it to the screen edge and acked success, hiding the pixel-vs-point bug
     expect(() => attachedClient().normalize(1019, 400)).toThrow(/outside the screen bounds/u);
   });
 
@@ -431,7 +426,7 @@ describe("device point bounds", () => {
   });
 
   it("names the valid bounds and the scale so the caller can see the mistake", () => {
-    // "1019 is outside 0..402 (402x874 at 3x)" makes the scale factor obvious.
+    // "1019 is outside 0..402 (402x874 at 3x)" makes the scale factor obvious
     expect(() => attachedClient().normalize(1019, 400)).toThrow(/0\.\.402/u);
     expect(() => attachedClient().normalize(1019, 400)).toThrow(/402x874 points at 3x/u);
     expect(() => attachedClient().normalize(1019, 400)).toThrow(/not frame pixels/u);

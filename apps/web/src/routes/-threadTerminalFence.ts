@@ -1,10 +1,4 @@
-// FILE: -threadTerminalFence.ts
-// Purpose: Decide when a terminal-session fence can be retired after projection reconcile.
-// Layer: Web EventRouter helper
-// Why: ProviderRuntimeIngestion settles the session before it flushes buffered
-//      assistant finals. A snapshot taken at the session-set sequence can look
-//      terminal while the reply text has not been projected yet. Clearing the
-//      fence there leaves the UI stuck on a spinner until a full reload (#548).
+// ProviderRuntimeIngestion settles the session before flushing buffered assistant finals; a session-set-sequence snapshot can look terminal before the reply projects — retiring the fence there leaves a spinner until reload (#548)
 
 export function isTerminalThreadSessionStatus(status: string): boolean {
   return (
@@ -20,11 +14,6 @@ export function isTerminalThreadSessionStatus(status: string): boolean {
  */
 export const TERMINAL_FENCE_EMPTY_TURN_HOLD_MS = 1_500;
 
-/**
- * A terminal fence armed at `fenceSequence` (the session-set / shell upsert that
- * ended the turn) must keep reconciling until the detail snapshot proves the
- * post-settle assistant finals have been projected — or that none will arrive.
- */
 export function doesSnapshotSatisfyTerminalFence(input: {
   readonly snapshotSequence: number;
   readonly fenceSequence: number;
@@ -62,10 +51,7 @@ export function doesSnapshotSatisfyTerminalFence(input: {
     return true;
   }
 
-  // A global projection sequence can advance because another thread was
-  // updated while this turn's buffered final is still waiting. The expected
-  // assistant row, not sequence advancement alone, is the proof that the reply
-  // is visible. Only genuinely empty turns may retire after the hold window.
+  // the global sequence can advance via other threads while this turn's final is still buffered — the expected assistant row, not sequence advancement, proves the reply is visible; only genuinely empty turns may retire after the hold
   if (latestTurn.assistantMessageId !== null) return false;
   return input.nowMs - input.armedAtMs >= TERMINAL_FENCE_EMPTY_TURN_HOLD_MS;
 }

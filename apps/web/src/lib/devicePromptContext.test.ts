@@ -17,7 +17,6 @@ describe("promptLooksLikeDeviceTask", () => {
   });
 
   it("ignores a scope mention with no action verb", () => {
-    // Otherwise a build-configuration request would silently attach a screenshot.
     expect(promptLooksLikeDeviceTask("add a simulator target to the build")).toBe(false);
     expect(promptLooksLikeDeviceTask("the simulator is configured in Package.swift")).toBe(false);
   });

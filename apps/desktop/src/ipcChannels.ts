@@ -1,7 +1,3 @@
-// FILE: ipcChannels.ts
-// Purpose: Defines the data-only IPC channel contract shared by Electron main and preload.
-// Layer: Desktop IPC contract
-
 export const DESKTOP_IPC_CHANNELS = {
   pickFolder: "desktop:pick-folder",
   saveFile: "desktop:save-file",

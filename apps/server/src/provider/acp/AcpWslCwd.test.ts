@@ -1,7 +1,3 @@
-// FILE: AcpWslCwd.test.ts
-// Purpose: Verifies ACP protocol cwd normalization for WSL workspaces.
-// Layer: Provider ACP runtime tests
-
 import { describe, expect, it } from "vitest";
 
 import { resolveAcpSessionCwd } from "./AcpSessionRuntime.ts";

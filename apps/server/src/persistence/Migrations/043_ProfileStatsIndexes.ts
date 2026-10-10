@@ -1,7 +1,4 @@
-/**
- * Adds lightweight covering indexes for Profile stats queries.
- * These support prompt bucketing, per-turn model events, and token delta scans.
- */
+/** covering indexes for prompt bucketing, per-turn model events, token delta scans */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

@@ -1,11 +1,4 @@
-// FILE: privacy/page.tsx
-// Purpose: Full privacy page — the detailed, honest account of what Synara does
-//          (and doesn't do) with your data. Linked from the homepage + footer.
-// Layer: App Router page (static)
-// Depends on: Navbar, SiteFooter, react-icons/lu
-// Note: Claims verified against the synara codebase. Keep them in sync with the
-//       app: local SQLite, direct-to-provider, no Synara account, explicit
-//       feedback delivery, and anonymous analytics that are OFF by default.
+// claims verified against the codebase — keep in sync: local SQLite, direct-to-provider, no account, analytics off by default
 
 import type { ReactNode } from "react";
 import Link from "next/link";

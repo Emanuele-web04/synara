@@ -1,25 +1,6 @@
-// FILE: feedbackRateLimit.ts
-// Purpose: Rate limiting for /api/feedback that survives the Workers runtime.
-// Layer: Server utility
-// Depends on: Cloudflare rate limiting binding (FEEDBACK_RATE_LIMITER) when
-//             present, in-process counters otherwise.
-
 import "server-only";
 
-/**
- * The in-process limiter this file replaces was a module-level Map. That works
- * on a long-lived Node server, where every request shares one process; on
- * Workers each isolate gets its own Map and isolates are many and short-lived,
- * so the limit stopped binding and /api/feedback was effectively unthrottled
- * against a paid upstream (Resend).
- *
- * Cloudflare's rate limiting binding is account-level state, so it holds across
- * isolates. Its `period` accepts only 10 or 60 seconds, so the durable layer
- * enforces a per-minute burst cap rather than the per-hour budget below. Both
- * run: the binding stops the abuse case (one source hammering the endpoint),
- * the in-process window keeps the friendlier hourly budget for the common case
- * where a person submits repeatedly against a warm isolate.
- */
+// a module-level Map doesn't bind on Workers (many short-lived isolates) so the endpoint went unthrottled against paid Resend — the Cloudflare binding is account-level (period accepts only 10/60s → per-minute burst) and the in-process window keeps the hourly budget for warm isolates
 export const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1_000;
 export const RATE_LIMIT_MAX_REQUESTS = 5;
 
@@ -33,7 +14,6 @@ interface RateLimitRecord {
 
 export interface RateLimitDecision {
   allowed: boolean;
-  /** Seconds the caller should wait. 0 when allowed. */
   retryAfter: number;
 }
 
@@ -44,12 +24,7 @@ interface RateLimiterBinding {
   limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
-/**
- * The binding is absent outside Workers (`bun run dev`, `next start` under the
- * SEO smoke test, `node --test`), so this resolves to null there and callers
- * fall back to the in-process window. Imported lazily because
- * @opennextjs/cloudflare cannot be loaded in a plain Node process.
- */
+// the binding is absent outside Workers (dev, next start, node --test) → null and callers fall back to the in-process window; lazy import because @opennextjs/cloudflare can't load in plain Node
 async function getBinding(): Promise<RateLimiterBinding | null> {
   try {
     const { getCloudflareContext } = await import("@opennextjs/cloudflare");
@@ -83,11 +58,7 @@ function consumeInProcess(key: string, now: number): RateLimitDecision {
   return { allowed: true, retryAfter: 0 };
 }
 
-/**
- * Records a hit for `key` and reports whether it is allowed. The durable check
- * runs first so a distributed flood is rejected before it can also fill the
- * in-process map.
- */
+// the durable check runs first so a distributed flood is rejected before it can also fill the in-process map
 export async function consumeFeedbackRateLimit(
   key: string,
   now = Date.now(),
@@ -98,8 +69,7 @@ export async function consumeFeedbackRateLimit(
       const { success } = await binding.limit({ key });
       if (!success) return { allowed: false, retryAfter: BINDING_PERIOD_SECONDS };
     } catch {
-      // A binding failure must not take the endpoint down; the in-process
-      // window below still applies.
+      // A binding failure must not take the endpoint down; the in-process window below still applies.
     }
   }
 

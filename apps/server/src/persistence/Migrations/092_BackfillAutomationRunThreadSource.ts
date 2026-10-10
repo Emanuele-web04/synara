@@ -1,15 +1,4 @@
-// Purpose: Backfills creationSource = "automation_run" onto per-run threads that standalone
-//          automations created before the marker existed, so the sidebar visibility setting
-//          applies to legacy runs too.
-//
-// Scope: automation-run thread ids (`automation:automation-run:<uuid>:thread`) that are NOT
-// any automation definition's dedicated target thread (including archived definitions').
-// Dedicated threads are persistent conversations and stay unmarked. A definition that was
-// hard-deleted (not archived) no longer excludes its dedicated thread, so that thread gets
-// reclassified as a run thread — acceptable: nothing references it as a conversation anymore.
-//
-// Repairs the authoritative thread.created event AND the projection row, so a later
-// projection replay reproduces the same state (089 pattern).
+// backfills creationSource="automation_run" onto legacy per-run threads so the sidebar visibility setting applies; dedicated threads (persistent conversations) stay unmarked; a hard-deleted definition's thread gets reclassified as a run thread — nothing references it as a conversation anymore; repairs the authoritative event AND the row so replay reproduces the same state
 
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";

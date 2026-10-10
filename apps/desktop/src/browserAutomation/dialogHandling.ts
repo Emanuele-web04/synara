@@ -170,11 +170,6 @@ const ensureDialogMonitor = async (
       if (method !== "Page.javascriptDialogOpening") return;
       const dialog = normalizeDialog(params);
       const policy = DIALOG_POLICY[dialog.kind];
-      // This path deliberately bypasses sendCdpCommand: it must be able to
-      // unblock a renderer whose normal CDP work is waiting behind the modal.
-      // Attach rejection handling directly to Electron's promise. Wrapping the
-      // call in a detached microtask leaves a narrow unhandled-rejection race
-      // when Chromium auto-closes the dialog before the queued command runs.
       const handling = webContents.debugger
         .sendCommand("Page.handleJavaScriptDialog", {
           accept: policy.accept,
@@ -193,11 +188,6 @@ const ensureDialogMonitor = async (
     const dispose = () => {
       if (disposed) return;
       disposed = true;
-      // Electron emits `destroyed` after the debugger wrapper itself has become
-      // unusable. Calling removeListener through that wrapper then throws
-      // "Object has been destroyed" during application shutdown. The native
-      // object is already releasing every listener in that path, so explicit
-      // listener cleanup is only necessary while WebContents is still alive.
       if (!webContents.isDestroyed()) {
         debuggerSession.removeListener("message", onMessage);
         if (tracksDestruction) webContents.removeListener("destroyed", dispose);
@@ -209,9 +199,6 @@ const ensureDialogMonitor = async (
     if (tracksDestruction) webContents.once("destroyed", dispose);
     try {
       await sendCdpCommand(runtime, "Page.enable", {}, signal);
-      // A human may have opened a dialog before the first automation command.
-      // Keep this command direct so it can bypass the blocked page command,
-      // but drain it before releasing the tab lock if cancellation races it.
       await drainOnAbort(
         webContents.debugger
           .sendCommand("Page.handleJavaScriptDialog", { accept: false })
@@ -250,14 +237,10 @@ const evaluateDialogCleanup = async <Result>(
 ): Promise<Result | undefined> => {
   try {
     const response = await evaluateInContext<Result>(runtime, expression, {
-      // CDP enforces this deadline inside Chromium. Awaiting that same command
-      // keeps cleanup non-cancellable and leaves no detached promise behind.
       timeoutMs: DIALOG_CLEANUP_TIMEOUT_MS,
     });
     return response.value;
   } catch {
-    // Navigation, teardown, or the cleanup deadline already discarded the
-    // instrumented Window. Cleanup must never replace the command's result.
     return undefined;
   }
 };
@@ -308,10 +291,6 @@ export const withDialogHandling = async <T>(
     throwIfAborted(signal);
     return { value, dialogs: capture.dialogs };
   } finally {
-    // The operation (including Runtime.terminateExecution on abort) has drained
-    // before this block runs. Ignore the caller's cancelled signal for the
-    // bounded restore so main-world dialog APIs never remain overridden after
-    // the per-tab lock is released.
     runtime.webContents.debugger.removeListener("message", onDocumentLifecycle);
     const mayIssueCleanupCommands = !documentReplaced;
     if (dialogShimInstalled && mayIssueCleanupCommands && !signal?.aborted) {

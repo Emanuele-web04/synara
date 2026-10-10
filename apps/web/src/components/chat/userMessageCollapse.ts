@@ -1,5 +1,4 @@
-// The character threshold is a first-paint overflow hint; rendered message
-// height is governed by the line limit.
+// The character threshold is a first-paint overflow hint; rendered message height is governed by the line limit.
 export const COLLAPSED_USER_MESSAGE_MAX_CHARS = 600;
 export const USER_MESSAGE_COLLAPSED_MAX_LINES = 12;
 export const USER_MESSAGE_COLLAPSED_FADE_LINES = 2;

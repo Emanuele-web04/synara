@@ -1,8 +1,3 @@
-// FILE: providerOrdering.ts
-// Purpose: Keeps provider picker ordering stable across settings, search, and menus.
-// Layer: Web settings utility
-// Exports: default order, normalization, and order comparison helpers.
-
 import type { ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 

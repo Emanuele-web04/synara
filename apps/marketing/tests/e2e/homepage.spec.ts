@@ -26,7 +26,6 @@ test.describe("homepage functional flow", () => {
     ]);
     expect(downloadBox).not.toBeNull();
     expect(githubBox).not.toBeNull();
-    // Both CTAs share the same row in the compact hero.
     expect(Math.abs(downloadBox!.y - githubBox!.y)).toBeLessThanOrEqual(2);
 
     const preview = page.locator("[data-hero-preview]");

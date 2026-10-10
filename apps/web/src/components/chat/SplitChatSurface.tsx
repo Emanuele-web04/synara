@@ -458,9 +458,7 @@ function SplitPaneSurface(props: {
   );
 }
 
-// Module-level and shell-only: this surface only reads shell fields (title, projectId,
-// modelSelection, timestamps, sidechatSourceThreadId), so subscribing to full threads would
-// rebuild every thread's message/activity lists on each streaming flush for no benefit.
+// shell-only subscription: this surface reads shell fields only — full threads would rebuild every message/activity list on each streaming flush for no benefit
 const selectThreadShells = createThreadShellsSelector();
 
 export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: ThreadId }) {

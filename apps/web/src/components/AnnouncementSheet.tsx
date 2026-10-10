@@ -1,14 +1,5 @@
-// FILE: AnnouncementSheet.tsx
-// Purpose: Shared one-time announcement sheet — hero, title, short pitch, then dismiss/confirm.
-// Layer: Root web overlay
-//
-// Geometry is matched to the macOS system announcement sheet it apes — 420px wide,
-// 20px padding, 64px hero, 32px buttons. Body copy and buttons follow the UI font size
-// from Settings; only the title is fixed.
-//
-// Uses the dialog system's opaque "solid" surface — the frosted composer default
-// reads translucent over the desktop, since the Electron window itself is
-// transparent under macOS vibrancy.
+// geometry matched to the macOS system sheet it apes (420px/20px/64px/32px); body copy + buttons follow the Settings UI font size, only the title is fixed
+// uses the opaque "solid" dialog surface — the frosted composer default reads translucent over desktop since the Electron window is transparent under macOS vibrancy
 
 import { useRef, type ReactNode, type KeyboardEventHandler } from "react";
 
@@ -40,8 +31,7 @@ export function AnnouncementSheet(props: {
   // Decorative hero rendered above the title; the sheet owns the spacing below it.
   hero: ReactNode;
   title: ReactNode;
-  // Two lines at 378px wide is the reference sheet's proportion; longer copy wraps to
-  // three and throws the whole vertical rhythm off.
+  // two lines at 378px is the reference sheet's proportion; longer copy wraps to three and breaks the vertical rhythm
   description: ReactNode;
   // Optional structured content (rows, a status note) below the pitch. Kept out of
   // the description because that renders as a paragraph.
@@ -49,7 +39,6 @@ export function AnnouncementSheet(props: {
   // Omitted on single-action sheets; the confirm button still closes via onConfirm.
   dismissLabel?: string;
   confirmLabel: string;
-  // Fired by the dismiss button and by Escape / backdrop closes.
   onDismiss: () => void;
   onConfirm: () => void;
 }) {

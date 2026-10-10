@@ -1,22 +1,10 @@
-// FILE: acpFork.ts
-// Purpose: Shared "probe capability + session/fork" step for ACP-backed provider adapters.
-// Layer: Provider ACP helper
-// Exports: forkViaAcpRuntime
-
 import type * as Acp from "@agentclientprotocol/sdk";
 import { Effect, Option } from "effect";
 import type * as AcpErrors from "./AcpErrors.ts";
 import type { AcpSessionRuntimeShape } from "./AcpSessionRuntime.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
 
-/**
- * Fork the runtime's active session when the agent advertises `session/fork`.
- *
- * Fails with a `ProviderAdapterValidationError` when the capability is missing
- * so callers fall back to Synara's retained-transcript fork. Replay readiness
- * has its own bounded policy; the adapter timeout applies only after that gate
- * opens, preserving the full RPC allowance even when replay hits its hard cap.
- */
+// missing session/fork capability → validation error so callers fall back to retained-transcript fork; the adapter timeout applies only after the replay gate opens
 export function forkViaAcpRuntime(input: {
   readonly provider: string;
   readonly runtime: AcpSessionRuntimeShape;

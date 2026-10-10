@@ -1,7 +1,3 @@
-// FILE: ProfileUsageCoverage.test.tsx
-// Purpose: Verify missing telemetry stays visible in profile rankings and exported cards.
-// Layer: web profile feature tests.
-
 import type { ProfileTokenStats } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";

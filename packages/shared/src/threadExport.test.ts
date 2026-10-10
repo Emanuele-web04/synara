@@ -1,8 +1,3 @@
-// FILE: threadExport.test.ts
-// Purpose: Verifies the shared export-eligibility guard used by the server
-//          export route (409) and the web composer's /export availability.
-// Layer: Shared utility tests
-
 import { describe, expect, it } from "vitest";
 
 import { threadExportBlockedReason } from "./threadExport";

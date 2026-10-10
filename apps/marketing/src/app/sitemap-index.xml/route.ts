@@ -1,7 +1,3 @@
-// FILE: sitemap-index.xml/route.ts
-// Purpose: Serves a sitemap index so crawlers can discover every sitemap.
-// Layer: App Router route handler.
-
 import { SITEMAP_INDEX_ENTRIES } from "@/lib/siteRoutes";
 import { absoluteUrl } from "@/lib/seo";
 

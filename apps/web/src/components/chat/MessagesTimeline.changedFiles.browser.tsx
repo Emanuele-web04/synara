@@ -1,7 +1,3 @@
-// FILE: MessagesTimeline.changedFiles.browser.tsx
-// Purpose: Browser regressions for the changed-files row cap and expansion.
-// Layer: Vitest browser tests
-
 import "../../index.css";
 
 import { MessageId, TurnId } from "@synara/contracts";

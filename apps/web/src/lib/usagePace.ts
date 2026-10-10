@@ -1,7 +1,3 @@
-// FILE: usagePace.ts
-// Purpose: Derive OpenUsage-style quota pace indicators from percent-used windows.
-// Used by Settings usage meters to show reserve/deficit and projected run-out timing.
-
 export type UsagePaceStatus = "ahead" | "on-track" | "behind";
 
 export interface UsagePaceSummary {

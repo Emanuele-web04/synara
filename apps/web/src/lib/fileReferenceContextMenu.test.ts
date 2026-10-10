@@ -1,7 +1,3 @@
-// FILE: fileReferenceContextMenu.test.ts
-// Purpose: Verifies file-reference menu labels and desktop reveal/copy actions.
-// Layer: Web UI helper tests
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = vi.hoisted(() => ({

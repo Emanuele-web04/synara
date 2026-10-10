@@ -17,11 +17,7 @@ import {
   type ClaudeWorkflowAgentAccum,
 } from "./claudeWorkflowRuntime.ts";
 
-// Line shapes mirror a real run's transcript directory
-// (~/.claude/projects/<session>/subagents/workflows/wf_*/): journal.jsonl
-// records {type, key, agentId}; agent-<id>.jsonl is the session-jsonl shape
-// whose assistant lines carry message.model/usage and tool_use blocks plus a
-// top-level `effort` field (sibling of `message`).
+// fixture mirrors a real run's transcript dir: journal.jsonl {type,key,agentId} + agent-<id>.jsonl session-jsonl with model/usage/tool_use and top-level effort
 const JOURNAL_STARTED = JSON.stringify({
   type: "started",
   key: "v2:e6b51252c782edf079b5f85ce071ce87afc52b300b3ae35c607f3b0569d47868",
@@ -107,7 +103,6 @@ describe("applyClaudeWorkflowJournalLines", () => {
     expect(state.agents.get("a423ae8cef86a1ed4")?.state).toBe("running");
     expect(applyClaudeWorkflowJournalLines(state, [JOURNAL_RESULT])).toBe(true);
     expect(state.agents.get("a423ae8cef86a1ed4")?.state).toBe("completed");
-    // Replays and garbage are inert.
     expect(applyClaudeWorkflowJournalLines(state, [JOURNAL_RESULT, "not json", ""])).toBe(false);
     expect(state.agents.size).toBe(1);
   });
@@ -135,9 +130,7 @@ describe("applyClaudeWorkflowAgentTranscriptLines", () => {
     expect(agent.promptPreview).toBe("Decompose this research question into angles.\n\nDetails.");
     expect(agent.model).toBe("claude-sonnet-4-6");
     expect(agent.effort).toBe("high");
-    // Latest usage line wins: 1 + 946 + 20318 + 34.
     expect(agent.tokens).toBe(21_299);
-    // tool_use blocks dedupe by id across streamed line repeats.
     expect(agent.toolCalls).toBe(2);
     expect(agent.recentToolNames).toEqual(["WebSearch", "StructuredOutput"]);
     expect(agent.startedAt).toBe("2026-07-14T22:48:58.400Z");
@@ -217,7 +210,6 @@ describe("collectClaudeWorkflowRuntime", () => {
     withDir((dir, fileSystem) =>
       Effect.gen(function* () {
         const state = makeClaudeWorkflowRuntimeState();
-        // Nothing on disk yet: quiet no-op.
         expect(yield* collectClaudeWorkflowRuntime(fileSystem, dir, state)).toBe(false);
 
         writeFileSync(path.join(dir, "journal.jsonl"), `${JOURNAL_STARTED}\n`);
@@ -231,11 +223,8 @@ describe("collectClaudeWorkflowRuntime", () => {
         expect(agent.toolCalls).toBe(1);
         expect(agent.tokens).toBe(3 + 17_276 + 0 + 97);
 
-        // No growth: no change reported.
         expect(yield* collectClaudeWorkflowRuntime(fileSystem, dir, state)).toBe(false);
 
-        // Appended lines (including a trailing partial) are picked up; the
-        // partial line stays unconsumed.
         appendFileSync(
           path.join(dir, "agent-a423ae8cef86a1ed4.jsonl"),
           `${AGENT_FINAL_LINE}\n{"tr`,
@@ -265,7 +254,6 @@ describe("collectClaudeWorkflowRuntime", () => {
         expect(agent.transcriptSkipped).toBe(true);
         expect(agent.promptPreview).toBeUndefined();
 
-        // A vanished directory degrades to "no change" rather than failing.
         rmSync(dir, { recursive: true, force: true });
         expect(yield* collectClaudeWorkflowRuntime(fileSystem, dir, state)).toBe(false);
       }),

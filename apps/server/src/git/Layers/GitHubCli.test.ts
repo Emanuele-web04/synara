@@ -1364,8 +1364,7 @@ layer("GitHubCliLive", (it) => {
         detail.commits.map((commit) => commit.messageHeadline),
         ["", ""],
       );
-      // Avatars are derived from real user logins only: "platform" is a Team (slug), and a
-      // slug-derived URL could show an unrelated user who happens to share the name.
+      // avatars derive from real user logins only — a team slug could show an unrelated user with the same name
       assert.deepStrictEqual(detail.reviewers, [
         {
           login: "platform",
@@ -1435,8 +1434,7 @@ layer("GitHubCliLive", (it) => {
                 oid: "5a554f9e40043fba3184182c22f7f4bab617fc19",
                 messageHeadline: "fix(models): ignore inherited display-name tokens",
                 committedDate: "2026-09-08T13:18:37Z",
-                // `gh` emits empty-string logins for local-git authors with no
-                // GitHub account. This must not fail the whole detail payload.
+                // `gh` emits empty-string logins for local-git authors — must not fail the whole payload
                 authors: [{ id: "", login, name: "Emanuele Di Pietro" }],
               },
             ],
@@ -2050,8 +2048,7 @@ layer("GitHubCliLive", (it) => {
         number: 357,
       });
       assert.equal(diff.patch, "diff --git a/a.ts b/a.ts\n");
-      // Git resolves the validated remote name itself, preserving its transport and credentials
-      // without putting a token-bearing remote URL in argv or process-runner errors.
+      // Git resolves the remote name itself — a token-bearing URL never enters argv or process-runner errors
       expect(mockedRunProcess.mock.calls[5]?.[1]).toEqual([
         "fetch",
         "--quiet",
@@ -2244,7 +2241,7 @@ layer("GitHubCliLive", (it) => {
         "--body-file",
         "-",
       ]);
-      // The body must never appear in argv — it travels over stdin.
+      // the body must never appear in argv — it travels over stdin
       expect(mockedRunProcess.mock.calls[0]?.[2]).toEqual(
         expect.objectContaining({ stdin: "Looks good!\n\nShipping it." }),
       );

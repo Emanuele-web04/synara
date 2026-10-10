@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 
 import { absoluteUrl, OG_IMAGE, SITE_NAME, SITE_URL, X_PROFILE_URL } from "@/lib/seo";
 
-/** Search and user-directed retrieval agents that affect answer visibility. */
 export const AI_DISCOVERY_USER_AGENTS = [
   "OAI-SearchBot",
   "ChatGPT-User",
@@ -11,13 +10,9 @@ export const AI_DISCOVERY_USER_AGENTS = [
   "PerplexityBot",
 ] as const;
 
-/** General web-search crawlers that can also feed AI-assisted search products. */
 export const SEARCH_USER_AGENTS = ["Googlebot", "Bingbot", "Applebot"] as const;
 
-/**
- * Model-development controls are intentionally separate from search/retrieval.
- * Allowing or blocking these is a publishing-policy choice, not an SEO switch.
- */
+// model-development controls are intentionally separate from search/retrieval — a publishing-policy choice, not an SEO switch
 export const AI_TRAINING_USER_AGENTS = ["GPTBot", "ClaudeBot", "Google-Extended"] as const;
 
 export const AI_DISCOVERY_PATHS = ["/llms.txt", "/llms-full.txt", "/ai.txt"] as const;

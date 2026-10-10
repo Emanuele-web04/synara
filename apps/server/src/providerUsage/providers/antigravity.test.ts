@@ -1,6 +1,3 @@
-// FILE: providerUsage/providers/antigravity.test.ts
-// Purpose: Covers Antigravity/agy OAuth files, Google refresh write-back, and Cloud Code quota.
-
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";

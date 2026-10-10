@@ -1,9 +1,3 @@
-// FILE: not-found.tsx
-// Purpose: Site-chromed 404 page for unmatched routes (and docs pages that
-//          call notFound()). Matches the site design system and is
-//          dark-mode aware via the same design tokens as every other page.
-// Layer: App Router not-found (server component).
-
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import SiteFooter from "@/components/SiteFooter";

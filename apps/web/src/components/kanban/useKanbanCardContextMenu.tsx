@@ -87,8 +87,7 @@ async function archiveCardThread(
   if (!api) return;
   const thread = getThreadFromState(useStore.getState(), threadId);
   if (!thread) return;
-  // Archived threads leave the board's thread feed, so a live optimistic
-  // dispatch entry could never reconcile — drop it with the card.
+  // archived threads leave the board's thread feed — a live optimistic dispatch could never reconcile, drop it with the card
   useKanbanUiStore.getState().clearOptimisticDispatch(threadId);
   const archiveSequence = await archiveThreadFromClient(api.orchestration, threadId);
   if (!worktreeRelease.enabled) return;
@@ -132,8 +131,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
 
   const deleteCardThread = async (card: KanbanCard) => {
-    // A deleted thread can never reconcile its optimistic dispatch — drop the
-    // entry first so no phantom In Progress card survives the deletion.
+    // a deleted thread can never reconcile its optimistic dispatch — drop the entry first so no phantom In Progress card survives
     useKanbanUiStore.getState().clearOptimisticDispatch(card.threadId);
     // Local-only draft (never promoted): just drop it from the draft store.
     if (card.thread === null) {

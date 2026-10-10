@@ -10,11 +10,7 @@ export interface KeyedLock<Key> {
   readonly activeKeyCount: () => number;
 }
 
-/**
- * Serialize work per key without retaining one semaphore for every key ever seen.
- * The user count includes queued callers, so cleanup waits for the final holder
- * or waiter to leave the critical section.
- */
+// serialize per key without retaining a semaphore per key — user count includes queued callers so cleanup waits for the last one
 export function makeKeyedLock<Key>(): KeyedLock<Key> {
   const entries = new Map<Key, { tail: Deferred.Deferred<void>; users: number }>();
 
@@ -50,8 +46,7 @@ export function makeKeyedLock<Key>(): KeyedLock<Key> {
           Effect.andThen(restore(effect)),
           Effect.ensuring(
             Effect.sync(() => {
-              // An interrupted waiter still owns its FIFO node. Link that node
-              // to its predecessor so later callers cannot overtake the holder.
+              // An interrupted waiter still owns its FIFO node. Link that node to its predecessor so later callers cannot overtake the holder.
               Deferred.doneUnsafe(completed, acquired ? Effect.void : Deferred.await(previous));
               acquiredEntry.users -= 1;
               if (acquiredEntry.users === 0 && entries.get(key) === acquiredEntry) {

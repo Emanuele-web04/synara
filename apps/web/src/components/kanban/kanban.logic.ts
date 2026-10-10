@@ -695,20 +695,11 @@ export function resolveOptimisticDispatchOutcome(
   if ((thread.latestTurn?.turnId ?? null) !== entry.baselineTurnId) {
     return "settled";
   }
-  // A "connecting" session is the pre-init signal the server now emits before
-  // the provider spawns. It must NOT settle the entry: provider init can still
-  // fail, and settling here would skip the "failed" toast when the error event
-  // follows. The board already renders the card In Progress from derived state
-  // during this window, so the entry has no visual effect — it only keeps
-  // watching for the failure.
+  // a "connecting" session is the pre-init signal; it must NOT settle the entry — provider init can still fail and settling would skip the "failed" toast
   if (deriveKanbanColumn(thread) === "inProgress" && thread.session?.status !== "connecting") {
     return "settled";
   }
-  // A session that errored or closed after the drop without producing a turn
-  // means the dispatch never started (provider failure, manual stop mid-init) —
-  // revert now instead of waiting out the expiry window. The timestamp guard
-  // keeps stale terminal states from an earlier run from reverting a fresh
-  // dispatch: only transitions at/after the drop count.
+  // a session that errored/closed after the drop without a turn means the dispatch never started — revert now; the timestamp guard keeps stale terminal states from reverting a fresh dispatch
   const sessionStatus = thread.session?.status;
   if (sessionStatus === "error" || sessionStatus === "closed") {
     const endedAtMs = Date.parse(thread.session?.updatedAt ?? "");
@@ -901,10 +892,7 @@ export function buildKanbanBoard(
       continue;
     }
     const optimisticEntry = optimisticDispatchByThreadId[draftThread.threadId];
-    // Only drafts with actual content earn a card; projects accumulate empty
-    // sticky drafts from routine navigation and those are pure noise here. A
-    // dispatched draft is exempt — the dispatch clears the composer prompt before
-    // the durable thread arrives, and the card must survive that gap.
+    // only drafts with actual content earn a card — projects accumulate empty sticky drafts from navigation; a dispatched draft is exempt since the card must survive the promotion gap
     const composerDraft = resolveComposerDraft(input.composerDraftByThreadId, draftThread.threadId);
     if (!optimisticEntry && composerDraft.prompt.length === 0 && !composerDraft.hasAttachments) {
       continue;
@@ -920,8 +908,7 @@ export function buildKanbanBoard(
     bucketFor(boardProjectId).draft.push(card);
   }
 
-  // Promotion gap: the draft snapshot is gone (promoted, composer cleared) but the
-  // durable thread has not reached the store yet — synthesize the In Progress card.
+  // promotion gap: draft snapshot gone (promoted, composer cleared) but the durable thread hasn't reached the store — synthesize the In Progress card
   for (const [threadId, optimisticEntry] of Object.entries(optimisticDispatchByThreadId)) {
     // A promotion-gap card is a just-dispatched draft — it cannot carry a
     // live-confirmed review flag, so it too stays out of the filtered view.

@@ -210,7 +210,6 @@ describe("providerRuntimeEventPump", () => {
           yield* Fiber.interrupt(fiber);
 
           expect(processed).toEqual(["event-heal-1", "event-heal-2", "event-heal-3"]);
-          // Healed: no longer degraded, but the quarantine forensics survive.
           expect(health.snapshot()[0]).toMatchObject({
             status: "healthy",
             quarantinedEvents: 0,

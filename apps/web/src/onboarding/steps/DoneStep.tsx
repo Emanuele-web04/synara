@@ -1,8 +1,3 @@
-// FILE: DoneStep.tsx
-// Purpose: Closing step of the welcome tour: the day-one shortcuts. The run summary lives
-//          in the dialog header.
-// Layer: Web UI component
-
 import { TourShortcutList } from "./FeatureTourStep";
 
 export function DoneStep() {

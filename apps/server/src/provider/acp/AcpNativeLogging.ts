@@ -164,7 +164,6 @@ function visit(current: unknown, seen: WeakMap<object, unknown>): unknown {
     return clone;
   }
 
-  // Covers plain objects, null-prototype objects, and custom-prototype instances.
   const source = current as Record<string, unknown>;
   const clone: Record<string, unknown> = {};
   seen.set(current, clone);
@@ -182,7 +181,6 @@ function visit(current: unknown, seen: WeakMap<object, unknown>): unknown {
   return clone;
 }
 
-/** Recursively sanitize both decoded ACP payloads and raw JSON protocol frames. */
 export function redactAcpLogSecrets(value: unknown): unknown {
   const seen = new WeakMap<object, unknown>();
   return visit(value, seen);

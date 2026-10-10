@@ -38,8 +38,7 @@ export function useComposerReferences({
   >(() => composerMentions);
   const selectedComposerSkillsRef = useRef<ProviderSkillReference[]>(selectedComposerSkills);
   const selectedComposerMentionsRef = useRef<ProviderMentionReference[]>(selectedComposerMentions);
-  // The setters below stamp these refs synchronously; layout effects backstop
-  // external state changes before another browser event can read stale values.
+  // the setters stamp these refs synchronously; layout effects backstop external changes before another browser event reads stale values
   useLayoutEffect(() => {
     selectedComposerSkillsRef.current = selectedComposerSkills;
   }, [selectedComposerSkills]);

@@ -1,7 +1,3 @@
-// FILE: subagentPresentation.ts
-// Purpose: Normalizes subagent identity, nickname colors, and status labels for sidebar/chat UI.
-// Exports: Shared presentation helpers consumed by sidebar rows, chat cards, and thread hydration.
-
 import {
   buildSubagentIdentityDirectory,
   extractSubagentIdentityHints as extractParsedSubagentIdentityHints,
@@ -93,8 +89,7 @@ function normalizeRole(role: string | null | undefined): string | null {
   return normalized ? normalized.toLowerCase() : null;
 }
 
-// Worker-tier agent types are internal effort carriers; never surface them as a
-// role even when persisted thread metadata or titles still contain them.
+// worker-tier agent types are internal effort carriers — never surface them as a role even when persisted metadata still contains them
 function suppressWorkerTierRole(role: string | null): string | null {
   return role !== null && isWorkerTierSubagentRole(role) ? null : role;
 }
@@ -363,17 +358,13 @@ export function humanizeSubagentStatus(
   }
 }
 
-// Short form for agent rows: the "Claude " prefix is redundant next to a
-// model name ("Haiku 4.5" reads as well as "Claude Haiku 4.5" and halves the
-// label), and non-Claude names pass through unchanged.
+// Short form for agent rows: the "Claude " prefix is redundant next to a model name ("Haiku 4.5" reads as well as "Claude Haiku 4.5" and halves the label), and non-Claude names pass through unchanged.
 export function formatSubagentModelLabel(model: string | null | undefined): string | undefined {
   const displayName = formatModelDisplayName(normalizeWhitespace(model));
   return displayName?.startsWith("Claude ") ? displayName.slice("Claude ".length) : displayName;
 }
 
-// Status is the only hue in the agent panels: the dot always carries it, the
-// text echoes it only while live (running) or when something went wrong
-// (failed); terminal/neutral states read as plain muted text.
+// status is the only hue in agent panels: the dot always carries it, text echoes it only while live or failed; terminal/neutral states are muted
 export function subagentStatusTextToneClassName(
   statusKind: SubagentStatusKind | null | undefined,
 ): string {

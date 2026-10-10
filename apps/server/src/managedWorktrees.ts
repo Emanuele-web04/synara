@@ -82,17 +82,9 @@ export function archivedWorktreeHasNoOtherOwners(input: {
   });
 }
 
-/**
- * The only thread state managed-worktree retention reads. Structural on purpose so
- * both the narrow projection row and a full `OrchestrationThread` satisfy it, and so
- * the prune path never pulls a whole read model into memory just to look at five
- * columns.
- */
+/** structural on purpose — the narrow projection row and a full OrchestrationThread both satisfy it, and the prune never pulls a whole read model to look at five columns */
 export interface ManagedWorktreeThreadRef {
   readonly id: string;
-  // Widened with `| undefined` so both the narrow reader's normalized rows and a
-  // full `OrchestrationThread` (whose optional columns are `?: T | null` under
-  // `exactOptionalPropertyTypes`) structurally satisfy this ref.
   readonly archivedAt?: string | null | undefined;
   readonly deletedAt?: string | null | undefined;
   readonly worktreePath?: string | null | undefined;
@@ -199,10 +191,7 @@ function isArchivedOnlyManagedWorktreeThread(thread: ManagedWorktreeThreadRef): 
   return !isDeletedManagedWorktreeThread(thread) && (thread.archivedAt ?? null) !== null;
 }
 
-// The scanned inventory is realpath-canonical, while recorded thread paths may
-// reach the same directory through symlinks (e.g. /var -> /private/var).
-// Canonicalize the thread side too, or retention silently never matches
-// anything on symlinked layouts. Missing paths fall back to plain resolution.
+// the scanned inventory is realpath-canonical while recorded paths may reach the same dir through symlinks (/var → /private/var) — canonicalize the thread side too or retention silently never matches on symlinked layouts
 function canonicalizeThreadWorktreePaths(
   threads: ReadonlyArray<ManagedWorktreeThreadRef>,
 ): Effect.Effect<ReadonlyMap<string, string>, Error> {
@@ -240,13 +229,7 @@ function snapshotOutputPath(input: {
   return path.join(input.snapshotsDir, `${threadPathSegment || "thread"}-${digest}`);
 }
 
-/**
- * Classify inventory entries into immediate reclaim vs retained archived keepers.
- * Active owners are never reclaim candidates. Deleted paths bypass the archived
- * retention window; only non-deleted archived worktrees honor it. Unowned inventory
- * is deliberately preserved: a newly-created worktree exists briefly before its
- * thread association is projected, and standalone worktrees are valid user data.
- */
+/** deleted paths bypass the archived retention window; unowned inventory is deliberately preserved — a fresh worktree exists briefly before its thread association is projected, and standalone worktrees are valid user data */
 export function classifyManagedWorktreeRemovalCandidates(input: {
   readonly inventory: ReadonlyArray<ServerManagedWorktree>;
   readonly threads: ReadonlyArray<ManagedWorktreeThreadRef>;
@@ -409,7 +392,6 @@ function removeManagedWorktreeSafely(input: {
     );
 }
 
-/** Keep active worktrees and the 15 most recently archived managed worktrees. */
 export function pruneArchivedManagedWorktrees(input: {
   readonly worktreesDir: string;
   readonly snapshotsDir: string;
@@ -457,8 +439,7 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
   readonly git: GitCoreShape;
 }): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
   return Effect.gen(function* () {
-    // Deliberately not the shell snapshot: it hides soft-deleted threads, and a
-    // retention-deleted thread still owns a worktree that must be reclaimed.
+    // deliberately not the shell snapshot — it hides soft-deleted threads, and a retention-deleted thread still owns a worktree to reclaim
     const threads = yield* input.snapshotQuery.listManagedWorktreeThreads();
     return yield* pruneArchivedManagedWorktrees({
       worktreesDir: input.worktreesDir,

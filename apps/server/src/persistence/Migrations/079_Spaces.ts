@@ -1,7 +1,3 @@
-// FILE: 079_Spaces.ts
-// Purpose: Adds durable custom spaces and nullable project assignments.
-// Layer: SQLite migration
-
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

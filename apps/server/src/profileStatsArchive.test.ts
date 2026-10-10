@@ -1,9 +1,3 @@
-// FILE: profileStatsArchive.test.ts
-// Purpose: Coverage for the snapshot-then-purge flow: purging a thread must
-// free its rows while leaving every Profile stat unchanged.
-// Layer: Server stats tests
-// Exports: Vitest coverage for ProfileStatsArchive.
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { Effect, Layer } from "effect";
@@ -515,8 +509,7 @@ describe("ProfileStatsArchive", () => {
         const archive = yield* ProfileStatsArchive;
         yield* seedTwoThreadsWithActivity;
         yield* acknowledgeProviderCommandJournal(sql);
-        // Independent child threads are real work. Only provider-native mirrors
-        // are excluded from Claude result accounting.
+        // independent child threads are real work — only provider-native mirrors are excluded from Claude result accounting
         yield* sql`
           UPDATE projection_threads
           SET parent_thread_id = 'thread-keep', creation_source = 'synara_mcp'
@@ -692,7 +685,6 @@ describe("ProfileStatsArchive", () => {
         const purged = yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" });
         expect(purged).toBe(true);
 
-        // Every row the purged thread owned is gone.
         const remaining = yield* sql<{
           readonly threads: number;
           readonly messages: number;
@@ -788,7 +780,6 @@ describe("ProfileStatsArchive", () => {
         `;
         expect(remainingActivities[0]?.count).toBe(0);
 
-        // The Profile numbers do not move: the archive snapshot replaces the rows.
         const statsAfter = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         const tokenStatsAfter = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
         expect(statsAfter.activity).toEqual(statsBefore.activity);
@@ -807,7 +798,6 @@ describe("ProfileStatsArchive", () => {
         expect(statsAfterIst.activeHours).toEqual(statsBeforeIst.activeHours);
         expect(tokenStatsAfterIst).toEqual(tokenStatsBeforeIst);
 
-        // Re-purging an already purged thread is a no-op.
         const purgedAgain = yield* archive.purgeThreadWithStatsSnapshot({
           threadId: "thread-purge",
         });
@@ -1642,9 +1632,7 @@ describe("ProfileStatsArchive", () => {
               '{"threadId":"thread-retention","deletedAt":"2026-06-15T09:00:00.000Z"}', '{}'
             )
         `;
-        // The purge fence blocks while provider-intent events (thread.deleted
-        // included) are still unconsumed; a real sweep only runs after the
-        // reactor has acked them.
+        // the purge fence blocks while provider-intent events (thread.deleted included) are still unconsumed — a real sweep only runs after the reactor acks them
         yield* acknowledgeProviderCommandJournal(sql);
 
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
@@ -1683,7 +1671,7 @@ describe("ProfileStatsArchive", () => {
         `;
         expect(tombstones.map((row) => row.threadId)).toEqual(["thread-manual"]);
 
-        // Lifetime totals survive: retention rows stay live, manual work is archived.
+        // lifetime totals survive — retention rows stay live, manual work is archived
         const statsAfter = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsAfter.activity.totalPromptsSent).toBe(2);
         expect(statsAfter.activity.totalThreads).toBe(3);

@@ -1,9 +1,3 @@
-// FILE: environmentPanelStyles.ts
-// Purpose: Shared Environment panel typography tokens. Section labels, the panel title,
-//          and muted body copy (e.g. recap) all reuse the composer placeholder color so
-//          secondary chrome reads consistently across the chat shell.
-// Layer: Environment panel design tokens
-
 import { COMPACT_CHAT_MARKDOWN_COZY_CLASS_NAME } from "~/components/chatMarkdownSpacing";
 import {
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,

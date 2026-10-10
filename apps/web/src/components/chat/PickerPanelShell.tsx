@@ -1,8 +1,3 @@
-// FILE: PickerPanelShell.tsx
-// Purpose: Share the visual shell used by combobox-style pickers in chat surfaces.
-// Layer: Chat picker UI
-// Depends on: shared input styling plus caller-provided content slots.
-
 import { useEffect, useRef, type ReactNode } from "react";
 import { SearchIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";

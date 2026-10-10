@@ -1,8 +1,3 @@
-// FILE: threadSettle.ts
-// Purpose: Dispatches the thread settle/unsettle toggle from the client.
-// Layer: Web orchestration helper
-// Exports: setThreadSettledFromClient
-
 import type { NativeApi, ThreadId } from "@synara/contracts";
 
 import { newCommandId } from "./utils";
@@ -11,7 +6,6 @@ type ThreadCommandDispatcher = Pick<NativeApi["orchestration"], "dispatchCommand
 
 export interface OptimisticSettledMutation {
   readonly desiredSettled: boolean;
-  /** Durable sequence returned after the latest settle command is accepted. */
   readonly commandSequence: number | null;
   /**
    * True once the projection has represented a state different from the latest
@@ -45,9 +39,7 @@ export function reconcileOptimisticSettledMutation(
   serverSettled: boolean,
   projectionSequence: number = 0,
 ): { acknowledged: boolean; mutation: OptimisticSettledMutation } {
-  // Reconnect replay can fold Done -> Undo into one store update, so the UI may
-  // never render the intermediate boolean. The durable sequence proves that the
-  // latest command has passed through the projection even in that batched case.
+  // reconnect replay can fold Done→Undo into one store update so the UI may never render the intermediate boolean — the durable sequence proves the latest command passed through the projection even batched
   if (mutation.commandSequence !== null && projectionSequence >= mutation.commandSequence) {
     return { acknowledged: true, mutation };
   }
@@ -63,10 +55,7 @@ export function reconcileOptimisticSettledMutation(
   };
 }
 
-// Marks a thread settled (done, dimmed at the bottom of the Activity view) or
-// restores it. The server stamps the authoritative `settledAt` timestamp from
-// the `isSettled` intent, so two clients toggling concurrently converge on the
-// last write instead of racing on client clocks.
+// the server stamps authoritative settledAt from the isSettled intent so two clients toggling concurrently converge on last write instead of racing on client clocks
 export async function setThreadSettledFromClient(
   api: ThreadCommandDispatcher,
   threadId: ThreadId,

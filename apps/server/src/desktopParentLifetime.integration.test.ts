@@ -42,7 +42,7 @@ async function killOwner(owner: ChildProcess): Promise<void> {
   await exited;
 }
 
-// SIGKILL of the owning process reproduces the confirmed POSIX orphan condition.
+// SIGKILL of the owning process reproduces the confirmed POSIX orphan condition
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("desktop parent loss subprocess integration", () => {
   let fixtureDirectory: string;
@@ -50,8 +50,7 @@ describePosix("desktop parent loss subprocess integration", () => {
   beforeAll(async () => {
     fixtureDirectory = await fsPromises.mkdtemp(path.join(os.tmpdir(), "synara-parent-fixture-"));
     bundledFixture = path.join(fixtureDirectory, "backend.mjs");
-    // Exercise the production Node runtime, including code requiring TS
-    // transforms, rather than relying on Node's strip-only TypeScript loader.
+    // exercise the production Node runtime incl. TS transforms rather than Node's strip-only TS loader
     execFileSync("bun", ["build", backendFixture, "--target=node", "--outfile", bundledFixture]);
   });
   afterAll(async () => {
@@ -96,8 +95,7 @@ describePosix("desktop parent loss subprocess integration", () => {
         await waitFor(() => (isAlive(state.pid) ? undefined : true), "orphan backend exit");
         if (mode === "stubborn") {
           expect(fs.existsSync(`${statePath}.stopped`)).toBe(false);
-          // A timed-out finalizer leaves a dead-owner lock for the existing safe
-          // stale-owner recovery path; no live lock is ever bypassed.
+          // a timed-out finalizer leaves a dead-owner lock for the existing safe stale-owner recovery; no live lock is ever bypassed
           expect(fs.existsSync(`${dbPath}.lifecycle-lock`)).toBe(true);
         } else {
           expect(fs.readFileSync(`${statePath}.stopped`, "utf8")).toBe("cleaned up");

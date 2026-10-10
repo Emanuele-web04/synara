@@ -1,8 +1,3 @@
-// FILE: route.ts
-// Purpose: Exposes the live installer total to the client as a CDN-cached JSON response.
-// Layer: App Router route handler
-// Depends on: getInstallerCount server utility
-
 import { NextResponse } from "next/server";
 
 import { getInstallerCount } from "@/lib/installerCount";

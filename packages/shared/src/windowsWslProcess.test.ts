@@ -1,7 +1,3 @@
-// FILE: windowsWslProcess.test.ts
-// Purpose: Verifies WSL workspace process routing stays shell-free and distro-scoped.
-// Layer: Shared Node runtime utility tests
-
 import { describe, expect, it } from "vitest";
 
 import {

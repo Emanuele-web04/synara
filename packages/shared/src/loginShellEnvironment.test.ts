@@ -4,9 +4,7 @@ import * as Path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// `OS.homedir()` throws on hosts with neither HOME nor a passwd entry, and an ESM namespace
-// export cannot be spied on — so the failure is injected through the module itself, off by
-// default so every other test keeps the real implementation.
+// OS.homedir() throws with neither HOME nor a passwd entry, and an ESM export can't be spied — the failure is injected through the module, off by default
 const { homeDirectoryFailure } = vi.hoisted(() => ({ homeDirectoryFailure: { active: false } }));
 
 vi.mock("node:os", async (importOriginal) => {
@@ -56,7 +54,7 @@ function makeFixture(): Fixture {
   FS.mkdirSync(homeDirectory, { recursive: true });
   const zshrcPath = Path.join(homeDirectory, ".zshrc");
   FS.writeFileSync(zshrcPath, "export PATH=/opt/homebrew/bin:$PATH\n");
-  // A real file so the interpreter fingerprint is stable across calls.
+  // a real file so the interpreter fingerprint is stable across calls
   const shell = Path.join(root, "zsh");
   FS.writeFileSync(shell, "#!/bin/sh\n");
   return {
@@ -87,7 +85,6 @@ describe("createCachedLoginShellEnvironmentReader", () => {
     expect(probe).toHaveBeenCalledTimes(1);
     expect(FS.existsSync(fixture.cachePath)).toBe(true);
 
-    // A fresh reader, as a later process would build.
     const second = createCachedLoginShellEnvironmentReader(options)(fixture.shell, ["PATH"]);
     expect(second).toEqual({ PATH: "/opt/homebrew/bin:/usr/bin" });
     expect(probe).toHaveBeenCalledTimes(1);
@@ -264,7 +261,7 @@ describe("createCachedLoginShellEnvironmentReader", () => {
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
-  // A probe that answered with nothing is a failure to retry, not a result to remember.
+  // a probe that answered with nothing is a failure to retry, not a result to remember
   it("does not cache a probe that produced no PATH", () => {
     const fixture = makeFixture();
     const probe = probeReturning({});
@@ -318,13 +315,10 @@ describe("createCachedLoginShellEnvironmentReader", () => {
     });
   });
 
-  // A process with neither HOME nor a passwd entry (containers, sandboxed CI) cannot
-  // resolve a home to key the cache against. The desktop builds this reader before
-  // `whenReady()` outside any try, so that must degrade to probing, never throw.
+  // a process with no resolvable home must degrade to probing, never throw — the desktop builds this reader before whenReady() outside any try
   it("runs uncached when the home directory cannot be resolved", () => {
     const fixture = makeFixture();
-    // Pointed at the fixture root, so a spy that failed to apply writes here (and fails the
-    // call-count assertion below) instead of touching the developer's real Synara home.
+    // pointed at the fixture root so a failed spy writes here instead of the developer's real Synara home
     const env = { SYNARA_HOME: Path.dirname(Path.dirname(fixture.cachePath)) };
     homeDirectoryFailure.active = true;
 

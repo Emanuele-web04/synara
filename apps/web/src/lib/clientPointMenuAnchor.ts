@@ -1,6 +1,3 @@
-// FILE: clientPointMenuAnchor.ts
-// Purpose: Gives Base UI menus a virtual anchor at a pointer/context-menu position.
-
 export function createClientPointMenuAnchor(position: { x: number; y: number }) {
   return {
     getBoundingClientRect: () => ({

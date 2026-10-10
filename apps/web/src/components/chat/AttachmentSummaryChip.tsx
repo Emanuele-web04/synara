@@ -1,11 +1,3 @@
-// FILE: AttachmentSummaryChip.tsx
-// Purpose: Shared compact "count pill" for composer/transcript reference attachments
-//   that collapse a list into one chip (assistant selections, file comments). Owns the
-//   pill shell, leading-icon treatment, dismiss affordance, and hover tooltip so every
-//   summary chip stays consistent; each kind supplies its icon, label, and tooltip body.
-// Layer: Chat attachment presentation
-// Exports: AttachmentSummaryChip
-
 import { type ComponentType, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
@@ -16,7 +8,6 @@ import { AttachmentRemoveButton } from "./AttachmentRemoveButton";
 interface AttachmentSummaryChipProps {
   /** Leading glyph; rendered with the shared muted count-pill icon treatment. */
   icon: ComponentType<{ className?: string }>;
-  /** Pill label, e.g. `3 selections`. */
   label: string;
   /** Accessible label for the dismiss button, e.g. `Remove selections`. */
   removeLabel: string;

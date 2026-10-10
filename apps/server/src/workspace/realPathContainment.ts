@@ -23,12 +23,7 @@ function isLexicallyContainedPath(workspaceRoot: string, absolutePath: string): 
   return isContainedPath(path.resolve(workspaceRoot), path.resolve(absolutePath));
 }
 
-// String-level containment checks (path.resolve + path.relative) cannot see
-// symlinks, so a link inside the workspace pointing outside it would pass and
-// the subsequent open/readdir would follow it. Resolve both sides through the
-// filesystem and re-check containment on the canonical paths. This also
-// canonicalizes roots that are themselves behind symlinks (e.g. /tmp ->
-// /private/tmp on macOS), so in-root symlinks keep working.
+// string-level checks can't see symlinks — resolve both sides and re-check on canonical paths (keeps in-root links under symlinked roots working, e.g. /tmp→/private/tmp)
 export async function resolveRealPathWithinRoot(
   workspaceRoot: string,
   absolutePath: string,
@@ -40,11 +35,7 @@ export async function resolveRealPathWithinRoot(
   return isContainedPath(realRoot, realTarget) ? realTarget : null;
 }
 
-// Canonicalize the existing prefix of a write/create target, then append only
-// the suffix that does not exist yet. Walking one component at a time matters:
-// a simple realpath(dirname(target)) cannot validate nested paths whose parent
-// directories also need to be created. Existing in-root symlinks remain
-// supported, while dangling symlinks and links outside the root are rejected.
+// canonicalize the existing prefix, then append the missing suffix — realpath(dirname) can't validate paths whose parents don't exist yet
 export async function resolveRealPathForCreateWithinRoot(
   workspaceRoot: string,
   absolutePath: string,
@@ -73,9 +64,7 @@ export async function resolveRealPathForCreateWithinRoot(
         throw cause;
       }
 
-      // realpath also reports ENOENT for a dangling symlink. Do not classify
-      // that as a safe missing component because later filesystem calls may
-      // follow it if its external target appears between validation and use.
+      // realpath reports ENOENT on a dangling symlink — not a safe "missing" component; its target could appear before use
       let candidateExists = true;
       try {
         await fs.lstat(candidatePath);
@@ -93,9 +82,7 @@ export async function resolveRealPathForCreateWithinRoot(
   return currentPath;
 }
 
-// Prepare a canonical write target while creating missing parent directories.
-// Each parent is created and canonicalized separately, so mkdir never receives
-// an unresolved multi-component suffix that could traverse an existing link.
+// each parent is created+canonicalized separately so mkdir never gets a suffix that traverses an existing link
 export async function prepareRealPathForWriteWithinRoot(
   workspaceRoot: string,
   absolutePath: string,
@@ -139,7 +126,7 @@ export async function prepareRealPathForWriteWithinRoot(
       try {
         await fs.mkdir(candidatePath);
       } catch (mkdirCause) {
-        // A concurrent creator is accepted only after canonical validation.
+        // a concurrent creator is accepted only after canonical validation
         if (!isAlreadyExistsError(mkdirCause)) {
           throw mkdirCause;
         }

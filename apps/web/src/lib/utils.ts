@@ -4,9 +4,7 @@ import { extendTailwindMerge } from "tailwind-merge";
 import * as Random from "effect/Random";
 import * as Effect from "effect/Effect";
 
-// `text-ui*` / `text-chat*` are font sizes from the `@theme` block in index.css.
-// Register them so twMerge resolves them against `text-xs` etc. instead of
-// treating them as text colors.
+// `text-ui*` / `text-chat*` are font sizes from the `@theme` block in index.css. Register them so twMerge resolves them against `text-xs` etc. instead of treating them as text colors.
 const twMerge = extendTailwindMerge({
   extend: {
     theme: {
@@ -43,12 +41,10 @@ export function isLinuxPlatform(platform: string): boolean {
   return /linux/i.test(platform);
 }
 
-/** The host platform string, safe to read where `navigator` may be absent (SSR, node tests). */
 export function getNavigatorPlatform(): string {
   return typeof navigator === "undefined" ? "" : navigator.platform;
 }
 
-/** Single source of truth for "render the ⌘ affordance instead of the Ctrl one". */
 export function isMacNavigatorPlatform(): boolean {
   return isMacPlatform(getNavigatorPlatform());
 }

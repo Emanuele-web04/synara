@@ -13,9 +13,6 @@ import { sendCdpCommand, throwIfAborted } from "./cdpRuntime";
 
 const MAX_CAPTURED_ENTRIES = 1_000;
 const MAX_TRACKED_REQUESTS = 2_048;
-// Reserve room under the 512 KiB wire contract for the host to append bounded
-// dialog events without turning a successful diagnostics read into an invalid
-// response.
 const MAX_LOG_OUTPUT_BYTES = 320 * 1_024;
 
 interface TrackedRequest {
@@ -106,9 +103,7 @@ const remoteObjectText = (raw: unknown): string => {
   if (object.value !== undefined) {
     try {
       return boundedUtf8(JSON.stringify(object.value), 1_024);
-    } catch {
-      // Fall through to the CDP preview description.
-    }
+    } catch {}
   }
   return boundedUtf8(object.description ?? object.unserializableValue, 1_024);
 };
@@ -123,12 +118,6 @@ const optionalStatus = (value: unknown): number | undefined =>
     ? value
     : undefined;
 
-/**
- * Bounded, per-WebContents diagnostics recorder. It deliberately stores no
- * headers, cookies, post data, response bodies, initiator stacks or raw CDP
- * payloads, so browser_logs cannot become an accidental secret-exfiltration
- * channel.
- */
 export class BrowserDiagnosticsStore {
   private readonly stateByWebContents = new WeakMap<WebContents, DiagnosticsState>();
 
@@ -365,11 +354,6 @@ export class BrowserDiagnosticsStore {
       truncated = true;
       let bytes = Buffer.byteLength(JSON.stringify({ ...base, entries: [], truncated }), "utf8");
       let firstEntry = entries.length;
-      // JSON arrays add only commas between their independently serialized
-      // entries. Count the newest suffix once instead of repeatedly encoding
-      // the shrinking response on the Electron main thread. An oversized
-      // response always dropped at least one entry, even when changing
-      // truncated from false to true would save the one byte needed to fit.
       for (let index = entries.length - 1; index > 0; index -= 1) {
         const entryBytes = Buffer.byteLength(JSON.stringify(entries[index]), "utf8");
         const nextBytes = bytes + entryBytes + (firstEntry < entries.length ? 1 : 0);

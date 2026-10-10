@@ -1,7 +1,3 @@
-// FILE: AppIconPicker.browser.tsx
-// Purpose: Verify the visual app-icon picker exposes and applies platform-supported choices.
-// Layer: Browser UI test
-
 import "../../index.css";
 
 import { expect, it, vi } from "vitest";

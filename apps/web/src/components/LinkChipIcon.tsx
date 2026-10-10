@@ -1,11 +1,3 @@
-// FILE: LinkChipIcon.tsx
-// Purpose: Single source of truth for a link's leading icon — the GitHub mark for
-//          GitHub URLs, the site favicon otherwise — using the same describeLinkChip
-//          decision the composer link chip uses. Shared by the read-only
-//          user-message link chip and markdown links so every link surface parses
-//          and renders its icon identically.
-// Layer: Shared UI component
-
 import { GitHubIcon } from "~/lib/icons";
 import { describeLinkChip } from "~/lib/linkChips";
 import { SiteFavicon } from "./SiteFavicon";

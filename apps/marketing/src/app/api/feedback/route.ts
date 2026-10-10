@@ -1,8 +1,3 @@
-// FILE: api/feedback/route.ts
-// Purpose: Receives explicit Synara feedback and delivers it to the maintainer through Resend.
-// Layer: App Router route handler (Node.js runtime)
-// Depends on: Server-only Resend, recipient, and verified sender configuration.
-
 import { consumeFeedbackRateLimit } from "@/lib/feedbackRateLimit";
 
 export const runtime = "nodejs";

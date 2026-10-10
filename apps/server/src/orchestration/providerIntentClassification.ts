@@ -79,11 +79,7 @@ export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean 
 export const isClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
   isReplaySafeClaimedProviderIntent(event) || isProviderSideEffectIntent(event);
 
-/**
- * Intents that must still execute while a thread is quarantined by a blocking
- * delivery. Interrupt, stop and archive must still be able to tear down live
- * work; quarantining new work must never disable cancellation.
- */
+/** intents that must still execute while a thread is quarantined — interrupt/stop/archive must be able to tear down live work; quarantining new work must never disable cancellation */
 export const isQuarantineExemptProviderIntent = (event: ProviderIntentEvent): boolean =>
   event.type === "thread.turn-interrupt-requested" ||
   event.type === "thread.session-stop-requested" ||

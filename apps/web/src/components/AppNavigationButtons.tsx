@@ -1,8 +1,3 @@
-// FILE: AppNavigationButtons.tsx
-// Purpose: Renders Electron-only browser-style route back/forward controls.
-// Layer: Shared web shell chrome
-// Depends on: appNavigation history helpers, header Button/Tooltip primitives
-
 import { goBackInAppHistory, goForwardInAppHistory, useAppNavigationState } from "~/appNavigation";
 import { isElectron } from "~/env";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";

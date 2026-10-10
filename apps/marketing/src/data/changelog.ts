@@ -1,11 +1,5 @@
-// FILE: data/changelog.ts
-// Purpose: Curated Synara release notes powering the public /changelog page.
-// Layer: static data (server-importable). Mirrors the in-app "What's new"
-//        changelog from the Synara desktop app, newest release first.
-// Note: To add a release, prepend a new entry. `date` is rendered verbatim,
-//       so keep the format consistent (e.g. "Jun 4").
+// prepend new entries; `date` is rendered verbatim so keep the format consistent
 
-/** A single highlight inside a release. */
 export interface ChangelogFeature {
   readonly id: string;
   readonly title: string;
@@ -15,7 +9,6 @@ export interface ChangelogFeature {
   readonly details?: string;
 }
 
-/** One released version, with its date label and feature highlights. */
 export interface ChangelogEntry {
   readonly version: string;
   readonly date: string;

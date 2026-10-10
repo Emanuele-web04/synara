@@ -1,4 +1,4 @@
-/** Conservative validation for the `owner/repository` form accepted by GitHub CLI. */
+/** conservative validation for the `owner/repository` form accepted by GitHub CLI */
 export function isValidGitHubRepositoryNameWithOwner(repository: string): boolean {
   const normalized = repository.trim();
   const separator = normalized.indexOf("/");
@@ -13,10 +13,7 @@ export function isValidGitHubRepositoryNameWithOwner(repository: string): boolea
   );
 }
 
-/**
- * Parse the deliberately small input surface used when provisioning a GitHub project.
- * Accepts `owner/repository` or a credential-free GitHub.com HTTPS repository root.
- */
+/** accepts `owner/repository` or a credential-free github.com HTTPS root */
 export function parseGitHubRepositoryInput(input: string | null | undefined): string | null {
   const trimmed = input?.trim() ?? "";
   if (isValidGitHubRepositoryNameWithOwner(trimmed)) return trimmed;
@@ -28,7 +25,6 @@ export function parseGitHubRepositoryInput(input: string | null | undefined): st
     : null;
 }
 
-/** Normalize a supported GitHub remote URL into its `owner/repository` identity. */
 export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(
   url: string | null | undefined,
 ): string | null {
@@ -45,7 +41,6 @@ export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(
     : null;
 }
 
-/** Extract the `owner/repository` identity from a GitHub pull-request web URL. */
 export function parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(
   url: string | null | undefined,
 ): string | null {

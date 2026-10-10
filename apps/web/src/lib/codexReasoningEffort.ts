@@ -3,9 +3,7 @@ import { getModelCapabilities, hasEffortLevel, trimOrNull } from "@synara/shared
 
 export type CodexReasoningEffortSupport = "supported" | "unsupported" | "unknown";
 
-// Runtime discovery is authoritative when present. Before it arrives, known static
-// models can still validate built-in efforts; genuinely unknown models remain open
-// to forward-compatible runtime-only values.
+// runtime discovery is authoritative when present; before it arrives known static models validate built-in efforts and unknown models stay open to forward-compatible values
 export function classifyProviderReasoningEffortSupport(input: {
   provider: ProviderKind;
   model: string | null | undefined;

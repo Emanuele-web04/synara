@@ -1,8 +1,3 @@
-// FILE: windowsShellAppUserModel.ts
-// Purpose: Set AppUserModel relaunch properties on Windows shortcuts and windows
-//          in Microsoft's required order, bypassing Electron's AppId-first write.
-// Layer: Desktop-native Windows shell integration
-
 import * as ChildProcess from "node:child_process";
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";

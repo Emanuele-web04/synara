@@ -3,11 +3,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { columnExists, tableExists } from "./schemaHelpers.ts";
 
-/** Bind a projected provider request to the exact runtime incarnation that emitted it. */
+/** bind a projected request to the exact runtime incarnation that emitted it */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  // Migration 62 retires this table; on a replay of the 54.. range the column
-  // already lives on projection_pending_interactions and there is nothing to add.
+  // migration 62 retires this table — on a 54.. replay the column already lives on projection_pending_interactions
   if (!(yield* tableExists(sql, "projection_pending_approvals"))) {
     return;
   }

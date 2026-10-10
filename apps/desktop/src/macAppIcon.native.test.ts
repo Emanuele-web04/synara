@@ -19,8 +19,7 @@ describe.skipIf(process.platform !== "darwin")("native macOS custom icon persist
       );
       await persistMacAppIcon({ bundlePath, cacheDirectory, png });
 
-      // Read Finder's on-disk custom-icon bit in a separate process, after the
-      // native writer has exited. A runtime Dock override cannot set this bit.
+      // read Finder's custom-icon bit in a separate process after the native writer exits — a runtime Dock override can't set this bit
       const customInfo = spawnProcessSync(
         "/usr/bin/xattr",
         ["-px", "com.apple.FinderInfo", bundlePath],

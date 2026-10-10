@@ -1,8 +1,3 @@
-// FILE: focusedChatContext.ts
-// Purpose: Resolves the currently focused chat context across single and split chat surfaces.
-// Layer: Route-aware UI helpers
-// Exports: hook used by shortcut, discovery, and thread creation flows
-
 import { ThreadId, type ThreadId as ThreadIdType } from "@synara/contracts";
 import { useMemo } from "react";
 import { useParams } from "@tanstack/react-router";

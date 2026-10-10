@@ -1,10 +1,4 @@
-// FILE: threadExport.ts
-// Purpose: Single source of truth for when a thread transcript may be exported.
-//          Exports must not capture in-flight output: a partial assistant
-//          response would be serialized as if it were a completed message.
-// Layer: Shared runtime utility (used by the server export route's 409 guard
-//         and the web composer's /export availability so they cannot drift).
-// Exports: threadExportBlockedReason.
+// exports must not capture in-flight output — a partial response would serialize as a completed message; shared by the server's 409 guard and the web composer so they can't drift
 
 export interface ThreadExportSnapshot {
   readonly latestTurn: { readonly state: string } | null;

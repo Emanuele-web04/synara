@@ -1,11 +1,3 @@
-// FILE: lib/useActiveAnchor.ts
-// Purpose: Shared changelog navigation behavior — scroll-spies which release
-//          section is in view AND jumps to a release on demand. Both the
-//          right-rail (ChangelogNav) and the mobile dropdown (ChangelogPicker)
-//          consume this so the IntersectionObserver wiring and the smooth,
-//          reduced-motion-aware anchor jump live in exactly one place.
-// Layer: Client hook.
-
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
@@ -17,16 +9,7 @@ export interface ChangelogNavItem {
   readonly anchor: string;
 }
 
-/**
- * Tracks the release whose section is near the top of the viewport (`active`)
- * and returns `jumpTo`, which scrolls to a release, syncs the URL hash, and
- * marks it active — honoring `prefers-reduced-motion`. Pass the click event to
- * `jumpTo` to suppress the default anchor jump; omit it (e.g. from a `<select>`)
- * and only the programmatic scroll runs.
- *
- * `items` must be a stable reference (it is — the server page builds it once),
- * so the observer is wired up a single time.
- */
+// `items` must be a stable reference (the server page builds it once) so the observer wires up a single time
 export function useActiveAnchor(items: readonly ChangelogNavItem[]) {
   const [active, setActive] = useState<string | null>(items[0]?.anchor ?? null);
 

@@ -1,11 +1,3 @@
-// FILE: useContainerSize.ts
-// Purpose: Observe an element's content-box size with a "first measurement
-//          immediate, subsequent measurements debounced" policy. The PDF viewer
-//          uses this to resolve fit-width/fit-page scale without re-painting
-//          every page canvas on each frame while a pane divider is dragged.
-// Layer: Web PDF rendering hook
-// Exports: useContainerSize
-
 import { useEffect, useState } from "react";
 
 import type { PdfViewportSize } from "./pdfZoom";

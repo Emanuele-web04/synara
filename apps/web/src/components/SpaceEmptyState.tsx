@@ -1,10 +1,4 @@
-// FILE: SpaceEmptyState.tsx
-// Purpose: The one empty state for the sidebar project list, across Void and custom Spaces.
-// Layer: Sidebar / Spaces UI
-// Why: Void and custom Spaces each had their own empty state (plain centred text vs. a dashed
-//      card with an icon bubble), so the list changed character as you moved between tabs.
-//      One component, one voice: a title, a line of orientation, and an action only where
-//      there is something to do.
+// one empty-state component for Void and custom Spaces — they each had their own, so the list changed character between tabs
 
 import type { Space } from "~/types";
 import { Button } from "./ui/button";
@@ -16,10 +10,7 @@ export function SpaceEmptyState(props: {
   hasProjectsElsewhere: boolean;
   onMoveProjects: () => void;
 }) {
-  // Before the first project exists, every Space is empty for the same reason and the
-  // only move is to create one (which lands in Void). Naming the Space here would dress
-  // a global "nothing yet" up as a per-Space problem, and the bulk-move action below
-  // would open a picker with nothing in it.
+  // before the first project exists every Space is empty for the same reason — naming the Space would dress a global "nothing yet" as a per-Space problem
   if (!props.hasProjectsElsewhere) {
     return (
       <p className="px-2 pt-4 text-center text-ui text-muted-foreground/58">No projects yet</p>

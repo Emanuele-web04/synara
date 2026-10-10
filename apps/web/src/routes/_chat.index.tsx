@@ -1,9 +1,3 @@
-// FILE: _chat.index.tsx
-// Purpose: Restores the last chat route on app launch, falling back to a fresh home-chat draft.
-//          Also the landing for a Space that has nothing to open.
-// Layer: Routing
-// Depends on: the shared restore/create route surface plus the home-chat new-chat handler.
-
 import { SpaceId, type ProjectId } from "@synara/contracts";
 import { createFileRoute } from "@tanstack/react-router";
 

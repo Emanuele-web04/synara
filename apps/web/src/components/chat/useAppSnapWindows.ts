@@ -1,8 +1,3 @@
-// FILE: useAppSnapWindows.ts
-// Purpose: Subscribes to AppSnap desktop state and lists capturable windows while a picker is open.
-// Layer: Chat composer state
-// Depends on: the desktop AppSnap bridge and the shared capture attach helper.
-
 import type { DesktopAppSnapState, DesktopAppSnapWindowEntry, ThreadId } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 

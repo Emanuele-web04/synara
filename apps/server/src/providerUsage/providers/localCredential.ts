@@ -1,8 +1,3 @@
-// FILE: providerUsage/providers/localCredential.ts
-// Purpose: Usage fetchers for providers that expose a local login but no
-// individual live quota API (Droid, Pi). Connected accounts still appear
-// in Settings → Usage; unsigned ones stay needs-auth.
-
 import nodePath from "node:path";
 
 import type { ProviderKind } from "@synara/contracts";

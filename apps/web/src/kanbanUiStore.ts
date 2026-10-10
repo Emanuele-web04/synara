@@ -1,9 +1,3 @@
-// FILE: kanbanUiStore.ts
-// Purpose: Persists kanban control-center UI state (manual draft-card order per project)
-//          plus the ephemeral optimistic-dispatch overlay for drag-to-In-Progress drops.
-// Layer: UI state store
-// Exports: useKanbanUiStore
-
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -13,7 +7,6 @@ import type { KanbanOptimisticDispatchSnapshot } from "./components/kanban/kanba
 export type KanbanViewMode = "classic" | "v2";
 
 interface KanbanUiStoreState {
-  /** Manual order of draft-column card ids per project, captured after a drag. */
   draftOrderByProjectId: Record<string, string[]>;
   setDraftOrder: (projectId: string, order: readonly string[]) => void;
   clearDraftOrder: (projectId: string) => void;
@@ -37,7 +30,6 @@ interface KanbanUiStoreState {
   optimisticDispatchByThreadId: Record<string, KanbanOptimisticDispatchSnapshot>;
   markOptimisticDispatch: (threadId: string, entry: KanbanOptimisticDispatchSnapshot) => void;
   clearOptimisticDispatch: (threadId: string) => void;
-  /** Removes entries dropped at or before cutoffMs; returns them for revert toasts. */
   expireOptimisticDispatches: (
     cutoffMs: number,
   ) => Array<[string, KanbanOptimisticDispatchSnapshot]>;

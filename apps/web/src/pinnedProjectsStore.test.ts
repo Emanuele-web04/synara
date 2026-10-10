@@ -1,7 +1,3 @@
-// FILE: pinnedProjectsStore.test.ts
-// Purpose: Verifies the capped pinned-project store mutates ids predictably.
-// Layer: UI state store test
-
 import { beforeEach, describe, expect, it } from "vitest";
 import { ProjectId } from "@synara/contracts";
 import { usePinnedProjectsStore } from "./pinnedProjectsStore";

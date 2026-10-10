@@ -1,5 +1,3 @@
-// Purpose: Floating composer that retains a transcript quote while the user writes a new prompt.
-
 import type { ThreadEnvironmentMode } from "@synara/contracts";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -130,8 +128,7 @@ export function SelectionNewChatComposer({
       role="dialog"
       aria-label="New chat from selection"
       className="fixed z-50 w-[320px] max-w-[calc(100vw-16px)] text-foreground"
-      // No overflow on this wrapper: a scroll box is square and would clip the rounded
-      // surface's shadow into hard corners. The editor caps and scrolls its own height.
+      // No overflow on this wrapper: a scroll box is square and would clip the rounded surface's shadow into hard corners. The editor caps and scrolls its own height.
       style={{ left: action.left, top: action.top }}
     >
       <div className={COMPOSER_INPUT_SHELL_CLASS_NAME}>

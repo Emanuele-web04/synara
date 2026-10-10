@@ -1,9 +1,3 @@
-// FILE: voiceTranscription.test.ts
-// Purpose: Verifies ChatGPT-session voice transcription behavior without contacting OpenAI.
-// Layer: Server test
-// Exports: Vitest cases
-// Depends on: voiceTranscription utility and mocked fetch responses.
-
 import type { ServerVoiceTranscriptionInput } from "@synara/contracts";
 import { outboundHttp, type OutboundHttpResponse } from "@synara/shared/outboundHttp";
 import { afterEach, describe, expect, it, vi } from "vitest";
