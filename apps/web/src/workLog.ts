@@ -504,9 +504,9 @@ function subagentOutcomeFromStatus(
   }
 }
 
-// A subagent's progress rows take its final state from the task completion or
-// from the per-agent state on its launching call (set when the launcher's turn
-// was interrupted, or when a background subagent settled), whichever is latest.
+// Keep terminal outcomes within one invocation. A resumed task reuses its tool
+// id, but a task.started after settlement opens a new scope. Background progress
+// can span parent turns without starting a new invocation.
 function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
   entries: ReadonlyArray<Entry>,
   ordered: ReadonlyArray<OrchestrationThreadActivity>,
@@ -514,13 +514,37 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
   if (!entries.some((entry) => entry.subagentProgress !== undefined)) {
     return entries;
   }
-  const outcomeByToolUseId = new Map<string, "completed" | "failed" | "stopped">();
+  type Invocation = { outcome?: WorkLogSubagentProgress["outcome"] };
+  const invocationByToolUseId = new Map<string, Invocation>();
+  const invocationByProgressId = new Map<string, Invocation>();
+  const currentInvocation = (toolUseId: string): Invocation => {
+    let invocation = invocationByToolUseId.get(toolUseId);
+    if (!invocation) {
+      invocation = {};
+      invocationByToolUseId.set(toolUseId, invocation);
+    }
+    return invocation;
+  };
   for (const activity of ordered) {
     const payload = asRecord(activity.payload);
+    if (activity.kind === "task.started") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      if (toolUseId && invocationByToolUseId.get(toolUseId)?.outcome !== undefined) {
+        // Older progress retains its settled invocation object. A repeated
+        // start while still live leaves the existing invocation intact.
+        invocationByToolUseId.set(toolUseId, {});
+      }
+      continue;
+    }
+    if (activity.kind === "task.progress") {
+      const toolUseId = asTrimmedString(payload?.toolUseId);
+      if (toolUseId) invocationByProgressId.set(activity.id, currentInvocation(toolUseId));
+      continue;
+    }
     if (activity.kind === "task.completed") {
       const toolUseId = asTrimmedString(payload?.toolUseId);
       const outcome = subagentOutcomeFromStatus(asTrimmedString(payload?.status));
-      if (toolUseId && outcome) outcomeByToolUseId.set(toolUseId, outcome);
+      if (toolUseId && outcome) currentInvocation(toolUseId).outcome = outcome;
       continue;
     }
     if (
@@ -531,13 +555,13 @@ function withSubagentProgressOutcomes<Entry extends WorkLogEntry>(
         decodeSubagentAgentStates(collabPayloadItem(payload)),
       )) {
         const outcome = subagentOutcomeFromStatus(state.status);
-        if (outcome) outcomeByToolUseId.set(threadId, outcome);
+        if (outcome) currentInvocation(threadId).outcome = outcome;
       }
     }
   }
   return entries.map((entry) => {
     const outcome = entry.subagentProgress
-      ? outcomeByToolUseId.get(entry.subagentProgress.toolUseId)
+      ? invocationByProgressId.get(entry.id)?.outcome
       : undefined;
     return outcome && entry.subagentProgress
       ? { ...entry, subagentProgress: { ...entry.subagentProgress, outcome } }
