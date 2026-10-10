@@ -657,9 +657,20 @@ test("production MCP controls one persistent Electron page across visibility cha
           expect(layerOrder.backgroundVisible).toBe(false);
           expect(layerOrder.backgroundBounds).toMatchObject({ x: 0, y: 0 });
           const viewport = (await read(
-            "({width:innerWidth,height:innerHeight,scale:devicePixelRatio})",
-          )) as { width: number; height: number; scale: number };
+            "({width:innerWidth,height:innerHeight,scale:devicePixelRatio,clientWidth:document.documentElement.clientWidth,documentWidth:document.documentElement.scrollWidth})",
+          )) as {
+            width: number;
+            height: number;
+            scale: number;
+            clientWidth: number;
+            documentWidth: number;
+          };
           expect(viewport).toMatchObject({ width: 1280, height: 800 });
+          // Linux's non-overlay scrollbar uses part of the viewport. Full-page
+          // capture covers the document's measured content, without that gutter.
+          expect(viewport.documentWidth).toBe(viewport.clientWidth);
+          expect(viewport.clientWidth).toBeGreaterThan(0);
+          expect(viewport.clientWidth).toBeLessThanOrEqual(viewport.width);
           await run(
             'await human.click(page.getByRole("button",{name:"Commit agent action",exact:true})); return true;',
             3000,
@@ -672,7 +683,7 @@ test("production MCP controls one persistent Electron page across visibility cha
           });
           expect(proof.content.some((block) => block.type === "image")).toBe(true);
           expect(proof.structuredContent.image).toMatchObject({
-            width: 1280 * viewport.scale,
+            width: (fullPage ? viewport.documentWidth : 1280) * viewport.scale,
             height: (fullPage ? 2600 : 800) * viewport.scale,
           });
           const pixels = await electronApp.evaluate(({ nativeImage }, artifactPath) => {
@@ -877,6 +888,9 @@ test("keeps one real renderer guest across floating and sidebar handoffs", async
       const f = (globalThis as FocusFixtureGlobals).__synaraVisibleBrowserE2E;
       f.browserManager.open({ threadId: f.threadId });
       f.browserManager.newTab({ threadId: f.threadId, url });
+      // As in the existing renderer-input fixture, first create the native
+      // runtime, then use the real manager's promotion path to mount its guest.
+      f.setSurface("native");
       f.setSurface("renderer");
       f.setPageZoomFactor(0.25);
     }, site.appUrl);
@@ -906,6 +920,25 @@ test("keeps one real renderer guest across floating and sidebar handoffs", async
       await testInfo.attach(name, { body: Buffer.from(png, "base64"), contentType: "image/png" });
     };
     const clickChrome = async (buttonId: "drag" | "pop" | "close") => {
+      // Wait for the disclosure to expose its target before sending real native
+      // input. A coordinate click during the width transition can be clipped.
+      await expect
+        .poll(() =>
+          electronApp.evaluate(
+            async ({ webContents }, input) => {
+              const chrome = webContents.fromId(input.id);
+              if (!chrome) throw new Error("Expected the isolated chrome guest.");
+              return chrome.executeJavaScript(`(() => {
+                const button = document.getElementById(${JSON.stringify(input.buttonId)});
+                const rect = button.getBoundingClientRect();
+                const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                return target?.closest("button") === button;
+              })()`);
+            },
+            { id: chromeId, buttonId },
+          ),
+        )
+        .toBe(true);
       await electronApp.evaluate(
         async ({ webContents }, input) => {
           const chrome = webContents.fromId(input.id);
