@@ -22,6 +22,7 @@ const CONTROL_METHODS = new Set<string>([
   WS_METHODS.terminalResize,
   WS_METHODS.terminalClose,
   WS_METHODS.serverStopLocalServer,
+  WS_METHODS.providerStopIdleRuntimeSession,
   WS_METHODS.automationCancelRun,
   WS_METHODS.automationMarkRunRead,
   WS_METHODS.automationArchiveRun,

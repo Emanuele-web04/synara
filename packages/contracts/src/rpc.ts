@@ -251,7 +251,7 @@ import {
   OrchestrationShellStreamItem,
   OrchestrationThreadStreamItem,
 } from "./orchestration";
-import { ProviderCompactThreadInput } from "./provider";
+import { ProviderCompactThreadInput, ProviderStopSessionInput } from "./provider";
 import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
@@ -1560,6 +1560,15 @@ export const WsProviderCompactThreadRpc = Rpc.make(WS_METHODS.providerCompactThr
   error: WsRpcError,
 });
 
+export const WsProviderStopIdleRuntimeSessionRpc = Rpc.make(
+  WS_METHODS.providerStopIdleRuntimeSession,
+  {
+    payload: ProviderStopSessionInput,
+    success: Schema.Void,
+    error: WsRpcError,
+  },
+);
+
 export const WsProviderListCommandsRpc = Rpc.make(WS_METHODS.providerListCommands, {
   payload: ProviderListCommandsInput,
   success: ProviderListCommandsResult,
@@ -2024,6 +2033,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsSubscribeServerSettingsRpc,
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderCompactThreadRpc,
+  WsProviderStopIdleRuntimeSessionRpc,
   WsProviderListCommandsRpc,
   WsProviderListSkillsRpc,
   WsProviderListSkillsCatalogRpc,

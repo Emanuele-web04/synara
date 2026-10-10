@@ -225,6 +225,15 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Stop an idle, resumable runtime without cancelling thread work. Refuses
+   * active turns, provider preparation and background tasks; waits for the
+   * adapter cleanup barrier while preserving the binding and resume cursor.
+   */
+  readonly stopIdleRuntimeSession?: (
+    input: ProviderStopSessionInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Whether provider-native background tasks are currently keeping the
    * thread's runtime alive. Restart-oriented recovery paths must check this
    * before stopRuntimeSession: killing the shared subprocess silently
