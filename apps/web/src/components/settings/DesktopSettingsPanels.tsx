@@ -393,11 +393,11 @@ export function AppSnapSettingsPanel({
 
         <SettingsRow
           title="Shortcut"
-          description="Choose exactly two keys: one modifier and one other key. Synara checks its own bindings and asks macOS whether another app already owns the shortcut before saving it."
+          description="Choose one modifier and one other key, or both ⌘ or both ⌥ keys together. Synara checks its own bindings and asks macOS whether another app already owns the shortcut before saving it."
           control={
             <AppSnapShortcutControl
               key={
-                settings.appSnapShortcut.kind === "both-option-keys"
+                settings.appSnapShortcut.kind !== "key-chord"
                   ? settings.appSnapShortcut.kind
                   : `${settings.appSnapShortcut.modifier}:${settings.appSnapShortcut.key}`
               }

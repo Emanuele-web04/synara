@@ -32,6 +32,7 @@ import {
   DEFAULT_APP_SNAP_SHORTCUT,
   appSnapShortcutAccelerator,
   appSnapShortcutSystemConflict,
+  isAppSnapModifierPairShortcut,
   isAppSnapShortcut,
   sameAppSnapShortcut,
 } from "@synara/shared/appSnapShortcut";
@@ -668,7 +669,7 @@ export class DesktopAppSnapManager {
         reason: "Choose one modifier and one supported keyboard key.",
       };
     }
-    if (shortcut.kind === "both-option-keys") {
+    if (isAppSnapModifierPairShortcut(shortcut)) {
       return { available: true, reason: null };
     }
     const systemConflict = appSnapShortcutSystemConflict(shortcut);
@@ -1631,7 +1632,7 @@ export class DesktopAppSnapManager {
       this.#setState("error", "The AppSnap shortcut is already used by macOS or another app.");
       return;
     }
-    if (this.#shortcut.kind === "both-option-keys") this.#releaseShortcutReservation();
+    if (isAppSnapModifierPairShortcut(this.#shortcut)) this.#releaseShortcutReservation();
     if (this.#watchProcess) return;
     try {
       await FS.promises.mkdir(this.#options.captureDirectory, { recursive: true, mode: 0o700 });
@@ -1661,7 +1662,13 @@ export class DesktopAppSnapManager {
     this.#setState("starting", null);
     // Key chords are detected by Electron's reserved accelerator; the helper
     // only captures on demand, driven by "trigger" lines on its stdin.
-    const shortcutArguments = this.#shortcut.kind === "key-chord" ? ["--external-trigger"] : [];
+    // Modifier pairs are watched by the helper's own passive event tap.
+    const shortcutArguments =
+      this.#shortcut.kind === "key-chord"
+        ? ["--external-trigger"]
+        : this.#shortcut.kind === "both-command-keys"
+          ? ["--chord-modifier", "command"]
+          : [];
     const child = this.#options.spawn(
       this.#options.helperPath,
       [
@@ -2029,7 +2036,7 @@ export class DesktopAppSnapManager {
     }
     if (message.type === "triggered") {
       if (!this.#pendingCaptureRequests.has(message.id)) {
-        console.info(`[desktop-appsnap] Option chord triggered (${message.id}).`);
+        console.info(`[desktop-appsnap] Modifier chord triggered (${message.id}).`);
       }
       return;
     }

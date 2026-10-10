@@ -295,7 +295,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "appsnap:shortcut",
     section: "appsnap",
     title: "Shortcut",
-    keywords: "Press the left and right Option keys at the same time. hotkey chord alt keys",
+    keywords:
+      "Press the left and right Option or Command keys at the same time. hotkey chord alt cmd keys",
   },
   {
     id: "appsnap:destination",

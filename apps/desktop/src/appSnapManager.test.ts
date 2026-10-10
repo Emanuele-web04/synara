@@ -479,6 +479,59 @@ describe("AppSnap shortcut availability", () => {
     expect(unregister).toHaveBeenLastCalledWith("Alt+S");
     manager.dispose();
   });
+
+  it("watches both Command keys in the helper without reserving an accelerator", async () => {
+    const permissionChild = createFakeChildProcess();
+    const watchChild = createFakeChildProcess();
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(permissionChild)
+      .mockReturnValueOnce(watchChild) as unknown as typeof ChildProcess.spawn;
+    const register = vi.fn(() => true);
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory: "/tmp/synara-appsnap-test",
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      spawn,
+      shortcutRegistry: { register, unregister: vi.fn() },
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError: vi.fn(),
+    });
+    const shortcut = { kind: "both-command-keys" } as const;
+    expect(manager.checkShortcut(shortcut)).toEqual({ available: true, reason: null });
+    expect((await manager.setShortcut(shortcut)).state.shortcut).toEqual(shortcut);
+
+    const enabling = manager.setEnabled(true);
+    await flushPromises();
+    permissionChild.stdout.end(
+      `${JSON.stringify({
+        type: "permissions",
+        inputMonitoring: "granted",
+        screenRecording: "granted",
+      })}\n`,
+    );
+    permissionChild.stderr.end();
+    permissionChild.emit("close", 0, null);
+    await enabling;
+
+    expect(spawn).toHaveBeenLastCalledWith(
+      process.execPath,
+      [
+        "--watch",
+        "--output-dir",
+        "/tmp/synara-appsnap-test",
+        "--excluded-bundle-id",
+        SYNARA_DEVELOPMENT_BUNDLE_ID,
+        "--chord-modifier",
+        "command",
+      ],
+      expect.any(Object),
+    );
+    expect(register).not.toHaveBeenCalled();
+    manager.dispose();
+  });
 });
 
 describe("AppSnap helper protocol", () => {

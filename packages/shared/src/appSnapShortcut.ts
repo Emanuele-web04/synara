@@ -3,6 +3,7 @@
 
 import type {
   DesktopAppSnapKeyChord,
+  DesktopAppSnapModifierPairShortcut,
   DesktopAppSnapShortcut,
   DesktopAppSnapShortcutModifier,
 } from "@synara/contracts";
@@ -10,6 +11,11 @@ import type {
 export const DEFAULT_APP_SNAP_SHORTCUT = {
   kind: "both-option-keys",
 } as const satisfies DesktopAppSnapShortcut;
+
+export const APP_SNAP_MODIFIER_PAIR_SHORTCUT_KINDS = [
+  "both-option-keys",
+  "both-command-keys",
+] as const satisfies ReadonlyArray<DesktopAppSnapModifierPairShortcut["kind"]>;
 
 export const APP_SNAP_SHORTCUT_MODIFIERS = [
   "command",
@@ -42,6 +48,13 @@ const MODIFIER_BY_EVENT_CODE: Readonly<Record<string, DesktopAppSnapShortcutModi
   AltRight: "option",
   ShiftLeft: "shift",
   ShiftRight: "shift",
+};
+
+const MODIFIER_PAIR_LABELS: Readonly<
+  Record<DesktopAppSnapModifierPairShortcut["kind"], readonly [string, string]>
+> = {
+  "both-option-keys": ["⌥ left", "⌥ right"],
+  "both-command-keys": ["⌘ left", "⌘ right"],
 };
 
 const MODIFIER_LABELS: Readonly<Record<DesktopAppSnapShortcutModifier, string>> = {
@@ -116,10 +129,16 @@ export function isAppSnapShortcutKey(value: unknown): value is string {
   return typeof value === "string" && APP_SNAP_SHORTCUT_KEY_SET.has(value);
 }
 
+export function isAppSnapModifierPairShortcut(
+  shortcut: DesktopAppSnapShortcut,
+): shortcut is DesktopAppSnapModifierPairShortcut {
+  return shortcut.kind !== "key-chord";
+}
+
 export function isAppSnapShortcut(value: unknown): value is DesktopAppSnapShortcut {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
-  if (candidate.kind === "both-option-keys") return true;
+  if (APP_SNAP_MODIFIER_PAIR_SHORTCUT_KINDS.includes(candidate.kind as never)) return true;
   return (
     candidate.kind === "key-chord" &&
     isAppSnapShortcutModifier(candidate.modifier) &&
@@ -129,6 +148,19 @@ export function isAppSnapShortcut(value: unknown): value is DesktopAppSnapShortc
 
 export function appSnapModifierFromEventCode(code: string): DesktopAppSnapShortcutModifier | null {
   return MODIFIER_BY_EVENT_CODE[code] ?? null;
+}
+
+/** The modifier-pair shortcut formed by held physical keys, e.g. both ⌘ keys. */
+export function appSnapModifierPairFromEventCodes(
+  codes: readonly string[],
+): DesktopAppSnapModifierPairShortcut | null {
+  if (codes.includes("MetaLeft") && codes.includes("MetaRight")) {
+    return { kind: "both-command-keys" };
+  }
+  if (codes.includes("AltLeft") && codes.includes("AltRight")) {
+    return { kind: "both-option-keys" };
+  }
+  return null;
 }
 
 /**
@@ -153,7 +185,7 @@ export function appSnapShortcutSystemConflict(chord: DesktopAppSnapKeyChord): st
 }
 
 export function appSnapShortcutLabels(shortcut: DesktopAppSnapShortcut): readonly [string, string] {
-  if (shortcut.kind === "both-option-keys") return ["⌥ left", "⌥ right"];
+  if (isAppSnapModifierPairShortcut(shortcut)) return MODIFIER_PAIR_LABELS[shortcut.kind];
   return [appSnapShortcutModifierLabel(shortcut.modifier), appSnapShortcutKeyLabel(shortcut.key)];
 }
 
@@ -181,6 +213,6 @@ export function sameAppSnapShortcut(
   right: DesktopAppSnapShortcut,
 ): boolean {
   if (left.kind !== right.kind) return false;
-  if (left.kind === "both-option-keys" || right.kind === "both-option-keys") return true;
+  if (left.kind !== "key-chord" || right.kind !== "key-chord") return true;
   return left.modifier === right.modifier && left.key === right.key;
 }
