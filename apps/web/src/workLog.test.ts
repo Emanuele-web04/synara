@@ -1790,6 +1790,40 @@ describe("deriveWorkLogEntries", () => {
     },
   );
 
+  it("keeps per-turn provider tool ids from merging calls of different turns", () => {
+    // ACP providers (Grok, Devin, Droid, OMP) restart their tool-call ids every
+    // turn; the server scopes the runtime item id and marks the raw id as
+    // `providerToolCallId`, but activity data still carries the raw `toolCallId`.
+    const call = (id: string, turnId: string, sequence: number, kind: string, command: string) =>
+      makeActivity({
+        id,
+        createdAt: `2026-02-23T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+        sequence,
+        turnId,
+        kind,
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: { toolCallId: "call-1", providerToolCallId: "call-1", command },
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        call("turn-1-start", "turn-1", 1, "tool.started", "ls"),
+        call("turn-1-done", "turn-1", 2, "tool.completed", "ls"),
+        call("turn-2-start", "turn-2", 3, "tool.started", "pwd"),
+        call("turn-2-done", "turn-2", 4, "tool.completed", "pwd"),
+      ],
+      undefined,
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1"), TurnId.makeUnsafe("turn-2")]) },
+    );
+    expect(entries.map((entry) => [entry.id, entry.turnId, entry.command])).toEqual([
+      ["turn-1-start", TurnId.makeUnsafe("turn-1"), "ls"],
+      ["turn-2-start", TurnId.makeUnsafe("turn-2"), "pwd"],
+    ]);
+  });
+
   it("keeps distinct calls of the same tool separate by tool-call id", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
