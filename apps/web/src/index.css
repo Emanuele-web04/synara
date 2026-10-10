@@ -332,6 +332,31 @@
   }
 }
 
+/* Rail activation follows the same brief ease-out timing as sidebar disclosures. */
+@keyframes app-rail-icon-enter {
+  0% {
+    transform: scale(0.92);
+  }
+
+  55% {
+    transform: scale(1.08);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.app-rail-icon-enter {
+  animation: app-rail-icon-enter 220ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-rail-icon-enter {
+    animation: none;
+  }
+}
+
 /* The composer model trigger swaps to a fixed placeholder while its menu is open; this
    plays on the model label when it comes back. */
 @keyframes composer-trigger-label-enter {
