@@ -83,7 +83,9 @@ export function useChatPendingInteractions({
   // can never be answered. Gate them exactly like the sidebar pill, Kanban and
   // Tasks so a dead approval cannot keep the composer locked; the server settles
   // the rows once the runtime reports the turn or session gone.
-  const canAnswerPendingRequests = canSessionAnswerPendingRequests(activeThread?.session);
+  const detailSync = useStore((store) => store.threadDetailSyncById?.[threadId]);
+  const canAnswerPendingRequests =
+    detailSync !== "cached" && canSessionAnswerPendingRequests(activeThread?.session);
   const pendingApprovals = useMemo(
     () =>
       canAnswerPendingRequests

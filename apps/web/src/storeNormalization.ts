@@ -643,11 +643,12 @@ export function normalizeChatMessage(
 function normalizeChatMessages(
   incoming: ReadModelThread["messages"],
   previous: ChatMessage[] | undefined,
+  preserveHistory = false,
 ): ChatMessage[] {
   const previousById = new Map(previous?.map((message) => [message.id, message] as const));
-  const nextMessages = incoming
-    .slice(-MAX_THREAD_MESSAGES)
-    .map((message) => normalizeChatMessage(message, previousById.get(message.id)));
+  const nextMessages = (preserveHistory ? incoming : incoming.slice(-MAX_THREAD_MESSAGES)).map(
+    (message) => normalizeChatMessage(message, previousById.get(message.id)),
+  );
   return arraysShallowEqual(previous, nextMessages) ? previous : nextMessages;
 }
 
@@ -766,6 +767,7 @@ function mergeReadModelMessagesWithLiveHotPath(
     // Turn the snapshot has just settled: its message contents are final, so the
     // "local row looks richer" heuristics must not resurrect mid-stream text.
     readonly authoritativeTurnId?: TurnId | null;
+    readonly preserveLoadedHistory?: boolean;
   },
 ): ReadModelThread["messages"] {
   if (!previousThread || previousThread.messages.length === 0) {
@@ -778,6 +780,13 @@ function mergeReadModelMessagesWithLiveHotPath(
   );
   const mergedById = new Map<MessageId, ReadModelThread["messages"][number]>();
   let changed = false;
+  if (options?.preserveLoadedHistory) {
+    const incomingIds = new Set(incomingMessages.map((message) => message.id));
+    for (const previousMessage of previousThread.messages) {
+      mergedById.set(previousMessage.id, readModelMessageFromChatMessage(previousMessage));
+      if (!incomingIds.has(previousMessage.id)) changed = true;
+    }
+  }
 
   for (const incomingMessage of incomingMessages) {
     const previousMessage = previousMessageById.get(incomingMessage.id);
@@ -1078,6 +1087,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
   incoming: ReadModelThread,
   previousThread: Thread | undefined,
   snapshotSequence?: number,
+  preserveLoadedHistory = false,
 ): ReadModelThread {
   if (!previousThread) {
     return incoming;
@@ -1102,11 +1112,21 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     settledLocalTurnId === null && shouldPreserveRunningTurn(previousThread, incoming);
   const mergedMessages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread, {
     authoritativeTurnId: settledLocalTurnId,
+    preserveLoadedHistory,
   });
   const messages =
     settledLocalTurnId === null
       ? mergedMessages
       : clearSettledTurnStreamingFlags(mergedMessages, settledLocalTurnId);
+  const incomingActivityIds = preserveLoadedHistory
+    ? new Set(incoming.activities.map((activity) => activity.id))
+    : undefined;
+  const activities = incomingActivityIds
+    ? [
+        ...previousThread.activities.filter((activity) => !incomingActivityIds.has(activity.id)),
+        ...incoming.activities,
+      ]
+    : incoming.activities;
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
     preserveRunningTurn,
     incomingLatestTurn: incoming.latestTurn,
@@ -1131,6 +1151,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     : incoming.snoozeReminderAt;
   if (
     messages === incoming.messages &&
+    activities === incoming.activities &&
     session === incoming.session &&
     latestTurn === incoming.latestTurn &&
     claudeCacheReview === incoming.claudeCacheReview &&
@@ -1142,6 +1163,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
   return {
     ...incoming,
     messages,
+    activities,
     session,
     latestTurn,
     ...(claudeCacheReview !== undefined ? { claudeCacheReview } : {}),
@@ -1260,6 +1282,7 @@ function normalizeTurnDiffSummaries(
 export function normalizeActivities(
   incoming: ReadModelThread["activities"],
   previous: Thread["activities"] | undefined,
+  preserveHistory = false,
 ): Thread["activities"] {
   const previousActivities = previous ? dedupeActivitiesById(previous) : undefined;
   const incomingActivities = dedupeActivitiesById(incoming);
@@ -1277,7 +1300,7 @@ export function normalizeActivities(
     }
     return activity;
   });
-  const cappedActivities = capThreadActivities(nextActivities);
+  const cappedActivities = preserveHistory ? nextActivities : capThreadActivities(nextActivities);
   return arraysShallowEqual(previous, cappedActivities) ? previous : cappedActivities;
 }
 
@@ -1306,6 +1329,7 @@ export interface ThreadActivityAccumulator {
 
 export function createThreadActivityAccumulator(
   previous: Thread["activities"],
+  preserveHistory = false,
 ): ThreadActivityAccumulator {
   const deduped = dedupeActivitiesById(previous);
   // `dedupeActivitiesById` only returns a new array when it actually removed a duplicate, so a
@@ -1353,7 +1377,7 @@ export function createThreadActivityAccumulator(
           changed = true;
         }
       }
-      if (working.length > MAX_THREAD_ACTIVITIES) {
+      if (!preserveHistory && working.length > MAX_THREAD_ACTIVITIES) {
         const capped = capThreadActivities(working);
         // `capThreadActivities` only filters, so an unchanged length means unchanged contents.
         if (capped.length !== working.length) {
@@ -1747,11 +1771,15 @@ export function normalizeThreadFromReadModel(
   previous: Thread | undefined,
   snapshotSequence?: number,
   /** `restoringSession`: see resolveInitialLastVisitedAt. */
-  options: { readonly restoringSession?: boolean } = {},
+  options: { readonly restoringSession?: boolean; readonly preserveMessageHistory?: boolean } = {},
 ): Thread {
   const modelSelection = normalizeModelSelection(incoming.modelSelection, previous?.modelSelection);
   const session = normalizeThreadSession(incoming.session, previous?.session);
-  const messages = normalizeChatMessages(incoming.messages, previous?.messages);
+  const messages = normalizeChatMessages(
+    incoming.messages,
+    previous?.messages,
+    options.preserveMessageHistory,
+  );
   const proposedPlans = normalizeProposedPlans(incoming.proposedPlans, previous?.proposedPlans);
   const latestTurn = normalizeLatestTurn(incoming.latestTurn, previous?.latestTurn);
   const handoff =
@@ -1807,7 +1835,11 @@ export function normalizeThreadFromReadModel(
     incoming.checkpoints,
     previous?.turnDiffSummaries,
   );
-  const activities = normalizeActivities(incoming.activities, previous?.activities);
+  const activities = normalizeActivities(
+    incoming.activities,
+    previous?.activities,
+    options?.preserveMessageHistory,
+  );
   const incomingPendingInteractions = Object.hasOwn(incoming, "pendingInteractions")
     ? (incoming.pendingInteractions ?? [])
     : previous?.pendingInteractions;

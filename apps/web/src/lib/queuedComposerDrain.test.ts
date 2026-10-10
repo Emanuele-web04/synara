@@ -305,6 +305,19 @@ describe("queued composer drain watcher", () => {
     useStore.setState(initialState);
   });
 
+  it("holds restored queues until an empty replay confirms detail, without changing pause provenance", async () => {
+    seedThread(makeThread({ id: THREAD_ID, session: makeSession("ready") }));
+    useStore.setState({ threadDetailSyncById: { [THREAD_ID]: "cached" } });
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("restored-queue"));
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+    useStore.getState().confirmThreadDetailReplay(THREAD_ID);
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
   it("holds every cache review status without consuming retries and resumes after clearance", async () => {
     vi.useFakeTimers();
     const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
