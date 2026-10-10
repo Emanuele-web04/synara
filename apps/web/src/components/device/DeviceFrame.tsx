@@ -337,13 +337,13 @@ export const DeviceSilhouette = memo(function DeviceSilhouette({
  *
  * `button` is what the press sends. A nub with no `button` is drawn metal with
  * a tooltip: it explains why there is nothing to press rather than offering a
- * control that would refuse, which is the state the pane must never ship. The
- * action button (the ring/silent switch's replacement) is the only such nub;
- * it maps to nothing the helper can inject.
+ * control that would refuse, which is the state the pane must never ship.
  *
- * Apple puts volume up and down on two separate buttons, so both chassis draw
- * two nubs. `volumeRocker` belongs to the Android spec, whose backend does not
- * exist yet; it gets its press when that lands.
+ * Two nubs are inert. The action button (the ring/silent switch's replacement)
+ * maps to nothing the helper can inject, and `volumeRocker` belongs to the
+ * Android spec, whose backend does not exist yet; it gets its press when that
+ * lands. Apple puts volume up and down on two separate buttons, so both
+ * chassis draw two nubs.
  */
 const NUB_ACTIONS: Record<
   string,
@@ -352,6 +352,8 @@ const NUB_ACTIONS: Record<
   volumeUp: { label: "Volume up", button: "volume-up" },
   volumeDown: { label: "Volume down", button: "volume-down" },
   power: { label: "Lock", button: "lock" },
+  action: { label: "Action button", hint: "Can't be pressed in the simulator" },
+  volumeRocker: { label: "Volume rocker", hint: "Can't be pressed in the simulator" },
 };
 
 /** Direction a pressed nub travels: always into the chassis. */
@@ -364,8 +366,10 @@ const NUB_PRESS_IN: Record<Nub["side"], string> = {
 /**
  * Hit rectangles for the drawn nubs, as percentages of the frame box. The SVG
  * already draws the hardware; these are the invisible controls laid over it,
- * deep enough (the full chassis margin) that a few pixels of protruding metal
- * are not the only thing to click.
+ * deep enough (the full chassis margin plus a few pixels past the device edge)
+ * that a thin strip of protruding metal is not the whole target. Extending
+ * inward is not an option — that would sit on the screen and steal taps meant
+ * for the bezel's edge.
  */
 function nubHitRects(kind: DeviceKind, pixelW?: number, pixelH?: number) {
   const { spec, margin, W, H } = metrics(kind, pixelW, pixelH);
@@ -374,14 +378,14 @@ function nubHitRects(kind: DeviceKind, pixelW?: number, pixelH?: number) {
     const style: CSSProperties =
       side === "top"
         ? {
-            top: 0,
-            height: `${depth.y}%`,
+            top: "-8px",
+            height: `calc(${depth.y}% + 8px)`,
             left: `${(100 * (at >= 0 ? at : W + at - len)) / W}%`,
             width: `${(100 * len) / W}%`,
           }
         : {
-            [side]: 0,
-            width: `${depth.x}%`,
+            [side]: "-8px",
+            width: `calc(${depth.x}% + 8px)`,
             top: `${(100 * at) / H}%`,
             height: `${(100 * len) / H}%`,
           };

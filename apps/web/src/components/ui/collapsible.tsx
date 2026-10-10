@@ -12,7 +12,10 @@ function Collapsible({ ...props }: CollapsiblePrimitive.Root.Props) {
 function CollapsibleTrigger({ className, ...props }: CollapsiblePrimitive.Trigger.Props) {
   return (
     <CollapsiblePrimitive.Trigger
-      className={cn("cursor-pointer", className)}
+      className={cn(
+        "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-1",
+        className,
+      )}
       data-slot="collapsible-trigger"
       {...props}
     />

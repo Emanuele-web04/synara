@@ -145,7 +145,7 @@ export function PdfFilePreview(props: {
       <div
         className="flex min-h-0 flex-1 items-center justify-center"
         role="status"
-        aria-label="Loading PDF..."
+        aria-label="Loading PDF…"
       >
         <Loader2Icon className="size-4 animate-spin opacity-60" aria-hidden="true" />
       </div>

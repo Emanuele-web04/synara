@@ -41,6 +41,7 @@ import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/Impor
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
+  interruptedTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
   subagentsRunning?: boolean;
   collapseFinishedTurns?: boolean;
@@ -144,6 +145,7 @@ interface ChatTranscriptPaneProps {
 export function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
+  interruptedTurnId,
   activeTurnInProgress,
   subagentsRunning,
   collapseFinishedTurns,
@@ -354,6 +356,7 @@ export function ChatTranscriptPane({
             worktreeSetupPendingAction={worktreeSetupPendingAction ?? null}
             {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
             activeTurnId={activeTurnId ?? null}
+            interruptedTurnId={interruptedTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
             subagentsRunning={subagentsRunning === true}
             collapseFinishedTurns={collapseFinishedTurns !== false}

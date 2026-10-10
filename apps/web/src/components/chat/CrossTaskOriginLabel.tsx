@@ -45,7 +45,7 @@ export const CrossTaskOriginLabel = memo(function CrossTaskOriginLabel({
 }) {
   const className = cn(
     "inline-flex max-w-full items-center gap-2 self-end rounded-md py-1",
-    "font-system-ui text-ui font-normal text-muted-foreground/72",
+    "font-system-ui text-ui font-normal text-muted-foreground/80",
     onOpenSourceThread &&
       "cursor-pointer transition-colors duration-150 hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
   );
@@ -56,7 +56,7 @@ export const CrossTaskOriginLabel = memo(function CrossTaskOriginLabel({
         type="button"
         className={className}
         data-cross-task-origin="true"
-        aria-label={origin.coordinatorGroupName ? "Open coordinator" : "Open source thread"}
+        aria-label={`${crossTaskOriginText(origin)}. ${origin.coordinatorGroupName ? "Open coordinator" : "Open source thread"}`}
         onClick={() => onOpenSourceThread(origin.sourceThreadId)}
       >
         <OriginContent text={crossTaskOriginText(origin)} />

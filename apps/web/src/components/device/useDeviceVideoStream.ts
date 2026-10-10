@@ -283,8 +283,8 @@ export function useDeviceVideoStream(input: {
         kind: "error",
         message:
           reason === "decode-failed"
-            ? "The simulator stream sent a frame Synara could not read."
-            : "The simulator stream disconnected.",
+            ? "The simulator stream sent a frame Synara could not read. Reopen the panel to retry."
+            : "The simulator stream disconnected. Reopen the panel to retry.",
       });
     };
 

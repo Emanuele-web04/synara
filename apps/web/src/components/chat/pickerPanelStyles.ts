@@ -45,7 +45,7 @@ export const PICKER_PANEL_ROW_SELECTED_CLASS_NAME =
 
 /** Quiet section header above a plain picker list group. */
 export const PICKER_PANEL_GROUP_LABEL_CLASS_NAME =
-  "px-1.5 py-1 font-normal text-muted-foreground/60 text-ui-xs";
+  "px-1.5 py-1 font-normal text-muted-foreground/80 text-ui-xs";
 
 /** Footer actions share the app UI size used by ComboboxItem (add project, reset to home). */
 export const PICKER_PANEL_ACTION_ROW_CLASS_NAME = `flex w-full items-center text-left text-ui ${PICKER_PANEL_ROW_GEOMETRY_CLASS_NAME} ${ELEVATED_HOVER_SURFACE_CLASS_NAME} hover:text-[var(--color-text-foreground)]`;

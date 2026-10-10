@@ -39,15 +39,27 @@ export const SIDEBAR_HOVER_CARD_ROW_CLASS_NAME = `flex w-full min-w-0 items-cent
 export const SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME = `${APP_TOOLTIP_SURFACE_CLASS_NAME} w-[16rem]`;
 
 /**
- * Open/close timing spread onto BOTH cards' triggers. In Base UI v1.5 `delay`/
- * `closeDelay` live on the trigger (Tooltip.Trigger and PreviewCard.Trigger), NOT
- * the root — passing them to the root is silently ignored. `delay: 0` surfaces the
- * card the instant the pointer lands; `closeDelay: 0` dismisses it the instant the
- * pointer leaves, matching the tooltip's natural snappy close. The project card's
- * controls stay reachable while dismissing via PreviewCard's hoverable safe area
- * (the trigger/popup overlap from the negative side offset leaves no gap to cross).
+ * Open/close timing spread onto the thread cards' Tooltip.Triggers. In Base UI
+ * `delay`/`closeDelay` live on the trigger (Tooltip.Trigger and
+ * PreviewCard.Trigger), NOT the root — passing them to the root is silently
+ * ignored. `delay: 300` dwell-gates the first open so a pointer swept down the
+ * list doesn't strobe a card per row crossed; the app-root `TooltipProvider`
+ * delay group still applies, so a trigger with its own `delay` opens instantly
+ * while the group is in its instant phase (adjacent rows re-open at 0ms).
+ * `closeDelay: 0` dismisses the card the instant the pointer leaves.
  */
 export const SIDEBAR_HOVER_CARD_TRIGGER_PROPS = {
+  delay: 300,
+  closeDelay: 0,
+} as const;
+
+/**
+ * The project card is a PreviewCard (not a Tooltip), so it cannot join the
+ * TooltipProvider delay group — a gated first open would never get the instant
+ * re-open payoff. It also carries clickable controls, so it keeps the original
+ * instant-open timing instead.
+ */
+export const SIDEBAR_PROJECT_HOVER_CARD_TRIGGER_PROPS = {
   delay: 0,
   closeDelay: 0,
 } as const;

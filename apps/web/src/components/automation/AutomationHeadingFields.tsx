@@ -41,7 +41,8 @@ export function AutomationNameField({
     <input
       value={draft.draft}
       disabled={disabled}
-      title={title}
+      // An invalid draft reverts on blur; surface the reason on the control itself.
+      title={draft.error ?? title}
       aria-label="Automation name"
       aria-invalid={draft.error !== null || undefined}
       placeholder="Automation name"
@@ -86,7 +87,8 @@ export function AutomationPromptField({
     <textarea
       value={draft.draft}
       disabled={disabled}
-      title={title}
+      // An invalid draft reverts on blur; surface the reason on the control itself.
+      title={draft.error ?? title}
       aria-label="Automation prompt"
       aria-invalid={draft.error !== null || undefined}
       placeholder="What should this automation do on each run?"
@@ -103,7 +105,7 @@ export function AutomationPromptField({
       }}
       className={cn(
         HEADING_FIELD_CLASS,
-        "field-sizing-content resize-none whitespace-pre-wrap py-1.5 text-[0.9375rem] leading-relaxed text-muted-foreground placeholder:text-muted-foreground/50 focus-visible:text-foreground",
+        "field-sizing-content resize-none whitespace-pre-wrap py-1.5 text-ui-lg leading-relaxed text-muted-foreground placeholder:text-muted-foreground/50 focus-visible:text-foreground",
       )}
     />
   );
@@ -132,7 +134,7 @@ export function AutomationSaveStatus({
     return () => clearTimeout(timer);
   }, [saving, failed]);
   return (
-    <p aria-live="polite" className="h-4 text-ui leading-snug text-muted-foreground/70">
+    <p aria-live="polite" className="h-4 text-ui leading-snug text-muted-foreground">
       {saving ? "Saving…" : showSaved ? "Saved" : ""}
     </p>
   );

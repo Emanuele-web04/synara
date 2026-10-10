@@ -136,7 +136,7 @@ const REVIEW_TREE_SKELETON_ROW_WIDTHS = ["w-9/12", "w-6/12", "w-8/12", "w-5/12",
 
 function ReviewFileTreeLoadingRows() {
   return (
-    <div className="space-y-1.5 px-1 py-1.5" role="status" aria-label="Loading changed files...">
+    <div className="space-y-1.5 px-1 py-1.5" role="status" aria-label="Loading changed files…">
       {REVIEW_TREE_SKELETON_ROW_WIDTHS.map((width, index) => (
         <div
           key={width}
@@ -212,7 +212,7 @@ export const ReviewFileTreePanel = function ReviewFileTreePanel(props: {
           spellCheck={false}
           autoCorrect="off"
           autoCapitalize="off"
-          placeholder="Filter files..."
+          placeholder="Filter files…"
           aria-label="Filter files"
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleSearchKeyDown}

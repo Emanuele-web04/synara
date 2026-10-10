@@ -100,21 +100,27 @@ export function DiffPanelChangeMarkers(props: {
       className="pointer-events-none absolute inset-y-0 right-[10px] z-10 w-[6px]"
     >
       {markers.map((marker) => (
+        // 24px hit box centered on the 3px bar; the box may overflow the strip
+        // edge but only empty padding is clipped, so the bar stays aligned.
         <button
           key={marker.path}
           type="button"
           aria-label={`${CHANGE_MARKER_LABEL_BY_KIND[marker.kind]}: ${marker.path}`}
           title={marker.path}
-          className="pointer-events-auto absolute left-0 w-full cursor-pointer rounded-full opacity-70 transition-opacity hover:opacity-100"
+          className="group pointer-events-auto absolute right-0 flex h-6 w-6 cursor-pointer items-center justify-end rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
           style={{
-            top: `${marker.top}px`,
-            height: `${DIFF_CHANGE_MARKER_HEIGHT_PX}px`,
-            backgroundColor: CHANGE_MARKER_COLOR_BY_KIND[marker.kind],
+            top: `${marker.top + DIFF_CHANGE_MARKER_HEIGHT_PX / 2 - 12}px`,
           }}
           onClick={() => {
             props.onSelectFilePath(marker.path);
           }}
-        />
+        >
+          <span
+            aria-hidden="true"
+            className="h-[3px] w-1.5 rounded-full opacity-70 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+            style={{ backgroundColor: CHANGE_MARKER_COLOR_BY_KIND[marker.kind] }}
+          />
+        </button>
       ))}
     </div>
   );

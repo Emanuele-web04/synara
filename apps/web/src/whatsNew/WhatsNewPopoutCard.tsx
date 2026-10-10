@@ -91,16 +91,15 @@ export function WhatsNewPopoutCard({
     <div
       className={cn(
         "fixed bottom-3 left-3 z-50 max-w-[calc(100vw-1.5rem)] select-none",
-        "animate-[popout-in_200ms_ease-out]",
+        "animate-[whats-new-popout-in_200ms_ease-out] motion-reduce:animate-none",
         className,
       )}
       style={{
         width: cardWidth,
-        // Inline @keyframes so the popout doesn't need a tailwind plugin or
-        // global stylesheet just for one 200ms fade-in.
-        animationName: "whats-new-popout-in",
       }}
     >
+      {/* Inline @keyframes so the popout doesn't need a tailwind plugin or
+          global stylesheet just for one 200ms fade-in. */}
       <style>{`@keyframes whats-new-popout-in {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }

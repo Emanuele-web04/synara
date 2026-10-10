@@ -5,12 +5,14 @@ import { CheckIcon, ChevronsUpDownIcon, XIcon } from "~/lib/icons";
 import * as React from "react";
 
 import { cn } from "~/lib/utils";
+import { POPUP_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import {
   APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
   COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME,
   COMPOSER_PICKER_RADIUS_CLASS_NAME,
+  COMPOSER_SURFACE_SHADOW_CLASS_NAME,
 } from "../chat/composerPickerStyles";
 
 const ComboboxContext = React.createContext<{
@@ -116,7 +118,7 @@ function ComboboxInput({
       {showTrigger && (
         <ComboboxTrigger
           className={cn(
-            "-translate-y-1/2 absolute top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-opacity pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 has-[+[data-slot=combobox-clear]]:hidden sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+            "-translate-y-1/2 absolute top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-opacity pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 has-[+[data-slot=combobox-clear]]:hidden sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             sizeValue === "sm" ? "end-0" : "end-0.5",
           )}
         >
@@ -128,7 +130,7 @@ function ComboboxInput({
       {showClear && (
         <ComboboxClear
           className={cn(
-            "-translate-y-1/2 absolute top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-opacity pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 has-[+[data-slot=combobox-clear]]:hidden sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+            "-translate-y-1/2 absolute top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 transition-opacity outline-none pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 has-[+[data-slot=combobox-clear]]:hidden sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             sizeValue === "sm" ? "end-0" : "end-0.5",
           )}
         >
@@ -182,14 +184,17 @@ function ComboboxPopup({
       >
         <span
           className={cn(
-            APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
-            "relative flex max-h-full min-w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) not-dark:bg-clip-padding shadow-lg/5 transition-[scale,opacity]",
-            COMPOSER_PICKER_RADIUS_CLASS_NAME,
+            "flex max-h-full min-w-(--anchor-width) max-w-(--available-width)",
             className,
           )}
         >
           <ComboboxPrimitive.Popup
-            className="flex max-h-[min(var(--available-height),23rem)] flex-1 flex-col text-foreground"
+            className={cn(
+              POPUP_MOTION_CLASS,
+              APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+              COMPOSER_PICKER_RADIUS_CLASS_NAME,
+              `flex max-h-[min(var(--available-height),23rem)] flex-1 flex-col text-foreground not-dark:bg-clip-padding ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`,
+            )}
             data-slot="combobox-popup"
             {...props}
           >

@@ -132,13 +132,13 @@ function PullRequestThreadDialogContent({
   let statusTone: string;
   switch (resolvedPullRequest?.state) {
     case "merged":
-      statusTone = "text-indigo-600 dark:text-indigo-300/90";
+      statusTone = "text-status-merged";
       break;
     case "closed":
-      statusTone = "text-zinc-500 dark:text-zinc-400/80";
+      statusTone = "text-status-neutral";
       break;
     case "open":
-      statusTone = "text-emerald-600 dark:text-emerald-300/90";
+      statusTone = "text-status-open";
       break;
     default:
       statusTone = "text-muted-foreground";
@@ -201,7 +201,7 @@ function PullRequestThreadDialogContent({
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Checkout Pull Request</DialogTitle>
+        <DialogTitle>Check out pull request</DialogTitle>
         <DialogDescription>
           Resolve a GitHub pull request, then create the draft thread in the main repo or in a
           dedicated worktree.
@@ -252,12 +252,14 @@ function PullRequestThreadDialogContent({
         {isResolving ? (
           <div className="flex items-center gap-2 text-muted-foreground text-ui leading-snug">
             <Spinner className="size-3.5" />
-            Resolving pull request...
+            Resolving pull request…
           </div>
         ) : null}
 
         {errorMessage ? (
-          <p className="text-destructive text-ui leading-snug">{errorMessage}</p>
+          <p role="alert" className="text-destructive text-ui leading-snug">
+            {errorMessage}
+          </p>
         ) : null}
       </DialogPanel>
       <DialogFooter>
@@ -284,7 +286,7 @@ function PullRequestThreadDialogContent({
             preparePullRequestThreadMutation.isPending
           }
         >
-          {preparingMode === "local" ? "Preparing local..." : "Local"}
+          {preparingMode === "local" ? "Preparing local…" : "Local"}
         </Button>
         <Button
           type="button"
@@ -299,7 +301,7 @@ function PullRequestThreadDialogContent({
             preparePullRequestThreadMutation.isPending
           }
         >
-          {preparingMode === "worktree" ? "Preparing worktree..." : "Worktree"}
+          {preparingMode === "worktree" ? "Preparing worktree…" : "Worktree"}
         </Button>
       </DialogFooter>
     </>

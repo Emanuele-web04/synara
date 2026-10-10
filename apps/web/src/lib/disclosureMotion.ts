@@ -107,3 +107,15 @@ export function disclosurePopClassName(open: boolean, className?: string) {
     className,
   );
 }
+
+/**
+ * Shared enter motion for anchored popups (Menu incl. submenus, Select,
+ * Combobox, Autocomplete). Apply to the Base UI `*Primitive.Popup` element — it
+ * is the one that receives `data-starting-style`. Scales from the positioner's
+ * `--transform-origin` so the surface grows out of its anchor.
+ * No exit animation: an exiting popup stays mounted for its transition, and a
+ * fast re-open (submenu re-hovered after Escape) collides with the lingering
+ * node — the replacement can get trapped in a mount/detach loop.
+ */
+export const POPUP_MOTION_CLASS =
+  "origin-(--transform-origin) transition-[scale,opacity] duration-150 ease-smooth-out data-starting-style:scale-97 data-starting-style:opacity-0 motion-reduce:transition-none";

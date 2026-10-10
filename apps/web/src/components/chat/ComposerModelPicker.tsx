@@ -550,7 +550,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         align="start"
         side="top"
         // Glassier than the stock picker shell: thinner fill over a deeper, more saturated blur.
-        className="w-[min(18.5rem,92vw)] bg-popover/55 [--picker-option-min-h:1.75rem] before:backdrop-blur-3xl before:backdrop-saturate-200"
+        className="w-[min(22rem,92vw)] bg-popover/55 [--picker-option-min-h:1.75rem] before:backdrop-blur-3xl before:backdrop-saturate-200"
         {...{ [MODEL_PICKER_POPUP_ATTRIBUTE]: "" }}
         onKeyDownCapture={(event) => {
           // Tab walks the provider tabs instead of leaving (and closing) the menu.

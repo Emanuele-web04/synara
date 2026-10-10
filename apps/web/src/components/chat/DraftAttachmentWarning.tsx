@@ -39,7 +39,7 @@ export const DraftAttachmentWarningIcon = forwardRef<
       role="img"
       aria-label={DRAFT_ATTACHMENT_WARNING_LABEL}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full text-amber-600",
+        "inline-flex shrink-0 items-center justify-center rounded-full text-warning",
         variant === "badge" ? "size-5 bg-[var(--composer-surface)] shadow-sm" : "size-4",
         className,
       )}

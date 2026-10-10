@@ -258,7 +258,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup.match(/data-cross-task-origin="true"/g)).toHaveLength(1);
     expect(markup).toContain("Sent by Synara from another thread");
-    expect(markup).toContain('aria-label="Open source thread"');
+    expect(markup).toContain('aria-label="Sent by Synara from another thread. Open source thread"');
     expect(markup.indexOf("Sent by Synara from another thread")).toBeLessThan(
       markup.indexOf("Inspect the repository"),
     );
@@ -330,7 +330,9 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Sent by the Release Synara coordinator");
-    expect(markup).toContain('aria-label="Open coordinator"');
+    expect(markup).toContain(
+      'aria-label="Sent by the Release Synara coordinator. Open coordinator"',
+    );
     expect(markup).not.toContain("Sent by Synara from another thread");
   });
 

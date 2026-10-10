@@ -75,7 +75,7 @@ export function EnvironmentStudioOutputsSection({
           // The containing folder is plumbing, not user-facing info: the tooltip on the
           // label keeps the full relative path for whoever needs it.
           trailing={
-            <span className="text-ui-xs tabular-nums text-muted-foreground/50">
+            <span className="text-ui-xs tabular-nums text-muted-foreground/80">
               {formatRelativeTime(entry.modifiedAt)}
             </span>
           }

@@ -112,7 +112,7 @@ function compactText(value: string, maxChars: number): string {
   if (compacted.length <= maxChars) {
     return compacted;
   }
-  return `${compacted.slice(0, Math.max(0, maxChars - 15)).trimEnd()}... [truncated]`;
+  return `${compacted.slice(0, Math.max(0, maxChars - 13)).trimEnd()}… [truncated]`;
 }
 
 function isRecappableMessage(message: ChatMessage): boolean {

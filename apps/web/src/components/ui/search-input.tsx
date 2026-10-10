@@ -1,6 +1,6 @@
 // FILE: search-input.tsx
 // Purpose: General-purpose search input — the standard Input with a leading
-//          magnifier icon (e.g. "Search files...", "Search settings...").
+//          magnifier icon (e.g. "Search files…", "Search settings…").
 // Layer: UI primitives
 
 import { forwardRef } from "react";

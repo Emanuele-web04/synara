@@ -4,8 +4,15 @@ import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomple
 import { ChevronsUpDownIcon, XIcon } from "~/lib/icons";
 
 import { cn } from "~/lib/utils";
+import { POPUP_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import {
+  APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+  COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME,
+  COMPOSER_PICKER_RADIUS_CLASS_NAME,
+  COMPOSER_SURFACE_SHADOW_CLASS_NAME,
+} from "../chat/composerPickerStyles";
 
 const Autocomplete = AutocompletePrimitive.Root;
 
@@ -57,7 +64,7 @@ function AutocompleteInput({
       {showTrigger && (
         <AutocompleteTrigger
           className={cn(
-            "-translate-y-1/2 absolute top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-colors pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 has-[+[data-slot=autocomplete-clear]]:hidden sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+            "-translate-y-1/2 absolute top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-colors pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 has-[+[data-slot=autocomplete-clear]]:hidden sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             sizeValue === "sm" ? "end-0" : "end-0.5",
           )}
         >
@@ -69,7 +76,7 @@ function AutocompleteInput({
       {showClear && (
         <AutocompleteClear
           className={cn(
-            "-translate-y-1/2 absolute top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-colors pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 has-[+[data-slot=autocomplete-clear]]:hidden sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+            "-translate-y-1/2 absolute top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-colors pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 has-[+[data-slot=autocomplete-clear]]:hidden sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             sizeValue === "sm" ? "end-0" : "end-0.5",
           )}
         >
@@ -112,12 +119,17 @@ function AutocompletePopup({
       >
         <span
           className={cn(
-            "relative flex max-h-full min-w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) rounded-lg border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] shadow-lg/5 transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+            "flex max-h-full min-w-(--anchor-width) max-w-(--available-width)",
             className,
           )}
         >
           <AutocompletePrimitive.Popup
-            className="flex max-h-[min(var(--available-height),23rem)] flex-1 flex-col text-foreground"
+            className={cn(
+              POPUP_MOTION_CLASS,
+              APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+              COMPOSER_PICKER_RADIUS_CLASS_NAME,
+              `flex max-h-[min(var(--available-height),23rem)] flex-1 flex-col text-foreground not-dark:bg-clip-padding ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`,
+            )}
             data-slot="autocomplete-popup"
             {...props}
           >
@@ -134,7 +146,7 @@ function AutocompleteItem({ className, children, ...props }: AutocompletePrimiti
   return (
     <AutocompletePrimitive.Item
       className={cn(
-        "flex min-h-8 cursor-default select-none items-center rounded-sm px-2 py-1 text-ui outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 sm:text-ui",
+        `flex min-h-8 cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} px-2 py-1 text-ui outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 sm:text-ui`,
         className,
       )}
       data-slot="autocomplete-item"
@@ -214,7 +226,7 @@ function AutocompleteClear({ className, ...props }: AutocompletePrimitive.Clear.
   return (
     <AutocompletePrimitive.Clear
       className={cn(
-        "-translate-y-1/2 absolute end-0.5 top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-[color,background-color,box-shadow,opacity] pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "-translate-y-1/2 absolute end-0.5 top-1/2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-transparent opacity-80 outline-none transition-[color,background-color,box-shadow,opacity] pointer-coarse:after:absolute pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 hover:opacity-100 sm:size-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
         className,
       )}
       data-slot="autocomplete-clear"

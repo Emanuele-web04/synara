@@ -8125,6 +8125,7 @@ function SidebarSearchPaletteController(props: {
             props.projectById.get(thread.projectId)?.remoteName ?? "Unknown project",
           spaceName: searchProjectById.get(thread.projectId)?.spaceName ?? "Global",
           provider: thread.modelSelection.provider,
+          branch: thread.branch,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           messages: searchPaletteMessagesFor(thread),

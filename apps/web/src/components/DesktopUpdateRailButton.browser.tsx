@@ -292,7 +292,7 @@ describe("desktop update rail control", () => {
       expect(onClick).toHaveBeenCalledOnce();
       await screen.rerender(<DesktopUpdateRailButton state={ready} installing onClick={onClick} />);
       await expect
-        .element(page.getByRole("button", { name: "Applying update...", exact: true }))
+        .element(page.getByRole("button", { name: "Applying update…", exact: true }))
         .toBeDisabled();
       await screen.rerender(
         <DesktopUpdateRailButton

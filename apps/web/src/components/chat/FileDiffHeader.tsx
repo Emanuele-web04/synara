@@ -59,7 +59,7 @@ export const FileDiffHeader = function FileDiffHeader(props: {
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
         {prevLeaf ? (
           <>
-            <span className="shrink-0 truncate text-ui-sm text-muted-foreground/65 line-through">
+            <span className="shrink-0 truncate text-ui-sm text-muted-foreground/80 line-through">
               {prevLeaf}
             </span>
             <span className="shrink-0 text-ui-sm text-muted-foreground/45" aria-hidden>
@@ -69,7 +69,7 @@ export const FileDiffHeader = function FileDiffHeader(props: {
         ) : null}
         <span className="shrink-0 truncate text-ui-sm font-medium text-foreground/85">{name}</span>
         {dir ? (
-          <span className="min-w-0 truncate text-ui-sm text-muted-foreground/55">{dir}</span>
+          <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">{dir}</span>
         ) : null}
       </div>
       <DiffStat

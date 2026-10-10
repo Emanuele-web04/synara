@@ -8,7 +8,9 @@ import { type ButtonHTMLAttributes, type ReactNode, useState } from "react";
 
 import { ChevronRightIcon, FileIcon } from "~/lib/icons";
 import { formatPastedTextCountLabel, pastedTextTitle } from "~/lib/composerPastedText";
+import { cn } from "~/lib/utils";
 import { AttachmentCard } from "./AttachmentCard";
+import { TRANSCRIPT_TEXT_BUTTON_CLASS_NAME } from "./MessageActionButton";
 
 interface PastedTextCardMetrics {
   lineCount: number;
@@ -21,7 +23,10 @@ function PastedTextCardAction({ children, ...props }: ButtonHTMLAttributes<HTMLB
   return (
     <button
       type="button"
-      className="-ml-px inline-flex w-fit items-center gap-0.5 text-ui-sm text-muted-foreground underline decoration-muted-foreground/40 underline-offset-2 transition-colors hover:text-foreground hover:decoration-foreground/60 focus-visible:outline-none"
+      className={cn(
+        "-ml-px inline-flex w-fit items-center gap-0.5 text-ui-sm text-muted-foreground underline decoration-muted-foreground/40 underline-offset-2 transition-colors hover:text-foreground hover:decoration-foreground/60",
+        TRANSCRIPT_TEXT_BUTTON_CLASS_NAME,
+      )}
       {...props}
     >
       {children}

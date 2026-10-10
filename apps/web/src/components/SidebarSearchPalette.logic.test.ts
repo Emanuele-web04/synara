@@ -114,6 +114,7 @@ const threads: SidebarSearchThread[] = [
     projectRemoteName: "Alpha Repo",
     spaceName: "Work",
     provider: "claudeAgent",
+    branch: null,
     createdAt: "2026-04-09T09:00:00.000Z",
     updatedAt: "2026-04-09T11:30:00.000Z",
     messages: [
@@ -130,6 +131,7 @@ const threads: SidebarSearchThread[] = [
     projectRemoteName: "Alpha Repo",
     spaceName: "Work",
     provider: "codex",
+    branch: null,
     createdAt: "2026-04-09T08:00:00.000Z",
     updatedAt: "2026-04-09T10:30:00.000Z",
     messages: [
@@ -149,6 +151,7 @@ const threads: SidebarSearchThread[] = [
     projectRemoteName: "Beta Repo",
     spaceName: "Void",
     provider: "claudeAgent",
+    branch: null,
     createdAt: "2026-04-09T07:00:00.000Z",
     updatedAt: "2026-04-09T09:00:00.000Z",
     messages: [
@@ -366,6 +369,7 @@ describe("areSidebarSearchThreadListsEqual", () => {
     projectRemoteName: "org/project",
     spaceName: "Global",
     provider: "codex",
+    branch: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: undefined,
     messages: [],

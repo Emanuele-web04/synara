@@ -32,7 +32,7 @@ function CommandDialogBackdrop({ className, ...props }: CommandDialogPrimitive.B
   return (
     <CommandDialogPrimitive.Backdrop
       className={cn(
-        "fixed inset-0 z-50 bg-black/60 transition-all duration-200 data-ending-style:opacity-0 data-starting-style:opacity-0",
+        "fixed inset-0 z-50 bg-black/60 transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0",
         className,
       )}
       data-slot="command-dialog-backdrop"
@@ -212,7 +212,7 @@ function CommandShortcut({ className, children, ...props }: React.ComponentProps
   return (
     <kbd
       className={cn(
-        "ms-auto font-medium font-sans text-muted-foreground/72 text-ui leading-snug tracking-widest",
+        "ms-auto font-medium font-sans text-muted-foreground text-ui leading-snug tracking-widest",
         className,
       )}
       data-slot="command-shortcut"

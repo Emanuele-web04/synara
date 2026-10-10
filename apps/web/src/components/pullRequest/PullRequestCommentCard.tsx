@@ -1,9 +1,9 @@
 // FILE: PullRequestCommentCard.tsx
 // Purpose: One review/issue comment as a plain collapsible row (hairline-separated, no card
 //          chrome): avatar + author leading, timestamp + per-row collapse chevron trailing,
-//          finding-style comments elevated into a title + severity subheading, and a "Reply"
-//          affordance that always opens the comment's own GitHub URL externally (falling back
-//          to the PR URL when the comment has none) — never the in-app browser, since replying
+//          finding-style comments elevated into a title + severity subheading, and a "Reply on
+//          GitHub" affordance that always opens the comment's own GitHub URL externally (falling
+//          back to the PR URL when the comment has none) — never the in-app browser, since replying
 //          has to happen on GitHub itself.
 // Layer: Pull request presentation
 // Exports: PullRequestCommentCard
@@ -26,7 +26,7 @@ import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { parseFindingComment, type PullRequestCommentSeverity } from "./pullRequestComment.logic";
 
 function severityToneClassName(severity: PullRequestCommentSeverity): string {
-  if (severity === "High") return "text-destructive";
+  if (severity === "High") return "text-status-failure";
   if (severity === "Medium") return "text-warning";
   return "text-muted-foreground";
 }
@@ -106,10 +106,10 @@ export function PullRequestCommentCard({
               onClick={() => void ensureNativeApi().shell.openExternal(replyUrl)}
               className={cn(
                 PR_META_TEXT_CLASS_NAME,
-                "rounded px-1.5 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
+                "rounded px-1.5 py-1 font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
               )}
             >
-              Reply
+              Reply on GitHub
             </button>
           </div>
         </div>

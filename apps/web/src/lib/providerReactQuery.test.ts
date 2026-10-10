@@ -337,7 +337,7 @@ describe("resolveCheckpointDiffQueryDisplayState", () => {
         ).toEqual({
           isLoading: isFetching && data == null,
           error: null,
-          refreshStatus: isFetching ? "Refreshing diff..." : "Diff refresh delayed.",
+          refreshStatus: isFetching ? "Refreshing diff…" : "Diff refresh delayed.",
         });
       }
     },

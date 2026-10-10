@@ -23,6 +23,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "./ui/menu";
+import { waitForTransientPopups } from "../lib/browserPopupCleanup";
 
 const api = vi.hoisted(() => ({
   browser: {
@@ -166,7 +167,8 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await waitForTransientPopups();
   document.body.innerHTML = "";
 });
 
@@ -184,7 +186,7 @@ describe("native browser menu occlusion", () => {
     await vi.waitFor(() => expect(lastBounds()?.width).toBeGreaterThan(0));
     const original = lastBounds();
     const address = page.getByPlaceholder("Search or enter a URL");
-    const suggestion = page.getByRole("button", { name: /Open https:\/\/example.test\/next/ });
+    const suggestion = page.getByRole("option", { name: /Open https:\/\/example.test\/next/ });
 
     for (const dismissal of ["blur", "selection", "submit"]) {
       await address.fill("https://example.test/next");

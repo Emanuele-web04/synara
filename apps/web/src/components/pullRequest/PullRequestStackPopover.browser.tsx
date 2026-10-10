@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { PullRequestStackPopover } from "./PullRequestStackPopover";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 function entry(position: number): PullRequestStackEntry {
   return {
@@ -35,7 +36,8 @@ const stack: PullRequestStack = {
 };
 
 describe("PullRequestStackPopover", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

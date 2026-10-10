@@ -6,6 +6,7 @@
 // Exports: PullRequestCodeTab (default export for React.lazy)
 
 import type { PullRequestDetail, PullRequestDetailInput } from "@synara/contracts";
+import { pluralize } from "@synara/shared/text";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
@@ -68,7 +69,9 @@ export function PullRequestCodeTab({
               "border-b border-border/60 px-3 py-2 text-muted-foreground",
             )}
           >
-            <span>{patchTotals.fileCount} files</span>
+            <span>
+              {patchTotals.fileCount} {pluralize(patchTotals.fileCount, "file")}
+            </span>
             <PullRequestDiffStat
               additions={patchTotals.additions}
               deletions={patchTotals.deletions}
