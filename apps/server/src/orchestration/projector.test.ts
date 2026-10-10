@@ -7,7 +7,7 @@ import {
   type OrchestrationEvent,
 } from "@synara/contracts";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
@@ -2180,4 +2180,130 @@ describe("orchestration projector", () => {
     expect(finalized.threads[0]?.messages[1]?.text).toBe("Hello, world!");
     expect(finalized.threads[0]?.messages[1]?.streaming).toBe(false);
   });
+
+  it.each(
+    [
+      { label: "ASCII", unit: "x" },
+      { label: "emoji", unit: "😀" },
+      { label: "CJK", unit: "界" },
+      { label: "BOM", unit: "\uFEFF界" },
+    ].flatMap((sample) => (["user", "assistant"] as const).map((role) => ({ ...sample, role }))),
+  )(
+    "preserves full oversized canonical $label $role text for dispatch and retries",
+    async ({ unit, role }) => {
+      const createdAt = "2026-08-30T12:00:00.000Z";
+      const afterCreate = await Effect.runPromise(
+        projectEvent(
+          createEmptyReadModel(createdAt),
+          makeEvent({
+            sequence: 1,
+            type: "thread.created",
+            aggregateKind: "thread",
+            aggregateId: "thread-huge",
+            occurredAt: createdAt,
+            commandId: "cmd-create-huge",
+            payload: {
+              threadId: "thread-huge",
+              projectId: "project-1",
+              title: "Huge message test",
+              modelSelection: { provider: "codex", model: "gpt-5-codex" },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          }),
+        ),
+      );
+
+      const smallText = "Hello";
+      const afterSmall = await Effect.runPromise(
+        projectEvent(
+          afterCreate,
+          makeEvent({
+            sequence: 2,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-huge",
+            occurredAt: createdAt,
+            commandId: "cmd-small",
+            payload: {
+              threadId: "thread-huge",
+              messageId: "msg-small",
+              role: "user",
+              text: smallText,
+              turnId: null,
+              streaming: false,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          }),
+        ),
+      );
+      expect(afterSmall.threads[0]?.messages[0]?.text).toBe(smallText);
+
+      const hugeText = unit.repeat(700_000);
+      const afterHuge = await Effect.runPromise(
+        projectEvent(
+          afterSmall,
+          makeEvent({
+            sequence: 3,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-huge",
+            occurredAt: createdAt,
+            commandId: "cmd-huge",
+            payload: {
+              threadId: "thread-huge",
+              messageId: "msg-huge",
+              role,
+              text: hugeText,
+              turnId: null,
+              streaming: false,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          }),
+        ),
+      );
+      const compacted = afterHuge.threads[0]?.messages[1]?.text;
+      // This is the command read model, consumed by retries and handoffs, not a
+      // display-only cache. Never discard canonical user/assistant content here.
+      expect(compacted === hugeText).toBe(true);
+      const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode");
+      try {
+        let state = afterHuge;
+        for (let index = 0; index < 20; index += 1) {
+          state = await Effect.runPromise(
+            projectEvent(
+              state,
+              makeEvent({
+                sequence: 4 + index,
+                type: "thread.message-sent",
+                aggregateKind: "thread",
+                aggregateId: "thread-huge",
+                occurredAt: createdAt,
+                commandId: `cmd-delta-${index}`,
+                payload: {
+                  threadId: "thread-huge",
+                  messageId: "msg-huge",
+                  role,
+                  text: "more",
+                  turnId: null,
+                  streaming: true,
+                  createdAt,
+                  updatedAt: createdAt,
+                },
+              }),
+            ),
+          );
+        }
+        expect(state.threads[0]?.messages[1]?.text === hugeText + "more".repeat(20)).toBe(true);
+        expect(encodeSpy).not.toHaveBeenCalled();
+      } finally {
+        encodeSpy.mockRestore();
+      }
+    },
+  );
 });

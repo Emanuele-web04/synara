@@ -14102,6 +14102,90 @@ describe("ProviderCommandReactor", () => {
     expect((await readHarnessThread(harness))?.title).toBe("Manual title wins");
   });
 
+  it("shows the starting status before a slow provider session resolves and then runs the turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const turnId = asTurnId("turn-1");
+    const defaultStartSession = harness.startSession.getMockImplementation();
+    if (!defaultStartSession) {
+      throw new Error("Harness startSession mock has no implementation.");
+    }
+
+    let releaseStartSession: (() => void) | undefined;
+    const startSessionGate = new Promise<void>((resolve) => {
+      releaseStartSession = resolve;
+    });
+
+    harness.startSession.mockImplementationOnce((threadId, input) =>
+      Effect.promise(() => startSessionGate).pipe(
+        Effect.flatMap(() => defaultStartSession(threadId, input)),
+      ),
+    );
+
+    const dispatchPromise = Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-slow-pr-a"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-slow-pr-a"),
+          role: "user",
+          text: "hello slow provider",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "starting");
+    releaseStartSession?.();
+    const startingThread = await readHarnessThread(harness);
+    expect(startingThread?.session?.activeTurnId).toBeNull();
+    expect(startingThread?.latestTurn).toBeNull();
+
+    await waitFor(
+      async () => (await readHarnessThread(harness))?.session?.status === "ready",
+      15000,
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await dispatchPromise;
+    expect(harness.sendTurn).toHaveBeenCalled();
+    const readyThread = await readHarnessThread(harness);
+    expect(readyThread?.session?.activeTurnId).toBeNull();
+    expect(readyThread?.latestTurn).toBeNull();
+
+    const runningAt = new Date().toISOString();
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: turnId,
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-pr-a"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: runningAt,
+        },
+        createdAt: runningAt,
+      }),
+    );
+
+    const runningThread = await readHarnessThread(harness);
+    expect(runningThread?.session?.status).toBe("running");
+    expect(runningThread?.session?.activeTurnId).toEqual(turnId);
+    expect(runningThread?.latestTurn?.startedAt).not.toBeNull();
+  }, 20000);
+
   it("uses the configured text generation model for providers without native title generation", async () => {
     const harness = await createHarness({
       threadModelSelection: {
