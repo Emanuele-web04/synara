@@ -33,8 +33,8 @@ signing credentials. Download the evidence before its 14-day artifact expiry.
 
 ## Packaging policy
 
-`desktop-bundle-files.ts` omits dependency maps, declaration variants, verified
-compiled packages' TypeScript source copies, native compiler intermediates and
+`desktop-bundle-files.ts` omits dependency maps, declaration variants, selected
+compiled-package TypeScript source files, native compiler intermediates and
 artwork for other platforms. It retains runtime JavaScript, binaries, terminal
 helpers, license notices, Chromium locales and application language support.
 Never replace the package-specific source list with a blanket `**/src` deletion:
@@ -46,27 +46,29 @@ native executable. Unknown libc environments retain both packages. The primary
 executable is required by a provider-health path even when regular sessions use
 a separately installed CLI.
 
-For dependency-level diagnostic builds, preserve maps and their source files:
+For dependency-level diagnostic builds, preserve maps and their source files by
+setting one or more of the supported variables:
 
 ```sh
-SYNARA_DESKTOP_DEPENDENCY_SOURCEMAP=1 bun run dist:desktop:artifact -- \
+SYNARA_WEB_SOURCEMAP=1 bun run dist:desktop:artifact -- \
   --platform mac --target dmg --arch arm64 --build-version 0.8.4
 ```
 
-This is independent of `SYNARA_WEB_SOURCEMAP`, which controls first-party web maps.
-Normal production builds do not need either kind of source map for execution.
+`SYNARA_WEB_SOURCEMAP`, `SYNARA_SERVER_SOURCEMAP`, and
+`SYNARA_DESKTOP_SOURCEMAP` control dependency diagnostics. Normal production
+builds do not need source maps for execution.
 
 ## Public assets
 
 Production builds retain a conservative superset of referenced Central icon
 basenames in **both** visual variants. Keep dynamically selected names in literal
-mapping tables under `apps/web/src`; the scanner also recognizes `.svg` suffixes
-and direct Central asset URLs. It retains a whole variant if no references can
-be identified and fails the build on source-read errors. Original icon sets and
-the test-only MSW worker remain available in development and browser tests.
+mapping tables under `apps/web/src` and shared source roots. The scanner
+recognizes basename literals and `.svg` suffixes; it does not claim to scan
+arbitrary URLs. It retains a whole variant if no references can be identified,
+and fails the build on source-read errors. Original icon sets and the test-only
+MSW worker remain available in development and browser tests.
 
 Pruning runs sequentially before precompression. Removed icons cannot leave
 orphaned gzip/Brotli sidecars, and all retained precompressed delivery paths stay
-available. Shipped PNG optimizations preserve pixels, dimensions, alpha, color
-profiles and other metadata; do not replace these with lossy conversions or
-resampling merely to lower the byte count.
+available. PNG assets in this branch are retained as supplied by current main;
+no pixel-equivalence or optimization claim is made without independent proof.
