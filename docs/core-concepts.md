@@ -51,7 +51,11 @@ composer; it is not sent twice.
   Failed — and its details show the agent's recent activity, let you approve a pending request
   without opening the chat, and show the agent's latest reply for review before you mark it done. A
   List / Kanban switch in the header opens the Kanban board instead, and the Tasks entry remembers
-  the view you picked.
+  the view you picked. An agent can also keep the list from a chat: ask it to note something for
+  later and it adds a to-do with `synara_create_todo`, filed under the chat's project unless the
+  to-do is unrelated to it. `synara_list_todos` reads the list and `synara_update_todo` edits a
+  to-do or marks it done. Adding a to-do starts no agent work; handing a to-do to a chat and
+  deleting it stay in the Tasks view.
 - **Kanban** — the Attention view groups chat cards into Draft, In Progress, Awaiting you,
   and Done; Classic keeps the three-column layout. Approval/input requests, failures, and
   stalled work surface in Awaiting you. Needs review requires a live-confirmed open PR in a
@@ -60,7 +64,7 @@ composer; it is not sent twice.
   The `synara_*_kanban_*` gateway tools read and drive durable cards within the caller's
   ordinary project; local composer drafts remain client-only. Gateway draft creation uses
   the local checkout; isolated worktree callers can create a task instead. These tools do
-  not change the Tasks to-do records.
+  not change the Tasks to-do records; the `synara_*_todo` tools do.
 - **Inbox** (Stable and Beta) — chats needing attention, running and finished work, review
   requests, and the day’s agent recap, starting at 4am. Inbox also shows today’s due and overdue
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.

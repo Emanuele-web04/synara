@@ -242,6 +242,8 @@ export function makeServerRuntimeServicesLayer(
       Layer.mergeAll(
         ProjectionThreadMessageRepositoryLive,
         OrchestrationCommandReceiptRepositoryLive,
+        // The same instance the todo.* RPCs use, so a to-do an agent adds reaches open windows.
+        todoServiceLayer,
       ),
     ),
     Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
