@@ -98,3 +98,9 @@ Existing `StatusDot`, disclosure components, keyboard navigation, context-menu
 grouping, clipboard helpers, and Git/project query APIs are reused. The new lazy
 chain helper is necessary because the existing diff-tree compactor requires an
 eagerly populated tree; no comparable lazy/status-label helper existed.
+
+Visual evidence from matched mocked Chromium fixtures is in
+[`docs/pr-screenshots/explorer-154/README.md`](pr-screenshots/explorer-154/README.md).
+It compares the PR against its pre-feature main parent and demonstrates the
+compact chain, mocked Git indicator, and copy submenu. The browser fallback menu
+is rendered; this is not native desktop-menu or live-workspace evidence.
