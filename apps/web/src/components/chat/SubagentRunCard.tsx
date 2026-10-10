@@ -1,7 +1,7 @@
 // FILE: SubagentRunCard.tsx
 // Purpose: The transcript card a turn's subagents fold into, at the point the
 // parent launched them: a header ("2 subagents · 1 running · 12s", Stop all) and
-// one row per subagent (status dot, name, role, model, live state with the
+// one unboxed line per subagent (name, role, model, live state with the
 // current command, or the past-tense outcome with a one-line result). Nested
 // subagents sit collapsed under the row that launched them. Live cards start
 // expanded; finished ones fold into a single work row that expands on click.
@@ -22,11 +22,7 @@ import {
   CircleCheckIcon,
   StopIcon,
 } from "~/lib/icons";
-import {
-  subagentOutcomeTextToneClassName,
-  subagentStatusDotClassName,
-  subagentStatusTextToneClassName,
-} from "~/lib/subagentPresentation";
+import { subagentStatusTextToneClassName } from "~/lib/subagentPresentation";
 import { cn } from "~/lib/utils";
 import { retainThreadDetailSubscription } from "../../threadDetailSubscriptionRetention";
 import type { WorkLogEntry } from "../../session-logic";
@@ -34,7 +30,6 @@ import { Button } from "../ui/button";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { LiveStatusSpinner } from "../ui/spinner";
-import { StatusDot } from "../ui/status-chip";
 import type { ComposerSubagentStripItem } from "./ComposerSubagentStrip.logic";
 import {
   collectLiveSubagentRunItems,
@@ -115,31 +110,31 @@ function SubagentRunRowView({
   const openThread = threadId && context ? () => context.onOpenThread(threadId) : undefined;
   const onStop = context?.onStop;
   const onBackground = context?.onBackground;
-  const ended = !live;
-  const wordToneClassName = ended
-    ? subagentOutcomeTextToneClassName(description.statusKind)
-    : subagentStatusTextToneClassName(description.statusKind);
+  // One color in the row: the live spinner. Outcomes stay muted except failures.
+  const wordToneClassName =
+    description.statusKind === "failed"
+      ? subagentStatusTextToneClassName("failed")
+      : "text-muted-foreground/70";
 
   return (
     <div data-testid="subagent-run-row" data-phase={row.phase} data-depth={depth}>
-      <div className="group/subagent-row relative flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-within:bg-[var(--color-background-button-secondary-hover)] [&>button:not(:first-child)]:relative [&>button:not(:first-child)]:z-[1]">
+      <div className="group/subagent-row relative flex min-w-0 items-center gap-1 rounded-lg px-1.5 py-0.5 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-within:bg-[var(--color-background-button-secondary-hover)] [&>button:not(:first-child)]:relative [&>button:not(:first-child)]:z-[1]">
         {/* The open button stretches over the whole row (chevron included);
             the row's own controls sit above it. */}
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-start gap-2.5 py-0.5 text-left outline-none after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:after:ring-1 focus-visible:after:ring-ring/60 disabled:cursor-default"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:after:ring-1 focus-visible:after:ring-ring/60 disabled:cursor-default"
           disabled={!openThread}
           onClick={openThread}
           aria-label={`Open ${row.item.primaryLabel}`}
         >
-          <StatusDot
-            className={cn("mt-[0.5em]", subagentStatusDotClassName(description.statusKind))}
-          />
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 flex-1 items-center gap-2">
             <SubagentIdentityLine item={row.item} />
             <span className="chat-markdown flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground/70">
               {live || row.phase === "starting" ? (
-                <LiveStatusSpinner className={cn("size-3 shrink-0", wordToneClassName)} />
+                <LiveStatusSpinner
+                  className={cn("size-3 shrink-0", subagentStatusTextToneClassName("running"))}
+                />
               ) : row.phase === "done" ? (
                 <CheckIcon className={cn("size-3 shrink-0", wordToneClassName)} />
               ) : null}
@@ -185,7 +180,7 @@ function SubagentRunRowView({
           // Message reveals on hover or keyboard focus; it stays in the tab order.
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="xs"
             className="shrink-0 opacity-0 transition-opacity group-hover/subagent-row:opacity-100 group-focus-within/subagent-row:opacity-100 focus-visible:opacity-100"
             onClick={openThread}
@@ -210,7 +205,7 @@ function SubagentRunRowView({
         {live && onStop ? (
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="xs"
             className="shrink-0"
             onClick={() => void onStop(row.item)}
@@ -222,7 +217,10 @@ function SubagentRunRowView({
         ) : null}
         <ChevronRightIcon
           aria-hidden="true"
-          className={cn("size-3.5 shrink-0 text-muted-foreground/45", !openThread && "invisible")}
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground/45 opacity-0 transition-opacity group-hover/subagent-row:opacity-100 group-focus-within/subagent-row:opacity-100",
+            !openThread && "invisible",
+          )}
         />
       </div>
       {row.nested.length > 0 ? (
@@ -347,14 +345,9 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
       data-testid="subagent-run-card"
       data-subagent-run-card={entryId}
       data-expanded={expanded || undefined}
-      className={cn(
-        "my-0.5 rounded-xl border text-ui transition-colors motion-reduce:transition-none",
-        expanded
-          ? "border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)]"
-          : "border-transparent",
-      )}
+      className="my-0.5 text-ui"
     >
-      <div className={cn("flex min-w-0 items-center gap-1", expanded ? "px-2.5 py-1.5" : "py-0.5")}>
+      <div className="flex min-w-0 items-center gap-1 py-0.5">
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -362,16 +355,11 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
           onClick={() => setExpandedChoice(!expanded)}
         >
           {card.isLive ? (
-            <LiveStatusSpinner className="size-3.5 shrink-0 text-muted-foreground" />
-          ) : HeaderIcon ? (
-            <HeaderIcon
-              className={cn(
-                "size-3.5 shrink-0",
-                card.counts.failed > 0
-                  ? "text-muted-foreground"
-                  : "text-emerald-600 dark:text-emerald-300/85",
-              )}
+            <LiveStatusSpinner
+              className={cn("size-3.5 shrink-0", subagentStatusTextToneClassName("running"))}
             />
+          ) : HeaderIcon ? (
+            <HeaderIcon className={cn("size-3.5 shrink-0", "text-muted-foreground")} />
           ) : (
             <span aria-hidden="true" className="flex size-3.5 shrink-0 items-center justify-center">
               <span className="size-2 rounded-[2px] bg-muted-foreground/70" />
@@ -390,7 +378,6 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
                 <span
                   className={cn(
                     "text-muted-foreground/75",
-                    segment.tone === "running" && subagentStatusTextToneClassName("running"),
                     segment.tone === "failed" && subagentStatusTextToneClassName("failed"),
                   )}
                 >
@@ -407,9 +394,7 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
               </>
             ) : null}
           </span>
-          {expanded ? null : (
-            <DisclosureChevron open={false} className="text-muted-foreground/55" />
-          )}
+          <DisclosureChevron open={expanded} className="text-muted-foreground/55" />
         </button>
         {card.isLive && liveItems.length > 0 && onStop ? (
           <Button
@@ -423,21 +408,10 @@ export function SubagentRunCard({ workEntry }: { workEntry: WorkLogEntry }) {
             Stop all
           </Button>
         ) : null}
-        {expanded ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="shrink-0"
-            aria-label="Collapse subagents"
-            onClick={() => setExpandedChoice(false)}
-          >
-            <ChevronRightIcon className="size-3.5 -rotate-90 text-muted-foreground" />
-          </Button>
-        ) : null}
       </div>
       <DisclosureRegion open={expanded}>
-        <div className="border-t border-[color:var(--color-border-light)] px-1 py-1">
+        {/* Rows hang under the header's label, unboxed, like an expanded tool group. */}
+        <div className="ml-4 pb-0.5">
           {card.rows.map((row) => (
             <SubagentRunRowView
               key={row.key}

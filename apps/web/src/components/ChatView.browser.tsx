@@ -6552,23 +6552,6 @@ describe("ChatView transcript geometry (full app)", () => {
     "thread switch",
     "short transcript",
   ] as const)("restores streaming follow after %s in the full ChatView", async (action) => {
-    const followTrace: Array<Record<string, number | boolean | string>> = [];
-    let tracePhase = "setup";
-    const traceStart = performance.now();
-    const traceWindow = window as Window & {
-      __synaraFollowTrace?: (sample: Record<string, number | boolean | string>) => void;
-      __synaraFollowSnapshot?: () => void;
-    };
-    if (action === "thread switch") {
-      traceWindow.__synaraFollowTrace = (sample) => {
-        if (tracePhase === "setup" || followTrace.length >= 180) return;
-        followTrace.push({
-          phase: tracePhase,
-          t: Math.round(performance.now() - traceStart),
-          ...sample,
-        });
-      };
-    }
     const keyboardKey = action.startsWith("keyboard ") ? action.slice("keyboard ".length) : null;
     const restoreNativeApi = installDeterministicSendNativeApi();
     let snapshot = addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID);
@@ -6848,7 +6831,6 @@ describe("ChatView transcript geometry (full app)", () => {
         // the reader is looking at must remain at the same viewport position.
         expect(readAnchorTop()).toBeCloseTo(detachedTop, 0);
         if (action === "thread switch") {
-          tracePhase = "away";
           await mounted.router.navigate({
             to: "/$threadId",
             params: { threadId: OTHER_THREAD_ID },
@@ -6856,7 +6838,6 @@ describe("ChatView transcript geometry (full app)", () => {
           // Router navigation can finish before React commits the new transcript.
           // Wait for the old list to unmount so the return cannot race that commit.
           await vi.waitFor(() => expect(container.isConnected).toBe(false));
-          tracePhase = "return";
           await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
           container = await waitForElement(() => {
             const next = document.querySelector<HTMLElement>("[data-chat-scroll-container='true']");
@@ -6890,7 +6871,6 @@ describe("ChatView transcript geometry (full app)", () => {
         );
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
       }
-      tracePhase = "grow";
       for (let index = 0; index < 8; index += 1) {
         grow();
         await waitForLayout();
@@ -6909,17 +6889,11 @@ describe("ChatView transcript geometry (full app)", () => {
           { timeout: 10_000, interval: 20 },
         );
         await waitForTranscriptLayoutToSettle(container);
-        tracePhase = "settled";
       }
       await vi.waitFor(() =>
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
       );
     } finally {
-      if (action === "thread switch") {
-        traceWindow.__synaraFollowSnapshot?.();
-        console.info("SYNARA_FOLLOW_DIAGNOSTIC", JSON.stringify(followTrace));
-        delete traceWindow.__synaraFollowTrace;
-      }
       await mounted.cleanup();
       restoreNativeApi();
     }

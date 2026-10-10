@@ -624,60 +624,6 @@ export function useChatTranscriptScroll({
     };
   }, [activeThreadId, hasStreamingAssistantText, legendListRef]);
 
-  // Temporary, synthetic-test-only trace for the thread re-entry CI failure.
-  // Removed once the native/list geometry divergence has been diagnosed.
-  useEffect(() => {
-    const traceWindow = window as Window & {
-      __synaraFollowTrace?: (sample: Record<string, number | boolean | string>) => void;
-      __synaraFollowSnapshot?: () => void;
-    };
-    const trace = traceWindow.__synaraFollowTrace;
-    if (!trace) return;
-    const target = legendListRef.current;
-    if (!target) return;
-    const sample = (event: string, readNative = false) => {
-      const state = target.getState();
-      const node = readNative ? target.getScrollableNode() : undefined;
-      trace({
-        event,
-        streaming: hasStreamingAssistantText,
-        detached: isUserScrollDetachedRef.current,
-        following: isAtEndRef.current,
-        anchor: tailAnchorScrollInFlightRef.current,
-        settling: settledScrollInFlightRef.current,
-        guardMs: Math.max(0, Math.round(programmaticScrollUntilRef.current - performance.now())),
-        listEnd: state.isAtEnd,
-        listNearEnd: state.isWithinMaintainScrollAtEndThreshold,
-        listTop: Math.round(state.scroll),
-        listHeight: Math.round(state.contentLength),
-        listViewport: Math.round(state.scrollLength),
-        ...(node instanceof HTMLElement
-          ? {
-              nativeTop: Math.round(node.scrollTop),
-              nativeHeight: node.scrollHeight,
-              nativeViewport: node.clientHeight,
-            }
-          : {}),
-      });
-    };
-    const snapshot = () => sample("final", true);
-    traceWindow.__synaraFollowSnapshot = snapshot;
-    const state = target.getState();
-    const stopEnd = state.listen("isAtEnd", () => sample("end"));
-    const stopThreshold = state.listen("isWithinMaintainScrollAtEndThreshold", () =>
-      sample("threshold"),
-    );
-    const stopSize = state.listen("totalSize", () => sample("size"));
-    sample("mount");
-    return () => {
-      stopEnd();
-      stopThreshold();
-      stopSize();
-      if (traceWindow.__synaraFollowSnapshot === snapshot)
-        delete traceWindow.__synaraFollowSnapshot;
-    };
-  }, [activeThreadId, hasStreamingAssistantText, legendListRef]);
-
   return {
     showScrollToBottom,
     isUserScrollDetached,
