@@ -9,6 +9,7 @@ import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurablePro
 import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
 import PullRequestAutoFixMigration from "./Migrations/130_PullRequestAutoFix.ts";
+import ForkSourceMessageMigration from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
 import WorkspaceInitializationMigration from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
 
@@ -99,6 +100,27 @@ layer("reconcileMigrationLineage", (it) => {
         yield* sql`UPDATE projection_turns SET started_without_git_workspace = 1 WHERE turn_id = 'old-workspace-turn'`;
         yield* WorkspaceInitializationMigration;
         assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 1 }]);
+      }),
+  );
+
+  it.effect(
+    "adds a nullable fork cutoff without modifying legacy threads or clearing it on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 133 });
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+        VALUES ('legacy-fork', 'project', 'Keep this', '2026-10-10T10:00:00.000Z', '2026-10-10T10:00:00.000Z')`;
+        yield* runMigrations();
+        const read = () => sql<{
+          title: string;
+          cutoff: string | null;
+        }>`SELECT title, fork_source_message_id AS cutoff
+        FROM projection_threads WHERE thread_id = 'legacy-fork'`;
+        assert.deepStrictEqual(yield* read(), [{ title: "Keep this", cutoff: null }]);
+        yield* sql`UPDATE projection_threads SET fork_source_message_id = 'chosen-message' WHERE thread_id = 'legacy-fork'`;
+        yield* ForkSourceMessageMigration;
+        assert.deepStrictEqual(yield* read(), [{ title: "Keep this", cutoff: "chosen-message" }]);
       }),
   );
 
@@ -658,6 +680,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -743,6 +766,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 131, name: "ProjectSourceFolders" },
           { migration_id: 132, name: "ExternalMcpTurnCapacityRecovery" },
           { migration_id: 133, name: "ProjectionTurnsWorkspaceInitialization" },
+          { migration_id: 134, name: "ProjectionThreadsForkSourceMessage" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -908,6 +932,7 @@ agentGatewayRetentionLegacyLayer(
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1036,6 +1061,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1105,6 +1131,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
         ],
       );
 
@@ -1228,6 +1255,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
         [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1293,6 +1321,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
           [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
