@@ -132,6 +132,7 @@ export type { CommandResult } from "../providerCliOutput";
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
+const PI_HEALTH_TIMEOUT_MS = 20_000;
 const CODEX_AUTH_STATUS_ARGS = ["-c", "mcp_servers={}", "login", "status"] as const;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
@@ -1920,7 +1921,7 @@ export const checkPiProviderStatus = (
 
     const versionProbe = yield* probeProviderCliVersion(
       runPiCommand(["--version"], executable, probeEnv),
-      DEFAULT_TIMEOUT_MS,
+      PI_HEALTH_TIMEOUT_MS,
     );
 
     // Pi itself is SDK-backed in Synara. Keep this CLI probe advisory so health
