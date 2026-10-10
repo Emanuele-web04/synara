@@ -1814,7 +1814,8 @@ function workLogSubagentRunsEqual(a: WorkLogEntry["subagentRun"], b: WorkLogEntr
       member.latestStep === other.latestStep &&
       member.outcome === other.outcome &&
       member.failure === other.failure &&
-      member.settledAt === other.settledAt
+      member.settledAt === other.settledAt &&
+      member.nextLaunchedAt === other.nextLaunchedAt
     );
   });
 }
