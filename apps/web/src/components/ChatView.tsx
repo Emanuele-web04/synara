@@ -1,3 +1,4 @@
+import { ensureThreadHistoryLoaded, useThreadHistory } from "../threadHistory";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -173,7 +174,11 @@ import {
 } from "../lib/runtimeMode";
 import { addSelectionToSide, startSelectionChat } from "../lib/selectionChat";
 import { waitForSidechatCreator } from "../lib/sidechatCreatorRegistry";
-import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
+import {
+  formatSubagentModelLabel,
+  resolveSubagentPresentationForThread,
+  resolveSubagentThreadStatusKind,
+} from "../lib/subagentPresentation";
 import {
   insertInlineTerminalContextPlaceholder,
   type TerminalContextSelection,
@@ -227,6 +232,7 @@ import {
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../threadDetailAuthority";
 import { retryThreadDetailSync } from "../threadDetailSyncRetry";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import {
@@ -329,8 +335,12 @@ import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./chat/composerStackedPa
 import { ComposerPullRequestAutoFixHint } from "./chat/ComposerPullRequestAutoFixHint";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
-import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
+import {
+  findLatestRunningSubagentRun,
+  subagentRunPhaseStatusKind,
+} from "./chat/SubagentRunCard.logic";
 import { useSubagentRunControls } from "./chat/useSubagentRunControls";
+import type { SubagentThreadPresentation } from "./chat/SubagentThreadIntro";
 import {
   collectForegroundRunningSubagentStripItems,
   collectRunningSubagentStripItems,
@@ -809,7 +819,6 @@ export default function ChatView({
 
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
-  const [subagentStripCompact, setSubagentStripCompact] = useState(false);
   const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   // Width-aware visibility for the footer picker cluster (context meter,
@@ -852,6 +861,15 @@ export default function ChatView({
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
   const [threadFindOpen, setThreadFindOpen] = useState(false);
+  const threadHistory = useThreadHistory(threadId);
+  useEffect(() => {
+    if (!threadFindOpen) return;
+    let cancelled = false;
+    void ensureThreadHistoryLoaded(threadId, undefined, () => cancelled);
+    return () => {
+      cancelled = true;
+    };
+  }, [threadFindOpen, threadId, threadDetailSyncState, threadHistory.owner]);
   const [threadFindFocusNonce, setThreadFindFocusNonce] = useState(0);
   const [threadFindHighlightStore] = useState(() => createThreadFindHighlightStore());
   const handleThreadFindJump = (match: ThreadFindMatch) => {
@@ -1489,11 +1507,15 @@ export default function ChatView({
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
 
   const phase = derivePhase(activeThread?.session ?? null);
-  const isConnecting = phase === "connecting";
+  const isConnecting = phase === "connecting" || threadDetailSyncState === "cached";
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   const {
     workLogEntries,
+    subagentRunThreads,
+    backgroundedSubagentToolUseIds,
+    subagentTaskEnds,
+    subagentThreadRunRow,
     composerSubagentStripItems,
     subagentRoster,
     stripSourceThreadId,
@@ -1503,6 +1525,29 @@ export default function ChatView({
     latestTurnSettled,
     latestTurnLive,
   });
+  // The newest transcript card with subagents still at work, for the floating
+  // "N running" chip that brings it back into view.
+  const runningSubagentRunParentId = activeThread?.parentThreadId ?? activeThread?.id ?? null;
+  const subagentRunLiveTurnId = latestTurnLive ? activeLatestTurnId : null;
+  const runningSubagentRun = useMemo(
+    () =>
+      findLatestRunningSubagentRun({
+        entries: workLogEntries,
+        threads: subagentRunThreads,
+        parentThreadId: runningSubagentRunParentId,
+        liveTurnId: subagentRunLiveTurnId,
+        taskEndByToolUseId: subagentTaskEnds,
+        backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+      }),
+    [
+      backgroundedSubagentToolUseIds,
+      runningSubagentRunParentId,
+      subagentRunLiveTurnId,
+      subagentRunThreads,
+      subagentTaskEnds,
+      workLogEntries,
+    ],
+  );
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
     () => deriveAgentActivityTimelineState(workLogEntries),
@@ -1776,7 +1821,8 @@ export default function ChatView({
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
-  const activeTurnLayoutLive = isWorking || !latestTurnSettled;
+  const activeTurnLayoutLive =
+    threadDetailSyncState === "cached" ? !latestTurnSettled : isWorking || !latestTurnSettled;
   const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
   const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
   const previousActiveTurnLayoutKeyRef = useRef<string | null>(null);
@@ -1802,6 +1848,14 @@ export default function ChatView({
   });
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
   useLayoutEffect(() => {
+    if (threadDetailSyncState === "cached") {
+      // A last-known running turn is hydration, not observed live work. Its
+      // eventual confirmation must not start the live settlement grace period.
+      previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
+      previousActiveTurnLayoutLiveRef.current = false;
+      setKeepSettledActiveTurnLayout(false);
+      return;
+    }
     if (previousActiveTurnLayoutKeyRef.current !== activeTurnLayoutKey) {
       previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
       previousActiveTurnLayoutLiveRef.current = activeTurnLayoutLive;
@@ -1839,6 +1893,7 @@ export default function ChatView({
     activeLatestTurn?.startedAt,
     activeTurnLayoutKey,
     activeTurnLayoutLive,
+    threadDetailSyncState,
   ]);
 
   const { timelineMessages, optimisticUserMessages, setOptimisticUserMessages } =
@@ -1885,12 +1940,76 @@ export default function ChatView({
       ? (composerThreadProjects.find((project) => project.id === crossTaskSourceThread?.projectId)
           ?.name ?? null)
       : null;
+  // A subagent's own thread says whose subagent it is (the launching agent:
+  // the main thread, or for a nested one the subagent that launched it), its
+  // role · model · state, and shows the brief as a card from that agent.
+  const subagentParentThreadId = serverThread?.parentThreadId
+    ? (crossTaskSourceThreadId ?? serverThread.parentThreadId)
+    : null;
+  const subagentParentTitle = crossTaskSourceThread
+    ? crossTaskSourceThread.parentThreadId
+      ? resolveSubagentPresentationForThread({ thread: crossTaskSourceThread }).primaryLabel
+      : crossTaskSourceThread.title
+    : null;
+  const subagentStartedAt =
+    (subagentThreadRunRow?.startedAtMs != null
+      ? new Date(subagentThreadRunRow.startedAtMs).toISOString()
+      : null) ??
+    serverThread?.messages.find((message) => message.dispatchOrigin === "agent")?.createdAt ??
+    serverThread?.createdAt ??
+    null;
+  const subagentStatusKind = serverThread?.parentThreadId
+    ? subagentThreadRunRow
+      ? subagentRunPhaseStatusKind(subagentThreadRunRow.phase)
+      : latestTurnLive
+        ? "running"
+        : resolveSubagentThreadStatusKind({
+            error: serverThread.error,
+            session: serverThread.session,
+            latestTurn: serverThread.latestTurn,
+          })
+    : null;
+  const subagentRole = serverThread?.subagentRole ?? null;
+  const subagentModelLabel = formatSubagentModelLabel(serverThread?.modelSelection.model) ?? null;
+  const subagentProvider = serverThread?.modelSelection.provider ?? null;
+  const subagentEndedAt =
+    subagentThreadRunRow?.endedAtMs != null
+      ? new Date(subagentThreadRunRow.endedAtMs).toISOString()
+      : (serverThread?.latestTurn?.completedAt ?? null);
+  const subagentThread = useMemo<SubagentThreadPresentation | null>(
+    () =>
+      subagentParentThreadId && subagentProvider
+        ? {
+            parentThreadId: subagentParentThreadId,
+            parentTitle: subagentParentTitle ?? "the parent thread",
+            role: subagentRole,
+            modelLabel: subagentModelLabel,
+            provider: subagentProvider,
+            statusKind: subagentStatusKind,
+            startedAt: subagentStartedAt,
+            endedAt: subagentEndedAt,
+          }
+        : null,
+    [
+      subagentEndedAt,
+      subagentModelLabel,
+      subagentParentThreadId,
+      subagentParentTitle,
+      subagentProvider,
+      subagentRole,
+      subagentStartedAt,
+      subagentStatusKind,
+    ],
+  );
   const resolvedCrossTaskOrigin = useMemo(
     () =>
-      crossTaskOrigin && crossTaskOriginGroupName
-        ? { ...crossTaskOrigin, coordinatorGroupName: crossTaskOriginGroupName }
-        : crossTaskOrigin,
-    [crossTaskOrigin, crossTaskOriginGroupName],
+      // The subagent intro already names the launching agent and links to it.
+      subagentThread
+        ? null
+        : crossTaskOrigin && crossTaskOriginGroupName
+          ? { ...crossTaskOrigin, coordinatorGroupName: crossTaskOriginGroupName }
+          : crossTaskOrigin,
+    [crossTaskOrigin, crossTaskOriginGroupName, subagentThread],
   );
   const [coordinatorSettingsOpen, setCoordinatorSettingsOpen] = useState(false);
   const [coordinatorSettingsSection, setCoordinatorSettingsSection] = useState<
@@ -2019,11 +2138,23 @@ export default function ChatView({
         // `handleNotesChange` already surfaces the save failure through the shared notes toast.
       });
   }, [activeThreadId, handleNotesChange, projectInstructions, threadNotes]);
+  const historyJumpThreadRef = useRef<ThreadId | null>(threadId);
+  useLayoutEffect(() => {
+    historyJumpThreadRef.current = threadId;
+    return () => {
+      historyJumpThreadRef.current = null;
+    };
+  }, [threadId]);
   const handleJumpToPinnedMessage = useCallback(
     (messageId: MessageId) => {
-      timelineControllerRef.current?.scrollToMessage(messageId);
+      const cancelled = () => historyJumpThreadRef.current !== threadId;
+      void ensureThreadHistoryLoaded(threadId, messageId, cancelled).then(() => {
+        requestAnimationFrame(() => {
+          if (!cancelled()) timelineControllerRef.current?.scrollToMessage(messageId);
+        });
+      });
     },
-    [timelineControllerRef],
+    [threadId, timelineControllerRef],
   );
 
   // Before treating an empty timeline as a genuinely new thread, wait for the
@@ -2248,7 +2379,8 @@ export default function ChatView({
   const onRespondToClaudeCacheReview = useCallback(
     async (review: PendingClaudeCacheReview, decision: ClaudeCacheReviewDecision) => {
       const api = readNativeApi();
-      if (!api) throw new Error("Reconnect before choosing how to resume.");
+      if (!api || isThreadDetailAwaitingVerification(threadId))
+        throw new Error("Reconnect before choosing how to resume.");
       await api.orchestration.dispatchCommand({
         type: "thread.claude-cache.respond",
         commandId: newCommandId(),
@@ -3191,6 +3323,7 @@ export default function ChatView({
       !api ||
       !isServerThread ||
       !activeThread ||
+      isThreadDetailAwaitingVerification(activeThread.id) ||
       activeThread.session === null ||
       activeThread.session.status === "closed"
     ) {
@@ -3284,6 +3417,20 @@ export default function ChatView({
     composerTranscriptInsetPx,
     isInactiveSplitPane,
   });
+  useEffect(() => {
+    const messageId = rawSearch.messageId;
+    if (!messageId || threadDetailSyncState !== "synced") return;
+    let cancelled = false;
+    onTranscriptNavigate();
+    void ensureThreadHistoryLoaded(threadId, messageId, () => cancelled).then(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) timelineControllerRef.current?.scrollToMessage(messageId);
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rawSearch.messageId, threadId, threadDetailSyncState, onTranscriptNavigate]);
   useLayoutEffect(() => {
     if (settings.anchorSentMessagesToTop) return;
     tailAnchorScrollInFlightRef.current = false;
@@ -3628,12 +3775,13 @@ export default function ChatView({
 
   const onInterrupt = useCallback(async () => {
     const api = readNativeApi();
-    if (!api || !activeThread) return;
+    if (!api || !activeThread || isThreadDetailAwaitingVerification(activeThread.id)) return;
     // A user Stop pauses the waiting queue instead of sending it after the turn.
     const releaseQueueHold = holdQueuedComposerTurnsForStop(activeThread.id);
     await api.orchestration
       .dispatchCommand({
         type: "thread.turn.interrupt",
+        requestedBy: "user",
         commandId: newCommandId(),
         threadId: activeThread.id,
         createdAt: new Date().toISOString(),
@@ -3659,9 +3807,40 @@ export default function ChatView({
     });
   }, [onInterrupt]);
 
+  // Background command rows offer Stop while their task runs. A rejected stop
+  // leaves the row running, so the failure is reported instead of swallowed.
+  const onStopBackgroundTask = useCallback(
+    (taskId: string) => {
+      const api = readNativeApi();
+      if (!api || !activeThread || isThreadDetailAwaitingVerification(activeThread.id)) return;
+      void api.orchestration
+        .dispatchCommand({
+          type: "thread.task.stop",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          taskId,
+          createdAt: new Date().toISOString(),
+        })
+        .catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not stop the background task",
+            description: error instanceof Error ? error.message : "Try again in a moment.",
+          });
+        });
+    },
+    [activeThread],
+  );
+
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
-    if (!api || !activeThread || !workflowRunState) return;
+    if (
+      !api ||
+      !activeThread ||
+      !workflowRunState ||
+      isThreadDetailAwaitingVerification(activeThread.id)
+    )
+      return;
     await api.orchestration.dispatchCommand({
       type: "thread.task.stop",
       commandId: newCommandId(),
@@ -3676,31 +3855,26 @@ export default function ChatView({
     stopSubagent: onStopSubagentStripItem,
   } = useSubagentRunControls(stripSourceThreadId);
 
-  // Stop-all fans out through the same per-row stop so both paths share one seam.
-  const onStopAllSubagentStripItems = useCallback(async () => {
-    const running = collectRunningSubagentStripItems(composerSubagentStripItems);
-    await Promise.all(running.map((item) => onStopSubagentStripItem(item)));
-  }, [composerSubagentStripItems, onStopSubagentStripItem]);
-
   // Ctrl+B parity with the native CLI: send every foreground running subagent to
   // the background at once, fanning through the same per-row background dispatch.
   const onBackgroundAllForegroundSubagentStripItems = useCallback(async () => {
     const foreground = collectForegroundRunningSubagentStripItems(composerSubagentStripItems);
     await Promise.all(foreground.map((item) => onBackgroundSubagentStripItem(item)));
   }, [composerSubagentStripItems, onBackgroundSubagentStripItem]);
-
   // Pause is the same stop command; the persisted flag makes the settled card
   // read as paused (with a resume affordance) instead of plain stopped, across
   // reloads too.
   const onPauseWorkflowRun = useCallback(async () => {
-    if (!workflowRunState || !activeThreadId) return;
+    if (!workflowRunState || !activeThreadId || isThreadDetailAwaitingVerification(activeThreadId))
+      return;
     const { workflowTaskId } = workflowRunState;
     markWorkflowRunPaused(activeThreadId, workflowTaskId);
     await onStopWorkflowRun();
   }, [activeThreadId, markWorkflowRunPaused, onStopWorkflowRun, workflowRunState]);
 
   const onDismissWorkflowRun = useCallback(() => {
-    if (!workflowRunState || !activeThreadId) return;
+    if (!workflowRunState || !activeThreadId || isThreadDetailAwaitingVerification(activeThreadId))
+      return;
     const { workflowTaskId } = workflowRunState;
     markWorkflowRunDismissed(activeThreadId, workflowTaskId);
   }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
@@ -5090,6 +5264,35 @@ export default function ChatView({
       }),
     [isEditorRail, navigate],
   );
+  // What the transcript's subagent cards read from this chat. Stop and
+  // background go through the same per-row dispatches the keyboard uses.
+  const activeThreadIdForSubagentRuns = activeThread?.id ?? null;
+  const subagentRunContext = useMemo(
+    () =>
+      activeThreadIdForSubagentRuns
+        ? {
+            parentThreadId: runningSubagentRunParentId,
+            liveTurnId: subagentRunLiveTurnId,
+            threads: subagentRunThreads,
+            backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+            taskEndByToolUseId: subagentTaskEnds,
+            onOpenThread: onNavigateToThread,
+            onStop: onStopSubagentStripItem,
+            onBackground: onBackgroundSubagentStripItem,
+          }
+        : null,
+    [
+      activeThreadIdForSubagentRuns,
+      runningSubagentRunParentId,
+      subagentRunLiveTurnId,
+      subagentTaskEnds,
+      backgroundedSubagentToolUseIds,
+      onBackgroundSubagentStripItem,
+      onNavigateToThread,
+      onStopSubagentStripItem,
+      subagentRunThreads,
+    ],
+  );
   const onOpenAutomation = useCallback(
     (automationId: string) => {
       void navigate({
@@ -5731,7 +5934,6 @@ export default function ChatView({
   const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
   const showComposerWorkflowRunCard = workflowRunState !== null;
-  const showComposerSubagentStrip = composerSubagentStripItems.length > 0;
   const activeThreadGoalText = activeThread?.goal?.trim() ?? "";
   const showComposerGoalHeader = activeThreadGoalText.length > 0;
   const showComposerComputerControlEffortHint = shouldShowComputerControlEffortHint({
@@ -5839,22 +6041,6 @@ export default function ChatView({
                 attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
               />
             ) : null}
-            {showComposerSubagentStrip ? (
-              <ComposerSubagentStrip
-                items={composerSubagentStripItems}
-                compact={subagentStripCompact}
-                onCompactChange={setSubagentStripCompact}
-                onOpenThread={onNavigateToThread}
-                onBackgroundItem={onBackgroundSubagentStripItem}
-                onStopItem={onStopSubagentStripItem}
-                onStopAll={onStopAllSubagentStripItems}
-                attachedToPrevious={
-                  showComposerLiveChangesHeader ||
-                  showComposerActiveTaskListCard ||
-                  showComposerWorkflowRunCard
-                }
-              />
-            ) : null}
             <ComposerQueuedHeader
               queuedTurns={queuedComposerTurns}
               onSteer={onSteerQueuedComposerTurn}
@@ -5867,8 +6053,7 @@ export default function ChatView({
               attachedToPrevious={
                 showComposerLiveChangesHeader ||
                 showComposerActiveTaskListCard ||
-                showComposerWorkflowRunCard ||
-                showComposerSubagentStrip
+                showComposerWorkflowRunCard
               }
             />
             {showComposerGoalHeader && activeThread ? (
@@ -5886,7 +6071,6 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0
                 }
               />
@@ -5899,7 +6083,6 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader
                 }
@@ -5923,7 +6106,6 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader ||
                   showComposerComputerControlEffortHint
@@ -5938,7 +6120,6 @@ export default function ChatView({
                   showComposerLiveChangesHeader ||
                   showComposerActiveTaskListCard ||
                   showComposerWorkflowRunCard ||
-                  showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader ||
                   showComposerComputerControlEffortHint ||
@@ -5955,7 +6136,6 @@ export default function ChatView({
                 showComposerLiveChangesHeader ||
                 showComposerActiveTaskListCard ||
                 showComposerWorkflowRunCard ||
-                showComposerSubagentStrip ||
                 queuedComposerTurns.length > 0 ||
                 showComposerGoalHeader ||
                 showComposerComputerControlEffortHint ||
@@ -6217,7 +6397,7 @@ export default function ChatView({
                         : showPlanFollowUpPrompt && activeProposedPlan
                           ? "Add feedback to refine the plan, or leave this blank to implement it"
                           : activeThread?.parentThreadId
-                            ? "Message this subagent while it works"
+                            ? "Message this subagent"
                             : hasLiveTurn
                               ? "Ask for follow-up changes"
                               : standaloneSidechatContext
@@ -6453,6 +6633,8 @@ export default function ChatView({
       {shouldRenderChatPaneContent ? (
         <ChatThreadFindHost
           open={threadFindOpen}
+          historyIncomplete={threadHistory.nextCursor !== null}
+          historyError={threadHistory.error}
           focusNonce={threadFindFocusNonce}
           timelineEntries={timelineEntries}
           threadId={threadId}
@@ -6632,6 +6814,9 @@ export default function ChatView({
                     onResolveWorktreeSetup={onResolveWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     subagentsRunning={hasRunningSubagents}
+                    subagentRun={subagentRunContext}
+                    runningSubagentRun={runningSubagentRun}
+                    subagentThread={subagentThread}
                     collapseFinishedTurns={settings.collapseFinishedTurns}
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}
@@ -6681,13 +6866,14 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
+                    {...(threadDetailSyncState === "cached" ? {} : { onStopBackgroundTask })}
                     computerControlEnabled={enableComputerControl}
                     onEnableComputerControl={handleEnableComputerControlFromDenial}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
-                    onRespondToAsyncUserInput={onRespondToAsyncUserInput}
+                    {...(threadDetailSyncState === "cached" ? {} : { onRespondToAsyncUserInput })}
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}

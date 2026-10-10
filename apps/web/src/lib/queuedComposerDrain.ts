@@ -20,6 +20,7 @@ import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraft
 import { derivePendingApprovals, derivePendingUserInputs, derivePhase } from "../session-logic";
 import { useStore, type AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../threadDetailAuthority";
 import type { SessionPhase } from "../types";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
 import { deriveQueuedComposerPause } from "./queuedComposerPause";
@@ -357,6 +358,7 @@ function threadDrainSignal(state: AppState, threadId: ThreadId): string {
     },
   ).length;
   return [
+    state.threadDetailSyncById?.[threadId] ?? "live",
     thread.session?.status ?? "",
     thread.session?.orchestrationStatus ?? "",
     thread.session?.activeTurnId ?? "",
@@ -425,7 +427,7 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
     hasQueueableLiveTurn: hasLiveTurn && thread?.session?.activeTurnId != null,
     phase,
     isSendBusy: autoDispatchLocks.has(threadId),
-    isConnecting: phase === "connecting",
+    isConnecting: phase === "connecting" || isThreadDetailAwaitingVerification(threadId),
     isAwaitingTurnStart: awaitingTurnStartsByThreadId.has(threadId),
     steerGate: getQueuedComposerSteerGate(threadId),
     hasPendingApproval: pendingApprovals.length > 0,
