@@ -219,7 +219,7 @@ const makeProviderServiceLive = (options?: Parameters<typeof makeProviderService
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
-  readonly provider: ProviderKind;
+  readonly provider: ProviderRuntimeEvent["provider"];
   readonly createdAt: string;
   readonly threadId: ThreadId;
   readonly turnId?: string | undefined;
@@ -308,6 +308,7 @@ function makeFakeCodexAdapter(
   provider: ProviderKind = "codex",
   options?: {
     readonly conversationRollback?: "native" | "restart-session";
+    readonly runtimeEventDelivery?: "fresh-ids-once";
     readonly didResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
     >;
@@ -477,6 +478,9 @@ function makeFakeCodexAdapter(
     startSession,
     ...(provider === "claudeAgent" ? { prepareSessionReplacement } : {}),
     ...(options?.didResumeSession ? { didResumeSession: options.didResumeSession } : {}),
+    ...(options?.runtimeEventDelivery
+      ? { runtimeEventDelivery: options.runtimeEventDelivery }
+      : {}),
     sendTurn,
     steerTurn,
     startReview,
@@ -583,6 +587,7 @@ const waitUntilEffect = <E = never, R = never>(
 function makeProviderServiceLayer(
   options?: Parameters<typeof makeProviderServiceLive>[0],
   providers?: {
+    readonly freshRuntimeEventDelivery?: boolean;
     readonly includeRestartRollbackDroid?: boolean;
     readonly includePi?: boolean;
     readonly codexDidResumeSession?: NonNullable<
@@ -598,6 +603,9 @@ function makeProviderServiceLayer(
   },
 ) {
   const codex = makeFakeCodexAdapter("codex", {
+    ...(providers?.freshRuntimeEventDelivery
+      ? { runtimeEventDelivery: "fresh-ids-once" as const }
+      : {}),
     ...(providers?.codexDidResumeSession
       ? { didResumeSession: providers.codexDidResumeSession }
       : {}),
@@ -7910,6 +7918,262 @@ persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
       assert.equal(canonicalEvent.eventId, completedEvent.eventId);
       assert.equal(persistedEvent.event.eventId, completedEvent.eventId);
       assert.equal(persistedEvent.sequence > 0, true);
+    }),
+  );
+});
+
+const batchFanoutEvents: ProviderRuntimeEvent[] = [];
+let batchFanoutRelease = Effect.void;
+const batchFanout = makeProviderServiceLayer(
+  {
+    persistRuntimeEvent: (event) =>
+      Effect.sync(() => {
+        batchFanoutEvents.push(event);
+      }).pipe(
+        Effect.andThen(Effect.suspend(() => batchFanoutRelease)),
+        Effect.map(() => ({ sequence: batchFanoutEvents.length, event })),
+      ),
+  },
+  { freshRuntimeEventDelivery: true },
+);
+batchFanout.layer("ProviderServiceLive durable text batches", (it) => {
+  it.effect(
+    "publishes a shared combined journal row to consumers only after durable acceptance",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("thread-batch-fanout");
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const release = yield* Deferred.make<void>();
+        batchFanoutRelease = Deferred.await(release);
+        batchFanoutEvents.length = 0;
+        const canonical: ProviderRuntimeEvent[] = [];
+        const persisted: Array<{ sequence: number; event: ProviderRuntimeEvent }> = [];
+        yield* provider.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              canonical.push(event);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* provider.streamPersistedEvents!.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              persisted.push(event);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* sleep(20);
+        const turnId = asTurnId("turn-batch-fanout");
+        const first: ProviderRuntimeEvent = {
+          type: "content.delta",
+          eventId: asEventId("batch-fanout-first"),
+          provider: "codex",
+          createdAt: "2026-10-10T00:00:00.000Z",
+          threadId,
+          turnId,
+          itemId: RuntimeItemId.makeUnsafe("batch-fanout-item"),
+          payload: { streamKind: "assistant_text", delta: "A" },
+        };
+        batchFanout.codex.emit(first);
+        batchFanout.codex.emit({
+          ...first,
+          eventId: asEventId("batch-fanout-second"),
+          payload: { streamKind: "assistant_text", delta: "B" },
+        });
+        batchFanout.codex.emit({
+          ...first,
+          type: "turn.completed",
+          eventId: asEventId("batch-fanout-terminal"),
+          payload: { state: "completed" },
+        });
+        yield* waitUntil(() => batchFanoutEvents.length === 1);
+        const acceptedPayload = batchFanoutEvents[0]?.payload;
+        assert.equal(canonical.length, 0);
+        assert.equal(persisted.length, 0);
+        yield* Deferred.succeed(release, undefined);
+        batchFanoutRelease = Effect.void;
+        assert.deepEqual(acceptedPayload, { streamKind: "assistant_text", delta: "AB" });
+        yield* waitUntil(() => persisted.length === 2);
+        assert.deepEqual(
+          canonical,
+          persisted.map((row) => row.event),
+        );
+        assert.deepEqual(
+          persisted.map((row) => row.sequence),
+          [1, 2],
+        );
+      }),
+  );
+});
+
+for (const stop of ["interrupt", "session", "dispose"] as const) {
+  const stopEvents: ProviderRuntimeEvent[] = [];
+  const stopBatch = makeProviderServiceLayer(
+    {
+      persistRuntimeEvent: (event) =>
+        Effect.sync(() => {
+          stopEvents.push(event);
+          return { sequence: stopEvents.length, event };
+        }),
+    },
+    { freshRuntimeEventDelivery: true },
+  );
+  stopBatch.layer(`ProviderServiceLive text flush on ${stop}`, (it) => {
+    it.effect(
+      "accepts admitted text before generation retirement without advancing the batch timer",
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const threadId = asThreadId(`thread-batch-${stop}`);
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+          yield* stopBatch.codex.waitForRuntimeSubscribers();
+          const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+          const event: ProviderRuntimeEvent = {
+            type: "content.delta",
+            eventId: asEventId(`batch-${stop}-text`),
+            provider: "codex",
+            createdAt: "2026-10-10T00:00:00.000Z",
+            threadId,
+            turnId: sent.turnId,
+            lifecycleGeneration: binding.lifecycleGeneration,
+            payload: { streamKind: "assistant_text", delta: "Preserve this text." },
+          };
+          stopBatch.codex.emit(event);
+          yield* sleep(20);
+          assert.lengthOf(stopEvents, 0);
+          if (stop === "interrupt")
+            yield* provider.interruptTurn({ threadId, turnId: sent.turnId });
+          else if (stop === "session") yield* provider.stopSession({ threadId });
+          else yield* provider.closeRuntimeEvents;
+          assert.equal(
+            stopEvents.find((accepted) => accepted.eventId === event.eventId)?.payload,
+            event.payload,
+          );
+        }),
+    );
+  });
+}
+
+let stopRetryAttempts = 0;
+const stopRetryAccepted: ProviderRuntimeEvent[] = [];
+const stopRetry = makeProviderServiceLayer(
+  {
+    persistRuntimeEvent: (event) =>
+      Effect.suspend(() => {
+        if (event.type === "content.delta" && ++stopRetryAttempts === 1)
+          return Effect.fail(new Error("sqlite busy"));
+        stopRetryAccepted.push(event);
+        return Effect.succeed({ sequence: stopRetryAttempts, event });
+      }),
+    runtimeEventRetryBaseDelayMs: 1,
+    runtimeEventRetryMaxDelayMs: 1,
+  },
+  { freshRuntimeEventDelivery: true },
+);
+stopRetry.layer("ProviderServiceLive urgent Stop with text persistence retry", (it) => {
+  it.effect("starts native interruption before waiting for a failed text append", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stop-text-retry");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+      yield* stopRetry.codex.waitForRuntimeSubscribers();
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      stopRetry.codex.emit({
+        type: "content.delta",
+        eventId: asEventId("urgent-stop-text"),
+        provider: "codex",
+        createdAt: "2026-10-10T00:00:00.000Z",
+        threadId,
+        turnId: sent.turnId,
+        lifecycleGeneration: binding.lifecycleGeneration,
+        payload: { streamKind: "assistant_text", delta: "Preserved through Stop." },
+      });
+      yield* sleep(20);
+      const interrupted = yield* provider
+        .interruptTurn({ threadId, turnId: sent.turnId })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(() => stopRetryAttempts === 1);
+      const nativeStartedBeforeRetry = stopRetry.codex.interruptTurn.mock.calls.length === 1;
+      yield* TestClock.adjust("1 millis");
+      yield* Fiber.join(interrupted);
+      assert.equal(nativeStartedBeforeRetry, true);
+      assert.equal(stopRetryAttempts, 2);
+      assert.deepEqual(
+        stopRetryAccepted
+          .filter((event) => event.type === "content.delta")
+          .map((event) => event.payload),
+        [{ streamKind: "assistant_text", delta: "Preserved through Stop." }],
+      );
+    }),
+  );
+});
+
+const originalIdEvents: ProviderRuntimeEvent[] = [];
+const originalIdFanout = makeProviderServiceLayer({
+  persistRuntimeEvent: (event) =>
+    Effect.sync(() => {
+      originalIdEvents.push(event);
+      return { sequence: originalIdEvents.length, event };
+    }),
+});
+originalIdFanout.layer("ProviderServiceLive original delta identities", (it) => {
+  it.effect("keeps every original delta for an adapter without fresh-ids-once capability", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-original-ids");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* originalIdFanout.codex.waitForRuntimeSubscribers();
+      originalIdEvents.length = 0;
+      const first: ProviderRuntimeEvent = {
+        type: "content.delta",
+        eventId: asEventId("original-first"),
+        provider: "codex",
+        createdAt: "2026-10-10T00:00:00.000Z",
+        threadId,
+        turnId: asTurnId("turn-original-ids"),
+        payload: { streamKind: "assistant_text", delta: "A" },
+      };
+      originalIdFanout.codex.emit(first);
+      originalIdFanout.codex.emit({
+        ...first,
+        eventId: asEventId("original-second"),
+        payload: { streamKind: "assistant_text", delta: "B" },
+      });
+      yield* waitUntil(() => originalIdEvents.length === 2);
+      assert.deepEqual(
+        originalIdEvents.map((event) => event.eventId),
+        ["original-first", "original-second"],
+      );
+      assert.deepEqual(
+        originalIdEvents.map((event) => event.payload),
+        [
+          { streamKind: "assistant_text", delta: "A" },
+          { streamKind: "assistant_text", delta: "B" },
+        ],
+      );
     }),
   );
 });

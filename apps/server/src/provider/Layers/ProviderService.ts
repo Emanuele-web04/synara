@@ -994,7 +994,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ),
           )
         : Effect.void;
-    const lifecycle = makeProviderLifecycleCoordinator();
+    const textBatchFlushers = new Map<ProviderKind, (threadId?: ThreadId) => Effect.Effect<void>>();
+    const flushRuntimeText = (threadId?: ThreadId) =>
+      Effect.suspend(() =>
+        Effect.forEach(Array.from(textBatchFlushers.values()), (flush) => flush(threadId), {
+          discard: true,
+        }),
+      );
+    const lifecycleCoordinator = makeProviderLifecycleCoordinator();
+    const lifecycle: typeof lifecycleCoordinator = {
+      ...lifecycleCoordinator,
+      // The existing prepare hook runs under the lifecycle lock while the old
+      // generation is still current. Accepted text must not become stale here.
+      run: (threadId, operation, prepare) =>
+        lifecycleCoordinator.run(
+          threadId,
+          operation,
+          (prepare ?? Effect.void).pipe(Effect.andThen(flushRuntimeText(threadId))),
+        ),
+    };
     for (const binding of yield* directory.listBindings()) {
       if (binding.lifecycleGeneration !== undefined) {
         lifecycle.adoptCurrent(binding.threadId, binding.lifecycleGeneration);
@@ -2564,6 +2582,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       runProviderRuntimeEventPump({
         provider: adapter.provider,
         stream: adapter.streamEvents,
+        batchAssistantText:
+          options?.persistRuntimeEvent !== undefined &&
+          adapter.runtimeEventDelivery === "fresh-ids-once",
+        onTextBatchFlusher: (flush) => {
+          if (flush === undefined) textBatchFlushers.delete(adapter.provider);
+          else textBatchFlushers.set(adapter.provider, flush);
+        },
         processEvent: processRuntimeEvent,
         updateHealth: runtimeEventPumpHealth.update,
         isPermanentFailure: (cause) =>
@@ -4232,6 +4257,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               TurnId.makeUnsafe(providerTurnId),
               input.providerThreadId,
             );
+            // Begin the physical Stop before SQLite retries, then drain text
+            // while this generation still owns it, ahead of runtime retirement.
+            yield* flushRuntimeText(input.threadId);
             if (targetedInterruptKey !== undefined) {
               rememberTargetedChildInterrupt(targetedInterruptKey, {
                 lifecycleGeneration: bindingGeneration,
@@ -5012,7 +5040,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         // snapshot and become the final writer.
         const shutdownWork: ReadonlyArray<
           Effect.Effect<void, ProviderAdapterError | ProviderSessionDirectoryWriteError, never>
-        > = [persistActiveSessions, persistInactiveSessions, stopAdapters];
+        > = [persistActiveSessions, persistInactiveSessions, stopAdapters, flushRuntimeText()];
         yield* settleConcurrentTeardowns(shutdownWork, (teardown) => teardown);
       });
 

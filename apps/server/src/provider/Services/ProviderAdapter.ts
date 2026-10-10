@@ -357,6 +357,15 @@ export interface ProviderAdapterShape<TError> {
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
 
   /**
+   * Opt-in delivery guarantee for pre-journal assistant text batching. The
+   * adapter mints fresh local canonical IDs and drains an owned destructive
+   * queue: resubscription/reconnection never redelivers a consumed canonical ID.
+   * The pump owns retries of the exact accepted envelope. Providers with native
+   * replay IDs or replaying streams must omit this and retain original events.
+   */
+  readonly runtimeEventDelivery?: "fresh-ids-once";
+
+  /**
    * Read provider-specific composer capabilities.
    */
   readonly getComposerCapabilities?: () => Effect.Effect<ProviderComposerCapabilities, TError>;
