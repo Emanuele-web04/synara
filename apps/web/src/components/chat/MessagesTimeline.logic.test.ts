@@ -880,6 +880,54 @@ describe("deriveMessagesTimelineRows", () => {
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
 
+  it("keeps adjacent child groups visible after parent completion without crossing narration", () => {
+    const launch = (id: string, child: string, time: string): TimelineEntry => ({
+      kind: "work",
+      id,
+      createdAt: time,
+      entry: {
+        id,
+        createdAt: time,
+        turnId: TurnId.makeUnsafe("t1"),
+        label: "Subagents",
+        tone: "info",
+        subagents: [{ threadId: child, rawStatus: "running" }],
+        subagentRun: {
+          members: [
+            {
+              key: child,
+              launchedAt: time,
+              latestStep: null,
+              outcome: null,
+              failure: null,
+              settledAt: null,
+            },
+          ],
+        },
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        launch("a", "a", "2026-01-01T00:00:01Z"),
+        launch("b", "b", "2026-01-01T00:00:02Z"),
+        assistantEntry("narration", "2026-01-01T00:00:03Z", { turnId: "t1", text: "Next task" }),
+        launch("c", "c", "2026-01-01T00:00:04Z"),
+        assistantEntry("done", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "Done",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+    expect(
+      rows
+        .filter((row) => row.kind === "work")
+        .map((row) => row.groupedEntries.map((entry) => entry.id)),
+    ).toEqual([["a", "b"], ["c"]]);
+  });
+
   it("keeps async question cards visible after their originating turn settles", () => {
     const question = assistantEntry("question", "2026-01-01T00:00:01Z", {
       turnId: "t1",

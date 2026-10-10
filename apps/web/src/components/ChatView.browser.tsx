@@ -2744,7 +2744,6 @@ describe("ChatView transcript geometry (full app)", () => {
                       });
                 expect(hintOpacity, debug).toBe(0);
                 expect(actionsOpacity, debug).toBe(1);
-
                 const actionsRect = actions.getBoundingClientRect();
                 for (const label of [...row.querySelectorAll<HTMLElement>("span")].filter(
                   (element) =>

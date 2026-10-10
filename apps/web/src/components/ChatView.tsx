@@ -331,8 +331,12 @@ import { COMPOSER_STACKED_PANEL_ICON_CLASS_NAME } from "./chat/composerStackedPa
 import { ComposerPullRequestAutoFixHint } from "./chat/ComposerPullRequestAutoFixHint";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
-import { ComposerSubagentStrip } from "./chat/ComposerSubagentStrip";
+import {
+  findLatestRunningSubagentRun,
+  subagentRunPhaseStatusKind,
+} from "./chat/SubagentRunCard.logic";
 import { useSubagentRunControls } from "./chat/useSubagentRunControls";
+import type { SubagentThreadPresentation } from "./chat/SubagentThreadIntro";
 import {
   collectForegroundRunningSubagentStripItems,
   collectRunningSubagentStripItems,
@@ -1505,6 +1509,10 @@ export default function ChatView({
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   const {
     workLogEntries,
+    subagentRunThreads,
+    backgroundedSubagentToolUseIds,
+    subagentTaskEnds,
+    subagentThreadRunRow,
     composerSubagentStripItems,
     subagentRoster,
     stripSourceThreadId,
@@ -1514,6 +1522,29 @@ export default function ChatView({
     latestTurnSettled,
     latestTurnLive,
   });
+  // The newest transcript card with subagents still at work, for the floating
+  // "N running" chip that brings it back into view.
+  const runningSubagentRunParentId = activeThread?.parentThreadId ?? activeThread?.id ?? null;
+  const subagentRunLiveTurnId = latestTurnLive ? activeLatestTurnId : null;
+  const runningSubagentRun = useMemo(
+    () =>
+      findLatestRunningSubagentRun({
+        entries: workLogEntries,
+        threads: subagentRunThreads,
+        parentThreadId: runningSubagentRunParentId,
+        liveTurnId: subagentRunLiveTurnId,
+        taskEndByToolUseId: subagentTaskEnds,
+        backgroundedProviderThreadIds: backgroundedSubagentToolUseIds,
+      }),
+    [
+      backgroundedSubagentToolUseIds,
+      runningSubagentRunParentId,
+      subagentRunLiveTurnId,
+      subagentRunThreads,
+      subagentTaskEnds,
+      workLogEntries,
+    ],
+  );
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
     () => deriveAgentActivityTimelineState(workLogEntries),
@@ -1906,6 +1937,67 @@ export default function ChatView({
       ? (composerThreadProjects.find((project) => project.id === crossTaskSourceThread?.projectId)
           ?.name ?? null)
       : null;
+  // A subagent's own thread says whose subagent it is (the launching agent:
+  // the main thread, or for a nested one the subagent that launched it), its
+  // role · model · state, and shows the brief as a card from that agent.
+  const subagentParentThreadId = serverThread?.parentThreadId
+    ? (crossTaskSourceThreadId ?? serverThread.parentThreadId)
+    : null;
+  const subagentParentTitle = crossTaskSourceThread
+    ? crossTaskSourceThread.parentThreadId
+      ? resolveSubagentPresentationForThread({ thread: crossTaskSourceThread }).primaryLabel
+      : crossTaskSourceThread.title
+    : null;
+  const subagentStartedAt =
+    (subagentThreadRunRow?.startedAtMs != null
+      ? new Date(subagentThreadRunRow.startedAtMs).toISOString()
+      : null) ??
+    serverThread?.messages.find((message) => message.dispatchOrigin === "agent")?.createdAt ??
+    serverThread?.createdAt ??
+    null;
+  const subagentStatusKind = serverThread?.parentThreadId
+    ? subagentThreadRunRow
+      ? subagentRunPhaseStatusKind(subagentThreadRunRow.phase)
+      : latestTurnLive
+        ? "running"
+        : resolveSubagentThreadStatusKind({
+            error: serverThread.error,
+            session: serverThread.session,
+            latestTurn: serverThread.latestTurn,
+          })
+    : null;
+  const subagentRole = serverThread?.subagentRole ?? null;
+  const subagentModelLabel = formatSubagentModelLabel(serverThread?.modelSelection.model) ?? null;
+  const subagentProvider = serverThread?.modelSelection.provider ?? null;
+  const subagentEndedAt =
+    subagentThreadRunRow?.endedAtMs != null
+      ? new Date(subagentThreadRunRow.endedAtMs).toISOString()
+      : (serverThread?.latestTurn?.completedAt ?? null);
+  const subagentThread = useMemo<SubagentThreadPresentation | null>(
+    () =>
+      subagentParentThreadId && subagentProvider
+        ? {
+            parentThreadId: subagentParentThreadId,
+            parentTitle: subagentParentTitle ?? "the parent thread",
+            role: subagentRole,
+            modelLabel: subagentModelLabel,
+            provider: subagentProvider,
+            statusKind: subagentStatusKind,
+            startedAt: subagentStartedAt,
+            endedAt: subagentEndedAt,
+          }
+        : null,
+    [
+      subagentEndedAt,
+      subagentModelLabel,
+      subagentParentThreadId,
+      subagentParentTitle,
+      subagentProvider,
+      subagentRole,
+      subagentStartedAt,
+      subagentStatusKind,
+    ],
+  );
   const resolvedCrossTaskOrigin = useMemo(
     () =>
       crossTaskOrigin && crossTaskOriginGroupName

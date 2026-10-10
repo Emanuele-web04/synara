@@ -988,9 +988,14 @@ export function deriveTerminalAssistantMessageIds(
 // Server-posted coordinator notices and provider handoff boundaries keep their own
 // row: they are not turn work, so they never merge into or fold with a turn.
 export function isStandaloneWorkEntry(
-  entry: Pick<WorkLogEntry, "synaraWorkerNotice" | "providerHandoff" | "turnFailure">,
+  entry: Pick<
+    WorkLogEntry,
+    "synaraWorkerNotice" | "providerHandoff" | "turnFailure" | "subagentRun"
+  >,
 ): boolean {
-  return Boolean(entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure);
+  return Boolean(
+    entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure || entry.subagentRun,
+  );
 }
 
 // Derives transcript rows from timeline entries while keeping live narration and
@@ -1096,6 +1101,33 @@ export function deriveMessagesTimelineRows(input: {
       // conversation-only surfaces, so they must never join a mergeable group.
       // Background task completions do too: they separate two responses.
       for (const runEntry of run) {
+        if (runEntry.entry.subagentRun) {
+          flushPendingWorkGroup({ attachToPreviousAssistant: false });
+          const previous = nextRows.at(-1);
+          const members = runEntry.entry.subagentRun.members;
+          if (
+            runEntry.entry.turnId &&
+            previous?.kind === "work" &&
+            previous.groupedEntries.every(
+              (entry) =>
+                entry.subagentRun &&
+                entry.turnId === runEntry.entry.turnId &&
+                !entry.subagentRun.members.some((member) =>
+                  members.some((next) => next.key === member.key),
+                ),
+            )
+          ) {
+            previous.groupedEntries.push(runEntry.entry);
+          } else {
+            nextRows.push({
+              kind: "work",
+              id: runEntry.id,
+              createdAt: runEntry.createdAt,
+              groupedEntries: [runEntry.entry],
+            });
+          }
+          continue;
+        }
         const userInputExchange = runEntry.entry.userInputExchange;
         if (userInputExchange) {
           flushPendingWorkGroup({ attachToPreviousAssistant: false });

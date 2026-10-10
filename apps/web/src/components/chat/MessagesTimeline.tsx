@@ -1189,7 +1189,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         if (target.expandCollapsedWorkMessageId) {
           setCollapsedWorkExpanded(target.expandCollapsedWorkMessageId, true);
         }
-        const selector = `[data-subagent-run-card="${cssAttributeSelectorValue(entryId)}"]`;
+        const row = rowsRef.current[target.rowIndex];
+        const cardEntryId =
+          row?.kind === "work" && row.groupedEntries.every((entry) => entry.subagentRun)
+            ? (row.groupedEntries[0]?.id ?? entryId)
+            : entryId;
+        const selector = `[data-subagent-run-card="${cssAttributeSelectorValue(cardEntryId)}"]`;
         const mounted = timelineRootRef.current?.querySelector(selector);
         if (mounted instanceof HTMLElement) {
           mounted.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
@@ -1554,6 +1559,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
             />
           );
+          if (groupedEntries.every((entry) => entry.subagentRun)) {
+            const first = groupedEntries[0]!;
+            return renderEntryRow({
+              ...first,
+              subagents: groupedEntries.flatMap((entry) => entry.subagents ?? []),
+              subagentRun: {
+                members: groupedEntries.flatMap((entry) => entry.subagentRun!.members),
+                entryIds: groupedEntries.map((entry) => entry.id),
+              },
+            });
+          }
           const isLiveGroup =
             groupId === lastLiveWorkGroupId && (activeTurnInProgress || isWorking);
           const isExpanded = expandedWorkGroupsState[groupId] ?? false;
