@@ -248,6 +248,23 @@ describe("deriveQueuedComposerPause", () => {
     ).toEqual({ reason: "usage-limit", turnId: LIVE_TURN_ID });
   });
 
+  it("does not pause a newer completed turn for a late rejection owned by an older turn", () => {
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        latestTurn: makeLatestTurn("completed"),
+        activities: [
+          makeActivity({
+            kind: "account.rate-limited",
+            payload: { status: "rejected" },
+            turnId: TurnId.makeUnsafe("turn-older"),
+            createdAt: "2026-03-13T12:00:20.000Z",
+          }),
+        ],
+      }),
+    ).toBeNull();
+  });
+
   it("keeps a stop pause through a turn the server promoted from its own queue", () => {
     expect(
       deriveQueuedComposerPause({

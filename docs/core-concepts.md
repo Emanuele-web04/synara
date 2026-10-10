@@ -148,6 +148,9 @@ running, even if the provider had already finished and its final events are stil
 Output that arrives after a turn ended is added to its message without marking it as streaming
 again. An assistant item that ends without any text does not add an empty response row.
 
+Chat code blocks above 250,000 characters display their complete source as plain text,
+using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
+
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
 If it was not accepted, Synara records a rejection that also blocks a delayed copy, then restores
@@ -349,6 +352,10 @@ follow a successful commit or push, so inspect the current branch before retryin
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
+
+File Undo and thread revert refuse to change a workspace while another thread has an active or
+pending turn in that same Git checkout. Symlinks and nested folders share this protection;
+separate Git worktrees remain independent. Stop the active turn before retrying Undo.
 
 Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;

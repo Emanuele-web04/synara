@@ -439,6 +439,29 @@ describe("observed Claude context budget", () => {
     ).toEqual({ model, maxTokens: 1_000_000 });
   });
 
+  it("starts over after a completed account handoff even when the context configuration is unchanged", () => {
+    const handoff = makeActivity("handoff", "provider.handoff", {});
+    expect(deriveObservedClaudeContextBudget([...turnActivities, handoff])).toBeNull();
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        makeActivity("failed-handoff", "provider.handoff.failed", {}),
+      ]),
+    ).toEqual({ model, maxTokens: 1_000_000 });
+    expect(
+      deriveObservedClaudeContextBudget([
+        ...turnActivities,
+        handoff,
+        makeActivity("new-account", "context-window.configured", { cleared: true }),
+        makeActivity("new-usage", "context-window.updated", {
+          usedTokens: 1000,
+          maxTokens: 200_000,
+          claudeCache: cache(model),
+        }),
+      ]),
+    ).toEqual({ model, maxTokens: 200_000 });
+  });
+
   it("starts over when the configured context window changes", () => {
     expect(
       deriveObservedClaudeContextBudget([

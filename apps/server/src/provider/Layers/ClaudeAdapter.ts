@@ -92,6 +92,7 @@ import {
   claudeCacheForModel,
 } from "../claudeCacheObservation.ts";
 import { compareSemverVersions } from "../providerMaintenance.ts";
+import { isImageGenerationToolName } from "../imageGenerationTool.ts";
 import { redactSensitiveJsonFields } from "../../sensitiveKeys.ts";
 import {
   Cause,
@@ -274,6 +275,8 @@ interface ClaudeTurnState {
     { itemId: string; text: string; completed: boolean; snapshotReceived?: boolean }
   >;
   reasoningMessageId?: string;
+  // Native fork boundaries must belong to this turn, never the prior session message.
+  lastAssistantUuid?: string;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
@@ -478,6 +481,9 @@ interface ClaudeSessionContext {
   processedTokenBaselineKnown: boolean;
   readonly requestUsage: ClaudeRequestUsage;
   lastResultUuid: string | undefined;
+  // Last effective fast-mode state Claude Code reported, as `state:reason`.
+  // `currentFastMode` is only what was requested; the account can still refuse it.
+  lastFastModeSignature: string | undefined;
   lastAssistantUuid: string | undefined;
   // Completed-turn native boundaries, oldest first (see ClaudeTurnBoundary).
   turnBoundaries: Array<ClaudeTurnBoundary>;
@@ -1269,6 +1275,14 @@ function hasActiveClaudeCompactionWork(context: ClaudeSessionContext): boolean {
 
 function classifyToolItemType(toolName: string): CanonicalItemType {
   const normalized = toolName.toLowerCase();
+  // Claude SDK qualifies MCP tools as mcp__<server>__<tool>. Match the exact
+  // terminal tool name before server names and broad edit/image checks interfere.
+  const mcpSeparator = toolName.startsWith("mcp__") ? toolName.indexOf("__", "mcp__".length) : -1;
+  const nativeToolName =
+    mcpSeparator > "mcp__".length ? toolName.slice(mcpSeparator + 2) : toolName;
+  if (isImageGenerationToolName(nativeToolName)) {
+    return "image_generation";
+  }
   if (
     normalized === "todowrite" ||
     normalized.includes("todo") ||
@@ -1440,6 +1454,8 @@ function titleForTool(itemType: CanonicalItemType): string {
       return "Web search";
     case "image_view":
       return "Image view";
+    case "image_generation":
+      return "Image generation";
     case "dynamic_tool_call":
       return "Tool call";
     default:
@@ -1687,6 +1703,15 @@ function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStat
     return "cancelled";
   }
   return "failed";
+}
+
+function claudeFastModeSignature(message: {
+  readonly fast_mode_state?: string | undefined;
+  readonly fast_mode_disabled_reason?: string | undefined;
+}): string | undefined {
+  return message.fast_mode_state === undefined
+    ? undefined
+    : `${message.fast_mode_state}:${message.fast_mode_disabled_reason ?? ""}`;
 }
 
 function nativeProviderRefs(
@@ -3661,13 +3686,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         };
         // Only a completed turn ends at a self-contained native message; an
         // interrupted or failed one can stop on a tool_use without its result.
-        if (status === "completed" && context.lastAssistantUuid && context.resumeSessionId) {
+        if (status === "completed" && turnState.lastAssistantUuid && context.resumeSessionId) {
           context.turnBoundaries = [
             ...context.turnBoundaries.filter((entry) => entry.turnId !== turnState.turnId),
             {
               turnId: turnState.turnId,
               sessionId: context.resumeSessionId,
-              assistantUuid: context.lastAssistantUuid,
+              assistantUuid: turnState.lastAssistantUuid,
             },
           ].slice(-CLAUDE_TURN_BOUNDARY_LIMIT);
         }
@@ -3797,6 +3822,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           processedTokenBaselineKnown: true,
           requestUsage: new ClaudeRequestUsage(),
           lastResultUuid: undefined,
+          lastFastModeSignature: undefined,
           lastAssistantUuid: undefined,
           turnBoundaries: [],
           lastThreadStartedId: undefined,
@@ -4886,6 +4912,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         context.lastAssistantUuid = message.uuid;
+        if (context.turnState) context.turnState.lastAssistantUuid = message.uuid;
         yield* updateResumeCursor(context);
       });
 
@@ -4922,6 +4949,34 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         yield* completeTurn(context, status, errorMessage, message);
+
+        // Results carry the fast-mode state that actually served the turn. Publish
+        // it when it moves (cooldown after a rate limit, a toggle between turns) so
+        // the composer stops showing a requested speed the account did not get.
+        const fastModeSignature = claudeFastModeSignature(message);
+        if (
+          fastModeSignature !== undefined &&
+          fastModeSignature !== context.lastFastModeSignature
+        ) {
+          context.lastFastModeSignature = fastModeSignature;
+          const fastModeStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "session.configured",
+            eventId: fastModeStamp.eventId,
+            provider: PROVIDER,
+            createdAt: fastModeStamp.createdAt,
+            threadId: context.session.threadId,
+            payload: {
+              config: {
+                fast_mode_state: message.fast_mode_state,
+                ...(message.fast_mode_disabled_reason !== undefined
+                  ? { fast_mode_disabled_reason: message.fast_mode_disabled_reason }
+                  : {}),
+              },
+            },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
 
         // Claude Code caches account credentials in the live SDK process. An
         // auth/account failure cannot be recovered by reusing that query after
@@ -5282,6 +5337,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (Array.isArray(message.tools)) {
               context.initToolNames = new Set(message.tools);
             }
+            context.lastFastModeSignature = claudeFastModeSignature(message);
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "session.configured",
@@ -7019,6 +7075,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             processedTokenBaselineKnown,
             requestUsage: new ClaudeRequestUsage(),
             lastResultUuid: undefined,
+            lastFastModeSignature: undefined,
             lastAssistantUuid: resumeState?.resumeSessionAt,
             turnBoundaries: [...(resumeState?.turnBoundaries ?? [])],
             lastThreadStartedId: undefined,
@@ -8005,7 +8062,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 cause,
               }),
           });
-          const lastMessage = messages.at(-1);
+          const cutoffIndex =
+            input.throughTurnId === undefined
+              ? messages.length - 1
+              : messages.findIndex((message) => message.uuid === upToMessageId);
+          if (input.throughTurnId !== undefined && cutoffIndex < 0) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "forkThread",
+              issue:
+                "The chosen Claude turn is no longer in the native transcript; Synara will rebuild the fork from its retained transcript.",
+            });
+          }
+          const completedMessages = messages.slice(0, cutoffIndex + 1);
+          const lastMessage = completedMessages.at(-1);
           const message = lastMessage?.message;
           const stopReason =
             message && typeof message === "object" && "stop_reason" in message
@@ -8043,7 +8113,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           // Freeze the boundary before the SDK copies the file: new messages
           // appended concurrently by Claude must not enter the imported copy.
           upToMessageId = lastMessage.uuid;
-          importedSourceMessages = messages;
+          importedSourceMessages = completedMessages;
         }
         const forked = yield* Effect.tryPromise({
           try: () =>
