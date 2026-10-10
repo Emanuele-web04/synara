@@ -26,13 +26,16 @@ export {
   type PendingUserInput,
 } from "./pendingInteractionDerivation";
 export {
+  deriveSubagentTaskEnds,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
   isRoutedSubagentWorkEntry,
+  isSubagentStateOnlyWorkEntry,
   omitRoutedSubagentWorkEntries,
   orderedActivities,
+  type SubagentTaskEnd,
   type TimelineEntry,
   type WorkLogAutomation,
   type WorkLogEntry,
@@ -40,6 +43,8 @@ export {
   type WorkLogLiveActivityState,
   type WorkLogSubagent,
   type WorkLogSubagentAction,
+  type WorkLogSubagentRun,
+  type WorkLogSubagentRunMember,
   type WorkLogSynaraCreatedThread,
   type WorkLogSynaraThreadCreation,
 } from "./workLog";

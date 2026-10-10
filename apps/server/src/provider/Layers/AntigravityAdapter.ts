@@ -61,7 +61,10 @@ import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
-import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
+import {
+  createAntigravityPrintResultParser,
+  isAntigravityPostResponseTimeout,
+} from "../antigravityPrintResult.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -72,8 +75,8 @@ import {
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
   type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
-import { signalOwnedChildProcess } from "../../platform/processTreeController.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
+import { capHistoryBytes } from "../../terminal/terminalHistory.ts";
 
 const PROVIDER = "antigravity" as const;
 const DEFAULT_MODEL = "Gemini 3.5 Flash";
@@ -81,7 +84,7 @@ const PRINT_TIMEOUT = "30m";
 const POLL_INTERVAL_MS = 75;
 const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 const PLUGIN_INSTALL_TIMEOUT_MS = 45_000;
-const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
+export const ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES = 128 * 1024;
 const WINDOWS_PROMPT_MAX_CHARS = 24_000;
 
 type TranscriptStep = {
@@ -100,7 +103,12 @@ type TranscriptStep = {
 type PendingTool = {
   readonly stepIndex: number;
   readonly itemId: RuntimeItemId;
-  readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
+  readonly itemType:
+    | "command_execution"
+    | "file_change"
+    | "dynamic_tool_call"
+    | "web_search"
+    | "image_generation";
   readonly name: string;
   readonly args?: Record<string, unknown>;
   /** Set when the transcript already reported this call as a background task. */
@@ -201,6 +209,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   /** Guards against double turn.completed (process close + interrupt/stop). */
   turnTerminalEmitted: boolean;
   stopTeardownRequested?: boolean;
+  stopTeardownPromise?: ReturnType<typeof teardownChildProcessTree>;
 };
 
 function messageFromCause(cause: unknown, fallback: string): string {
@@ -422,9 +431,63 @@ export function buildAntigravityHookConfig(
   };
 }
 
-function appendBoundedOutput(current: string, chunk: unknown): string {
-  const next = current + String(chunk);
-  return next.length > HELPER_OUTPUT_MAX_CHARS ? next.slice(-HELPER_OUTPUT_MAX_CHARS) : next;
+type BoundedOutputStream = "stdout" | "stderr";
+
+type BoundedOutputChunk = {
+  readonly stream: BoundedOutputStream;
+  readonly text: string;
+  readonly bytes: number;
+};
+
+/**
+ * Keep diagnostics bounded across both pipes while preserving their original
+ * stream labels. A provider can write to stdout and stderr concurrently, so
+ * separate per-stream caps would exceed the shared retention budget.
+ */
+export function createBoundedProcessOutput(maxBytes = ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES) {
+  const chunks: BoundedOutputChunk[] = [];
+  let byteLength = 0;
+
+  const append = (stream: BoundedOutputStream, chunk: unknown): void => {
+    const text = String(chunk);
+    if (text.length === 0 || maxBytes <= 0) return;
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (bytes > maxBytes) {
+      const tail = capHistoryBytes(text, maxBytes, 0);
+      chunks.push({ stream, text: tail, bytes: Buffer.byteLength(tail, "utf8") });
+      byteLength += chunks[chunks.length - 1]!.bytes;
+    } else {
+      chunks.push({ stream, text, bytes });
+      byteLength += bytes;
+    }
+    while (byteLength > maxBytes && chunks.length > 0) {
+      const first = chunks[0]!;
+      const overflow = byteLength - maxBytes;
+      if (first.bytes <= overflow) {
+        chunks.shift();
+        byteLength -= first.bytes;
+        continue;
+      }
+      const retained = capHistoryBytes(first.text, first.bytes - overflow, 0);
+      chunks[0] = { ...first, text: retained, bytes: Buffer.byteLength(retained, "utf8") };
+      byteLength -= first.bytes - chunks[0].bytes;
+      break;
+    }
+  };
+
+  const read = (stream: BoundedOutputStream): string =>
+    chunks
+      .filter((chunk) => chunk.stream === stream)
+      .map((chunk) => chunk.text)
+      .join("");
+
+  return {
+    append,
+    snapshot: () => ({ stdout: read("stdout"), stderr: read("stderr") }),
+    get byteLength() {
+      return byteLength;
+    },
+  };
 }
 
 export async function runAntigravityHelperProcess(
@@ -450,9 +513,9 @@ export async function runAntigravityHelperProcess(
       stdio: ["ignore", "pipe", "pipe"],
       requireExecutable: true,
     }) as AntigravityChildProcess;
-    let stdout = "";
-    let stderr = "";
+    const output = createBoundedProcessOutput();
     let settled = false;
+    let timedOut = false;
     const timeoutMs = options.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
     const finish = (callback: () => void) => {
       if (settled) return;
@@ -461,23 +524,48 @@ export async function runAntigravityHelperProcess(
       callback();
     };
     const timer = setTimeout(() => {
-      // A bounded helper probe fails fast: force the (Windows: tree) kill and
-      // reject with the timeout, exactly as before the runtime migration.
-      signalOwnedChildProcess(child, "SIGKILL");
-      finish(() =>
-        reject(
-          new Error(
-            `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+      timedOut = true;
+      // Do not return until the supervised tree teardown has observed the
+      // root exit and verified captured descendants are gone. A direct signal
+      // can leave an updater/helper descendant alive on Windows.
+      void teardownChildProcessTree(child).then(
+        (result) =>
+          finish(() =>
+            reject(
+              result.signalErrors.length > 0
+                ? new Error(
+                    `Antigravity helper timed out after ${timeoutMs}ms and teardown was unproven: ${result.signalErrors.map((error) => error.message).join("; ")}`,
+                    { cause: result.signalErrors[0] },
+                  )
+                : new Error(
+                    `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+                  ),
+            ),
           ),
-        ),
+        (cause) =>
+          finish(() =>
+            reject(
+              new Error(
+                `Antigravity helper timed out after ${timeoutMs}ms and teardown was unproven: ${messageFromCause(cause, "unknown teardown failure")}`,
+                { cause },
+              ),
+            ),
+          ),
       );
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => (stdout = appendBoundedOutput(stdout, chunk)));
-    child.stderr.on("data", (chunk) => (stderr = appendBoundedOutput(stderr, chunk)));
-    child.once("error", (cause) => finish(() => reject(cause)));
-    child.once("close", (code) => finish(() => resolve({ stdout, stderr, code: code ?? 1 })));
+    child.stdout.on("data", (chunk) => output.append("stdout", chunk));
+    child.stderr.on("data", (chunk) => output.append("stderr", chunk));
+    child.once("error", (cause) => {
+      if (timedOut) return;
+      finish(() => reject(cause));
+    });
+    child.once("close", (code) => {
+      if (timedOut) return;
+      const { stdout, stderr } = output.snapshot();
+      finish(() => resolve({ stdout, stderr, code: code ?? 1 }));
+    });
   });
 }
 
@@ -730,6 +818,7 @@ function parseModelLines(output: string): ProviderListModelsResult["models"] {
 
 function toolItemType(name: string): PendingTool["itemType"] {
   if (name === "run_command") return "command_execution";
+  if (name === "generate_image") return "image_generation";
   if (
     name === "write_to_file" ||
     name === "replace_file_content" ||
@@ -1406,7 +1495,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
       const child = context.activeProcess;
       context.stopTeardownRequested = true;
-      void teardownProcessTree(child).catch(() => {
+      context.stopTeardownPromise = teardownProcessTree(child);
+      void context.stopTeardownPromise.catch(() => {
         try {
           child.kill("SIGKILL");
         } catch {
@@ -2483,6 +2573,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.interrupted = false;
         context.turnTerminalEmitted = false;
         delete context.stopTeardownRequested;
+        delete context.stopTeardownPromise;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
           ...context.session,
@@ -2556,16 +2647,33 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             context.harnessPolicyDelivered = true;
           }
         });
-        let stdout = "";
-        let stderr = "";
+        const output = createBoundedProcessOutput();
+        // Keep the complete stdout stream for legacy plain-text responses. The
+        // bounded capture above is reserved for diagnostics/raw process-exit
+        // events; applying that cap to the response would silently truncate a
+        // valid provider answer.
+        const responseStdout: string[] = [];
+        // Recovery needs evidence from the whole stderr stream, even when its
+        // diagnostic tail evicts an earlier failure. Keep a short prefix plus
+        // an overflow marker; the exact benign timeout is much shorter than it.
+        let stderrEvidence = "";
+        let stderrEvidenceOverflow = false;
         const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
         child.stdout.on("data", (chunk) => {
-          outputParser.write(String(chunk));
-          stdout += chunk;
+          const text = String(chunk);
+          responseStdout.push(text);
+          outputParser.write(text);
+          output.append("stdout", chunk);
         });
-        child.stderr.on("data", (chunk) => (stderr += chunk));
+        child.stderr.on("data", (chunk) => {
+          output.append("stderr", chunk);
+          if (stderrEvidenceOverflow) return;
+          const evidence = (stderrEvidence + String(chunk)).trimStart();
+          stderrEvidenceOverflow = evidence.trimEnd().length > 128;
+          stderrEvidence = evidence.slice(0, 129);
+        });
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
         }, POLL_INTERVAL_MS);
@@ -2617,8 +2725,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
+            const { stdout: boundedStdout, stderr } = output.snapshot();
+            const hasStderrEvidence = stderrEvidenceOverflow || stderrEvidence.trim().length > 0;
+            const stderrOnlyExactTimeout =
+              !stderrEvidenceOverflow && isAntigravityPostResponseTimeout(stderrEvidence);
             const printResult = outputParser.finish();
-            const responseText = printResult?.response ?? stdout.trim();
+            const responseText = printResult?.response ?? responseStdout.join("").trim();
             if (!context.sawAssistant && responseText) {
               emitTextItem(
                 context,
@@ -2636,23 +2748,64 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            // Only our stop-hook teardown may replace a missing clean process exit.
-            // A provider ERROR is authoritative even when earlier response steps are DONE.
+            // Only our stop-hook teardown may replace a missing clean process exit. A
+            // provider ERROR is authoritative unless it is the exact timeout emitted
+            // after a durable final response (agy can report this after the reply is visible).
             const completedAfterStopTeardown =
               context.stopTeardownRequested === true &&
               printResult?.completedResponse === true &&
               context.sawAssistant &&
-              !stderr.trim() &&
+              !hasStderrEvidence &&
               context.pendingTools.length === 0 &&
               context.pendingBackgroundTasks.size === 0 &&
               context.pendingAnonymousBackgroundTasks.length === 0;
+            const exactPostResponseTimeout =
+              isAntigravityPostResponseTimeout(printResult?.terminalError) ||
+              (printResult?.hasExplicitResultError !== true &&
+                printResult?.terminalError === undefined &&
+                stderrOnlyExactTimeout);
+            const benignPostResponseTimeout =
+              context.stopTeardownPromise !== undefined &&
+              !context.interrupted &&
+              printResult?.hasConflictingResultError !== true &&
+              signal === null &&
+              (printResult?.resultStatus === undefined || printResult.resultStatus === "ERROR") &&
+              (printResult?.streamError === undefined ||
+                isAntigravityPostResponseTimeout(printResult.streamError)) &&
+              (!hasStderrEvidence || stderrOnlyExactTimeout) &&
+              exactPostResponseTimeout &&
+              printResult?.hasCompleteAssistantResponse === true &&
+              context.sawAssistant &&
+              context.pendingTools.length === 0 &&
+              context.pendingBackgroundTasks.size === 0 &&
+              context.pendingAnonymousBackgroundTasks.length === 0;
+            // Only the existing stop-hook teardown can have captured helpers
+            // while their parent was alive. A snapshot after close is insufficient.
+            let completedAfterBenignPostResponseTimeout = false;
+            if (benignPostResponseTimeout) {
+              try {
+                const teardown = await context.stopTeardownPromise;
+                completedAfterBenignPostResponseTimeout =
+                  teardown?.capturedBeforeRootExit === true && teardown.signalErrors.length === 0;
+              } catch {
+                // Keep the provider failure when process exit cannot be proven.
+              }
+              if (!ownsTurn()) {
+                await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                return;
+              }
+            }
+            const completedAfterExpectedPostResponseExit =
+              completedAfterStopTeardown || completedAfterBenignPostResponseTimeout;
             const interrupted =
               context.interrupted ||
               printResult?.state === "interrupted" ||
-              (signal !== null && printResult?.state !== "failed" && !completedAfterStopTeardown);
+              (signal !== null &&
+                printResult?.state !== "failed" &&
+                !completedAfterExpectedPostResponseExit);
             const failed =
               !interrupted &&
-              !completedAfterStopTeardown &&
+              !completedAfterExpectedPostResponseExit &&
               ((code ?? 1) !== 0 ||
                 (printResult !== undefined && printResult.state !== "completed"));
             if (failed && stderr.trim()) {
@@ -2677,7 +2830,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                       `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
-              raw: raw("process-exit", { code, signal, stdout, stderr }),
+              raw: raw("process-exit", {
+                code,
+                signal,
+                stdout: boundedStdout,
+                stderr,
+              }),
             });
             await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
           })();
