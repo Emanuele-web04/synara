@@ -8,6 +8,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
+import { GitStatusResult } from "@synara/contracts";
 import {
   Effect,
   Exit,
@@ -2499,7 +2500,7 @@ it.layer(TestLayer)("git integration", (it) => {
         const details = yield* (yield* GitCore).statusDetails(tmp);
 
         expect(details.workingTree.files).toEqual([
-          { path: fileName, insertions: 2, deletions: 1 },
+          { path: fileName, insertions: 2, deletions: 1, changeType: "modified" },
         ]);
       }),
     );
@@ -2625,8 +2626,8 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(details.workingTree.insertions).toBe(3);
         expect(details.workingTree.deletions).toBe(1);
         expect(details.workingTree.files).toEqual([
-          { path: "new-file.ts", insertions: 2, deletions: 0 },
-          { path: "README.md", insertions: 1, deletions: 1 },
+          { path: "new-file.ts", insertions: 2, deletions: 0, changeType: "untracked" },
+          { path: "README.md", insertions: 1, deletions: 1, changeType: "modified" },
         ]);
       }),
     );
@@ -2659,9 +2660,254 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(details.workingTree.insertions).toBe(1);
         expect(details.workingTree.deletions).toBe(0);
         expect(details.workingTree.files).toEqual([
-          { path: "Views/Turn/Core/TurnView.swift", insertions: 1, deletions: 0 },
+          {
+            path: "Views/Turn/Core/TurnView.swift",
+            insertions: 1,
+            deletions: 0,
+            changeType: "renamed",
+          },
         ]);
       }),
+    );
+
+    it.effect(
+      "classifies empty and binary files from existing porcelain in normal status reads",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          const realCore = yield* GitCore;
+          yield* initRepoWithCommit(tmp);
+          yield* Effect.tryPromise(() =>
+            fs.writeFile(path.join(tmp, "modified.bin"), new Uint8Array([0, 1, 2])),
+          );
+          yield* writeTextFile(path.join(tmp, "insert-only.txt"), "first\n");
+          yield* writeTextFile(path.join(tmp, "type-change"), "regular file\n");
+          yield* git(tmp, ["add", "."]);
+          yield* git(tmp, ["commit", "-m", "status classification baseline"]);
+
+          yield* Effect.tryPromise(() =>
+            fs.writeFile(path.join(tmp, "modified.bin"), new Uint8Array([0, 3, 4])),
+          );
+          yield* writeTextFile(path.join(tmp, "insert-only.txt"), "first\nsecond\n");
+          yield* writeTextFile(path.join(tmp, "added-empty.txt"), "");
+          yield* Effect.tryPromise(() =>
+            fs.writeFile(path.join(tmp, "added.bin"), new Uint8Array([0, 5])),
+          );
+          yield* git(tmp, ["add", "--", "added-empty.txt", "added.bin"]);
+          yield* writeTextFile(path.join(tmp, "untracked-empty.txt"), "");
+          yield* Effect.tryPromise(() =>
+            fs.writeFile(path.join(tmp, "untracked.bin"), new Uint8Array([0, 6])),
+          );
+          if (process.platform !== "win32") {
+            yield* Effect.tryPromise(async () => {
+              await fs.unlink(path.join(tmp, "type-change"));
+              await fs.symlink("README.md", path.join(tmp, "type-change"));
+            });
+          }
+          const operations: string[] = [];
+          const core = yield* makeIsolatedGitCore((input) => {
+            operations.push(input.operation);
+            return realCore.execute(input);
+          });
+          const details = yield* core.statusDetails(tmp);
+          const files = new Map(details.workingTree.files.map((file) => [file.path, file]));
+          for (const [path, changeType] of [
+            ["added-empty.txt", "added"],
+            ["added.bin", "added"],
+            ["untracked-empty.txt", "untracked"],
+            ["untracked.bin", "untracked"],
+            ["modified.bin", "modified"],
+          ])
+            expect(files.get(path!)).toEqual({ path, insertions: 0, deletions: 0, changeType });
+          expect(files.get("insert-only.txt")).toMatchObject({
+            insertions: 1,
+            deletions: 0,
+            changeType: "modified",
+          });
+          if (process.platform !== "win32")
+            expect(files.get("type-change")?.changeType).toBe("type-changed");
+          expect(
+            operations.filter((operation) => operation === "GitCore.statusDetails.status"),
+          ).toHaveLength(1);
+          expect(
+            operations.some(
+              (operation) => operation.includes("moveAware") || operation.includes("nameStatus"),
+            ),
+          ).toBe(false);
+          expect((yield* core.status({ cwd: tmp })).workingTree.files).toEqual(
+            details.workingTree.files,
+          );
+        }),
+    );
+
+    it.effect(
+      "keeps zero-count deleted files and binary moves in move-aware status without changing the real index",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          yield* writeTextFile(path.join(tmp, "deleted-empty.txt"), "");
+          yield* Effect.tryPromise(() =>
+            fs.writeFile(path.join(tmp, "old.bin"), new Uint8Array([0, 1, 2])),
+          );
+          yield* git(tmp, ["add", "."]);
+          yield* git(tmp, ["commit", "-m", "binary move source"]);
+          yield* Effect.tryPromise(async () => {
+            await fs.mkdir(path.join(tmp, "new-dir"));
+            await fs.rename(path.join(tmp, "old.bin"), path.join(tmp, "new-dir", "moved.bin"));
+            await fs.unlink(path.join(tmp, "deleted-empty.txt"));
+            await fs.writeFile(
+              path.join(tmp, "new-dir", "untracked.bin"),
+              new Uint8Array([0, 9, 8]),
+            );
+          });
+          const indexBefore = yield* git(tmp, ["ls-files", "--stage"]);
+          const details = yield* (yield* GitCore).statusDetails(tmp);
+          expect(details.workingTree).toEqual({
+            files: [
+              { path: "deleted-empty.txt", insertions: 0, deletions: 0, changeType: "deleted" },
+              { path: "new-dir/moved.bin", insertions: 0, deletions: 0, changeType: "renamed" },
+              {
+                path: "new-dir/untracked.bin",
+                insertions: 0,
+                deletions: 0,
+                changeType: "untracked",
+              },
+            ],
+            insertions: 0,
+            deletions: 0,
+          });
+          expect(yield* git(tmp, ["ls-files", "--stage"])).toBe(indexBefore);
+        }),
+    );
+
+    for (const moveAware of [false, true]) {
+      it.effect(
+        `retains staged rename/copy and type-change semantics in ${moveAware ? "move-aware" : "normal"} status`,
+        () =>
+          Effect.gen(function* () {
+            const tmp = yield* makeTmpDir();
+            yield* initRepoWithCommit(tmp);
+            yield* git(tmp, ["config", "status.renames", "copies"]);
+            const copyContents = Array.from(
+              { length: 10 },
+              (_, index) => `copy line ${index}\n`,
+            ).join("");
+            yield* writeTextFile(path.join(tmp, "copy-source.txt"), copyContents);
+            yield* writeTextFile(path.join(tmp, "rename-source.txt"), "rename source\n");
+            yield* writeTextFile(path.join(tmp, "type-change"), "regular file\n");
+            yield* git(tmp, ["add", "."]);
+            yield* git(tmp, ["commit", "-m", "status metadata sources"]);
+
+            const renamedPath =
+              process.platform === "win32" ? "renamed.txt" : " renamed\tto\n.txt ";
+            yield* git(tmp, ["mv", "--", "rename-source.txt", renamedPath]);
+            yield* writeTextFile(path.join(tmp, "copy.txt"), copyContents);
+            yield* writeTextFile(
+              path.join(tmp, "copy-source.txt"),
+              `${copyContents}source edited\n`,
+            );
+            yield* git(tmp, ["add", "--", "copy-source.txt", "copy.txt"]);
+            if (process.platform !== "win32") {
+              yield* Effect.tryPromise(async () => {
+                await fs.unlink(path.join(tmp, "type-change"));
+                await fs.symlink("README.md", path.join(tmp, "type-change"));
+              });
+            }
+            if (moveAware) {
+              yield* Effect.tryPromise(() => fs.mkdir(path.join(tmp, "untracked-dir")));
+              yield* writeTextFile(path.join(tmp, "untracked-dir", "empty.txt"), "");
+            }
+            const indexBefore = yield* git(tmp, ["ls-files", "--stage"]);
+            const details = yield* (yield* GitCore).statusDetails(tmp);
+            const files = new Map(details.workingTree.files.map((file) => [file.path, file]));
+            expect(files.get(renamedPath)?.changeType).toBe("renamed");
+            expect(files.get("copy.txt")?.changeType).toBe("copied");
+            expect(files.get("copy-source.txt")?.changeType).toBe("modified");
+            if (process.platform !== "win32")
+              expect(files.get("type-change")?.changeType).toBe("type-changed");
+            if (moveAware)
+              expect(files.get("untracked-dir/empty.txt")?.changeType).toBe("untracked");
+            expect(
+              Schema.decodeUnknownSync(GitStatusResult)({ ...details, pr: null }).workingTree.files,
+            ).toEqual(details.workingTree.files);
+            expect(yield* git(tmp, ["ls-files", "--stage"])).toBe(indexBefore);
+          }),
+      );
+    }
+
+    it.effect(
+      "retains staged type changes canceled by move-aware staging without changing the real index",
+      () =>
+        Effect.gen(function* () {
+          if (process.platform === "win32") return;
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          yield* writeTextFile(path.join(tmp, "type-change"), "original file\n");
+          yield* git(tmp, ["add", "."]);
+          yield* git(tmp, ["commit", "-m", "type change baseline"]);
+          yield* Effect.tryPromise(async () => {
+            await fs.unlink(path.join(tmp, "type-change"));
+            await fs.symlink("README.md", path.join(tmp, "type-change"));
+          });
+          yield* git(tmp, ["add", "--", "type-change"]);
+          yield* Effect.tryPromise(async () => {
+            await fs.unlink(path.join(tmp, "type-change"));
+            await fs.mkdir(path.join(tmp, "untracked-dir"));
+          });
+          yield* writeTextFile(path.join(tmp, "type-change"), "original file\n");
+          yield* writeTextFile(path.join(tmp, "untracked-dir", "empty.txt"), "");
+          const indexBefore = yield* git(tmp, ["ls-files", "--stage"]);
+          const details = yield* (yield* GitCore).statusDetails(tmp);
+          expect(details.workingTree.files.find((file) => file.path === "type-change")).toEqual({
+            path: "type-change",
+            insertions: 0,
+            deletions: 0,
+            changeType: "type-changed",
+          });
+          expect(details.workingTree).toMatchObject({ insertions: 0, deletions: 0 });
+          expect(yield* git(tmp, ["ls-files", "--stage"])).toBe(indexBefore);
+        }),
+    );
+
+    it.effect(
+      "retains an unmerged file even when move-aware staging temporarily produces no diff for it",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(tmp);
+          const core = yield* GitCore;
+          yield* git(tmp, ["checkout", "-b", "other"]);
+          yield* writeTextFile(path.join(tmp, "README.md"), "other version\n");
+          yield* git(tmp, ["commit", "-am", "other change"]);
+          yield* git(tmp, ["checkout", initialBranch]);
+          yield* writeTextFile(path.join(tmp, "README.md"), "current version\n");
+          yield* git(tmp, ["commit", "-am", "current change"]);
+          const merge = yield* core.execute({
+            operation: "GitCore.test.merge",
+            cwd: tmp,
+            args: ["merge", "other"],
+            allowNonZeroExit: true,
+          });
+          expect(merge.code).toBe(1);
+          yield* writeTextFile(path.join(tmp, "README.md"), "current version\n");
+          yield* Effect.tryPromise(() => fs.mkdir(path.join(tmp, "untracked-dir")));
+          yield* writeTextFile(path.join(tmp, "untracked-dir", "new.txt"), "new\n");
+          const conflictBefore = yield* git(tmp, ["ls-files", "--unmerged"]);
+          expect(conflictBefore).not.toBe("");
+          const status = yield* core.statusDetails(tmp);
+          expect(status.workingTree.files.find((file) => file.path === "README.md")).toEqual({
+            path: "README.md",
+            insertions: 0,
+            deletions: 0,
+            changeType: "unmerged",
+          });
+          expect(
+            status.workingTree.files.find((file) => file.path === "untracked-dir/new.txt")
+              ?.changeType,
+          ).toBe("untracked");
+          expect(yield* git(tmp, ["ls-files", "--unmerged"])).toBe(conflictBefore);
+        }),
     );
 
     it.effect("reads first-commit working tree patches including unstaged edits", () =>

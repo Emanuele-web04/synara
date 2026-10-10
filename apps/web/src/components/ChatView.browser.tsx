@@ -113,6 +113,7 @@ import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
+import { toastManager } from "./ui/toast";
 import { hasActiveComposerSend } from "../lib/composerSendOwnership";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
@@ -2289,6 +2290,9 @@ describe("ChatView transcript geometry (full app)", () => {
   });
 
   beforeEach(async () => {
+    // The toast manager survives React unmounts. Leftover error toasts can cover
+    // the tab bar and intercept real Chromium pointer actions in a later test.
+    toastManager.close();
     // Reset the shared fixture snapshot to a neutral, low-sequence shell before
     // disposing the old transport. Any in-flight getShellSnapshot that resolves
     // after this point will then return sequence 0, which the next test's real
@@ -2365,6 +2369,7 @@ describe("ChatView transcript geometry (full app)", () => {
   afterEach(async () => {
     await resetHomeChatProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
+    toastManager.close();
     document.body.innerHTML = "";
   });
 
