@@ -22,7 +22,7 @@ async function fixture() {
   for (const dir of CENTRAL_ICON_DIRECTORIES) {
     await fs.mkdir(path.join(publicDir, dir), { recursive: true });
     await fs.mkdir(path.join(dist, dir), { recursive: true });
-    for (const name of ["star", "cloud", "bag", "unused"]) {
+    for (const name of ["star", "cloud", "bag", "url-only", "css-only", "unused"]) {
       const svg = `<svg data-variant="${dir}" data-name="${name}"/>`;
       await fs.writeFile(path.join(publicDir, dir, `${name}.svg`), svg);
       await fs.writeFile(path.join(dist, dir, `${name}.svg`), svg);
@@ -36,9 +36,12 @@ describe("production icon pruning", () => {
     const f = await fixture();
     await fs.writeFile(
       path.join(f.source, "icons.tsx"),
-      'const icons = ["star", `cloud.svg`]; const css = "url(/central-icons-fill/bag.svg)";',
+      'const icons = ["star", `cloud.svg`]; const css = "url(/central-icons-fill/url-only.svg)";',
     );
-    await fs.writeFile(path.join(f.source, "theme.css"), 'background: url(/central-icons-reversed/bag.svg);');
+    await fs.writeFile(
+      path.join(f.source, "theme.css"),
+      "background: url(/central-icons-reversed/css-only.svg);",
+    );
     await fs.writeFile(path.join(f.contracts, "schema.ts"), 'const allowed = ["bag"];');
     for (const dir of CENTRAL_ICON_DIRECTORIES) {
       await fs.writeFile(path.join(f.dist, dir, "unused.svg.gz"), "old gzip");
@@ -49,9 +52,11 @@ describe("production icon pruning", () => {
       expect((await fs.readdir(path.join(f.dist, dir))).sort()).toEqual([
         "bag.svg",
         "cloud.svg",
+        "css-only.svg",
         "star.svg",
+        "url-only.svg",
       ]);
-      for (const name of ["bag", "cloud", "star"]) {
+      for (const name of ["bag", "cloud", "css-only", "star", "url-only"]) {
         expect(await fs.readFile(path.join(f.dist, dir, `${name}.svg`))).toEqual(
           await fs.readFile(path.join(f.publicDir, dir, `${name}.svg`)),
         );
@@ -65,7 +70,7 @@ describe("production icon pruning", () => {
     const f = await fixture();
     await pruneProductionIcons(f.publicDir, f.dist, [f.source]);
     for (const dir of CENTRAL_ICON_DIRECTORIES) {
-      expect(await fs.readdir(path.join(f.dist, dir))).toHaveLength(4);
+      expect(await fs.readdir(path.join(f.dist, dir))).toHaveLength(6);
     }
   });
 });
