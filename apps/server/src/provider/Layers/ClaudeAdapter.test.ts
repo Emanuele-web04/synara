@@ -5264,6 +5264,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   for (const [error, messagePattern] of [
     ["authentication_failed", /claude auth login --claudeai/i],
     ["account_on_hold", /account is on hold/i],
+    ["verification_required", /organization verification/i],
   ] as const) {
     it.effect(`restarts the Claude process after ${error}`, () => {
       const harness = makeMultiQueryHarness();
@@ -6321,7 +6322,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   });
 
   it.effect(
-    "suppresses thinking_tokens/task_updated telemetry and de-dupes each unknown Claude subtype once",
+    "suppresses thinking_tokens/task_updated/permission_check_status telemetry and de-dupes each unknown Claude subtype once",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -6348,6 +6349,18 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             estimated_tokens_delta: 50,
             session_id: "sdk-session-thinking",
             uuid: `thinking-${i}`,
+          } as unknown as SDKMessage);
+        }
+
+        // Private auto-mode permission-check bookends are not transcript events.
+        for (const status of ["checking", "done"]) {
+          harness.query.emit({
+            type: "system",
+            subtype: "permission_check_status",
+            tool_use_id: "tool-permission-check",
+            status,
+            session_id: "sdk-session-permission-check",
+            uuid: `permission-check-${status}`,
           } as unknown as SDKMessage);
         }
 
@@ -6415,6 +6428,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         );
         assert.equal(
           warningMessages.some((message) => message.includes("task_updated")),
+          false,
+        );
+        assert.equal(
+          warningMessages.some((message) => message.includes("permission_check_status")),
           false,
         );
         assert.equal(
