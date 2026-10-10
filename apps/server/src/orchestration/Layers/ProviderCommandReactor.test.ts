@@ -22057,6 +22057,10 @@ describe("ProviderCommandReactor", () => {
       );
       return state.pipe(Option.getOrThrow).lastAckedSequence >= midTurn.sequence;
     });
+    const changedThread = await readHarnessThread(harness);
+    expect(changedThread?.runtimeMode).toBe("full-access");
+    expect(changedThread?.session?.runtimeMode).toBe("approval-required");
+    expect(changedThread?.session?.activeTurnId).toBe("turn-mode-active");
     // The in-flight turn must survive the mode change: ensuring the session
     // now would restart the provider and kill the running turn.
     expect(harness.startSession.mock.calls.length).toBe(0);
