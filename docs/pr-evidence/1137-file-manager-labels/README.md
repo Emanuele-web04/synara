@@ -11,7 +11,7 @@ These matched Chromium captures show the `EditedFileRow` file-action menu with t
 - Both captures also used a temporary `page.screenshot(...)` line in `apps/web/src/components/chat/EditedFileRow.browser.tsx`; it was removed after capture. Neither temporary edit is in the committed candidate.
 - Capture runner: Chromium through the repository's Vitest browser setup, using `apps/web/src/components/chat/EditedFileRow.browser.tsx`, Linux `navigator.platform`, and the same row/menu fixture and viewport.
 
-This capture SHA is distinct from the later source/test qualification. **Qualification tree:** `4110ffad7a5d198cb539e420e51e3fb7857081c3` (feature plus latest integrated main `3e3e41c3b312ad95f62c33b155354b099bf36e2e` and the shared group-folder-reveal cleanup). Capture assets predate and are not represented as a rendering of that qualification tree.
+This capture SHA is distinct from the later source/test qualification. **Qualification tree:** `4110ffad7e2d8eafc985ae346d904de3a4683092` (feature plus latest integrated main `3e3e41c3b312ad95f62c33b155354b099bf36e2e` and the shared group-folder-reveal cleanup). Capture assets predate and are not represented as a rendering of that qualification tree.
 
 ## What is visible
 
