@@ -31,7 +31,7 @@ interface IntegrationRow {
   readonly pairedAt: string | null;
   readonly revokedAt: string | null;
   readonly rateLimitPerMinute: number;
-  readonly concurrencyLimit: number | null;
+  readonly concurrencyLimit: number;
 }
 
 interface OperationRow extends ExternalMcpOperationRecord {}
@@ -148,18 +148,6 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.mapError(repositoryError("createIntegration")));
-
-  const updateConcurrencyLimit: ExternalMcpRepositoryShape["updateConcurrencyLimit"] = (input) =>
-    sql<{ readonly integrationId: string }>`
-      UPDATE external_mcp_integrations
-      SET concurrency_limit = ${input.concurrencyLimit}
-      WHERE integration_id = ${input.integrationId}
-        AND revoked_at IS NULL AND expires_at > ${input.now}
-      RETURNING integration_id AS "integrationId"
-    `.pipe(
-      Effect.map((rows) => rows.length > 0),
-      Effect.mapError(repositoryError("updateConcurrencyLimit")),
-    );
 
   const listIntegrations: ExternalMcpRepositoryShape["listIntegrations"] = () =>
     sql<IntegrationRow>`
@@ -437,19 +425,16 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
               AND integrations.revoked_at IS NULL
               AND integrations.expires_at > ${input.now}
               AND (
-                integrations.concurrency_limit IS NULL
-                OR (
-                  SELECT COUNT(*)
-                  FROM external_mcp_active_capacity_claims AS claims
-                  WHERE claims.integration_id = integrations.integration_id
-                ) < integrations.concurrency_limit
-              )
+                SELECT COUNT(*)
+                FROM external_mcp_active_capacity_claims AS claims
+                WHERE claims.integration_id = integrations.integration_id
+              ) < integrations.concurrency_limit
             ON CONFLICT (integration_id, request_id) DO NOTHING
             RETURNING operation_id AS "operationId"
           `;
           const capacity = yield* sql<{
             readonly activeCount: number;
-            readonly concurrencyLimit: number | null;
+            readonly concurrencyLimit: number;
           }>`
             SELECT
               integrations.concurrency_limit AS "concurrencyLimit",
@@ -479,11 +464,6 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
             return operation.fingerprint === input.fingerprint
               ? ({ kind: "replay", operation } as const)
               : ({ kind: "idempotency_conflict", operation } as const);
-          }
-          if (state.concurrencyLimit === null) {
-            return yield* Effect.fail(
-              new Error("Uncapped external MCP operation was not reserved."),
-            );
           }
           return {
             kind: "concurrency_limited",
@@ -706,7 +686,6 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
   return {
     listActiveProjects,
     createIntegration,
-    updateConcurrencyLimit,
     listIntegrations,
     getIntegrationById,
     getActiveIntegrationByCredentialHash,
