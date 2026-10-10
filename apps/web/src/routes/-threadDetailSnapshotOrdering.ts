@@ -15,7 +15,7 @@
  * either be lost or re-applied by a catch-up replay. The only legitimate older
  * snapshot is a server-side reset (a fresh database restarts sequences), which
  * is observable only while the cursor is still the cached resume seed and no
- * event or snapshot of the current subscription has moved it.
+ * event has moved it and no snapshot of the current subscription has confirmed it.
  */
 export function shouldApplyThreadStreamSnapshot(input: {
   readonly snapshotSequence: number;

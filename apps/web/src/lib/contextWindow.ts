@@ -194,6 +194,9 @@ export function deriveObservedClaudeContextBudget(
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index];
     if (!activity) continue;
+    // A completed handoff can change accounts even with the same model and Auto
+    // configuration. Its previous runtime budget is no longer evidence.
+    if (activity.kind === "provider.handoff") break;
     if (activity.kind === "context-window.configured") {
       const key = configuredContextWindowKey(activity);
       newestConfiguredKey ??= key;
