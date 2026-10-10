@@ -1,7 +1,7 @@
 import { ThreadId, type OrchestrationSession } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
+import { canAdoptFirstTurnProvider, deriveTurnStartSession } from "./turnStartSession.ts";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-turn-start-session");
 const REQUESTED_AT = "2026-07-21T00:00:00.000Z";
@@ -11,6 +11,7 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
     threadId: THREAD_ID,
     status,
     providerName: "codex",
+    providerInstanceId: "codex",
     runtimeMode: "approval-required",
     activeTurnId: null,
     lastError: status === "error" ? "runtime exploded" : null,
@@ -29,36 +30,30 @@ function derive(currentSession: OrchestrationSession | null) {
 }
 
 describe("deriveTurnStartSession", () => {
-  it("keeps an established provider when a later turn requests another provider", () => {
+  it("ignores imported history when deciding first-turn provider adoption", () => {
     expect(
-      deriveTurnStartModelSelection({
-        currentModelSelection: { provider: "codex", model: "gpt-5-codex" },
-        requestedModelSelection: { provider: "pi", model: "openai/gpt-5" },
-        canAdoptRequestedProvider: false,
+      canAdoptFirstTurnProvider({
+        hasLatestTurn: false,
+        hasSession: false,
+        messages: [{ source: "fork-import" }, { source: "handoff-import" }, { source: "native" }],
       }),
-    ).toEqual({ provider: "codex", model: "gpt-5-codex" });
-  });
+    ).toBe(true);
 
-  it("allows an empty thread to adopt its first requested provider", () => {
     expect(
-      deriveTurnStartModelSelection({
-        currentModelSelection: { provider: "codex", model: "gpt-5-codex" },
-        requestedModelSelection: { provider: "pi", model: "openai/gpt-5" },
-        canAdoptRequestedProvider: true,
+      canAdoptFirstTurnProvider({
+        hasLatestTurn: false,
+        hasSession: false,
+        messages: [{ source: "fork-import" }, { source: "native" }, { source: "native" }],
       }),
-    ).toEqual({ provider: "pi", model: "openai/gpt-5" });
-  });
+    ).toBe(false);
 
-  it("creates a starting session when no session exists", () => {
-    expect(derive(null)).toEqual({
-      threadId: THREAD_ID,
-      status: "starting",
-      providerName: "pi",
-      runtimeMode: "full-access",
-      activeTurnId: null,
-      lastError: null,
-      updatedAt: REQUESTED_AT,
-    });
+    expect(
+      canAdoptFirstTurnProvider({
+        hasLatestTurn: true,
+        hasSession: false,
+        messages: [{ source: "fork-import" }],
+      }),
+    ).toBe(false);
   });
 
   it("preserves established provider settings when restarting an idle session", () => {

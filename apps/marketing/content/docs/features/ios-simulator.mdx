@@ -24,6 +24,12 @@ The first attachment compiles Synara's source-shipped device helper with the sel
 
 An agent launch through Synara's device tools can request that the pane open automatically for the owning task.
 
+## Automatic opening and focus
+
+In Settings, turn off **Automatically open simulator** to use Simulator.app without automatically opening the mirrored pane. You can still open the pane manually. The preference persists across restarts.
+
+Background device requests stay with their owning task and do not navigate away from the task you are using. Closing the pane manually is respected. An unconsumed open request can remain pending while automatic opening is disabled and be handled when it is enabled again for the owning task.
+
 ## Control the simulator
 
 The device screen accepts direct input:
@@ -62,6 +68,10 @@ Read-only inspection and input actions follow the active provider's tool policy.
   Ask the task to build the correct scheme and configuration first. A successful install or launch
   does not prove that the app was built from the intended branch, environment, or source state.
 </Callout>
+
+## Use captured screenshots
+
+Simulator screenshot results render as image previews in the chat, with expand and download controls. Capturing or inspecting an existing image does not make it a generated output. Use the returned screenshot as evidence of the captured device state, and confirm the pane has a fresh live frame before repeating input after a connection problem.
 
 ## Ownership and cleanup
 

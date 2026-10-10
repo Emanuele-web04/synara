@@ -4,7 +4,10 @@ import {
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
+  readSidebarUiStateSnapshot,
+  subscribeSidebarUiStateWrites,
 } from "./Sidebar.uiState";
+import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 describe("Sidebar.uiState", () => {
   let storage = new Map<string, string>();
@@ -26,12 +29,36 @@ describe("Sidebar.uiState", () => {
             storage.set(key, value);
           },
         },
+        addEventListener: () => {},
+        removeEventListener: () => {},
       },
     });
   });
 
   afterEach(() => {
     Reflect.deleteProperty(globalThis, "window");
+  });
+
+  it("tells same-tab readers about writes and keeps one snapshot between them", () => {
+    let writes = 0;
+    const unsubscribe = subscribeSidebarUiStateWrites(() => {
+      writes += 1;
+    });
+    const before = readSidebarUiStateSnapshot();
+    expect(readSidebarUiStateSnapshot()).toBe(before);
+
+    persistSidebarUiState({
+      ...readSidebarUiState(),
+      dismissedThreadStatusKeyByThreadId: { "thread-1": "Pending Approval:turn-1" },
+    });
+
+    expect(writes).toBe(1);
+    expect(readSidebarUiStateSnapshot().dismissedThreadStatusKeyByThreadId).toEqual({
+      "thread-1": "Pending Approval:turn-1",
+    });
+    unsubscribe();
+    persistSidebarUiState(readSidebarUiState());
+    expect(writes).toBe(1);
   });
 
   it("defaults collapsed sidebar UI state with no thread list paging", () => {
@@ -42,6 +69,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      activityScope: null,
     });
   });
 
@@ -62,6 +90,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      activityScope: "project-123" as ActivityScopeSelection,
     });
 
     expect(readSidebarUiState()).toEqual({
@@ -80,6 +109,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      activityScope: "project-123",
     });
   });
 
@@ -105,6 +135,7 @@ describe("Sidebar.uiState", () => {
           threadId: "thread-123",
           splitViewId: 42,
         },
+        activityScope: 42,
       }),
     );
 
@@ -121,6 +152,7 @@ describe("Sidebar.uiState", () => {
         threadId: "thread-123",
       },
       activityViewEnabled: false,
+      activityScope: null,
     });
   });
 
@@ -161,6 +193,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      activityScope: null,
     });
   });
 });

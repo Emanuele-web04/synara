@@ -99,6 +99,7 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
     command === "debug" ||
     command === "default" ||
     command === "automation" ||
+    command === "computer-use" ||
     command === "export" ||
     command === "feedback" ||
     // /fork is app-owned everywhere: it creates a Synara thread with fork
@@ -106,6 +107,7 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
     // "fork" text command cannot do.
     command === "fork" ||
     command === "goal" ||
+    command === "rename" ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && command === "review")
   );
 }
@@ -119,12 +121,14 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
   const appCommandIsAvailable = options.availableAppCommands?.has(normalizedCommand) ?? true;
   return (
     normalizedCommand === "automation" ||
+    normalizedCommand === "computer-use" ||
     normalizedCommand === "debug" ||
     normalizedCommand === "default" ||
     (normalizedCommand === "export" && appCommandIsAvailable) ||
     (normalizedCommand === "feedback" && appCommandIsAvailable) ||
     (normalizedCommand === "fork" && appCommandIsAvailable) ||
     (normalizedCommand === "goal" && appCommandIsAvailable) ||
+    (normalizedCommand === "rename" && appCommandIsAvailable) ||
     (providerUsesAppOwnedReviewSlashCommand(provider) && normalizedCommand === "review")
   );
 }
@@ -224,6 +228,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Insert a prompt that asks the assistant to delegate work",
     source: "app",
   },
+  "computer-use": {
+    command: "computer-use",
+    label: "/computer-use",
+    description: "Use Synara Computer for this request only",
+    source: "app",
+  },
   fast: {
     command: "fast",
     label: "/fast",
@@ -240,6 +250,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "goal",
     label: "/goal",
     description: "Set, edit, pause, resume, or clear this thread's persistent goal",
+    source: "app",
+  },
+  rename: {
+    command: "rename",
+    label: "/rename",
+    description: "Regenerate this thread title, or set an exact title",
     source: "app",
   },
   feedback: {
@@ -320,6 +336,27 @@ export function canOfferForkSlashCommand(input: {
   );
 }
 
+// Structural Side availability: attachments/mode/thread kind. Prompt emptiness is only
+// required when offering `/side` in the composer menu — executing `/side <provider>
+// [prompt]` intentionally carries args in the composer text.
+export function canExecuteSideSlashCommand(input: {
+  imageCount: number;
+  terminalContextCount: number;
+  selectedSkillCount: number;
+  selectedMentionCount: number;
+  interactionMode: ProviderInteractionMode;
+  isSidechat: boolean;
+}): boolean {
+  return (
+    input.imageCount === 0 &&
+    input.terminalContextCount === 0 &&
+    input.selectedSkillCount === 0 &&
+    input.selectedMentionCount === 0 &&
+    input.interactionMode === "default" &&
+    !input.isSidechat
+  );
+}
+
 export function canOfferSideSlashCommand(input: {
   prompt: string;
   imageCount: number;
@@ -331,12 +368,14 @@ export function canOfferSideSlashCommand(input: {
 }): boolean {
   return (
     !hasMeaningfulComposerText(input.prompt) &&
-    input.imageCount === 0 &&
-    input.terminalContextCount === 0 &&
-    input.selectedSkillCount === 0 &&
-    input.selectedMentionCount === 0 &&
-    input.interactionMode === "default" &&
-    !input.isSidechat
+    canExecuteSideSlashCommand({
+      imageCount: input.imageCount,
+      terminalContextCount: input.terminalContextCount,
+      selectedSkillCount: input.selectedSkillCount,
+      selectedMentionCount: input.selectedMentionCount,
+      interactionMode: input.interactionMode,
+      isSidechat: input.isSidechat,
+    })
   );
 }
 
@@ -393,17 +432,26 @@ export function parseFastSlashCommandAction(text: string): FastSlashCommandActio
   return "invalid";
 }
 
+/** Prefilled objectives are literal even when they match a `/goal` control word. */
+export function buildGoalSlashCommandPrompt(goal: string): string {
+  return `/goal -- ${goal.trim()}`;
+}
+
 export function parseGoalSlashCommandArgs(args: string): GoalSlashCommandAction {
-  const goal = args.trim();
+  const trimmed = args.trim();
+  const literal = /^--(?:\s|$)/.test(trimmed);
+  const goal = literal ? trimmed.slice(2).trim() : trimmed;
   if (!goal) {
     return { action: "show" };
   }
-  const control = goal.toLowerCase();
-  if (control === "clear") {
-    return { action: "clear" };
-  }
-  if (control === "pause" || control === "resume" || control === "edit") {
-    return { action: control };
+  if (!literal) {
+    const control = goal.toLowerCase();
+    if (control === "clear") {
+      return { action: "clear" };
+    }
+    if (control === "pause" || control === "resume" || control === "edit") {
+      return { action: control };
+    }
   }
   if (goal.length > THREAD_GOAL_MAX_CHARS) {
     return { action: "too-long" };
@@ -466,8 +514,10 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
+          "computer-use",
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "goal",
+          "rename",
           "feedback",
           "automation",
         ]
@@ -482,7 +532,9 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "goal",
+          "rename",
           "debug",
+          "computer-use",
           "default",
           "feedback",
           "automation",

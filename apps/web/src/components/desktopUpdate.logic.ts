@@ -1,5 +1,5 @@
 // FILE: desktopUpdate.logic.ts
-// Purpose: Maps desktop updater state into sidebar button actions, copy, and variants.
+// Purpose: Maps desktop updater state into sidebar button actions and copy.
 // Layer: Web UI state helper
 // Depends on: Desktop update IPC contracts.
 
@@ -68,84 +68,6 @@ export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null):
     state?.status === "checking" ||
     (state?.status === "available" && state.errorContext !== "download")
   );
-}
-
-export interface DesktopUpdateButtonPresentation {
-  label: string;
-  secondaryLabel: string | null;
-}
-
-export function getDesktopUpdateButtonPresentation(
-  state: DesktopUpdateState | null,
-  options?: { installing?: boolean },
-): DesktopUpdateButtonPresentation {
-  if (options?.installing) {
-    return {
-      label: "Updating...",
-      secondaryLabel: null,
-    };
-  }
-
-  if (!state) {
-    return {
-      label: "Update",
-      secondaryLabel: null,
-    };
-  }
-
-  if (state.status === "checking") {
-    return {
-      label: "Checking...",
-      secondaryLabel: null,
-    };
-  }
-
-  if (state.status === "downloading") {
-    return {
-      label: "Preparing",
-      secondaryLabel: null,
-    };
-  }
-
-  const action = resolveDesktopUpdateButtonAction(state);
-  if (action === "download") {
-    if (state.errorContext === "download" || state.errorContext === "install") {
-      return {
-        label: "Retry",
-        secondaryLabel: null,
-      };
-    }
-    return {
-      label: "Preparing",
-      secondaryLabel: null,
-    };
-  }
-  if (action === "install") {
-    if (state.errorContext === "install") {
-      return {
-        label: "Retry",
-        secondaryLabel: null,
-      };
-    }
-    return {
-      label: "Update",
-      secondaryLabel: null,
-    };
-  }
-  if (action === "check") {
-    return {
-      label: "Check updates",
-      secondaryLabel: null,
-    };
-  }
-  return {
-    label: "Update",
-    secondaryLabel: null,
-  };
-}
-
-export function getDesktopUpdateButtonLabel(state: DesktopUpdateState | null): string {
-  return getDesktopUpdateButtonPresentation(state).label;
 }
 
 /**
@@ -239,6 +161,18 @@ export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateAction
   return result.accepted && !result.completed;
 }
 
+// installUpdate resolves as soon as the quit-and-install handoff starts, while
+// the updater still reports "downloaded". That state means the install is in
+// flight, so callers must not treat the accepted-but-incomplete result as done.
+export function isDesktopUpdateInstallInFlight(result: DesktopUpdateActionResult): boolean {
+  return (
+    result.accepted &&
+    !result.completed &&
+    result.state.status === "downloaded" &&
+    result.state.errorContext !== "install"
+  );
+}
+
 // A download/install request can resolve to "up-to-date" when the offered version
 // turned out not to be newer (stale updater state). That is not an error, so the UI
 // should show an informational notice instead of silently resetting the button.
@@ -249,11 +183,6 @@ export function getDesktopUpdateAlreadyCurrentNotice(
     return null;
   }
   return `You're already on the latest version (${result.state.currentVersion}).`;
-}
-
-export function shouldHighlightDesktopUpdateError(state: DesktopUpdateState | null): boolean {
-  if (!state) return false;
-  return state.errorContext === "download" || state.errorContext === "install";
 }
 
 export function shouldRecommendManualDesktopDownload(state: DesktopUpdateState | null): boolean {
@@ -270,25 +199,4 @@ export function getDesktopUpdateErrorSignature(state: DesktopUpdateState | null)
   }
   const version = state.downloadedVersion ?? state.availableVersion ?? "";
   return `${state.errorContext}:${version}:${state.installFailureCount}:${state.message ?? ""}`;
-}
-
-export type DesktopUpdateButtonVariant = "installing" | "ready" | "progress" | "error" | "info";
-
-/**
- * Resolve the severity/color variant for the update button.
- *
- * A failed install keeps `status === "downloaded"` (with `errorContext === "install"`),
- * so the error state must be evaluated before the happy "downloaded"/"downloading"
- * states — otherwise a failed install would render with the green "ready" color while
- * its label says "Retry".
- */
-export function getDesktopUpdateButtonVariant(
-  state: DesktopUpdateState | null,
-  options?: { installing?: boolean },
-): DesktopUpdateButtonVariant {
-  if (options?.installing) return "installing";
-  if (shouldHighlightDesktopUpdateError(state)) return "error";
-  if (state?.status === "downloaded") return "ready";
-  if (state?.status === "downloading") return "progress";
-  return "info";
 }

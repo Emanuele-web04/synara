@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildLocalImageUrl, isLocalImageMarkdownSrc, localImageFileName } from "./localImageUrls";
+import {
+  buildLocalImageUrl,
+  isLocalImageMarkdownSrc,
+  localImageAbsolutePath,
+} from "./localImageUrls";
 
 describe("local image URL helpers", () => {
   afterEach(() => {
@@ -47,6 +51,31 @@ describe("local image URL helpers", () => {
     ).toBe("/api/local-image?path=%2FUsers%2Fme%2FDownloads%2Fshot.png&grant=grant-token");
   });
 
+  it("uses the same decoded absolute path for grants and image requests", () => {
+    for (const src of [
+      "/Users/me/Desktop/simulator%20shot.png",
+      "file:///Users/me/Downloads/simulator%20shot.png",
+      "C:\\Users\\me\\Desktop\\simulator.png",
+    ]) {
+      const url = new URL(buildLocalImageUrl({ src, cwd: undefined }), "http://localhost");
+      expect(localImageAbsolutePath(src)).toBe(url.searchParams.get("path"));
+    }
+    expect(localImageAbsolutePath("file:///Users/me/shot%2520.png")).toBe("/Users/me/shot%20.png");
+    for (const src of ["./shot.png", "../shot.png", "shot.png", "https://example.com/shot.png"]) {
+      expect(localImageAbsolutePath(src)).toBeNull();
+    }
+  });
+
+  it("cache-busts explicit preview reloads", () => {
+    expect(
+      buildLocalImageUrl({
+        src: "preview.png",
+        cwd: "/Users/me/project",
+        cacheKey: 3,
+      }),
+    ).toBe("/api/local-image?path=preview.png&cwd=%2FUsers%2Fme%2Fproject&v=3");
+  });
+
   it("forwards the desktop bridge legacy token so <img> requests stay authenticated", () => {
     (globalThis as unknown as { window: object }).window = {
       desktopBridge: { getWsUrl: () => "ws://127.0.0.1:51204/?token=secret-token-123" },
@@ -66,9 +95,5 @@ describe("local image URL helpers", () => {
     expect(parsed.searchParams.get("cwd")).toBe("/Users/me/project");
     expect(parsed.searchParams.get("download")).toBe("1");
     expect(parsed.searchParams.get("token")).toBe("secret-token-123");
-  });
-
-  it("derives display file names", () => {
-    expect(localImageFileName("/tmp/generated%20image.png")).toBe("generated image.png");
   });
 });

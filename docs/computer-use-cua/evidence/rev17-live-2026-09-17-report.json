@@ -1,0 +1,154 @@
+{
+  "fixtureRevision": 12,
+  "fixture": "Synara Cua Fixture 35036",
+  "pid": 35036,
+  "runtime": {
+    "node": "24.18.1",
+    "acorn": "8.16.0",
+    "ada": "3.4.4",
+    "amaro": "1.1.9",
+    "ares": "1.34.6",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "148",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.69.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.4",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.1",
+    "tz": "2025c",
+    "undici": "7.29.0",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.0.245.28-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "43.4.1",
+    "chrome": "150.0.7871.224"
+  },
+  "cases": [],
+  "measurements": [],
+  "nativeActions": [],
+  "nativeObservations": [],
+  "live": {
+    "mode": "live-provider",
+    "pid": 35036,
+    "nativeBuild": {
+      "source": {
+        "version": "0.28.2",
+        "source": "fc188250b4ca8549b8e61f937fdb1fb560770e86",
+        "sha256": "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
+        "nativeRevision": 17,
+        "patchSha256": "388f1693f94c32218d8a7b6c31c5280c6bae95341a64676b232b82dff7573259",
+        "rustVersion": "1.97.1"
+      },
+      "preSigningBinarySha256": "a8d9f70f9b16a9378e8d767b5f4f19d022dbee08a62894d53661d46406314e0a",
+      "fixtureDriverOverride": false
+    },
+    "calls": [
+      {
+        "at": "2026-09-17T17:03:32.567Z",
+        "error": "Error: Fixture host authority is required.",
+        "effect": "not-dispatched"
+      },
+      {
+        "at": "2026-09-17T17:03:32.570Z",
+        "error": "Error: Fixture refuses desktop overview, clipboard and all other input.",
+        "effect": "not-dispatched"
+      },
+      {
+        "at": "2026-09-17T17:03:32.571Z",
+        "error": "Error: Capture is restricted to the exact owned fixture window.",
+        "effect": "not-dispatched"
+      },
+      {
+        "at": "2026-09-17T17:03:32.571Z",
+        "error": "Error: Only one unmodified background click on the owned counter is admitted.",
+        "effect": "not-dispatched"
+      },
+      {
+        "at": "2026-09-17T17:03:32.572Z",
+        "error": "Error: Fixture refuses desktop overview, clipboard and all other input.",
+        "effect": "not-dispatched"
+      },
+      {
+        "at": "2026-09-17T17:03:35.080Z",
+        "method": "probe",
+        "ok": true
+      },
+      {
+        "at": "2026-09-17T17:05:06.833Z",
+        "error": "Error: Computer operation cancelled. Input already dispatched may have taken effect; do not replay.",
+        "effect": "not-dispatched"
+      }
+    ],
+    "nativeSubmissions": 0,
+    "clicks": 0,
+    "permissions": {
+      "accessibility": true,
+      "direct_capture_error": null,
+      "direct_capture_status": "not_checked",
+      "screen_recording": true,
+      "screen_recording_capturable": null,
+      "source": {
+        "attribution": "host",
+        "direct_runtime": false,
+        "disclaim_env": false,
+        "embedded": true,
+        "executable": "/Users/devin/repos/synara-wt-certification/apps/desktop/resources/cua-driver/cua-driver",
+        "host_bundle_id": "com.synara.cua-fixture-external",
+        "note": "Embedded mode: these booleans reflect the HOST app's TCC grant (the driver is a child in the host's responsibility chain). No separate driver grant exists or is needed. If a permission is NOT granted, the host app must request it — the driver never raises its own prompt.",
+        "pid": 35084,
+        "responsible_ppid": 56403
+      }
+    },
+    "target": {
+      "pid": 35036,
+      "windowId": 516,
+      "id": "cua:35036:516",
+      "title": "Synara Cua Live Fixture 35036"
+    },
+    "scopePreflight": [
+      {
+        "name": "authority",
+        "passed": true
+      },
+      {
+        "name": "desktop-capture",
+        "passed": true
+      },
+      {
+        "name": "foreign-window",
+        "passed": true
+      },
+      {
+        "name": "foreground-input",
+        "passed": true
+      },
+      {
+        "name": "clipboard",
+        "passed": true
+      }
+    ],
+    "server": {
+      "pid": 35085,
+      "port": 53062,
+      "url": "http://127.0.0.1:53062",
+      "workspace": "/private/tmp/synara-cua-implementation/fixture-run-live2/workspace",
+      "ready": true
+    },
+    "serverExit": {
+      "code": 1,
+      "signal": null
+    }
+  }
+}

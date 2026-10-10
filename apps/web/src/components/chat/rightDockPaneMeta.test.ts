@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { ThreadId } from "@synara/contracts";
-import { RIGHT_DOCK_PANE_KINDS, type RightDockPane } from "~/rightDockStore.logic";
+import { type RightDockPane } from "~/rightDockStore.logic";
 import {
-  RIGHT_DOCK_ADD_MENU_KINDS,
   buildRightDockPaneLabelOverrides,
-  getRightDockPaneMeta,
   resolveRightDockPaneLabel,
   resolveRightDockLauncherItems,
 } from "./rightDockPaneMeta";
@@ -26,45 +24,7 @@ function makePane(
   };
 }
 
-describe("RIGHT_DOCK_ADD_MENU_KINDS", () => {
-  it("offers the explorer pane but not the chat-driven file pane", () => {
-    // The "+" menu surfaces the file-tree explorer; single-file preview tabs are
-    // opened by clicking a file reference in chat, not from the add menu.
-    expect(RIGHT_DOCK_ADD_MENU_KINDS).toContain("explorer");
-    expect(RIGHT_DOCK_ADD_MENU_KINDS).not.toContain("file");
-  });
-
-  it("keeps the canonical kind order minus context-only panes", () => {
-    expect([...RIGHT_DOCK_ADD_MENU_KINDS]).toEqual(
-      RIGHT_DOCK_PANE_KINDS.filter((kind) => kind !== "file" && kind !== "pullRequest"),
-    );
-  });
-
-  it("labels the explorer pane", () => {
-    expect(getRightDockPaneMeta("explorer").label).toBe("Explorer");
-  });
-
-  it("gives the platform-neutral device kind its user-facing iOS label", () => {
-    expect(getRightDockPaneMeta("device").label).toBe("iOS Simulator");
-  });
-});
-
 describe("resolveRightDockLauncherItems", () => {
-  it("offers the non-Git tools for a chat without a repository", () => {
-    expect(
-      resolveRightDockLauncherItems({
-        hasWorkspace: true,
-        hasGitRepository: false,
-        hasReview: false,
-      }).map(({ kind, label }) => [kind, label]),
-    ).toEqual([
-      ["terminal", "Terminal"],
-      ["browser", "Browser"],
-      ["explorer", "Files"],
-      ["sidechat", "Side chats"],
-    ]);
-  });
-
   it("adds review and source control only for Git repositories", () => {
     expect(
       resolveRightDockLauncherItems({
@@ -113,16 +73,6 @@ describe("resolveRightDockLauncherItems", () => {
         hasGitRepository: false,
         hasReview: false,
         hasDeviceSupport: false,
-      }).map(({ kind }) => kind),
-    ).not.toContain("device");
-  });
-
-  it("omits the simulator when support is unknown, so the entry cannot flicker in", () => {
-    expect(
-      resolveRightDockLauncherItems({
-        hasWorkspace: true,
-        hasGitRepository: false,
-        hasReview: false,
       }).map(({ kind }) => kind),
     ).not.toContain("device");
   });

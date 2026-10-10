@@ -11,6 +11,7 @@ import {
   ListChecksIcon,
   PlayIcon,
   PlusIcon,
+  PlusSignIcon,
   SettingsIcon,
 } from "~/lib/icons";
 import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
@@ -26,7 +27,6 @@ import {
 } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
 import { keybindingFromKeyboardEvent } from "~/lib/keybindingCapture";
-import { cn } from "~/lib/utils";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -40,7 +40,6 @@ import { Button } from "./ui/button";
 import {
   CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
   CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
-  ChatHeaderButton,
   ChatHeaderIconButton,
   ChatHeaderSplitDivider,
   ChatHeaderSplitGroup,
@@ -100,7 +99,6 @@ interface ProjectScriptsControlProps {
   keybindings: ResolvedKeybindingsConfig;
   preferredScriptId?: string | null;
   showInlineControls?: boolean;
-  hideInlineLabel?: boolean;
   onRunScript: (script: ProjectScript) => void;
   onAddScript: (input: NewProjectScriptInput) => Promise<void> | void;
   onUpdateScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void> | void;
@@ -112,7 +110,6 @@ export default function ProjectScriptsControl({
   keybindings,
   preferredScriptId: preferredScriptIdProp,
   showInlineControls: showInlineControlsProp,
-  hideInlineLabel: hideInlineLabelProp,
   onRunScript,
   onAddScript,
   onUpdateScript,
@@ -120,7 +117,6 @@ export default function ProjectScriptsControl({
 }: ProjectScriptsControlProps) {
   const preferredScriptId = preferredScriptIdProp ?? null;
   const showInlineControls = showInlineControlsProp ?? true;
-  const hideInlineLabel = hideInlineLabelProp ?? false;
   const addScriptFormId = React.useId();
   const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -143,7 +139,7 @@ export default function ProjectScriptsControl({
   }, [preferredScriptId, scripts]);
   const isEditing = editingScriptId !== null;
   const actionMenuItemClassName =
-    "group grid min-h-9 grid-cols-[1rem_minmax(0,1fr)_1.5rem] items-center gap-2 rounded-xl px-2.5 py-1.5 text-[13px] leading-none data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:bg-[var(--color-background-button-secondary-hover)] focus-visible:text-foreground data-highlighted:hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:hover:text-foreground data-highlighted:focus-visible:bg-[var(--color-background-button-secondary-hover)] data-highlighted:focus-visible:text-foreground [&>svg]:mx-0 [&>svg]:size-4";
+    "group grid min-h-9 grid-cols-[1rem_minmax(0,1fr)_1.5rem] items-center gap-2 rounded-xl px-2.5 py-1.5 text-ui-lg leading-none data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:bg-[var(--color-background-button-secondary-hover)] focus-visible:text-foreground data-highlighted:hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:hover:text-foreground data-highlighted:focus-visible:bg-[var(--color-background-button-secondary-hover)] data-highlighted:focus-visible:text-foreground [&>svg]:mx-0 [&>svg]:size-4";
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab") return;
@@ -235,34 +231,25 @@ export default function ProjectScriptsControl({
   return (
     <>
       {showInlineControls && primaryScript ? (
+        // Icon-only, flat header controls: the action's name lives in the tooltip.
         <ChatHeaderSplitGroup label="Project actions">
-          <ChatHeaderButton
-            className={cn(
-              CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
-              "min-w-0 gap-1.5 px-2.5",
-              hideInlineLabel ? "px-2" : "max-w-44",
-            )}
-            onClick={() => onRunScript(primaryScript)}
-            aria-label={`Run ${primaryScript.name}`}
+          <ChatHeaderIconButton
+            tone="surface"
+            label={`Run ${primaryScript.name}`}
             title={`Run ${primaryScript.name}`}
+            className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
+            onClick={() => onRunScript(primaryScript)}
           >
-            <ScriptIcon icon={primaryScript.icon} className="size-3.5 shrink-0" />
-            <span
-              className={cn(
-                "max-w-32 truncate font-normal",
-                hideInlineLabel ? "sr-only" : "hidden sm:inline",
-              )}
-            >
-              {primaryScript.name}
-            </span>
-          </ChatHeaderButton>
+            <ScriptIcon icon={primaryScript.icon} className="size-4 shrink-0" />
+          </ChatHeaderIconButton>
           <ChatHeaderSplitDivider />
           <Menu highlightItemOnHover={false}>
             <MenuTrigger
               render={
                 <ChatHeaderIconButton
+                  tone="surface"
                   label="Script actions"
-                  tone="outline"
+                  title="Script actions"
                   className={CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME}
                 />
               }
@@ -321,17 +308,14 @@ export default function ProjectScriptsControl({
           </Menu>
         </ChatHeaderSplitGroup>
       ) : showInlineControls ? (
-        <ChatHeaderButton
-          className={cn("gap-1.5 px-2.5", hideInlineLabel && "px-2")}
-          onClick={openAddDialog}
-          aria-label="Add action"
+        <ChatHeaderIconButton
+          tone="surface"
+          label="Add action"
           title="Add action"
+          onClick={openAddDialog}
         >
-          <PlusIcon className="size-3.5" />
-          <span className={cn("font-normal", hideInlineLabel ? "sr-only" : "hidden sm:inline")}>
-            Add action
-          </span>
-        </ChatHeaderButton>
+          <PlusSignIcon className="size-4" />
+        </ChatHeaderIconButton>
       ) : null}
 
       <Dialog
@@ -386,7 +370,7 @@ export default function ProjectScriptsControl({
                             <button
                               key={entry.id}
                               type="button"
-                              className={`relative flex flex-col items-center gap-2 rounded-md border px-2 py-2 text-xs ${
+                              className={`relative flex flex-col items-center gap-2 rounded-md border px-2 py-2 text-ui leading-snug ${
                                 isSelected
                                   ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent)]"
                                   : "border-[color:var(--color-border-light)] hover:bg-[var(--sidebar-accent)]"
@@ -422,7 +406,7 @@ export default function ProjectScriptsControl({
                   readOnly
                   onKeyDown={captureKeybinding}
                 />
-                <p className="text-xs text-muted-foreground">
+                <p className="text-ui leading-snug text-muted-foreground">
                   Press a shortcut. Use <code>Backspace</code> to clear.
                 </p>
               </div>
@@ -435,14 +419,16 @@ export default function ProjectScriptsControl({
                   onChange={(event) => setCommand(event.target.value)}
                 />
               </div>
-              <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm">
+              <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-ui leading-snug">
                 <span>Run automatically on worktree creation</span>
                 <Switch
                   checked={runOnWorktreeCreate}
                   onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
                 />
               </label>
-              {validationError && <p className="text-sm text-destructive">{validationError}</p>}
+              {validationError && (
+                <p className="text-ui leading-snug text-destructive">{validationError}</p>
+              )}
             </form>
           </DialogPanel>
           <DialogFooter>

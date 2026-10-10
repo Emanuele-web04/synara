@@ -14,8 +14,12 @@ import type {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
 import {
+  APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
+  THREAD_NOT_ARCHIVED_INVARIANT_MARKER,
+} from "@synara/shared/errorMessages";
+import {
+  isGroupContainerKind,
   isLegacyHomeChatContainerRow as isSharedLegacyHomeChatContainerRow,
   isOrdinaryProjectRow as isSharedOrdinaryProjectRow,
 } from "@synara/shared/projectContainers";
@@ -215,8 +219,8 @@ export function isLegacyHomeChatContainerRow(input: {
 
 /**
  * Server half of the web's project partitioning: ordinary projects are the user-visible
- * ones. Managed chat and Studio containers are excluded by kind alone; the legacy Home
- * chat container kept `kind: "project"` and is recognized by its row shape instead.
+ * ones. Managed chat, Studio, and group containers are excluded by kind alone; the legacy
+ * Home chat container kept `kind: "project"` and is recognized by its row shape instead.
  */
 export function isOrdinaryProjectRow(input: {
   readonly projectKind: ProjectKind | undefined;
@@ -224,6 +228,9 @@ export function isOrdinaryProjectRow(input: {
   readonly projectWorkspaceRoot: string;
   readonly workspacePaths: SpaceAssignmentWorkspacePaths | undefined;
 }): boolean {
+  if (isGroupContainerKind(input.projectKind)) {
+    return false;
+  }
   return isSharedOrdinaryProjectRow({
     projectKind: input.projectKind,
     projectTitle: input.projectTitle,
@@ -402,7 +409,7 @@ export function requireApprovalNotResponded(input: {
   return Effect.fail(
     invariantError(
       input.command.type,
-      `Approval request '${input.requestId}' on thread '${input.threadId}' was already answered.`,
+      `Approval request '${input.requestId}' on thread '${input.threadId}' ${APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER}`,
     ),
   );
 }
@@ -457,22 +464,6 @@ export function requireThreadNotArchived(input: {
               `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
             ),
           ),
-    ),
-  );
-}
-
-export function requireNonNegativeInteger(input: {
-  readonly commandType: OrchestrationCommand["type"];
-  readonly field: string;
-  readonly value: number;
-}): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (Number.isInteger(input.value) && input.value >= 0) {
-    return Effect.void;
-  }
-  return Effect.fail(
-    invariantError(
-      input.commandType,
-      `${input.field} must be an integer greater than or equal to 0.`,
     ),
   );
 }

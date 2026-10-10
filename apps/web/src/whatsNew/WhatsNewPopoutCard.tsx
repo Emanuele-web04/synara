@@ -166,16 +166,16 @@ export function WhatsNewPopoutCard({
         </div>
 
         <div className="flex flex-col px-4 pb-4 pt-2.5">
-          <p className="text-xs font-medium text-primary">New · v{currentVersion}</p>
-          <p className="mt-1 line-clamp-2 text-sm font-semibold leading-snug text-foreground">
+          <p className="text-ui leading-snug font-medium text-primary">New · v{currentVersion}</p>
+          <p className="mt-1 line-clamp-2 text-ui-lg font-semibold leading-snug text-foreground">
             {primaryFeatureTitle ?? `What's new in v${currentVersion}`}
           </p>
           {primaryFeatureDescription !== undefined && (
-            <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground/90">
+            <p className="mt-1.5 line-clamp-2 text-ui leading-relaxed text-muted-foreground/90">
               {primaryFeatureDescription}
             </p>
           )}
-          <p className="mt-2.5 text-xs font-medium text-muted-foreground transition-colors group-hover:text-foreground">
+          <p className="mt-2.5 text-ui leading-snug font-medium text-muted-foreground transition-colors group-hover:text-foreground">
             Find out what&rsquo;s new <span aria-hidden="true">→</span>
           </p>
         </div>

@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  compareVersions,
-  parseVersion,
-  resolveWhatsNewState,
-  sortEntriesByVersionDesc,
-  type WhatsNewEntry,
-} from "./logic";
+import { resolveWhatsNewState, sortEntriesByVersionDesc, type WhatsNewEntry } from "./logic";
 
 const entry = (version: string, overrides?: Partial<WhatsNewEntry>): WhatsNewEntry => ({
   version,
@@ -21,47 +15,38 @@ const entry = (version: string, overrides?: Partial<WhatsNewEntry>): WhatsNewEnt
   ...overrides,
 });
 
-describe("parseVersion", () => {
-  it("parses a well-formed semver string", () => {
-    expect(parseVersion("1.2.3")).toEqual([1, 2, 3]);
-  });
-
-  it("fills missing segments with 0", () => {
-    expect(parseVersion("1")).toEqual([1, 0, 0]);
-    expect(parseVersion("1.2")).toEqual([1, 2, 0]);
-  });
-
-  it("treats non-numeric segments as 0", () => {
-    expect(parseVersion("abc.def.ghi")).toEqual([0, 0, 0]);
-    expect(parseVersion("1.x.3")).toEqual([1, 0, 3]);
-  });
-});
-
-describe("compareVersions", () => {
-  it("orders versions numerically, not lexicographically", () => {
-    expect(compareVersions("0.0.9", "0.0.10")).toBeLessThan(0);
-    expect(compareVersions("0.0.10", "0.0.9")).toBeGreaterThan(0);
-  });
-
-  it("returns zero for equal versions", () => {
-    expect(compareVersions("1.2.3", "1.2.3")).toBe(0);
-  });
-
-  it("ranks major > minor > patch", () => {
-    expect(compareVersions("2.0.0", "1.99.99")).toBeGreaterThan(0);
-    expect(compareVersions("1.2.0", "1.1.99")).toBeGreaterThan(0);
-  });
-});
-
 describe("sortEntriesByVersionDesc", () => {
   it("orders entries newest-first without mutating the input", () => {
-    const input = [entry("0.0.27"), entry("0.1.0"), entry("0.0.29")];
+    const versions = [
+      "1.2",
+      "0.0.9",
+      "1.x.3",
+      "2.0.0",
+      "1",
+      "1.99.99",
+      "1.2.0",
+      "abc.def.ghi",
+      "0.0.10",
+      "1.1.99",
+    ];
+    const input = versions.map((version) => entry(version));
     const sorted = sortEntriesByVersionDesc(input);
 
-    expect(sorted.map((e) => e.version)).toEqual(["0.1.0", "0.0.29", "0.0.27"]);
+    expect(sorted.map((e) => e.version)).toEqual([
+      "2.0.0",
+      "1.99.99",
+      "1.2",
+      "1.2.0",
+      "1.1.99",
+      "1.x.3",
+      "1",
+      "0.0.10",
+      "0.0.9",
+      "abc.def.ghi",
+    ]);
     // Input array identity must be preserved — settings uses the same array
     // for the accordion and the dialog derives another sort from it.
-    expect(input.map((e) => e.version)).toEqual(["0.0.27", "0.1.0", "0.0.29"]);
+    expect(input.map((e) => e.version)).toEqual(versions);
   });
 });
 

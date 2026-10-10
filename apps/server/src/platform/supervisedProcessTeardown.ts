@@ -3,11 +3,14 @@
 // Layer: Server platform runtime
 
 import { Effect } from "effect";
+import { didProcessFailToSpawn } from "@synara/shared/processRuntime";
 
 import {
   captureProcessTree,
   defaultProcessTreeKiller,
   inspectProcessTree,
+  isProcessRunning,
+  signalProcessTree,
   type CapturedProcess,
   type CapturedProcessTree,
   type CapturedProcessTreeInspection,
@@ -49,6 +52,8 @@ export interface EffectProcessExitHandle {
 export interface SupervisedProcessTeardownResult {
   readonly escalated: boolean;
   readonly signalErrors: ReadonlyArray<Error>;
+  /** Only true when the initial descendant snapshot completed before root exit. */
+  readonly capturedBeforeRootExit?: boolean;
 }
 
 export interface SupervisedProcessTeardownDependencies {
@@ -58,6 +63,8 @@ export interface SupervisedProcessTeardownDependencies {
   readonly inspectProcessTree: (
     tree: CapturedProcessTree,
   ) => Promise<CapturedProcessTreeInspection>;
+  /** Fresh native liveness observation, taken after the descendant snapshot. */
+  readonly isRootRunning: (rootPid: number) => Promise<boolean>;
   readonly now: () => number;
   readonly sleep: (milliseconds: number) => Promise<void>;
 }
@@ -113,6 +120,10 @@ export async function teardownChildProcessTree(
   teardownProcessTree: typeof teardownProviderProcessTree = teardownProviderProcessTree,
 ): Promise<SupervisedProcessTeardownResult> {
   if (process.pid === undefined) {
+    // A witnessed Node spawn error proves there was no process tree to retire.
+    // Missing cwd/executable must not become a second, permanent cleanup failure.
+    // Unknown PID-less handles still fail closed below.
+    if (didProcessFailToSpawn(process)) return { escalated: false, signalErrors: [] };
     throw new Error("Cannot prove process exit because the spawned process has no PID.");
   }
   return teardownProcessTree({
@@ -128,6 +139,87 @@ export function teardownEffectProcessTree(
   return teardownProcessTree({
     rootPid: Number(process.pid),
     rootExited: Effect.runPromise(Effect.exit(process.exitCode)),
+  });
+}
+
+/**
+ * Force-stops an Effect child that owns its POSIX process group. Captured
+ * descendants are killed first so a waiting shell can reap them before the
+ * root/group is forced, then the captured identities are verified as gone.
+ */
+export async function forceTeardownEffectProcessTree(
+  process: EffectProcessExitHandle,
+  forceExitMs = DEFAULT_FORCE_EXIT_MS,
+): Promise<void> {
+  const rootPid = Number(process.pid);
+  const rootExitedPromise = Effect.runPromise(Effect.exit(process.exitCode));
+  if (globalThis.process.platform === "win32") {
+    await teardownProviderProcessTree({
+      rootPid,
+      rootExited: rootExitedPromise,
+      termGraceMs: 1,
+      forceExitMs,
+    });
+    return;
+  }
+
+  const tree = await captureProcessTree(rootPid);
+  const signalErrors: Error[] = [];
+  signalProcessTree({
+    rootPid,
+    signal: "SIGKILL",
+    tree,
+    includeRootTree: false,
+    onError: (error) => signalErrors.push(error),
+  });
+
+  let rootExited = false;
+  void rootExitedPromise.then(() => {
+    rootExited = true;
+  });
+
+  // A shell blocked in `wait` can now reap its killed child and exit itself.
+  const reapDeadline = Date.now() + Math.min(100, forceExitMs);
+  while (!rootExited && Date.now() < reapDeadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, DEFAULT_POLL_MS));
+  }
+
+  if (!rootExited) {
+    try {
+      globalThis.process.kill(-rootPid, "SIGKILL");
+    } catch (cause) {
+      const code = (cause as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH") {
+        signalErrors.push(cause instanceof Error ? cause : new Error(String(cause)));
+      }
+      try {
+        globalThis.process.kill(rootPid, "SIGKILL");
+      } catch (fallbackCause) {
+        if ((fallbackCause as NodeJS.ErrnoException).code !== "ESRCH") {
+          signalErrors.push(
+            fallbackCause instanceof Error ? fallbackCause : new Error(String(fallbackCause)),
+          );
+        }
+      }
+    }
+  }
+
+  const deadline = Date.now() + forceExitMs;
+  let remainingDescendants: ReadonlyArray<CapturedProcess> | null =
+    tree.captureComplete === false ? null : tree.descendants;
+  do {
+    await Promise.resolve();
+    const inspection = await inspectProcessTree(tree);
+    remainingDescendants = inspection.verified ? inspection.survivors : null;
+    if (rootExited && remainingDescendants?.length === 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, DEFAULT_POLL_MS));
+  } while (Date.now() < deadline);
+
+  throw new ProviderProcessExitUnprovenError({
+    rootPid,
+    rootExited,
+    remainingDescendantPids: remainingDescendants?.map((descendant) => descendant.pid) ?? null,
+    captureComplete: tree.captureComplete !== false,
   });
 }
 
@@ -205,6 +297,25 @@ export async function teardownProviderProcessTree(
 
   try {
     const tree = await captureTree(input.rootPid);
+    // PPID traversal after root exit can miss reparented descendants. Cleanup
+    // can still retire the observed tree, but callers must not treat that as
+    // proof that an interrupted provider command had no surviving side effects.
+    // The exit promise alone is insufficient: native exit can precede its callback.
+    const rootRunningAfterCapture =
+      !rootExited &&
+      (await (
+        dependencies.isRootRunning?.(input.rootPid) ??
+        isProcessRunning(input.rootPid, {
+          platform,
+          ...(windowsObserver
+            ? {
+                captureWindowsChildren: () =>
+                  windowsObserver.captureWithin(FINAL_PROOF_INSPECTION_MAX_MS),
+              }
+            : {}),
+        })
+      ).catch(() => false));
+    const capturedBeforeRootExit = rootRunningAfterCapture && !rootExited;
     const signalErrors: Error[] = [];
 
     const signal = (
@@ -278,7 +389,7 @@ export async function teardownProviderProcessTree(
     const graceful = await waitForExitProof(
       positiveDuration(input.termGraceMs, DEFAULT_TERM_GRACE_MS),
     );
-    if (graceful.proven) return { escalated: false, signalErrors };
+    if (graceful.proven) return { escalated: false, signalErrors, capturedBeforeRootExit };
 
     let forceTree = tree;
     let forceDescendantsVerified = false;
@@ -310,7 +421,7 @@ export async function teardownProviderProcessTree(
     const forced = await waitForExitProof(
       positiveDuration(input.forceExitMs, DEFAULT_FORCE_EXIT_MS),
     );
-    if (forced.proven) return { escalated: true, signalErrors };
+    if (forced.proven) return { escalated: true, signalErrors, capturedBeforeRootExit };
 
     throw new ProviderProcessExitUnprovenError({
       rootPid: input.rootPid,

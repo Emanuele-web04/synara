@@ -16,6 +16,7 @@ import {
 import { getThreadsFromState } from "./threadDerivation";
 import type { AppState } from "./storeState";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
+import { vi, type Mock } from "vitest";
 
 export function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -38,6 +39,7 @@ export function makeThread(overrides: Partial<Thread> = {}): Thread {
     createdAt: "2026-02-13T00:00:00.000Z",
     latestTurn: null,
     latestUserMessageAt: null,
+    latestHumanMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
@@ -91,6 +93,7 @@ export function makeActivity(overrides: {
   payload?: OrchestrationThreadActivity["payload"];
   turnId?: string;
   sequence?: number;
+  sequenceSource?: OrchestrationThreadActivity["sequenceSource"];
 }): OrchestrationThreadActivity {
   return {
     id: EventId.makeUnsafe(overrides.id ?? crypto.randomUUID()),
@@ -101,6 +104,7 @@ export function makeActivity(overrides: {
     payload: overrides.payload ?? {},
     turnId: overrides.turnId ? TurnId.makeUnsafe(overrides.turnId) : null,
     ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
+    ...(overrides.sequenceSource !== undefined ? { sequenceSource: overrides.sequenceSource } : {}),
   };
 }
 
@@ -271,3 +275,22 @@ export function makeReadModelProject(
 }
 
 export const threadsOf = getThreadsFromState;
+
+export function makeFakeWindow(storage: Map<string, string>): {
+  localStorage: {
+    getItem: (key: string) => string | null;
+    setItem: Mock<(key: string, value: string) => void>;
+  };
+  addEventListener: Mock<() => void>;
+} {
+  const setItem = vi.fn((key: string, value: string) => {
+    storage.set(key, value);
+  });
+  return {
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem,
+    },
+    addEventListener: vi.fn(),
+  };
+}

@@ -6,6 +6,7 @@
 import {
   type DesktopAppSnapCapture,
   type DesktopAppSnapShortcut,
+  type DesktopBridge,
   type ThreadId,
 } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -20,7 +21,10 @@ import {
   hasPersistedAppSnapCapture,
   persistedAppSnapCaptureBlobKeys,
   resolveAppSnapTarget,
+  REQUEST_CURRENT_APP_SNAP_EVENT,
 } from "../appSnap.logic";
+import { attachAppSnapCapture } from "../appSnapAttach";
+import { sourceWithCachedIcon } from "../appSnapIntake";
 import {
   type ComposerImageAttachment,
   type PersistedComposerImageAttachment,
@@ -31,21 +35,11 @@ import { requestComposerFocus } from "../composerFocusRequestStore";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import {
-  effectiveComposerAttachmentCount,
-  prepareComposerImageAttachmentsFromFiles,
-} from "../lib/composerSend";
-import {
-  deleteComposerImageBlob,
   deleteOrphanedComposerImageBlobs,
-  persistComposerImageBlob,
   readComposerImageBlob,
 } from "../lib/composerImageBlobStore";
-import { persistAppSnapIcon, readAppSnapIcon } from "../lib/appSnapIconStore";
 import { playAppSnapCaptureSound } from "../lib/appSnapSound";
-import {
-  type ComposerAppSnapSource,
-  isComposerAppSnapCaptureSource,
-} from "../lib/composerImageSource";
+import { isComposerAppSnapCaptureSource } from "../lib/composerImageSource";
 import { resolveRecentThreadSplitActivation } from "../recentViewActivation.logic";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
@@ -86,23 +80,6 @@ function rememberCaptureId(captureIds: Map<string, true>, captureId: string): bo
     captureIds.delete(oldest);
   }
   return true;
-}
-
-async function sourceWithCachedIcon(source: ComposerAppSnapSource): Promise<ComposerAppSnapSource> {
-  const bundleIdentifier = source.bundleIdentifier?.trim() || null;
-  if (!bundleIdentifier) return source;
-  if (source.appIconDataUrl) {
-    await persistAppSnapIcon({
-      bundleIdentifier,
-      dataUrl: source.appIconDataUrl,
-    }).catch((error) => console.warn("[appsnap] Could not cache source app icon", error));
-    return source;
-  }
-  const appIconDataUrl = await readAppSnapIcon(bundleIdentifier).catch((error) => {
-    console.warn("[appsnap] Could not restore source app icon", error);
-    return null;
-  });
-  return appIconDataUrl ? { ...source, appIconDataUrl } : source;
 }
 
 // Kept at module scope so its try/finally stays out of the compiled coordinator.
@@ -220,7 +197,12 @@ export function AppSnapCoordinator() {
   const blobHydrationInFlightRef = useRef(new Set<string>());
   const hydratePersistedAppSnapsRef = useRef<(captureId?: string) => Promise<void>>(async () => {});
   const attachCaptureRef = useRef<
-    ((capture: DesktopAppSnapCapture) => Promise<"persisted" | "unverified">) | null
+    | ((
+        capture: DesktopAppSnapCapture,
+        bridge: DesktopBridge["appSnap"],
+        explicitTarget?: AppSnapThreadTarget,
+      ) => Promise<"persisted" | "unverified">)
+    | null
   >(null);
   // Read through a ref so toggling the sound preference doesn't resubscribe the
   // capture listener (which would re-deliver pending captures).
@@ -308,15 +290,18 @@ export function AppSnapCoordinator() {
         : { kind: "both-option-keys" };
     // The opt-in preference lives in the renderer settings store. This root
     // coordinator is mounted for the full UI lifetime and owns the native listener.
-    // Enable even when the saved shortcut is unavailable: the manager surfaces
-    // the conflict as an error state instead of AppSnap silently staying off.
+    // AppSnap is macOS-only, so unsupported desktop platforms must not attempt
+    // shortcut registration or log the expected platform availability result.
     void bridge
-      .setShortcut(shortcut)
-      .then((result) => {
-        if (!result.availability.available) {
-          console.warn("[appsnap] Saved shortcut is unavailable", result.availability.reason);
-        }
-        return bridge.setEnabled(settings.enableAppSnap);
+      .getState()
+      .then((state) => {
+        if (!state.supported) return;
+        return bridge.setShortcut(shortcut).then((result) => {
+          if (!result.availability.available) {
+            console.warn("[appsnap] Saved shortcut is unavailable", result.availability.reason);
+          }
+          return bridge.setEnabled(settings.enableAppSnap);
+        });
       })
       .catch((error) => {
         console.warn("[appsnap] Could not update native listener state", error);
@@ -359,7 +344,11 @@ export function AppSnapCoordinator() {
   );
 
   const attachCapture = useCallback(
-    async (capture: DesktopAppSnapCapture) => {
+    async (
+      capture: DesktopAppSnapCapture,
+      bridge: DesktopBridge["appSnap"],
+      explicitTarget?: AppSnapThreadTarget,
+    ) => {
       const captureAtMs = captureTimestampMs(capture);
       const resolvedTarget = resolveAppSnapTarget({
         captureAtMs,
@@ -369,7 +358,11 @@ export function AppSnapCoordinator() {
       });
 
       let target: AppSnapThreadTarget;
-      if (resolvedTarget.kind === "existing") {
+      if (explicitTarget) {
+        if (!isThreadAvailable(explicitTarget.threadId))
+          throw new Error("The destination task is no longer available.");
+        target = explicitTarget;
+      } else if (resolvedTarget.kind === "existing") {
         target = resolvedTarget.target;
         await activateExistingTarget(target);
       } else {
@@ -389,98 +382,24 @@ export function AppSnapCoordinator() {
         }
       }
 
-      const bytes = new Uint8Array(capture.bytes);
-      if (bytes.byteLength === 0) throw new Error("The captured AppSnap is empty.");
-      const file = new File([bytes], capture.name, {
-        type: capture.mimeType,
-        lastModified: captureAtMs,
-      });
-      const draftStore = useComposerDraftStore.getState();
-      const draft = draftStore.draftsByThreadId[target.threadId];
-      const existingAttachmentCount = effectiveComposerAttachmentCount(draft);
-      const { images, error } = await prepareComposerImageAttachmentsFromFiles({
-        files: [file],
-        existingAttachmentCount,
-      });
-      const image = images[0];
-      if (!image) throw new Error(error ?? "Synara could not attach the captured AppSnap.");
-
-      let imageAddedToDraft = false;
-      let blobKey: string | null = null;
-      let persistenceResult: "persisted" | "unverified" = "persisted";
-      try {
-        const source: ComposerAppSnapSource = {
-          kind: "appsnap",
-          captureId: capture.id,
-          capturedAt: capture.capturedAt,
-          appName: capture.sourceAppName,
-          bundleIdentifier: capture.sourceBundleIdentifier,
-          appIconDataUrl: capture.sourceAppIconDataUrl,
-          windowTitle: capture.sourceWindowTitle,
-        };
-        const sourceWithIcon = await sourceWithCachedIcon(source);
-        const appSnapImage = { ...image, source: sourceWithIcon };
-        blobKey = await persistComposerImageBlob({
-          threadId: target.threadId,
-          imageId: appSnapImage.id,
-          file: appSnapImage.file,
-        });
-
-        // Match ordinary composer mutations: recalled prompt-history state no longer owns the draft.
-        draftStore.setPromptHistorySavedDraft(target.threadId, null);
-        if (!draftStore.addImage(target.threadId, appSnapImage)) {
-          throw new Error(
-            "The AppSnap was prepared, but this message already has the maximum number of references.",
-          );
-        }
-        imageAddedToDraft = true;
-        const currentPersistedAttachments =
-          useComposerDraftStore.getState().draftsByThreadId[target.threadId]
-            ?.persistedAttachments ?? [];
-        const result = await draftStore.syncPersistedAttachments(target.threadId, [
-          ...currentPersistedAttachments.filter((attachment) => attachment.id !== appSnapImage.id),
-          {
-            id: appSnapImage.id,
-            name: appSnapImage.name,
-            mimeType: appSnapImage.mimeType,
-            sizeBytes: appSnapImage.sizeBytes,
-            blobKey,
-            source: sourceWithIcon,
-          },
-        ]);
-        if (result === "rejected") {
-          draftStore.removeImage(target.threadId, appSnapImage.id);
-          await deleteComposerImageBlob(blobKey).catch((error) =>
-            console.warn("[appsnap] Could not roll back rejected capture", error),
-          );
-          throw new Error("The AppSnap was captured, but its draft metadata was rejected.");
-        }
-        persistenceResult = result;
-      } catch (error) {
-        if (!imageAddedToDraft) {
-          URL.revokeObjectURL(image.previewUrl);
-          if (blobKey) {
-            await deleteComposerImageBlob(blobKey).catch((cleanupError) =>
-              console.warn("[appsnap] Could not roll back unattached capture", cleanupError),
-            );
-          }
-        }
-        throw error;
-      }
+      const persistenceResult = await attachAppSnapCapture(target.threadId, capture, () =>
+        bridge.acknowledgeCapture(capture.id),
+      );
       lastAppSnapRef.current = { ...target, atMs: captureAtMs };
-      requestComposerFocus(target.threadId);
-      toastManager.add({
-        type: persistenceResult === "unverified" ? "warning" : "success",
-        title:
-          persistenceResult === "unverified" ? "AppSnap added with a warning" : "AppSnap added",
-        description:
-          persistenceResult === "unverified"
-            ? "The capture is attached, but Synara could not verify its draft metadata. If it is missing after a reload, Synara will attach it again."
-            : capture.sourceAppName
-              ? `Captured ${capture.sourceAppName} and added it to the composer.`
-              : "The frontmost window was added to the composer.",
-        data: { allowCrossThreadVisibility: true },
-      });
+      if (!explicitTarget) requestComposerFocus(target.threadId);
+      if (explicitTarget)
+        toastManager.add({
+          type: persistenceResult === "unverified" ? "warning" : "success",
+          title:
+            persistenceResult === "unverified" ? "AppSnap added with a warning" : "AppSnap added",
+          description:
+            persistenceResult === "unverified"
+              ? "The capture is attached, but Synara could not verify its draft metadata. If it is missing after a reload, Synara will attach it again."
+              : capture.sourceAppName
+                ? `Captured ${capture.sourceAppName} and added it to the composer.`
+                : "The frontmost window was added to the composer.",
+          data: { allowCrossThreadVisibility: true },
+        });
       return persistenceResult;
     },
     [activateExistingTarget, handleNewChat, openChatThreadPage],
@@ -491,6 +410,59 @@ export function AppSnapCoordinator() {
   useEffect(() => {
     attachCaptureRef.current = attachCapture;
   }, [attachCapture]);
+
+  useEffect(() => {
+    const bridge = window.desktopBridge?.appSnap;
+    if (!bridge?.captureCurrentApp) return;
+    let cancelActive: (() => void) | undefined;
+    const onRequest = () => {
+      cancelActive?.();
+      const target = focusedTargetRef.current;
+      if (!target) return;
+      const requestId = crypto.randomUUID();
+      let cancelled = false;
+      const cancel = () => {
+        cancelled = true;
+        clearTimeout(timer);
+        void bridge.cancelCapture(requestId).catch(() => {});
+      };
+      cancelActive = cancel;
+      const timer = setTimeout(() => {
+        void bridge
+          .captureCurrentApp(requestId)
+          .then(async (capture) => {
+            if (cancelled) return;
+            const attach = attachCaptureRef.current;
+            if (!attach) throw new Error("The AppSnap composer is not ready yet.");
+            await attach(capture, bridge, target);
+          })
+          .catch((error: unknown) => {
+            if (!cancelled)
+              toastManager.add({
+                type: "error",
+                title: "AppSnap could not capture the app",
+                description: error instanceof Error ? error.message : "Capture failed.",
+              });
+          })
+          .finally(() => {
+            if (cancelActive === cancel) cancelActive = undefined;
+          });
+      }, 3_000);
+      toastManager.add({
+        type: "info",
+        title: "Switch to the app to share",
+        description:
+          "A window from the active app will be captured in 3 seconds and attached to this task. Nothing is sent automatically.",
+        actionProps: { children: "Cancel", onClick: cancel },
+        data: { allowCrossThreadVisibility: true },
+      });
+    };
+    window.addEventListener(REQUEST_CURRENT_APP_SNAP_EVENT, onRequest);
+    return () => {
+      window.removeEventListener(REQUEST_CURRENT_APP_SNAP_EVENT, onRequest);
+      cancelActive?.();
+    };
+  }, []);
 
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
@@ -526,7 +498,6 @@ export function AppSnapCoordinator() {
               }
             }
           }
-          let persistence: "persisted" | "unverified";
           try {
             // Missing blob bytes make the old metadata unusable. Purge every
             // row for this capture (including prompt-history snapshots) before
@@ -534,7 +505,7 @@ export function AppSnapCoordinator() {
             useComposerDraftStore.getState().removeAppSnapCapture(capture.id);
             const attach = attachCaptureRef.current;
             if (!attach) throw new Error("The AppSnap composer is not ready yet.");
-            persistence = await attach(capture);
+            await attach(capture, bridge);
           } catch (error) {
             toastManager.add({
               type: "error",
@@ -551,12 +522,6 @@ export function AppSnapCoordinator() {
             });
             return;
           }
-          // An unverified draft may vanish on reload; keeping the capture
-          // pending lets the next mount re-deliver it.
-          if (persistence !== "persisted") return;
-          await bridge
-            .acknowledgeCapture(capture.id)
-            .catch((error) => console.warn("[appsnap] Could not acknowledge capture", error));
         })
         .catch(() => undefined);
     };

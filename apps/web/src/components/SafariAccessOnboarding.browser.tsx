@@ -1,0 +1,199 @@
+import "../index.css";
+import type { DesktopBridge } from "@synara/contracts";
+import { page } from "vitest/browser";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render } from "vitest-browser-react";
+import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
+import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
+import {
+  SafariAccessOnboarding,
+  SafariAccessSetupButton,
+  SAFARI_ACCESS_STORAGE_KEY,
+} from "./SafariAccessOnboarding";
+
+const originalBridge = window.desktopBridge;
+const api = {
+  getInfo: vi.fn(async () => ({
+    supported: true as const,
+    appName: "Synara (Dev)",
+    appPath: "/Applications/Synara (Dev).app",
+  })),
+  openSettings: vi.fn(async () => true),
+  revealApp: vi.fn(async () => true),
+};
+
+beforeEach(() => {
+  useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
+  useOnboardingDialogStore.setState({
+    startupGateSettled: true,
+    isOpen: false,
+    betaWelcomePending: false,
+  });
+  vi.clearAllMocks();
+  localStorage.removeItem(SAFARI_ACCESS_STORAGE_KEY);
+  window.desktopBridge = { safariAccess: api } as unknown as DesktopBridge;
+});
+afterEach(() => {
+  if (originalBridge) window.desktopBridge = originalBridge;
+  else delete window.desktopBridge;
+  localStorage.removeItem(SAFARI_ACCESS_STORAGE_KEY);
+});
+
+function Harness() {
+  return (
+    <>
+      <SafariAccessOnboarding startup>
+        <p>Next welcome</p>
+      </SafariAccessOnboarding>
+      <SafariAccessSetupButton />
+    </>
+  );
+}
+
+describe("Safari access onboarding", () => {
+  it("opens manual setup despite a pending startup gate and an occupied slot", async () => {
+    localStorage.setItem(SAFARI_ACCESS_STORAGE_KEY, JSON.stringify("later"));
+    useOnboardingDialogStore.setState({ startupGateSettled: false });
+    useAnnouncementSheetSlotStore.setState({ owner: "startup-surface", handedOff: false });
+    const screen = await render(<Harness />);
+    try {
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+      await page.getByRole("button", { name: "Safari import setup" }).click();
+      await expect.element(page.getByRole("dialog")).toBeVisible();
+      // Reopening setup must preserve the caller and leave startup ownership alone.
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+      expect(useAnnouncementSheetSlotStore.getState().owner).toBe("startup-surface");
+      expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
+      await page.getByRole("button", { name: "Open System Settings" }).click();
+      await expect.element(page.getByRole("status")).toHaveTextContent("quit and reopen");
+      await page.getByRole("button", { name: "Not now", exact: true }).click();
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
+      expect(useAnnouncementSheetSlotStore.getState().owner).toBe("startup-surface");
+    } finally {
+      await screen.unmount();
+    }
+  });
+  it("keeps follow-on surfaces mounted after handoff and allows a manual Safari revisit", async () => {
+    useAnnouncementSheetSlotStore.setState({ handedOff: true });
+    const screen = await render(<Harness />);
+    try {
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+      await page.getByRole("button", { name: "Safari import setup" }).click();
+      await expect.element(page.getByRole("dialog")).toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+  it("waits for the shared slot without acknowledging the Safari intro", async () => {
+    useAnnouncementSheetSlotStore.getState().claim("onboarding");
+    const screen = await render(<Harness />);
+    try {
+      await vi.waitFor(() => expect(api.getInfo).toHaveBeenCalled());
+      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+      expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+      useAnnouncementSheetSlotStore.getState().release("onboarding");
+      await expect.element(page.getByRole("dialog")).toBeVisible();
+    } finally {
+      await screen.unmount();
+    }
+  });
+  it("shows optional first-launch guidance and serializes other welcome dialogs", async () => {
+    await render(<Harness />);
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+    await expect.element(page.getByText("Next welcome")).not.toBeInTheDocument();
+    await expect.element(page.getByRole("dialog")).toHaveTextContent("It's optional");
+    await expect.element(page.getByRole("dialog")).toHaveTextContent("broad macOS permission");
+    await expect.element(page.getByRole("dialog")).toHaveTextContent("Synara (Dev)");
+    await expect
+      .element(page.getByRole("button", { name: "Show app in Finder" }))
+      .toHaveAttribute("title", "/Applications/Synara (Dev).app");
+    expect(api.openSettings).not.toHaveBeenCalled();
+    expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+  });
+
+  it("persists Not now across remounts and allows revisiting", async () => {
+    const mounted = await render(<Harness />);
+    await page.getByRole("button", { name: "Not now", exact: true }).click();
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    expect(JSON.parse(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)!)).toBe("later");
+    await mounted.unmount();
+    await render(<Harness />);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    await page.getByRole("button", { name: "Safari import setup" }).click();
+    await expect.element(page.getByRole("dialog")).toBeVisible();
+  });
+
+  it("still honors the legacy continued decision", async () => {
+    localStorage.setItem(SAFARI_ACCESS_STORAGE_KEY, JSON.stringify("continued"));
+    await render(<Harness />);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opening Settings is not permission approval or an acknowledged intro", async () => {
+    await render(<Harness />);
+    await page.getByRole("button", { name: "Open System Settings" }).click();
+    await expect.element(page.getByRole("status")).toHaveTextContent("quit and reopen");
+    expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+    await page.getByRole("button", { name: "Show app in Finder" }).click();
+    expect(api.revealApp).toHaveBeenCalledOnce();
+    await expect.element(page.getByRole("status")).toHaveTextContent("selected in Finder");
+  });
+
+  it.each([false, "reject"])(
+    "leaves manual settings and skip available after open failure %s",
+    async (failure) => {
+      if (failure === false) api.openSettings.mockResolvedValueOnce(false);
+      else api.openSettings.mockRejectedValueOnce(new Error("private failure"));
+      await render(<Harness />);
+      await page.getByRole("button", { name: "Open System Settings" }).click();
+      await expect.element(page.getByRole("status")).toHaveTextContent("Couldn't open");
+      await expect.element(page.getByRole("status")).not.toHaveTextContent("private failure");
+      await page.getByRole("button", { name: "Not now" }).click();
+      await expect.element(page.getByText("Next welcome")).toBeVisible();
+    },
+  );
+
+  it.each(["web", "unavailable"])("does not show macOS onboarding on %s", async (mode) => {
+    if (mode === "web") delete window.desktopBridge;
+    else
+      window.desktopBridge = {
+        safariAccess: {
+          ...api,
+          getInfo:
+            mode === "unsupported"
+              ? async () => ({ supported: false })
+              : async () => {
+                  throw new Error("unavailable");
+                },
+        },
+      } as unknown as DesktopBridge;
+    await render(<Harness />);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Safari import setup" }))
+      .not.toBeInTheDocument();
+    expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+  });
+
+  it("does not reopen for a late Settings response after skipping", async () => {
+    let resolve!: (opened: boolean) => void;
+    api.openSettings.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    await render(<Harness />);
+    await page.getByRole("button", { name: "Open System Settings" }).click();
+    await page.getByRole("button", { name: "Not now" }).click();
+    resolve(true);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("status")).not.toBeInTheDocument();
+  });
+});

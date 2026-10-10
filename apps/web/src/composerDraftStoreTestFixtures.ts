@@ -139,6 +139,7 @@ export function makeQueuedChatTurn(
     terminalContexts: [makeTerminalContext({ id: `ctx-${id}` })],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [{ name: "check-code", path: "/skills/check-code" }],
     mentions: [{ name: "repo", path: "/mentions/repo" }],
     selectedProvider: "codex",
@@ -172,9 +173,11 @@ export function modelSelection(
   provider: ModelSelection["provider"],
   model: string,
   options?: ModelSelection["options"],
+  instanceId?: string,
 ): ModelSelection {
   return {
     provider,
+    ...(instanceId ? { instanceId } : {}),
     model,
     ...(options ? { options } : {}),
   } as ModelSelection;

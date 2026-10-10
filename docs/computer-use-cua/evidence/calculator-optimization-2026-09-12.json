@@ -1,0 +1,188 @@
+{
+  "samples": [
+    {
+      "session": "01a0928a-ec50-79e0-8ad3-7f688e812bee",
+      "turn": "01a0928a-ecb0-7561-a4bc-a0d050aba5e8",
+      "start": "2026-09-11T22:16:13.235Z",
+      "duration_ms": 47202,
+      "requests": 6,
+      "usage": {
+        "input_tokens": 254933,
+        "cached_input_tokens": 194560,
+        "output_tokens": 654,
+        "reasoning_output_tokens": 221,
+        "total_tokens": 255587,
+        "uncached_input_tokens": 60373
+      },
+      "batches": [
+        {
+          "start": "2026-09-11T22:16:18.414Z",
+          "seconds": 0.095,
+          "tools": [],
+          "discovery": true
+        },
+        {
+          "start": "2026-09-11T22:16:22.954Z",
+          "seconds": 1.488,
+          "tools": ["tools.mcp__synara__computer_launch_app"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:16:26.515Z",
+          "seconds": 0.071,
+          "tools": ["tools.mcp__synara__computer_list_windows"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:16:30.830Z",
+          "seconds": 0.646,
+          "tools": [
+            "tools.mcp__synara__computer_activate_window",
+            "tools.mcp__synara__computer_get_state"
+          ],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:16:35.331Z",
+          "seconds": 21.583,
+          "tools": ["tools.mcp__synara__computer_click"],
+          "discovery": false
+        }
+      ],
+      "result": "Il risultato di **123 \u00d7 45** \u00e8 **5.535**."
+    },
+    {
+      "session": "01a092a3-49b8-7d02-a6d1-1903baa7572f",
+      "turn": "01a092a3-4a1e-7f01-989a-f6fc7b68e20b",
+      "start": "2026-09-11T22:42:50.018Z",
+      "duration_ms": 30785,
+      "requests": 10,
+      "usage": {
+        "input_tokens": 333919,
+        "cached_input_tokens": 314496,
+        "output_tokens": 742,
+        "reasoning_output_tokens": 168,
+        "total_tokens": 334661,
+        "uncached_input_tokens": 19423
+      },
+      "batches": [
+        {
+          "start": "2026-09-11T22:42:54.597Z",
+          "seconds": 0.092,
+          "tools": [],
+          "discovery": true
+        },
+        {
+          "start": "2026-09-11T22:42:56.336Z",
+          "seconds": 2.08,
+          "tools": ["tools.mcp__synara__computer_launch_app"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:43:00.019Z",
+          "seconds": 0.035,
+          "tools": [],
+          "discovery": true
+        },
+        {
+          "start": "2026-09-11T22:43:01.478Z",
+          "seconds": 0.085,
+          "tools": ["tools.mcp__synara__computer_list_windows"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:43:03.199Z",
+          "seconds": 0.025,
+          "tools": [],
+          "discovery": true
+        },
+        {
+          "start": "2026-09-11T22:43:04.852Z",
+          "seconds": 0.266,
+          "tools": ["tools.mcp__synara__computer_get_state"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:43:06.805Z",
+          "seconds": 0.004,
+          "tools": [],
+          "discovery": true
+        },
+        {
+          "start": "2026-09-11T22:43:10.908Z",
+          "seconds": 5.64,
+          "tools": ["tools.mcp__synara__computer_click"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:43:19.195Z",
+          "seconds": 0.22,
+          "tools": ["tools.mcp__synara__computer_get_state"],
+          "discovery": false
+        }
+      ],
+      "result": "Il risultato di **123 \u00d7 45 \u00e8 5.535**."
+    },
+    {
+      "session": "01a092a6-37ab-7742-aec1-b61a3b72387d",
+      "turn": "01a092a6-3819-7343-83de-d86cbc75ce35",
+      "start": "2026-09-11T22:46:02.014Z",
+      "duration_ms": 30725,
+      "requests": 8,
+      "usage": {
+        "input_tokens": 215750,
+        "cached_input_tokens": 195840,
+        "output_tokens": 715,
+        "reasoning_output_tokens": 201,
+        "total_tokens": 216465,
+        "uncached_input_tokens": 19910
+      },
+      "batches": [
+        {
+          "start": "2026-09-11T22:46:07.441Z",
+          "seconds": 0.038,
+          "tools": [],
+          "discovery": true
+        },
+        {
+          "start": "2026-09-11T22:46:09.069Z",
+          "seconds": 1.632,
+          "tools": ["tools.mcp__synara__computer_launch_app"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:46:12.255Z",
+          "seconds": 0.038,
+          "tools": [],
+          "discovery": true
+        },
+        {
+          "start": "2026-09-11T22:46:14.077Z",
+          "seconds": 0.061,
+          "tools": ["tools.mcp__synara__computer_list_windows"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:46:15.713Z",
+          "seconds": 0.257,
+          "tools": ["tools.mcp__synara__computer_get_state"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:46:19.748Z",
+          "seconds": 5.937,
+          "tools": ["tools.mcp__synara__computer_click"],
+          "discovery": false
+        },
+        {
+          "start": "2026-09-11T22:46:29.181Z",
+          "seconds": 0.372,
+          "tools": ["tools.mcp__synara__computer_get_state"],
+          "discovery": false
+        }
+      ],
+      "result": "Il risultato di **123 \u00d7 45** \u00e8 **5.535**."
+    }
+  ],
+  "method": "Distinct response_id usage records within the Calculator turn; batch duration is custom_tool_call to custom_tool_call_output, not physical click time."
+}

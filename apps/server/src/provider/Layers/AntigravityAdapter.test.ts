@@ -8,10 +8,13 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
-import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
-import { describe, expect, it } from "vitest";
+import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
+import { describe, expect, it, vi } from "vitest";
+
+import * as processTeardown from "../supervisedProcessTeardown";
 
 import { ServerConfig } from "../../config";
+import { computerToolInstructions } from "../../agentGateway/computerGuidance";
 import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
@@ -23,6 +26,8 @@ import {
   buildAntigravityCaptureCommand,
   buildAntigravityHookConfig,
   buildAntigravityTurnProcessEnvironment,
+  createBoundedProcessOutput,
+  ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES,
   buildAntigravityTurnPrompt,
   detectAntigravityBackgroundTaskStart,
   ensureCapturePlugin,
@@ -30,6 +35,9 @@ import {
   makeAntigravityRuntimeEventBase,
   makeAntigravityAdapterLive,
   matchAntigravityTrackedTaskId,
+  normalizeAntigravityCommandLine,
+  parseAntigravityBackgroundTaskStep,
+  takeAntigravityBackgroundCallKey,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
   parseAntigravitySystemMessage,
@@ -181,32 +189,6 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
     });
   });
 
-  it("discovers future CLI models without requiring a static catalog update", () => {
-    expect(
-      parseAntigravityModelLines(`
-Gemini 4 Pro (Low)
-Gemini 4 Pro (Ultra)
-Claude Sonnet 5 (Thinking)
-`),
-    ).toEqual([
-      {
-        slug: "Gemini 4 Pro",
-        name: "Gemini 4 Pro",
-        supportedReasoningEfforts: [
-          { value: "low", label: "Low" },
-          { value: "ultra", label: "Ultra" },
-        ],
-        defaultReasoningEffort: "low",
-      },
-      {
-        slug: "Claude Sonnet 5",
-        name: "Claude Sonnet 5",
-        supportedReasoningEfforts: [{ value: "thinking", label: "Thinking" }],
-        defaultReasoningEffort: "thinking",
-      },
-    ]);
-  });
-
   it("dispatches a discovered model with its discovered default effort", () => {
     expect(resolveAntigravityCliModelLabel("Gemini 4 Pro", undefined, "low")).toBe(
       "Gemini 4 Pro (Low)",
@@ -215,11 +197,48 @@ Claude Sonnet 5 (Thinking)
 });
 
 describe("Antigravity CLI integration helpers", () => {
+  it("caps combined stdout and stderr diagnostics by UTF-8 byte length", () => {
+    const output = createBoundedProcessOutput(16);
+
+    output.append("stdout", "😀".repeat(4));
+    output.append("stderr", "x".repeat(16));
+
+    const snapshot = output.snapshot();
+    expect(output.byteLength).toBeLessThanOrEqual(16);
+    expect(
+      Buffer.byteLength(snapshot.stdout, "utf8") + Buffer.byteLength(snapshot.stderr, "utf8"),
+    ).toBeLessThanOrEqual(16);
+    expect(snapshot.stdout).toBe("");
+    expect(snapshot.stderr).toBe("x".repeat(16));
+  });
+
+  it.each([16, ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES])(
+    "retains valid UTF-8 within the %i-byte diagnostic budget when a chunk crosses it",
+    (budget) => {
+      const output = createBoundedProcessOutput(budget);
+      output.append("stdout", "€".repeat(Math.ceil(budget / 3) + 1));
+      expect(output.snapshot()).toEqual({
+        stdout: "€".repeat(Math.floor(budget / 3)),
+        stderr: "",
+      });
+      expect(output.byteLength).toBeLessThanOrEqual(budget);
+    },
+  );
+
+  it("evicts complete UTF-8 characters when the combined pipe budget cuts an older chunk", () => {
+    const output = createBoundedProcessOutput(16);
+    output.append("stdout", "😀".repeat(4));
+    output.append("stderr", "x");
+    expect(output.snapshot()).toEqual({ stdout: "😀".repeat(3), stderr: "x" });
+    expect(output.byteLength).toBe(13);
+  });
+
   it("rotates the gateway lease per print turn and rejects a retained prior bootstrap", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-turn-lease-"));
     const liveTokens = new Set<string>();
     const bootstrapOwners = new Map<string, string>();
     const revokedTokens: string[] = [];
+    const leasedCapabilities: Array<readonly string[]> = [];
     const spawnedEnvironments: NodeJS.ProcessEnv[] = [];
     let tokenSequence = 0;
     let bootstrapSequence = 0;
@@ -258,10 +277,13 @@ describe("Antigravity CLI integration helpers", () => {
           if (owner === token) bootstrapOwners.delete(bootstrap);
         }
       },
-      connectionForThread: () => ({
-        url: "http://127.0.0.1:3773/mcp",
-        bearerToken: issueSessionToken(),
-      }),
+      connectionForThread: (_threadId, _provider, options) => {
+        leasedCapabilities.push(options?.additionalCapabilities ?? []);
+        return {
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: issueSessionToken(),
+        };
+      },
       stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
     };
     let processSequence = 0;
@@ -299,6 +321,10 @@ describe("Antigravity CLI integration helpers", () => {
             threadId,
             runtimeMode: "full-access",
             cwd: root,
+            // Antigravity leases per turn, so the session-start capability facts
+            // have to survive in the session context or every turn silently
+            // loses the computer tools.
+            enableComputerControl: true,
             providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
           });
           const waitUntilReady = Effect.gen(function* () {
@@ -325,6 +351,7 @@ describe("Antigravity CLI integration helpers", () => {
           expect(credentials.exchangeStdioBootstrapToken(bootstrapB!)).toBe("turn-session-2");
           yield* waitUntilReady;
           expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2"]);
+          expect(leasedCapabilities).toEqual([["computer:control"], ["computer:control"]]);
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
@@ -447,8 +474,8 @@ describe("Antigravity CLI integration helpers", () => {
       prompt: "Ouvre YouTube dans le navigateur intégré.",
       hasGatewaySessionLease: true,
     });
-    expect(autonomousPrompt).toContain("Use the browser_* tools autonomously");
-    expect(autonomousPrompt).toContain("browser_open");
+    expect(autonomousPrompt).toContain("use browser_* autonomously");
+    expect(autonomousPrompt).toContain("Detailed rules live in each tool description");
     expect(autonomousPrompt).toContain("Ouvre YouTube dans le navigateur intégré.");
     expect(
       buildAntigravityTurnPrompt(withLease, {
@@ -627,8 +654,10 @@ describe("Antigravity CLI integration helpers", () => {
       // The Antigravity CLI runs hook commands through cmd.exe with JSON
       // escapes intact, so `"` arrives as `\"` and quoted paths fail to
       // execute ("not recognized as an internal or external command"). The
-      // win32 command must stay free of double quotes.
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
+      // win32 command must stay free of double quotes, including the
+      // inactive fallback: PowerShell rebuilds the decision JSON from
+      // `[char]34` so cmd echoes clean JSON.
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command Write-Output ^('{'+[char]34+'decision'+[char]34+':'+[char]34+'ask'+[char]34+'}'^)) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
     );
     // PreInvocation gates the LLM invocation: answer allow so subagent
     // launches are not denied (which would make the parent CLI exit 1).
@@ -640,7 +669,7 @@ describe("Antigravity CLI integration helpers", () => {
         "win32",
       ),
     ).toBe(
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"allow"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command Write-Output ^('{'+[char]34+'decision'+[char]34+':'+[char]34+'allow'+[char]34+'}'^)) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
     );
     expect(
       buildAntigravityCaptureCommand(
@@ -652,6 +681,19 @@ describe("Antigravity CLI integration helpers", () => {
     ).toBe(
       `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{"decision":"allow"}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-invocation'; fi`,
     );
+  });
+
+  it("keeps win32 hook commands free of double quotes", () => {
+    for (const event of ["pre-tool", "post-tool", "pre-invocation", "post-invocation", "stop"]) {
+      const command = buildAntigravityCaptureCommand(
+        String.raw`C:\Synara\Synara.exe`,
+        String.raw`C:\cap\capture.cjs`,
+        event,
+        "win32",
+      );
+      expect(command).not.toContain('"');
+      expect(JSON.parse(JSON.stringify({ command })).command).not.toContain('\\"');
+    }
   });
 
   it("guards Windows command-line limits before spawning the CLI", () => {
@@ -729,7 +771,7 @@ describe("Antigravity CLI integration helpers", () => {
             Stream.filter(
               (event) => event.type === "item.started" || event.type === "item.completed",
             ),
-            Stream.take(4),
+            Stream.take(6),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -755,6 +797,8 @@ describe("Antigravity CLI integration helpers", () => {
                 'post-tool\t{"stepIdx":7,"error":"super-secret-error"}',
                 'pre-tool\t{"stepIdx":8,"toolCall":{"name":"write_to_file","args":{"content":"super-secret-content"}}}',
                 'post-tool\t{"stepIdx":8,"error":""}',
+                'pre-tool\t{"stepIdx":9,"toolCall":{"name":"generate_image","args":{"Prompt":"Draw a diagram","ImageName":"diagram"}}}',
+                'post-tool\t{"stepIdx":9,"error":"Image generation failed"}',
                 "",
               ].join("\n"),
             ),
@@ -763,8 +807,10 @@ describe("Antigravity CLI integration helpers", () => {
           const events = Array.from(
             yield* Fiber.join(toolEventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(events).toHaveLength(4);
+          expect(events).toHaveLength(6);
           expect(events.map((event) => event.type)).toEqual([
+            "item.started",
+            "item.completed",
             "item.started",
             "item.completed",
             "item.started",
@@ -821,10 +867,48 @@ describe("Antigravity CLI integration helpers", () => {
                 rawOutput: "",
               },
             },
+            {
+              itemType: "image_generation",
+              status: "inProgress",
+              title: "generate_image",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-2`,
+                toolName: "generate_image",
+                arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                input: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawInput: { Prompt: "Draw a diagram", ImageName: "diagram" },
+              },
+            },
+            {
+              itemType: "image_generation",
+              status: "failed",
+              title: "generate_image",
+              data: {
+                toolCallId: `antigravity-${turn.turnId}-tool-2`,
+                toolName: "generate_image",
+                arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                input: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawInput: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                rawOutput: "Image generation failed",
+              },
+            },
           ]);
 
+          const turnTerminalFiber = yield* adapter.streamEvents.pipe(
+            Stream.filter((event) => event.type === "turn.completed"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
           child?.emit("close", 0, null);
-          yield* Effect.sleep("25 millis");
+          // The close handler settles the turn asynchronously (gateway cancel,
+          // hook-file drain, run-dir cleanup) and clears activeProcess before
+          // emitting turn.completed. Wait for that event instead of a fixed
+          // sleep so stopSession cannot race the pid-less fake into teardown.
+          const terminalEvents = Array.from(
+            yield* Fiber.join(turnTerminalFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          expect(terminalEvents).toHaveLength(1);
           yield* adapter.stopSession(threadId);
         }).pipe(
           Effect.provide(
@@ -883,10 +967,12 @@ describe("Antigravity CLI integration helpers", () => {
         Effect.gen(function* () {
           const adapter = yield* AntigravityAdapter;
           const toolEventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
             Stream.filter(
-              (event) => event.type === "item.started" || event.type === "item.completed",
+              (event) =>
+                (event.type === "item.started" || event.type === "item.completed") &&
+                event.payload.itemType === "command_execution",
             ),
-            Stream.take(4),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -905,7 +991,7 @@ describe("Antigravity CLI integration helpers", () => {
           });
           expect(eventFile).toBeTruthy();
 
-          // Both sources report two run_command calls in the same planner step.
+          // Matching step identities can be deduplicated without guessing across steps.
           // Each real call must render once, without either duplicating the
           // hook/transcript copy or collapsing the repeated tool name.
           yield* Effect.promise(() =>
@@ -942,6 +1028,7 @@ describe("Antigravity CLI integration helpers", () => {
             ),
           );
 
+          child?.emit("close", 0, null);
           const events = Array.from(
             yield* Fiber.join(toolEventsFiber).pipe(Effect.timeout("2 seconds")),
           );
@@ -952,12 +1039,17 @@ describe("Antigravity CLI integration helpers", () => {
             "item.started",
             "item.completed",
           ]);
-          const comparable = events.map((event) => ({
-            type: event.type,
-            itemType: event.payload.itemType,
-            title: event.payload.title,
-            toolCallId: (event.payload.data as { toolCallId?: string })?.toolCallId,
-          }));
+          const comparable = events.map((event) => {
+            if (event.type !== "item.started" && event.type !== "item.completed") {
+              throw new Error(`Unexpected tool event: ${event.type}`);
+            }
+            return {
+              type: event.type,
+              itemType: event.payload.itemType,
+              title: event.payload.title,
+              toolCallId: (event.payload.data as { toolCallId?: string })?.toolCallId,
+            };
+          });
           expect(comparable).toEqual([
             {
               type: "item.started",
@@ -985,7 +1077,6 @@ describe("Antigravity CLI integration helpers", () => {
             },
           ]);
 
-          child?.emit("close", 0, null);
           yield* Effect.sleep("25 millis");
           yield* adapter.stopSession(threadId);
         }).pipe(
@@ -1303,6 +1394,268 @@ describe("Antigravity CLI integration helpers", () => {
     ).rejects.toThrow("Antigravity helper timed out after 50ms");
   });
 
+  it("waits for timeout teardown proof even when the root closes first", async () => {
+    let observed!: (child: ChildProcess) => void;
+    const started = new Promise<ChildProcess>((resolve) => {
+      observed = resolve;
+    });
+    let finishTeardown!: () => void;
+    const teardown = new Promise<processTeardown.SupervisedProcessTeardownResult>((resolve) => {
+      finishTeardown = () => resolve({ escalated: false, signalErrors: [] });
+    });
+    const spy = vi
+      .spyOn(processTeardown, "teardownChildProcessTree")
+      .mockImplementation((child) => {
+        observed(child as ChildProcess);
+        return teardown;
+      });
+    let child: ChildProcess | undefined;
+    let settled = false;
+    const operation = runAntigravityHelperProcess(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      {
+        timeoutMs: 30,
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    const rejection = expect(operation).rejects.toThrow("Antigravity helper timed out after 30ms");
+    try {
+      child = await started;
+      const closed = new Promise<void>((resolve) => child!.once("close", () => resolve()));
+      child.kill("SIGKILL");
+      await closed;
+      expect(settled).toBe(false);
+      finishTeardown();
+      await rejection;
+    } finally {
+      finishTeardown();
+      child?.kill("SIGKILL");
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["resolved signal error", "rejected teardown"])(
+    "reports unproven timeout cleanup after %s",
+    async (failure) => {
+      const spy = vi
+        .spyOn(processTeardown, "teardownChildProcessTree")
+        .mockImplementation(async (child) => {
+          const owned = child as ChildProcess;
+          const closed = new Promise<void>((resolve) => owned.once("close", () => resolve()));
+          owned.kill("SIGKILL");
+          await closed;
+          const cause = new Error("helper signal failed");
+          if (failure === "rejected teardown") throw cause;
+          return { escalated: true, signalErrors: [cause] };
+        });
+      try {
+        await expect(
+          runAntigravityHelperProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+            timeoutMs: 30,
+          }),
+        ).rejects.toThrow("teardown was unproven: helper signal failed");
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it("reports expected versus minted gateway capabilities when the turn bootstrap is unavailable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-bootstrap-detail-"));
+    const leasedCapabilities: Array<ReadonlyArray<string> | undefined> = [];
+    let tokenSequence = 0;
+    const credentials: AgentGatewayCredentialsShape = {
+      mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+      setListeningPort: () => undefined,
+      issueSessionToken: () => `turn-session-${String(++tokenSequence)}`,
+      verifySessionToken: () => null,
+      verifySession: () => null,
+      issueStdioBootstrapToken: () => null,
+      exchangeStdioBootstrapToken: () => null,
+      bindWriteAuthority: () => null,
+      verifyWriteAuthority: () => false,
+      registerInFlightRequest: () => () => undefined,
+      cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+      cancelSessionTurnRequests: () => Promise.resolve(),
+      retireSessionTurn: () => Promise.resolve(),
+      revokeSessionToken: () => undefined,
+      connectionForThread: (_threadId, _provider, options) => {
+        leasedCapabilities.push(options?.additionalCapabilities);
+        return {
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: `turn-session-${String(tokenSequence)}`,
+        };
+      },
+      stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+    };
+    try {
+      const error = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-bootstrap-detail");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            enableComputerControl: true,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          return yield* Effect.flip(
+            adapter.sendTurn({ threadId, input: "turn A", attachments: [] }),
+          );
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
+              Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-bootstrap-detail-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+      expect(leasedCapabilities).toEqual([["computer:control"]]);
+      expect(error).toMatchObject({ _tag: "ProviderAdapterRequestError", method: "turn/prepare" });
+      const detail = (error as unknown as { detail: string }).detail;
+      expect(detail).toContain("expected gateway capabilities");
+      expect(detail).toContain("computer:control");
+      expect(detail).toContain("minted");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["bootstrap", "synchronous spawn", "asynchronous spawn"] as const)(
+    "delivers the full Computer guide once after a failed %s attempt",
+    async (failure) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-policy-retry-"));
+      const revokedTokens: string[] = [];
+      const deliveredPrompts: string[] = [];
+      let tokenSequence = 0;
+      const credentials: AgentGatewayCredentialsShape = {
+        mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+        setListeningPort: () => undefined,
+        issueSessionToken: () => `turn-session-${++tokenSequence}`,
+        verifySessionToken: () => null,
+        verifySession: () => null,
+        issueStdioBootstrapToken: (token) =>
+          failure === "bootstrap" && token === "turn-session-1" ? null : `bootstrap-${token}`,
+        exchangeStdioBootstrapToken: () => null,
+        bindWriteAuthority: () => null,
+        verifyWriteAuthority: () => false,
+        registerInFlightRequest: () => () => undefined,
+        cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+        cancelSessionTurnRequests: () => Promise.resolve(),
+        retireSessionTurn: () => Promise.resolve(),
+        revokeSessionToken: (token) => revokedTokens.push(token),
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: `turn-session-${++tokenSequence}`,
+        }),
+        stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+      };
+      let spawnCount = 0;
+      const spawnProcess = ((_: string, args: readonly string[]) => {
+        spawnCount += 1;
+        if (failure === "synchronous spawn" && spawnCount === 1) {
+          throw new Error("Synthetic spawn failure");
+        }
+        const failSpawn = failure === "asynchronous spawn" && spawnCount === 1;
+        const child = new EventEmitter() as ChildProcess;
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        Object.assign(child, {
+          pid: failSpawn ? undefined : 11_000 + spawnCount,
+          stdout,
+          stderr,
+          killed: false,
+          kill: () => true,
+        });
+        setTimeout(() => {
+          if (failSpawn) {
+            child.emit("error", new Error("Synthetic asynchronous spawn failure"));
+            stdout.end();
+            stderr.end();
+            child.emit("close", -1, null);
+            return;
+          }
+          deliveredPrompts.push(args[args.indexOf("-p") + 1]!);
+          child.emit("spawn");
+          stdout.end("done\n");
+          stderr.end();
+          child.emit("close", 0, null);
+        }, 0).unref();
+        return child;
+      }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const threadId = ThreadId.makeUnsafe("thread-antigravity-policy-retry");
+            yield* adapter.startSession({
+              provider: "antigravity",
+              threadId,
+              runtimeMode: "full-access",
+              cwd: root,
+              enableComputerControl: true,
+              providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            });
+            const waitUntilSettled = (status: "ready" | "error" = "ready") =>
+              Effect.gen(function* () {
+                for (let attempt = 0; attempt < 100; attempt += 1) {
+                  const session = (yield* adapter.listSessions()).find(
+                    (candidate) => candidate.threadId === threadId,
+                  );
+                  if (session?.status === status) return;
+                  yield* Effect.sleep(10);
+                }
+                throw new Error("Antigravity test turn did not settle.");
+              });
+            const firstAttempt = yield* adapter
+              .sendTurn({ threadId, input: "first attempt", attachments: [] })
+              .pipe(Effect.exit);
+            expect(Exit.isFailure(firstAttempt)).toBe(failure !== "asynchronous spawn");
+            if (failure === "asynchronous spawn") yield* waitUntilSettled("error");
+            expect(deliveredPrompts).toEqual([]);
+            expect(revokedTokens).toEqual(["turn-session-1"]);
+
+            yield* adapter.sendTurn({ threadId, input: "retry", attachments: [] });
+            yield* waitUntilSettled();
+            expect(deliveredPrompts).toHaveLength(1);
+            expect(deliveredPrompts[0]).toContain(computerToolInstructions());
+            expect(deliveredPrompts[0]).toContain("retry");
+
+            yield* adapter.sendTurn({ threadId, input: "next turn", attachments: [] });
+            yield* waitUntilSettled();
+            expect(deliveredPrompts).toHaveLength(2);
+            expect(deliveredPrompts[1]).toBe("next turn");
+            yield* adapter.stopSession(threadId);
+            expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2", "turn-session-3"]);
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess,
+              }).pipe(
+                Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-policy-retry-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   // #465: an active Stop hook must not emit a non-standard decision that can
   // hang the print process after the assistant reply is already visible.
   it("answers stop hooks with a neutral allow-exit payload", async () => {
@@ -1341,6 +1694,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
       Object.assign(child, {
         stdout,
         stderr,
+        eventFile: _options.env?.SYNARA_ANTIGRAVITY_EVENTS,
         killed: false,
         exitCode: null as number | null,
         signalCode: null as NodeJS.Signals | null,
@@ -1353,6 +1707,304 @@ describe("Antigravity turn settle on cancel (#465)", () => {
   const failTeardown = async () => {
     throw new Error("process exit could not be proven");
   };
+
+  it.each([
+    { error: "Historical failure", turns: 6, stopCleanup: false },
+    {
+      error: "The stream was interrupted. Please continue the task you were working on.",
+      turns: 1,
+      stopCleanup: false,
+    },
+    {
+      error: "The stream was interrupted. Please continue the task you were working on.",
+      turns: 1,
+      stopCleanup: true,
+    },
+    { error: undefined, turns: 1, stopCleanup: true },
+  ])(
+    "honors terminal errors and successful stop teardown (error=$error, turns=$turns)",
+    async ({ error, turns, stopCleanup }) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-json-usage-"));
+      const children: ChildProcess[] = [];
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const threadId = ThreadId.makeUnsafe("thread-antigravity-json-usage");
+            yield* adapter.startSession({
+              provider: "antigravity",
+              threadId,
+              runtimeMode: "full-access",
+              cwd: root,
+              providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            });
+            const eventsFiber = yield* adapter.streamEvents.pipe(
+              Stream.takeUntil((event) => event.type === "turn.completed"),
+              Stream.runCollect,
+              Effect.forkChild,
+            );
+            yield* adapter.sendTurn({ threadId, input: "usage test", attachments: [] });
+            children[0]!.stdout!.emit(
+              "data",
+              [
+                JSON.stringify({
+                  event: "step_update",
+                  step_update: {
+                    step_index: 32,
+                    state: "DONE",
+                    step_type: "agent_response",
+                    text_delta: "SG-OK",
+                    usage: {
+                      input_tokens: 13286,
+                      output_tokens: 3,
+                      cache_read_tokens: 0,
+                      thinking_tokens: 0,
+                    },
+                  },
+                }),
+                JSON.stringify({
+                  event: "result",
+                  result: {
+                    status: error ? "ERROR" : "SUCCESS",
+                    error,
+                    response: turns === 1 ? "" : "SG-OK",
+                    duration_seconds: 9259,
+                    num_turns: turns,
+                    usage: { input_tokens: 61019, output_tokens: 1023, cache_read_tokens: 105860 },
+                  },
+                }),
+              ].join("\n"),
+            );
+            if (stopCleanup) {
+              yield* Effect.promise(() =>
+                fs.writeFile(
+                  (children[0] as ChildProcess & { eventFile: string }).eventFile,
+                  "stop\t{}\n",
+                ),
+              );
+            }
+            children[0]!.emit("close", stopCleanup ? null : 1, stopCleanup ? "SIGKILL" : null);
+            const events = Array.from(
+              yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
+            );
+            const terminal = events.find((event) => event.type === "turn.completed")?.payload;
+            if (error) {
+              expect(terminal).toMatchObject({ state: "failed", errorMessage: error });
+            } else {
+              expect(terminal).toMatchObject({ state: "completed" });
+            }
+            expect(
+              events
+                .filter((event) => event.type === "content.delta")
+                .map((event) => event.payload),
+            ).toEqual([{ streamKind: "assistant_text", delta: "SG-OK" }]);
+            yield* adapter.stopSession(threadId);
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess: makeSpawnProcess(children),
+              }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-json-usage-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { name: "exact timeout", expected: "completed" },
+    { name: "stderr timeout", expected: "completed", stderrOnly: true },
+    { name: "unrelated stderr", expected: "failed", stderr: "quota exceeded" },
+    {
+      name: "evicted earlier stderr error",
+      expected: "failed",
+      stderrChunks: [
+        "quota exceeded\n",
+        " ".repeat(ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES),
+        "Error: timeout waiting for response\n",
+      ],
+    },
+    {
+      name: "evicted stderr error before whitespace",
+      expected: "failed",
+      stderrChunks: ["quota exceeded\n", " ".repeat(ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES)],
+    },
+    {
+      name: "split stderr timeout",
+      expected: "completed",
+      stderrOnly: true,
+      stderrChunks: ["Error: timeout waiting ", "for response\n"],
+    },
+    { name: "unrelated stream error", expected: "failed", streamError: "quota exceeded" },
+    { name: "earlier stream error", expected: "failed", earlierStreamError: true },
+    { name: "earlier terminal error", expected: "failed", earlierResultError: true },
+    { name: "interrupt result", expected: "interrupted", status: "INTERRUPTED" },
+    { name: "incomplete assistant", expected: "failed", responseState: "ACTIVE" },
+    { name: "signal exit", expected: "failed", signal: "SIGKILL" as const },
+    { name: "unproven teardown", expected: "failed", teardownFailure: true },
+    { name: "teardown signal error", expected: "failed", teardownSignalError: true },
+    { name: "late descendant capture", expected: "failed", lateCapture: true },
+    { name: "unobserved cleanup", expected: "failed", noStopHook: true },
+    { name: "malformed record", expected: "failed", malformed: true },
+    { name: "pending tool", expected: "failed", pendingTool: true },
+    { name: "pending background task", expected: "failed", background: true },
+    { name: "nonterminal status", expected: "failed", status: "WAITING" },
+    { name: "explicit malformed error", expected: "failed", malformedError: true },
+  ])("settles post-response timeout safely: $name", async (scenario) => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "synara-antigravity-post-response-timeout-"),
+    );
+    const children: ChildProcess[] = [];
+    let observeTeardown!: () => void;
+    const teardownObserved = new Promise<void>((resolve) => {
+      observeTeardown = resolve;
+    });
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-post-response-timeout");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* adapter.sendTurn({ threadId, input: "follow-up", attachments: [] });
+          children[0]!.stdout!.emit(
+            "data",
+            [
+              JSON.stringify({
+                event: "step_update",
+                step_update: {
+                  step_index: 1,
+                  state: scenario.responseState ?? "DONE",
+                  step_type: "agent_response",
+                  text_delta: "Finished",
+                },
+              }),
+              ...(scenario.earlierResultError
+                ? [
+                    JSON.stringify({
+                      event: "result",
+                      result: { status: "ERROR", error: "quota exceeded" },
+                    }),
+                  ]
+                : []),
+              ...(scenario.earlierStreamError
+                ? [
+                    JSON.stringify({ event: "error", message: "quota exceeded" }),
+                    JSON.stringify({ event: "error", message: "timeout waiting for response" }),
+                  ]
+                : []),
+              JSON.stringify({
+                event: "result",
+                result: {
+                  status: scenario.status ?? "ERROR",
+                  ...(scenario.stderrOnly
+                    ? {}
+                    : { error: scenario.malformedError ? {} : "timeout waiting for response" }),
+                },
+              }),
+              ...(scenario.streamError
+                ? [{ event: "error", message: scenario.streamError }].map((event) =>
+                    JSON.stringify(event),
+                  )
+                : []),
+              ...(scenario.pendingTool
+                ? [
+                    JSON.stringify({
+                      event: "step_update",
+                      step_update: { step_index: 2, state: "ACTIVE", step_type: "tool" },
+                    }),
+                  ]
+                : []),
+              ...(scenario.malformed ? ['{"event":invalid}'] : []),
+            ].join("\n"),
+          );
+          for (const chunk of scenario.stderrChunks ?? [
+            `${scenario.stderr ?? "Error: timeout waiting for response"}\n`,
+          ]) {
+            children[0]!.stderr!.emit("data", chunk);
+          }
+          if (scenario.background) {
+            yield* Effect.promise(() =>
+              fs.writeFile(
+                (children[0] as ChildProcess & { eventFile: string }).eventFile,
+                'post-tool\t{"stepIdx":2,"toolCall":{"name":"run_command"},"toolOutput":"Task id \'task-pending\' is now running in the background"}\n',
+              ),
+            );
+          }
+          if (!scenario.noStopHook) {
+            yield* Effect.promise(() =>
+              fs.appendFile(
+                (children[0] as ChildProcess & { eventFile: string }).eventFile,
+                "stop\t{}\n",
+              ),
+            );
+            if (!scenario.background) yield* Effect.promise(() => teardownObserved);
+          }
+          children[0]!.emit("close", scenario.signal ? null : 1, scenario.signal ?? null);
+          const events = Array.from(
+            yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
+          );
+          if (scenario.expected === "completed") {
+            expect(events.find((event) => event.type === "runtime.error")).toBeUndefined();
+          }
+          expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
+            state: scenario.expected,
+            stopReason:
+              scenario.expected === "completed"
+                ? "model_stop"
+                : scenario.expected === "interrupted"
+                  ? "interrupted"
+                  : "error",
+          });
+          expect(
+            events.filter((event) => event.type === "content.delta").map((event) => event.payload),
+          ).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess: makeSpawnProcess(children),
+              teardownProcessTree: async () => {
+                observeTeardown();
+                if (scenario.teardownFailure) throw new Error("helper exit unproven");
+                return {
+                  escalated: false,
+                  capturedBeforeRootExit: scenario.lateCapture !== true,
+                  signalErrors: scenario.teardownSignalError ? [new Error("signal denied")] : [],
+                };
+              },
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-post-response-timeout-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 
   it("unlocks Cancel without letting a late close settle the follow-up", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-interrupt-hung-"));
@@ -1490,16 +2142,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     }
   });
 
-  it("resolves default reasoning effort for Gemini 3.7 Flash and DeepSeek models", () => {
-    expect(resolveAntigravityCliModelLabel("Gemini 3.7 Flash")).toBe("Gemini 3.7 Flash (High)");
-    expect(resolveAntigravityCliModelLabel("Gemini 3.7 Flash", { reasoningEffort: "medium" })).toBe(
-      "Gemini 3.7 Flash (Medium)",
-    );
-    expect(resolveAntigravityCliModelLabel("DeepSeek V4 Flash Max")).toBe(
-      "DeepSeek V4 Flash Max (High)",
-    );
-  });
-
   it("compacts multiline pre-invocation and stop hook payloads into single NDJSON lines", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-compact-"));
     const scriptPath = path.join(directory, "capture.cjs");
@@ -1590,7 +2232,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
                 event.type === "content.delta" ||
                 event.type === "item.completed",
             ),
-            Stream.take(8),
+            Stream.take(10),
             Stream.runCollect,
             Effect.forkChild,
           );
@@ -1634,7 +2276,13 @@ describe("Antigravity turn settle on cancel (#465)", () => {
                   step_index: 1,
                   type: "PLANNER_RESPONSE",
                   thinking: "Analyzing problem requirements...",
-                  tool_calls: [{ name: "run_command", args: { CommandLine: "echo test" } }],
+                  tool_calls: [
+                    { name: "run_command", args: { CommandLine: "echo test" } },
+                    {
+                      name: "generate_image",
+                      args: { Prompt: "Draw a diagram", ImageName: "diagram" },
+                    },
+                  ],
                 }),
                 JSON.stringify({
                   step_index: 2,
@@ -1649,7 +2297,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           const events = Array.from(
             yield* Fiber.join(eventsFiber).pipe(Effect.timeout("2 seconds")),
           );
-          expect(events).toHaveLength(8);
+          expect(events).toHaveLength(10);
           // Reasoning item: started -> delta -> completed
           expect(events[0]?.payload).toMatchObject({
             itemType: "reasoning",
@@ -1668,7 +2316,7 @@ describe("Antigravity turn settle on cancel (#465)", () => {
           });
           // Tool call from the transcript body surfaces as a tool lifecycle
           // item even though no pre/post-tool hook event fired: reasoning ->
-          // run_command -> assistant. (#antigravity tool calls are displayed)
+          // run_command -> generate_image -> assistant.
           expect(events[3]?.payload).toMatchObject({
             itemType: "command_execution",
             status: "inProgress",
@@ -1689,17 +2337,35 @@ describe("Antigravity turn settle on cancel (#465)", () => {
               arguments: { CommandLine: "echo test" },
             },
           });
-          // Assistant message: started -> delta -> completed
           expect(events[5]?.payload).toMatchObject({
+            itemType: "image_generation",
+            status: "inProgress",
+            title: "generate_image",
+            data: {
+              toolName: "generate_image",
+              arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+            },
+          });
+          expect(events[6]?.payload).toMatchObject({
+            itemType: "image_generation",
+            status: "completed",
+            title: "generate_image",
+            data: {
+              toolName: "generate_image",
+              arguments: { Prompt: "Draw a diagram", ImageName: "diagram" },
+            },
+          });
+          // Assistant message: started -> delta -> completed
+          expect(events[7]?.payload).toMatchObject({
             itemType: "assistant_message",
             status: "inProgress",
             title: "Assistant",
           });
-          expect(events[6]?.payload).toMatchObject({
+          expect(events[8]?.payload).toMatchObject({
             streamKind: "assistant_text",
             delta: "Here is the solution.",
           });
-          expect(events[7]?.payload).toMatchObject({
+          expect(events[9]?.payload).toMatchObject({
             itemType: "assistant_message",
             status: "completed",
             title: "Assistant",
@@ -1726,6 +2392,26 @@ describe("Antigravity turn settle on cancel (#465)", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+const agyTaskId = "e5c58127-8ca4-48d1-af24-6f2bc370f613/task-997";
+const agyCommand =
+  "adb -s 1901092534053723 shell uiautomator dump /sdcard/native_overlay.xml; adb -s 1901092534053723 pull /sdcard/native_overlay.xml E:\\Tools\\Rokid\\tmp\\native_overlay_dump.xml";
+const agyRunningStep = (step_index: number, taskId = agyTaskId) => ({
+  step_index,
+  type: "GENERIC",
+  status: "RUNNING",
+  content: `Created At: 2026-09-13T14:25:03+02:00\nTool is running as a background task with task id: ${taskId}\nTask Description: ${agyCommand}\nTask logs are available at: file:///C:/tmp/task.log\nYOU MUST TAKE ONE OF THE FOLLOWING TWO ACTIONS: ...\n DO NOTHING ELSE.`,
+});
+const agyCompletionStep = (step_index: number, taskId = agyTaskId) => ({
+  step_index,
+  type: "SYSTEM_MESSAGE",
+  content: `<SYSTEM_MESSAGE>\n[Message] sender=${taskId} priority=MESSAGE_PRIORITY_HIGH content=Task id "${taskId}" exited with code 0\n</SYSTEM_MESSAGE>`,
+});
+const agyText = (step_index: number, content: string) => ({
+  step_index,
+  type: "PLANNER_RESPONSE",
+  content,
 });
 
 describe("Antigravity background task helpers (#752)", () => {
@@ -1834,6 +2520,37 @@ describe("Antigravity background task helpers (#752)", () => {
     ).toBeNull();
   });
 
+  it.each([
+    { taskId: "session/task-8", output: "Task id 'session/task-8' is running in the background" },
+    { taskId: "session:task-8", output: 'Task id "session:task-8" is running in the background' },
+    {
+      taskId: "session/task-8",
+      output: "Tool is running as a background task with task id: session/task-8",
+    },
+  ])("preserves the full background task id in $output", ({ taskId, output }) => {
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run build" },
+        { toolOutput: output },
+      ),
+    ).toEqual({
+      taskId,
+      description: "npm run build",
+      isBackground: true,
+    });
+  });
+
+  it("does not extract a task id from an identifier label", () => {
+    expect(
+      detectAntigravityBackgroundTaskStart(
+        "run_command",
+        { CommandLine: "npm run build" },
+        { toolOutput: "Task identifier pending for a command running in the background" },
+      ),
+    ).toEqual({ description: "npm run build", isBackground: true });
+  });
+
   it("detects schedule timers and ignores unrelated tools", () => {
     expect(
       detectAntigravityBackgroundTaskStart(
@@ -1914,12 +2631,16 @@ describe("Antigravity background task helpers (#752)", () => {
           const adapter = yield* AntigravityAdapter;
           const toolsCompleted = yield* Deferred.make<void>();
           const followupObserved = yield* Deferred.make<void>();
+          const backgroundTaskCompleted = yield* Deferred.make<void>();
           const runtimeTaskEvents: string[] = [];
           let completedTools = 0;
           const eventsFiber = yield* adapter.streamEvents.pipe(
             Stream.runForEach((event) =>
               Effect.gen(function* () {
                 if (event.type.startsWith("task.")) runtimeTaskEvents.push(event.type);
+                if (event.type === "task.completed") {
+                  yield* Deferred.succeed(backgroundTaskCompleted, undefined);
+                }
                 if (event.type === "item.completed" && ++completedTools === 2) {
                   yield* Deferred.succeed(toolsCompleted, undefined);
                 }
@@ -1983,10 +2704,35 @@ describe("Antigravity background task helpers (#752)", () => {
           });
           yield* Deferred.await(followupObserved).pipe(Effect.timeout("2 seconds"));
           expect(teardownCalls).toBe(0);
-          yield* Effect.sync(() => fsSync.appendFileSync(eventFile!, "stop\t{}\n"));
+          yield* Effect.sync(() => {
+            // Anonymous starts need their transcript identities before either
+            // terminal can settle them and permit the final Stop to tear down.
+            fsSync.appendFileSync(
+              transcriptFile,
+              [
+                JSON.stringify({
+                  step_index: 2,
+                  type: "GENERIC",
+                  status: "RUNNING",
+                  content:
+                    "Tool is running as a background task with task id: task-real-a\nTask Description: npm test",
+                }),
+                JSON.stringify({
+                  step_index: 3,
+                  type: "GENERIC",
+                  status: "RUNNING",
+                  content:
+                    "Tool is running as a background task with task id: task-real-b\nTask Description: npm run dev",
+                }),
+                "",
+              ].join("\n"),
+            );
+            fsSync.appendFileSync(eventFile!, "stop\t{}\n");
+          });
           yield* Effect.promise(() => teardownObserved).pipe(Effect.timeout("2 seconds"));
+          yield* Deferred.await(backgroundTaskCompleted).pipe(Effect.timeout("2 seconds"));
           expect(teardownCalls).toBe(1);
-          expect(runtimeTaskEvents).toEqual([]);
+          expect(runtimeTaskEvents).toEqual(["task.started", "task.completed"]);
           yield* Fiber.interrupt(eventsFiber);
 
           child?.emit("close", 0, null);
@@ -2012,6 +2758,971 @@ describe("Antigravity background task helpers (#752)", () => {
         ),
       );
     } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("parses agy GENERIC RUNNING background task steps", () => {
+    expect(parseAntigravityBackgroundTaskStep(agyRunningStep(997).content)).toEqual({
+      taskId: agyTaskId,
+      description: agyCommand,
+    });
+    expect(
+      parseAntigravityBackgroundTaskStep('Task id "task-5" moved to a background task'),
+    ).toEqual({ taskId: "task-5" });
+    expect(parseAntigravityBackgroundTaskStep("Created file E:\\tmp\\task-1.txt")).toBeNull();
+    expect(parseAntigravityBackgroundTaskStep(undefined)).toBeNull();
+    expect(normalizeAntigravityCommandLine(`"${agyCommand}"`)).toBe(agyCommand);
+    expect(normalizeAntigravityCommandLine("  npm   run build ")).toBe("npm run build");
+    expect(normalizeAntigravityCommandLine(undefined)).toBeUndefined();
+    const keys = [{ stepIndex: 5, command: "npm test" }, { stepIndex: 5 }];
+    expect(takeAntigravityBackgroundCallKey(keys, 5, "npm run build")).toBe(true);
+    expect(keys).toEqual([{ stepIndex: 5, command: "npm test" }]);
+    expect(takeAntigravityBackgroundCallKey(keys, 5, "npm run build")).toBe(false);
+    expect(takeAntigravityBackgroundCallKey(keys, 5, undefined)).toBe(true);
+    expect(takeAntigravityBackgroundCallKey(keys, undefined, "npm test")).toBe(false);
+  });
+
+  const runAgyBackgroundScenario = async (
+    label: string,
+    drive: (io: {
+      readonly hooks: (...lines: string[]) => void;
+      readonly transcript: (...steps: object[]) => void;
+      readonly waitUntil: (check: () => boolean) => Effect.Effect<void>;
+      readonly counts: { teardowns: number; assistantMessages: number };
+      readonly taskEvents: { type: string; taskId: string }[];
+      readonly taskStarts: { taskType: string | undefined; source: unknown }[];
+    }) => Effect.Effect<void>,
+  ) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), `synara-antigravity-${label}-`));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
+    let eventFile: string | undefined;
+    let child: ChildProcess | undefined;
+    const counts = { teardowns: 0, assistantMessages: 0 };
+    const taskEvents: { type: string; taskId: string }[] = [];
+    const taskStarts: { taskType: string | undefined; source: unknown }[] = [];
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const spawned = new EventEmitter() as ChildProcess;
+      Object.assign(spawned, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      child = spawned;
+      return spawned;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const waitUntil = (check: () => boolean) =>
+      Effect.promise(async () => {
+        for (let attempt = 0; attempt < 200 && !check(); attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(check()).toBe(true);
+      });
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          let turnsCompleted = 0;
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                if (event.type === "turn.completed") turnsCompleted += 1;
+                if (event.type === "task.started" || event.type === "task.completed") {
+                  taskEvents.push({ type: event.type, taskId: event.payload.taskId });
+                }
+                if (event.type === "task.started") {
+                  taskStarts.push({ taskType: event.payload.taskType, source: event.raw?.payload });
+                }
+                if (
+                  event.type === "item.completed" &&
+                  event.payload.itemType === "assistant_message"
+                ) {
+                  counts.assistantMessages += 1;
+                }
+              }),
+            ),
+            Effect.forkChild,
+          );
+          const threadId = ThreadId.makeUnsafe(`thread-antigravity-${label}`);
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({ threadId, input: "dump the overlay", attachments: [] });
+          const append = (file: string, entries: unknown[]) =>
+            fsSync.appendFileSync(
+              file,
+              entries.map((e) => `${typeof e === "string" ? e : JSON.stringify(e)}\n`).join(""),
+            );
+          const transcriptPath = transcriptFile;
+          append(eventFile!, [`pre-invocation\t${JSON.stringify({ transcriptPath })}`]);
+          yield* drive({
+            hooks: (...lines) => append(eventFile!, lines),
+            transcript: (...steps) => append(transcriptFile, steps),
+            waitUntil,
+            counts,
+            taskEvents,
+            taskStarts,
+          });
+          yield* Effect.sleep("200 millis");
+          expect(counts.teardowns).toBe(1);
+
+          child?.emit("close", 0, null);
+          yield* waitUntil(() => turnsCompleted === 1);
+          yield* Effect.sleep("100 millis");
+          expect(turnsCompleted).toBe(1);
+          yield* Fiber.interrupt(eventsFiber);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree: async () => {
+                counts.teardowns += 1;
+                return completeProcessTeardown();
+              },
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: `antigravity-${label}-` })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  };
+
+  it("keeps agy alive when a command is backgrounded before the stop hook", () =>
+    runAgyBackgroundScenario("agy-transcript-background", (io) =>
+      Effect.gen(function* () {
+        const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
+        const toolCall = `"toolCall":{"name":"run_command","args":${args}}`;
+        io.hooks(`pre-tool\t{"stepIdx":996,${toolCall}}`);
+        io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
+        io.hooks('stop\t{"stepIdx":998}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        yield* Effect.sleep("200 millis");
+        expect(io.counts.teardowns).toBe(0);
+
+        io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        // agy 1.2.2 sends post-tool only once the task finished: no re-registration.
+        io.hooks(
+          `post-tool\t{"stepIdx":996,${toolCall},"toolOutput":${JSON.stringify(agyRunningStep(997).content)}}`,
+          'stop\t{"stepIdx":1000}',
+        );
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("ignores a late post-tool start for a task the transcript already settled", () =>
+    runAgyBackgroundScenario("agy-background-late-post-tool", (io) =>
+      Effect.gen(function* () {
+        // No pre-tool hook (lost or malformed), so no PendingTool carries the marker.
+        io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
+        io.hooks('stop	{"stepIdx":998}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        yield* Effect.sleep("200 millis");
+        expect(io.counts.teardowns).toBe(0);
+
+        io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
+        io.hooks(
+          `post-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${args}},"toolOutput":${JSON.stringify(agyRunningStep(997).content)}}`,
+          'stop	{"stepIdx":1000}',
+        );
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("ignores a late post-tool start for a transcript task killed through manage_task", () =>
+    runAgyBackgroundScenario("agy-background-killed-late-post-tool", (io) =>
+      Effect.gen(function* () {
+        io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
+        io.hooks('stop	{"stepIdx":998}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        yield* Effect.sleep("200 millis");
+        expect(io.counts.teardowns).toBe(0);
+
+        const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
+        io.hooks(
+          `post-tool	{"stepIdx":1001,"toolCall":{"name":"manage_task","args":{"Action":"kill","TaskId":"task-997"}},"toolOutput":"killed"}`,
+          `post-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${args}},"toolOutput":${JSON.stringify(agyRunningStep(997).content)}}`,
+        );
+        io.transcript(agyText(1002, "Stopped the dump."));
+        io.hooks('stop	{"stepIdx":1002}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("marks a pre-tool hook read after the transcript backgrounded its call", () =>
+    runAgyBackgroundScenario("agy-background-late-pre-tool", (io) =>
+      Effect.gen(function* () {
+        io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
+        const toolCall = `"toolCall":{"name":"run_command","args":${args}}`;
+        io.hooks(`pre-tool	{"stepIdx":996,${toolCall}}`, 'stop	{"stepIdx":998}');
+        yield* Effect.sleep("200 millis");
+        expect(io.counts.teardowns).toBe(0);
+
+        io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        // The post-tool reports the background start without a task id.
+        io.hooks(
+          `post-tool	{"stepIdx":996,${toolCall},"toolOutput":"Command sent to the background"}`,
+          'stop	{"stepIdx":1000}',
+        );
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("ignores an anonymous late post-tool start when the pre-tool hook was lost", () =>
+    runAgyBackgroundScenario("agy-background-anonymous-late-post-tool", (io) =>
+      Effect.gen(function* () {
+        io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
+        io.hooks('stop	{"stepIdx":998}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        yield* Effect.sleep("200 millis");
+        expect(io.counts.teardowns).toBe(0);
+
+        io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
+        io.hooks(
+          `post-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${args}},"toolOutput":"Command sent to the background"}`,
+          'stop	{"stepIdx":1000}',
+        );
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("reconciles an anonymous post-tool start batched before the transcript step", () =>
+    runAgyBackgroundScenario("agy-background-batched-anonymous", (io) =>
+      Effect.gen(function* () {
+        const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
+        const toolCall = `"toolCall":{"name":"run_command","args":${args}}`;
+        // The command finished before the next poll: one hook batch holds the
+        // pre-tool, an id-less post-tool and the Stop, and the transcript already
+        // holds the background step, the wait message and the completion.
+        io.hooks(
+          `pre-tool	{"stepIdx":996,${toolCall}}`,
+          `post-tool	{"stepIdx":996,${toolCall},"toolOutput":"Command sent to the background"}`,
+          'stop	{"stepIdx":998}',
+        );
+        io.transcript(
+          agyRunningStep(997),
+          agyText(998, "Dumping native overlay hierarchy."),
+          agyCompletionStep(999),
+          agyText(1000, "Overlay dumped."),
+        );
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        io.hooks('stop	{"stepIdx":1000}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("marks the pending call named by the task description when a step issued several", () =>
+    runAgyBackgroundScenario("agy-background-two-calls-one-step", (io) =>
+      Effect.gen(function* () {
+        const quick = JSON.stringify({ CommandLine: '"adb devices"', WaitMsBeforeAsync: "5000" });
+        const slow = JSON.stringify({ CommandLine: `"${agyCommand}"`, WaitMsBeforeAsync: "5000" });
+        io.hooks(
+          `pre-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${quick}}}`,
+          `pre-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${slow}}}`,
+        );
+        io.transcript(agyRunningStep(997), agyText(998, "Dumping native overlay hierarchy."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        // The backgrounded call reports first, out of issue order.
+        io.hooks(
+          `post-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${slow}},"toolOutput":"Command sent to the background"}`,
+          `post-tool	{"stepIdx":996,"toolCall":{"name":"run_command","args":${quick}},"toolOutput":"The command exited with code 0."}`,
+          'stop	{"stepIdx":998}',
+        );
+        yield* Effect.sleep("200 millis");
+        expect(io.counts.teardowns).toBe(0);
+
+        io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        io.hooks('stop	{"stepIdx":1000}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("keeps the transcript marker for the backgrounded call when hooks arrive late", () =>
+    runAgyBackgroundScenario("agy-background-late-hooks-two-calls", (io) =>
+      Effect.gen(function* () {
+        const quickArgs = { CommandLine: '"adb devices"', WaitMsBeforeAsync: "5000" };
+        const slowArgs = { CommandLine: `"${agyCommand}"`, WaitMsBeforeAsync: "5000" };
+        // The transcript surfaces both calls before any hook is read, so the
+        // late pre-tool hooks open no pending lifecycle.
+        io.transcript(
+          {
+            step_index: 996,
+            type: "PLANNER_RESPONSE",
+            tool_calls: [
+              { name: "run_command", args: quickArgs },
+              { name: "run_command", args: slowArgs },
+            ],
+          },
+          agyRunningStep(997),
+          agyText(998, "Dumping native overlay hierarchy."),
+        );
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        const quick = JSON.stringify(quickArgs);
+        const slow = JSON.stringify(slowArgs);
+        io.hooks(
+          `pre-tool\t{"stepIdx":996,"toolCall":{"name":"run_command","args":${quick}}}`,
+          `pre-tool\t{"stepIdx":996,"toolCall":{"name":"run_command","args":${slow}}}`,
+          `post-tool\t{"stepIdx":996,"toolCall":{"name":"run_command","args":${quick}},"toolOutput":"The command exited with code 0."}`,
+          `post-tool\t{"stepIdx":996,"toolCall":{"name":"run_command","args":${slow}},"toolOutput":"Command sent to the background"}`,
+          'stop\t{"stepIdx":998}',
+        );
+        yield* Effect.sleep("200 millis");
+        expect(io.counts.teardowns).toBe(0);
+
+        io.transcript(agyCompletionStep(999), agyText(1000, "Overlay dumped."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        io.hooks('stop\t{"stepIdx":1000}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it.each([
+    { preHooks: "before", foregroundFirst: false },
+    { preHooks: "before", foregroundFirst: true },
+    { preHooks: "after", foregroundFirst: false },
+    { preHooks: "after", foregroundFirst: true },
+    { preHooks: "after-no-planner", foregroundFirst: false },
+    { preHooks: "after-no-planner", foregroundFirst: true },
+    { preHooks: "split", foregroundFirst: false },
+    { preHooks: "split", foregroundFirst: true },
+  ])(
+    "reconciles a background start without a description ($preHooks pre-hooks, foreground first: $foregroundFirst)",
+    ({ preHooks, foregroundFirst }) =>
+      runAgyBackgroundScenario(`no-description-${preHooks}-${foregroundFirst}`, (io) =>
+        Effect.gen(function* () {
+          const calls = [
+            { name: "run_command", args: { CommandLine: "echo foreground" } },
+            { name: "run_command", args: { CommandLine: agyCommand } },
+          ];
+          const pre = calls.map(
+            (toolCall) => `pre-tool\t${JSON.stringify({ stepIdx: 996, toolCall })}`,
+          );
+          if (preHooks === "before") io.hooks(...pre);
+          if (preHooks === "split") io.hooks(pre[0]!);
+          io.transcript(
+            ...(preHooks === "after-no-planner"
+              ? []
+              : [{ step_index: 996, type: "PLANNER_RESPONSE", tool_calls: calls }]),
+            {
+              ...agyRunningStep(997),
+              content: `Tool is running as a background task with task id: ${agyTaskId}`,
+            },
+            agyText(998, "Waiting for the background command."),
+          );
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          if (preHooks === "after" || preHooks === "after-no-planner") io.hooks(...pre);
+          if (preHooks === "split") io.hooks(pre[1]!);
+          const post = calls.map(
+            (toolCall, index) =>
+              `post-tool\t${JSON.stringify({ stepIdx: 996, toolCall, toolOutput: index === 0 ? "The command exited with code 0." : "Command sent to the background" })}`,
+          );
+          io.hooks(...(foregroundFirst ? post : post.toReversed()), 'stop\t{"stepIdx":998}');
+          yield* Effect.sleep("200 millis");
+          expect(io.counts.teardowns).toBe(0);
+          expect(io.taskEvents).toEqual([{ type: "task.started", taskId: agyTaskId }]);
+
+          io.transcript(agyCompletionStep(999), agyText(1000, "Done."));
+          io.hooks('stop\t{"stepIdx":1000}');
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+          expect(io.taskEvents).toEqual([
+            { type: "task.started", taskId: agyTaskId },
+            { type: "task.completed", taskId: agyTaskId },
+          ]);
+        }),
+      ),
+  );
+
+  it("does not consume a description-less marker for a different named background task", () =>
+    runAgyBackgroundScenario("no-description-other-task", (io) =>
+      Effect.gen(function* () {
+        const calls = [
+          { name: "run_command", args: { CommandLine: agyCommand } },
+          { name: "run_command", args: { CommandLine: "npm run build" } },
+        ];
+        io.hooks(
+          ...calls.map((toolCall) => `pre-tool\t${JSON.stringify({ stepIdx: 996, toolCall })}`),
+        );
+        io.transcript(
+          { step_index: 996, type: "PLANNER_RESPONSE", tool_calls: calls },
+          {
+            ...agyRunningStep(997),
+            content: `Tool is running as a background task with task id: ${agyTaskId}`,
+          },
+          agyText(998, "Waiting for both commands."),
+        );
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        io.hooks(
+          `post-tool\t${JSON.stringify({ stepIdx: 996, toolCall: calls[1], toolOutput: "Task id 'task-other' is running in the background" })}`,
+          `post-tool\t${JSON.stringify({ stepIdx: 996, toolCall: calls[0], toolOutput: "Command sent to the background" })}`,
+        );
+        io.transcript(agyCompletionStep(999), agyText(1000, "The build is still running."));
+        io.hooks('stop\t{"stepIdx":1000}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        yield* Effect.sleep("150 millis");
+        expect(io.counts.teardowns).toBe(0);
+        expect(io.taskEvents).toEqual([
+          { type: "task.started", taskId: agyTaskId },
+          { type: "task.started", taskId: "task-other" },
+          { type: "task.completed", taskId: agyTaskId },
+        ]);
+        io.transcript(agyCompletionStep(1001, "task-other"), agyText(1002, "Done."));
+        io.hooks('stop\t{"stepIdx":1002}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it.each(["matched", "unmatched", "missing-description"])(
+    "derives the background task type from its planner command before hooks arrive (%s)",
+    (scenario) =>
+      runAgyBackgroundScenario(`planner-command-${scenario}`, (io) =>
+        Effect.gen(function* () {
+          const running = agyRunningStep(997);
+          io.transcript(
+            {
+              step_index: 996,
+              type: "PLANNER_RESPONSE",
+              tool_calls: [
+                { name: "search_web", args: { Query: "overlay" } },
+                { name: "write_to_file", args: { TargetFile: "/tmp/overlay.txt" } },
+                ...(scenario === "unmatched"
+                  ? []
+                  : [{ name: "run_command", args: { CommandLine: `"${agyCommand}"` } }]),
+              ],
+            },
+            scenario === "missing-description"
+              ? {
+                  ...running,
+                  content: `Tool is running as a background task with task id: ${agyTaskId}`,
+                }
+              : running,
+            agyText(998, "Waiting for the command."),
+          );
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          expect(io.taskStarts).toEqual([
+            {
+              taskType: "command_execution",
+              source: expect.objectContaining({ taskId: agyTaskId, name: "run_command" }),
+            },
+          ]);
+          io.hooks('stop\t{"stepIdx":998}');
+          yield* Effect.sleep("150 millis");
+          expect(io.counts.teardowns).toBe(0);
+          io.transcript(agyCompletionStep(999), agyText(1000, "Done."));
+          io.hooks('stop\t{"stepIdx":1000}');
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+        }),
+      ),
+  );
+
+  it("preserves the sole schedule planner call when hooks have not arrived", () =>
+    runAgyBackgroundScenario("schedule-no-hooks", (io) =>
+      Effect.gen(function* () {
+        io.transcript(
+          {
+            step_index: 996,
+            type: "PLANNER_RESPONSE",
+            tool_calls: [{ name: "schedule", args: { Prompt: "remind me" } }],
+          },
+          {
+            step_index: 997,
+            type: "GENERIC",
+            status: "RUNNING",
+            content:
+              "Tool is running as a background task with task id: session/task-997\nTask Description: remind me",
+          },
+          agyText(998, "Timer started."),
+        );
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        expect(io.taskStarts).toEqual([
+          { taskType: "dynamic_tool_call", source: expect.objectContaining({ name: "schedule" }) },
+        ]);
+        io.transcript(agyCompletionStep(999, "session/task-997"), agyText(1000, "Timer finished."));
+        io.hooks('stop\t{"stepIdx":1000}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("reconciles qualified id session/task-8 in a delayed post-tool output", () => {
+    const taskId = "session/task-8";
+    return runAgyBackgroundScenario("qualified-post-id-session-task-8", (io) =>
+      Effect.gen(function* () {
+        io.transcript(agyRunningStep(8, taskId), agyText(9, "Waiting for command."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        io.hooks(
+          `post-tool\t${JSON.stringify({ stepIdx: 7, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: `Task id '${taskId}' is running in the background` })}`,
+        );
+        io.transcript(agyCompletionStep(10, taskId), agyText(11, "Done."));
+        io.hooks('stop\t{"stepIdx":11}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        expect(io.taskEvents).toEqual([
+          { type: "task.started", taskId: taskId },
+          { type: "task.completed", taskId: taskId },
+        ]);
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    );
+  });
+
+  it("tracks a transcript background task once when post-tool reports it too", () =>
+    runAgyBackgroundScenario("agy-background-dedupe", (io) =>
+      Effect.gen(function* () {
+        io.transcript(agyRunningStep(6, "session-a/task-6"), agyText(7, "Waiting for the build."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        io.hooks(
+          `post-tool\t{"stepIdx":5,"toolCall":{"name":"run_command","args":{"CommandLine":"npm run build","WaitMsBeforeAsync":"5000"}},"toolOutput":"Task id 'task-6' is running in the background"}`,
+          'stop\t{"stepIdx":7}',
+        );
+        yield* Effect.sleep("200 millis");
+        expect(io.counts.teardowns).toBe(0);
+
+        io.transcript(agyCompletionStep(8, "session-a/task-6"), agyText(9, "Build done."));
+        io.hooks('stop\t{"stepIdx":9}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("settles a transcript background task whose completion was read first", () =>
+    runAgyBackgroundScenario("agy-background-early-completion", (io) =>
+      Effect.gen(function* () {
+        io.transcript(
+          agyCompletionStep(9, "session-b/task-8"),
+          agyRunningStep(8, "session-b/task-8"),
+          agyText(10, "Command finished."),
+        );
+        io.hooks('stop\t{"stepIdx":10}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it("retains a completion consumed before an anonymous task receives its transcript id", () =>
+    runAgyBackgroundScenario("audit-anonymous-early-completion", (io) =>
+      Effect.gen(function* () {
+        const args = JSON.stringify({ CommandLine: agyCommand, WaitMsBeforeAsync: "5000" });
+        const toolCall = `"toolCall":{"name":"run_command","args":${args}}`;
+        io.hooks(
+          `pre-tool\t{"stepIdx":7,${toolCall}}`,
+          `post-tool\t{"stepIdx":7,${toolCall},"toolOutput":"Command sent to the background"}`,
+          'stop\t{"stepIdx":10}',
+        );
+        io.transcript(
+          agyCompletionStep(9, "session-b/task-8"),
+          agyRunningStep(8, "session-b/task-8"),
+          agyText(10, "Command finished."),
+        );
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        yield* Effect.sleep("250 millis");
+        expect(io.counts.teardowns).toBe(1);
+        expect(io.taskEvents).toEqual([
+          { type: "task.started", taskId: "session-b/task-8" },
+          { type: "task.completed", taskId: "session-b/task-8" },
+        ]);
+      }),
+    ));
+
+  it.each([false, true])(
+    "keeps another anonymous task pending after early completion (reverse starts: %s)",
+    (reverseStarts) =>
+      runAgyBackgroundScenario(`early-completion-two-${reverseStarts}`, (io) =>
+        Effect.gen(function* () {
+          for (const stepIdx of [7, 17]) {
+            io.hooks(
+              `post-tool\t${JSON.stringify({ stepIdx, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: "Command sent to the background" })}`,
+            );
+          }
+          const starts = [
+            agyRunningStep(8, "session/task-8"),
+            agyRunningStep(18, "session/task-18"),
+          ];
+          io.transcript(
+            agyCompletionStep(9, "session/task-8"),
+            ...(reverseStarts ? starts.reverse() : starts),
+            agyText(20, "The other command is still running."),
+          );
+          io.hooks('stop\t{"stepIdx":20}');
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
+            { type: "task.completed", taskId: "session/task-8" },
+          ]);
+          yield* Effect.sleep("150 millis");
+          expect(io.counts.teardowns).toBe(0);
+          io.transcript(
+            agyCompletionStep(21, "session/task-18"),
+            agyText(22, "Both commands completed."),
+          );
+          io.hooks('stop\t{"stepIdx":22}');
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+          expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
+            { type: "task.completed", taskId: "session/task-8" },
+            { type: "task.completed", taskId: "session/task-18" },
+          ]);
+        }),
+      ),
+  );
+
+  it.each([false, true])(
+    "does not spend an unrelated named completion on an anonymous command (anonymous named first: %s)",
+    (anonymousNamedFirst) =>
+      runAgyBackgroundScenario(`early-completion-unrelated-${anonymousNamedFirst}`, (io) =>
+        Effect.gen(function* () {
+          io.hooks(
+            `post-tool\t${JSON.stringify({ stepIdx: 7, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: "Command sent to the background" })}`,
+          );
+          io.transcript(
+            agyCompletionStep(19, "session/task-18"),
+            ...(anonymousNamedFirst ? [agyRunningStep(8, "session/task-8")] : []),
+            agyRunningStep(18, "session/task-18"),
+            agyText(20, "The anonymous command is still running."),
+          );
+          io.hooks('stop\t{"stepIdx":20}');
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
+            { type: "task.completed", taskId: "session/task-18" },
+          ]);
+          yield* Effect.sleep("150 millis");
+          expect(io.counts.teardowns).toBe(0);
+          io.transcript(
+            ...(!anonymousNamedFirst ? [agyRunningStep(8, "session/task-8")] : []),
+            agyCompletionStep(21, "session/task-8"),
+            agyText(22, "All done."),
+          );
+          io.hooks('stop\t{"stepIdx":22}');
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+        }),
+      ),
+  );
+
+  it.each(["completed", "killed"])(
+    "keeps an anonymous command alive when an unrelated task is %s before Stop and its delayed start",
+    (terminalState) =>
+      runAgyBackgroundScenario(`unrelated-terminal-before-stop-${terminalState}`, (io) =>
+        Effect.gen(function* () {
+          io.hooks(
+            `post-tool\t${JSON.stringify({ stepIdx: 7, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: "Command sent to the background" })}`,
+          );
+          if (terminalState === "completed") {
+            io.transcript(agyCompletionStep(19, "session/task-18"));
+          } else {
+            io.hooks(
+              'post-tool\t{"stepIdx":19,"toolCall":{"name":"manage_task","args":{"Action":"kill","TaskId":"task-18"}},"toolOutput":"killed"}',
+            );
+          }
+          io.transcript(agyText(20, "The anonymous command is still running."));
+          io.hooks('stop\t{"stepIdx":20}');
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          yield* Effect.sleep("150 millis");
+          expect(io.counts.teardowns).toBe(0);
+          expect(io.taskEvents).toEqual([]);
+
+          // Identifying the unrelated terminal still must not settle task-8.
+          io.transcript(agyRunningStep(18, "session/task-18"), agyText(21, "Still waiting."));
+          io.hooks('stop\t{"stepIdx":21}');
+          yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+          yield* Effect.sleep("150 millis");
+          expect(io.counts.teardowns).toBe(0);
+
+          io.transcript(
+            agyRunningStep(8, "session/task-8"),
+            agyCompletionStep(22, "session/task-8"),
+            agyText(23, "All done."),
+          );
+          io.hooks('stop\t{"stepIdx":23}');
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+          expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
+            ...(terminalState === "completed"
+              ? [{ type: "task.completed", taskId: "session/task-18" }]
+              : []),
+            { type: "task.completed", taskId: "session/task-8" },
+          ]);
+        }),
+      ),
+  );
+
+  it.each([7, undefined])(
+    "does not credit a later anonymous command with an old completion (first hook step: %s)",
+    (stepIdx) =>
+      runAgyBackgroundScenario(`early-completion-later-${stepIdx}`, (io) =>
+        Effect.gen(function* () {
+          io.hooks(
+            `post-tool\t${JSON.stringify({ stepIdx, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: "Command sent to the background" })}`,
+          );
+          io.transcript(
+            agyCompletionStep(19, "session/task-18"),
+            agyRunningStep(8, "session/task-8"),
+            agyText(20, "First command is running."),
+          );
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          io.hooks(
+            `post-tool\t${JSON.stringify({ stepIdx: 27, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: "Command sent to the background" })}`,
+          );
+          io.transcript(
+            agyCompletionStep(21, "session/task-8"),
+            agyText(30, "New command is still running."),
+          );
+          io.hooks('stop\t{"stepIdx":30}');
+          yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+          yield* Effect.sleep("150 millis");
+          expect(io.counts.teardowns).toBe(0);
+          io.transcript(
+            agyRunningStep(18, "session/task-18"),
+            agyCompletionStep(29, "session/task-28"),
+            agyRunningStep(28, "session/task-28"),
+            agyText(31, "Everything completed."),
+          );
+          io.hooks('stop\t{"stepIdx":31}');
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+          expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
+            { type: "task.completed", taskId: "session/task-8" },
+            { type: "task.completed", taskId: "session/task-18" },
+            { type: "task.completed", taskId: "session/task-28" },
+          ]);
+        }),
+      ),
+  );
+
+  it("does not use a repeated completion to settle a second anonymous command", () =>
+    runAgyBackgroundScenario("early-completion-duplicate", (io) =>
+      Effect.gen(function* () {
+        for (const stepIdx of [7, 17]) {
+          io.hooks(
+            `post-tool\t${JSON.stringify({ stepIdx, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: "Command sent to the background" })}`,
+          );
+        }
+        io.transcript(
+          agyCompletionStep(9, "session/task-8"),
+          agyCompletionStep(10, "task-8"),
+          agyRunningStep(8, "session/task-8"),
+          agyText(20, "Second command is still running."),
+        );
+        io.hooks('stop\t{"stepIdx":20}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        expect(io.taskEvents.filter((event) => event.type === "task.completed")).toEqual([
+          { type: "task.completed", taskId: "session/task-8" },
+        ]);
+        yield* Effect.sleep("150 millis");
+        expect(io.counts.teardowns).toBe(0);
+        io.transcript(
+          agyCompletionStep(21, "session/task-18"),
+          agyRunningStep(18, "session/task-18"),
+          agyText(22, "All done."),
+        );
+        io.hooks('stop\t{"stepIdx":22}');
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    ));
+
+  it.each(["completed", "killed"])(
+    "does not reopen a %s hook task when its first transcript start arrives late",
+    (terminalState) =>
+      runAgyBackgroundScenario(`late-transcript-${terminalState}`, (io) =>
+        Effect.gen(function* () {
+          io.hooks(
+            `post-tool\t${JSON.stringify({ stepIdx: 7, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: terminalState === "completed" ? "Task id 'task-8' is running in the background" : "Command sent to the background" })}`,
+          );
+          if (terminalState === "completed") {
+            io.transcript(agyCompletionStep(9, "session/task-8"));
+          } else {
+            io.hooks(
+              'post-tool\t{"stepIdx":9,"toolCall":{"name":"manage_task","args":{"Action":"kill","TaskId":"task-8"}},"toolOutput":"killed"}',
+            );
+          }
+          io.transcript(agyText(10, "The command is no longer running."));
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          const settledEvents = [...io.taskEvents];
+          io.transcript(agyRunningStep(8, "session/task-8"), agyText(11, "Done."));
+          io.hooks('stop\t{"stepIdx":11}');
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+          expect(io.taskEvents).toEqual(settledEvents);
+        }),
+      ),
+  );
+
+  it.each([8, 18])(
+    "does not lose another anonymous command when task-%s is killed before its transcript start",
+    (killedStep) =>
+      runAgyBackgroundScenario(`killed-anonymous-pair-${killedStep}`, (io) =>
+        Effect.gen(function* () {
+          for (const stepIdx of [7, 17]) {
+            io.hooks(
+              `post-tool\t${JSON.stringify({ stepIdx, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: "Command sent to the background" })}`,
+            );
+          }
+          io.hooks(
+            `post-tool\t${JSON.stringify({ stepIdx: 19, toolCall: { name: "manage_task", args: { Action: "kill", TaskId: `task-${killedStep}` } }, toolOutput: "killed" })}`,
+          );
+          io.transcript(
+            agyRunningStep(killedStep, `session/task-${killedStep}`),
+            agyText(20, "The other command is still running."),
+          );
+          io.hooks('stop\t{"stepIdx":20}');
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          yield* Effect.sleep("150 millis");
+          expect(io.counts.teardowns).toBe(0);
+          expect(io.taskEvents).toEqual([]);
+          const remainingStep = killedStep === 8 ? 18 : 8;
+          io.transcript(
+            agyRunningStep(remainingStep, `session/task-${remainingStep}`),
+            agyCompletionStep(21, `session/task-${remainingStep}`),
+            agyText(22, "Done."),
+          );
+          io.hooks('stop\t{"stepIdx":22}');
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+          expect(io.taskEvents).toEqual([
+            { type: "task.started", taskId: `session/task-${remainingStep}` },
+            { type: "task.completed", taskId: `session/task-${remainingStep}` },
+          ]);
+        }),
+      ),
+  );
+
+  it.each([false, true])(
+    "retains more than 32 early completions (anonymous hooks: %s)",
+    (anonymousHooks) =>
+      runAgyBackgroundScenario(`early-completion-many-${anonymousHooks}`, (io) =>
+        Effect.gen(function* () {
+          const taskCount = 33;
+          if (anonymousHooks) {
+            for (let index = 0; index < taskCount; index += 1) {
+              io.hooks(
+                `post-tool\t${JSON.stringify({ stepIdx: index * 3, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: "Command sent to the background" })}`,
+              );
+            }
+          }
+          for (let index = 0; index < taskCount; index += 1) {
+            io.transcript(agyCompletionStep(index * 3 + 2, `session/task-${index}`));
+          }
+          for (let index = 0; index < taskCount; index += 1) {
+            io.transcript(agyRunningStep(index * 3 + 1, `session/task-${index}`));
+          }
+          io.transcript(agyText(100, "All commands completed."));
+          io.hooks('stop\t{"stepIdx":100}');
+          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+          expect(io.taskEvents.filter((event) => event.type === "task.started")).toHaveLength(
+            taskCount,
+          );
+          expect(io.taskEvents.filter((event) => event.type === "task.completed")).toHaveLength(
+            taskCount,
+          );
+          yield* io.waitUntil(() => io.counts.teardowns === 1);
+        }),
+      ),
+  );
+
+  it("ignores the old stop hook after a transcript read outlives its turn", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-audit1170-stale-stop-"));
+    const transcriptFile = path.join(root, "transcript.jsonl");
+    await fs.writeFile(transcriptFile, "");
+    const children: ChildProcess[] = [];
+    const teardowns: number[] = [];
+    let eventFile: string | undefined;
+    let blocked = false;
+    let started!: () => void;
+    let release!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const readRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spawnProcess = ((
+      _command: string,
+      _args: readonly string[],
+      options: { readonly env?: NodeJS.ProcessEnv },
+    ) => {
+      eventFile = options.env?.SYNARA_ANTIGRAVITY_EVENTS;
+      const child = new EventEmitter() as ChildProcess;
+      Object.assign(child, {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        kill: () => true,
+      });
+      children.push(child);
+      return child;
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    const readCompleteLines: NonNullable<
+      AntigravityAdapterDependencies["readCompleteLines"]
+    > = async (file, offset) => {
+      const batch = await readCompleteAntigravityLines(file, offset);
+      if (file === transcriptFile && !blocked) {
+        blocked = true;
+        started();
+        await readRelease;
+      }
+      return batch;
+    };
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const events = yield* adapter.streamEvents.pipe(Stream.runDrain, Effect.forkChild);
+          const threadId = ThreadId.makeUnsafe("audit-stale-stop");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
+          fsSync.appendFileSync(
+            eventFile!,
+            `pre-invocation\t${JSON.stringify({ transcriptPath: transcriptFile })}\nstop\t{"stepIdx":10}\n`,
+          );
+          yield* Effect.promise(() => readStarted).pipe(Effect.timeout("2 seconds"));
+          yield* adapter.interruptTurn(threadId);
+          expect(teardowns).toEqual([0]);
+          yield* adapter.sendTurn({ threadId, input: "second", attachments: [] });
+          release();
+          yield* Effect.sleep("200 millis");
+          expect(teardowns).toEqual([0]);
+          yield* adapter.stopSession(threadId);
+          yield* Fiber.interrupt(events);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              readCompleteLines,
+              teardownProcessTree: async (child) => {
+                teardowns.push(children.findIndex((candidate) => candidate === child));
+                return completeProcessTeardown();
+              },
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "audit-stale-stop-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      release();
+      for (const child of children) child.emit("close", 0, null);
       await fs.rm(root, { recursive: true, force: true });
     }
   });

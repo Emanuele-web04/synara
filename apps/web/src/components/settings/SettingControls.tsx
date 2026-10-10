@@ -10,7 +10,7 @@ import { Button } from "~/components/ui/button";
 import { Select, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useRadioGroupKeyboardNav } from "~/hooks/useRadioGroupKeyboardNav";
-import { Undo2Icon } from "~/lib/icons";
+import { ResetIcon } from "~/lib/icons";
 import { SETTINGS_CONTROL_RADIUS_CLASS_NAME } from "~/settingsPanelStyles";
 import { SettingsSelectPopup } from "./SettingsPanelPrimitives";
 
@@ -40,7 +40,7 @@ export function SettingResetButton({ label, onClick }: { label: string; onClick:
               onClick();
             }}
           >
-            <Undo2Icon className="size-3" />
+            <ResetIcon className="size-3" />
           </Button>
         }
       />
@@ -51,13 +51,15 @@ export function SettingResetButton({ label, onClick }: { label: string; onClick:
 
 export function SettingsSelectControl({
   value,
+  disabled,
   onValueChange,
   ariaLabel,
   triggerClassName: triggerClassNameProp,
   valueContent,
   children,
 }: {
-  value: string;
+  value: string | null;
+  disabled?: boolean;
   onValueChange: (value: string) => void;
   ariaLabel: string;
   triggerClassName?: string;
@@ -68,6 +70,7 @@ export function SettingsSelectControl({
   return (
     <Select
       value={value}
+      disabled={disabled}
       onValueChange={(next) => {
         if (next !== null) onValueChange(next);
       }}

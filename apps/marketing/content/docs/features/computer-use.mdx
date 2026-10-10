@@ -1,0 +1,50 @@
+---
+title: Computer Use beta
+description: Let Synara operate Mac apps and browsers, with guided setup, task approval, a window preview and interruption controls.
+---
+
+Computer Use is **in beta and available on macOS only in Synara 0.9.0**. **Linux is coming soon.** This platform limit applies to Computer Use; Synara itself still has Linux and Windows desktop releases.
+
+## Set up your Mac
+
+Install and open the intended Synara app from Applications. In Settings, open Computer control and choose **Set up**. The shared guide checks these macOS permissions in order:
+
+- **Accessibility** lets Synara inspect controls and deliver native input.
+- **Input Monitoring** enables physical Escape and human-takeover detection during Computer work.
+- **Screen Recording** supplies screenshots and preview frames.
+
+Enable the exact app copy shown by the guide. Where macOS accepts it, drag the app chip into the permission list. Synara checks the actual grant; seeing an entry or dropping an icon does not prove access. Follow a macOS relaunch request if one appears.
+
+If macOS resolves another copy, quit the other copies and reopen the installed app. A switch left enabled for an older build can still represent a stale grant: follow the setup guide's recovery instructions for the current copy. Setup does not send a pending task automatically.
+
+## Ask for one task
+
+Send a prompt such as:
+
+```text
+/computer-use open Calculator and calculate 123 × 45
+```
+
+The command enables Computer for that request. To include Computer on ordinary turns, separately enable **Computer control** in Settings. Quoted commands, attached files and an app name alone do not enable it. If setup is missing, the prompt stays in the composer; send it after setup completes.
+
+Approve the task when your approval mode asks. System grants are not task authorization. Clipboard reads retain a separate approval rule, and consequential actions can still require review.
+
+## Background work and browsers
+
+The agent works in the background by default. Ask explicitly if you want an app brought forward, for example “Show me the browser.” Full access alone does not authorize that change. Background input can still affect focus, and some apps activate themselves when launched.
+
+Computer can inspect and interact with supported native controls, type, click, scroll, select text and use menus or shortcuts. App support varies during beta; a dispatched action is not proof that the requested result happened. Ask the agent to verify the resulting state.
+
+Computer browser automation can launch a separate headless Chromium profile. That profile does not inherit your personal cookies merely because it uses the same browser executable. Synara's [embedded browser and saved sessions](/docs/features/browser-sessions) are a separate surface.
+
+## Follow and interrupt
+
+Human-readable action cards and a draggable preview show the addressed app window or browser tab. Expand the preview for a larger view. It retains the last frame through brief gaps and can fall back to still images. It does not silently switch to a whole-desktop capture.
+
+**Stop in chat ends the task. Closing the preview only hides it.** Physical **Escape interrupts the current action** when Input Monitoring is granted; it does not disable future tasks or require a re-arm button. After an interruption, the agent needs fresh observation before more input.
+
+Preview frames are local feedback, not an automatic screenshot stream to the model. Explicit screenshot tool results are separate. AppSnap only attaches a window image and does not grant Computer control; see [Composer](/docs/features/composer).
+
+## Beta limits
+
+Native apps, custom controls, multiple displays, other Spaces and permission transitions can behave differently. Do not assume every provider/model/app combination has been qualified on your build. Keep the intended target clear and check the result before continuing a consequential workflow. Linux implementation experiments do not mean Linux Computer Use is supported in this release.

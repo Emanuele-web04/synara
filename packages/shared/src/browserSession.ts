@@ -18,13 +18,6 @@ export const BROWSER_AUTOMATION_VIEWPORT_HEIGHT = 800;
 /** Matches the environment overlay's `p-3` edge gutter. */
 export const BROWSER_FLOATING_PANEL_MARGIN_PX = 12;
 
-export function resolveBrowserFloatingZoomFactor(physicalViewportWidth: number): number {
-  if (!Number.isFinite(physicalViewportWidth) || physicalViewportWidth <= 0) {
-    return 1;
-  }
-  return Math.min(1, physicalViewportWidth / BROWSER_AUTOMATION_VIEWPORT_WIDTH);
-}
-
 export interface FloatingBrowserGuestLayout {
   width: number;
   height: number;
@@ -69,7 +62,7 @@ const OAUTH_HOST_PATTERNS: readonly RegExp[] = [
   /(^|\.)okta\.com$/i,
 ];
 
-export function isLikelyOAuthHost(host: string): boolean {
+function isLikelyOAuthHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
   if (normalized.length === 0) {
     return false;
@@ -256,7 +249,7 @@ export function deriveChromeUserAgent(
   return userAgent.replace(/\s{2,}/g, " ").trim();
 }
 
-export function chromeMajorVersionFromUserAgent(userAgent: string): string | null {
+function chromeMajorVersionFromUserAgent(userAgent: string): string | null {
   const match = /Chrome\/(\d+)/i.exec(userAgent);
   return match?.[1] ?? null;
 }

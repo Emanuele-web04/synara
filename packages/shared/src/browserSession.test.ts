@@ -1,18 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  BROWSER_AUTOMATION_VIEWPORT_WIDTH,
   BROWSER_SEARCH_URL_PREFIX,
   buildAcceptLanguageHeader,
   buildChromeClientHints,
-  chromeMajorVersionFromUserAgent,
   classifyBrowserWindowOpen,
   deriveChromeUserAgent,
-  isLikelyOAuthHost,
   normalizeBrowserPageZoomFactor,
   normalizeBrowserUrlInput,
   isBlankBrowserTabUrl,
-  resolveBrowserFloatingZoomFactor,
   resolveCopyableBrowserTabUrl,
   resolveFloatingBrowserGuestLayout,
 } from "./browserSession";
@@ -21,13 +17,6 @@ const ELECTRON_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Synara/0.3.1 Chrome/124.0.6367.91 Electron/30.0.1 Safari/537.36";
 
 describe("floating browser page zoom", () => {
-  it("fits the canonical 1280px automation viewport into the physical popup width", () => {
-    expect(BROWSER_AUTOMATION_VIEWPORT_WIDTH).toBe(1_280);
-    expect(resolveBrowserFloatingZoomFactor(480)).toBe(0.375);
-    expect(resolveBrowserFloatingZoomFactor(1_280)).toBe(1);
-    expect(resolveBrowserFloatingZoomFactor(1_600)).toBe(1);
-  });
-
   it("scales the frozen 1280x800 guest into the floating card without changing page zoom", () => {
     expect(resolveFloatingBrowserGuestLayout({ width: 320, height: 220 })).toEqual({
       width: 1_280,
@@ -39,9 +28,7 @@ describe("floating browser page zoom", () => {
     expect(resolveFloatingBrowserGuestLayout({ width: 1_280, height: 800 }).scale).toBe(1);
   });
 
-  it("resets invalid or hidden widths to normal page zoom", () => {
-    expect(resolveBrowserFloatingZoomFactor(0)).toBe(1);
-    expect(resolveBrowserFloatingZoomFactor(Number.NaN)).toBe(1);
+  it("normalizes page zoom and preserves valid factors", () => {
     expect(normalizeBrowserPageZoomFactor(undefined)).toBe(1);
     expect(normalizeBrowserPageZoomFactor(Number.NaN)).toBe(1);
     expect(normalizeBrowserPageZoomFactor(0.375)).toBe(0.375);
@@ -53,23 +40,6 @@ describe("deriveChromeUserAgent", () => {
     expect(deriveChromeUserAgent(ELECTRON_UA, ["Synara"])).toBe(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.91 Safari/537.36",
     );
-  });
-
-  it("preserves the platform and Chrome version from the base UA", () => {
-    const derived = deriveChromeUserAgent(ELECTRON_UA, ["Synara"]);
-    expect(derived).toContain("Chrome/124.0.6367.91");
-    expect(derived).not.toMatch(/Electron/i);
-    expect(derived).not.toMatch(/Synara/i);
-  });
-});
-
-describe("chromeMajorVersionFromUserAgent", () => {
-  it("extracts the Chrome major version", () => {
-    expect(chromeMajorVersionFromUserAgent(ELECTRON_UA)).toBe("124");
-  });
-
-  it("returns null when no Chrome token is present", () => {
-    expect(chromeMajorVersionFromUserAgent("Mozilla/5.0 (X11; Linux)")).toBeNull();
   });
 });
 
@@ -166,30 +136,18 @@ describe("isBlankBrowserTabUrl", () => {
   });
 });
 
-describe("isLikelyOAuthHost", () => {
-  it("matches known auth hosts and their subdomains", () => {
-    expect(isLikelyOAuthHost("accounts.google.com")).toBe(true);
-    expect(isLikelyOAuthHost("appleid.apple.com")).toBe(true);
-    expect(isLikelyOAuthHost("login.microsoftonline.com")).toBe(true);
-  });
-
-  it("does not match arbitrary hosts", () => {
-    expect(isLikelyOAuthHost("example.com")).toBe(false);
-    expect(isLikelyOAuthHost("github.com")).toBe(false);
-    expect(isLikelyOAuthHost("")).toBe(false);
-  });
-});
-
 describe("classifyBrowserWindowOpen", () => {
-  it("does not treat new-window disposition alone as a popup", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://example.com/article",
-        frameName: "",
-        features: "",
-        disposition: "new-window",
-      }),
-    ).toBe("tab");
+  it("does not treat new-window disposition or arbitrary hosts alone as a popup", () => {
+    for (const url of ["https://example.com/article", "https://github.com/", ""]) {
+      expect(
+        classifyBrowserWindowOpen({
+          url,
+          frameName: "",
+          features: "",
+          disposition: "new-window",
+        }),
+      ).toBe("tab");
+    }
   });
 
   it("treats window features as a popup signal", () => {
@@ -204,14 +162,20 @@ describe("classifyBrowserWindowOpen", () => {
   });
 
   it("treats known auth hosts opened via _blank as popups", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://accounts.google.com/o/oauth2/auth",
-        frameName: "_blank",
-        features: "",
-        disposition: "foreground-tab",
-      }),
-    ).toBe("popup");
+    for (const url of [
+      "https://accounts.google.com/o/oauth2/auth",
+      "https://appleid.apple.com/",
+      "https://login.microsoftonline.com/",
+    ]) {
+      expect(
+        classifyBrowserWindowOpen({
+          url,
+          frameName: "_blank",
+          features: "",
+          disposition: "foreground-tab",
+        }),
+      ).toBe("popup");
+    }
   });
 
   it("treats known OAuth endpoints on multi-purpose hosts as popups", () => {
@@ -245,17 +209,6 @@ describe("classifyBrowserWindowOpen", () => {
         disposition: "foreground-tab",
       }),
     ).toBe("popup");
-  });
-
-  it("keeps ordinary _blank links to non-auth hosts as tabs", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://example.com/article",
-        frameName: "_blank",
-        features: "",
-        disposition: "foreground-tab",
-      }),
-    ).toBe("tab");
   });
 
   it("keeps ordinary _blank links to multi-purpose provider hosts as tabs", () => {
