@@ -8,20 +8,25 @@
 // Why: Shared by both the pinned and the nested thread-row tooltips so the two
 //      surfaces cannot drift apart.
 
-import type { OrchestrationThreadPullRequest, ThreadId } from "@synara/contracts";
+import type { ModelSelection, OrchestrationThreadPullRequest, ThreadId } from "@synara/contracts";
+import { useQuery } from "@tanstack/react-query";
 import type { MouseEvent, ReactNode } from "react";
 
 import { useThreadDraftPreviewText } from "~/composerDraftStore";
-import { FastModeIcon, GitBranchIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
+import { useThreadFastModeNotice } from "~/hooks/useThreadFastModeNotice";
+import { GitBranchIcon, WorktreeIcon, FolderIcon } from "~/lib/icons";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
-import type { ThreadModelSummary } from "~/lib/threadModelSummary";
+import type { providerModelsQueryOptions } from "~/lib/providerDiscoveryReactQuery";
+import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import { cn } from "~/lib/utils";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon } from "./ProviderIcon";
+import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import {
   PR_STATE_PRESENTATION_ICONS,
   resolvePrStatePresentation,
 } from "./pullRequest/pullRequestStatePresentation";
+import { FastModeBadgeIcon } from "./chat/FastModeBadgeIcon";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarDraftGlyph, SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import {
@@ -47,7 +52,9 @@ export type ThreadHoverCardContentProps = {
   pullRequest: OrchestrationThreadPullRequest | null;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, prUrl: string) => void;
   /** Provider/model/effort currently selected for this chat. */
-  model: ThreadModelSummary | null;
+  model: ModelSelection | null;
+  /** Observe the composer's account/workspace catalog without starting discovery on hover. */
+  modelCatalogQueryOptions: ReturnType<typeof providerModelsQueryOptions>;
   /** Current live/actionable state, shown as text so compact row glyphs stay discoverable. */
   status: ThreadStatusPill | null;
 };
@@ -66,13 +73,42 @@ function MetaRow({ icon, children }: { icon: ReactNode; children: string }) {
 
 // Model row: provider glyph, model name, then the reasoning/effort label so the
 // line reads like the composer's model trigger.
-function ModelRow({ model }: { model: ThreadModelSummary }) {
+function ModelRow({
+  threadId,
+  modelSelection,
+  catalogQueryOptions,
+}: {
+  threadId: ThreadId;
+  modelSelection: ModelSelection;
+  catalogQueryOptions: ThreadHoverCardContentProps["modelCatalogQueryOptions"];
+}) {
+  const catalog = useQuery({
+    ...catalogQueryOptions,
+    enabled: false,
+    // A hover must not carry another account/workspace's catalog across a key change.
+    placeholderData: () => undefined,
+  });
+  const model = resolveThreadModelSummary(
+    modelSelection,
+    resolveRuntimeModelDescriptor({
+      provider: modelSelection.provider,
+      model: modelSelection.model,
+      runtimeModels: catalog.data?.models,
+    }),
+  );
+  const fastModeNotice = useThreadFastModeNotice(
+    modelSelection.provider === "claudeAgent" ? threadId : null,
+  );
+  if (!model) return null;
   return (
     <span className={META_ROW_CLASS_NAME}>
       <ProviderIcon provider={model.provider} className={META_ICON_CLASS_NAME} />
       <span className="min-w-0 truncate">{model.modelLabel}</span>
       {model.fastMode ? (
-        <FastModeIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground/75" />
+        <FastModeBadgeIcon
+          notice={fastModeNotice}
+          className="size-3.5 shrink-0 text-muted-foreground/75"
+        />
       ) : null}
       {model.statusLabel ? (
         <span className="shrink-0 text-muted-foreground/70">{model.statusLabel}</span>
@@ -94,6 +130,7 @@ export function ThreadHoverCardContent({
   pullRequest,
   onOpenPullRequest,
   model,
+  modelCatalogQueryOptions,
   status,
 }: ThreadHoverCardContentProps) {
   const hasMeta =
@@ -171,7 +208,13 @@ export function ThreadHoverCardContent({
             </MetaRow>
           ) : null}
           {pullRequest ? <PullRequestRow pr={pullRequest} onOpen={onOpenPullRequest} /> : null}
-          {model ? <ModelRow model={model} /> : null}
+          {model ? (
+            <ModelRow
+              threadId={threadId}
+              modelSelection={model}
+              catalogQueryOptions={modelCatalogQueryOptions}
+            />
+          ) : null}
         </div>
       ) : null}
       <DraftPreviewRow threadId={threadId} />

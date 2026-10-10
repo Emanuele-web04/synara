@@ -20,7 +20,8 @@ const resumeReplayLimitExceeded = new ResumeReplayLimitExceeded();
 
 export type SnapshotLiveStreamItem<Snapshot> =
   | { readonly kind: "snapshot"; readonly snapshot: Snapshot }
-  | { readonly kind: "event"; readonly event: OrchestrationEvent };
+  | { readonly kind: "event"; readonly event: OrchestrationEvent }
+  | { readonly kind: "replay"; readonly events: ReadonlyArray<OrchestrationEvent> };
 
 export interface ResnapshotReport {
   readonly snapshotSequence: number;
@@ -88,7 +89,9 @@ export function makeResnapshotEscalationTracker(): {
  * non-negative and fits 128 events and one MiB, the snapshot is skipped entirely
  * and only the gap is replayed. A negative gap (client cursor ahead of the
  * server head — restored backup or reset database) or an overflowing gap is
- * never trusted: both fall back to the full snapshot path.
+ * never trusted: both fall back to the full snapshot path. With `batchReplay`
+ * the resume gap arrives as a single `replay` item (omitted when empty) so the
+ * client can apply the whole catch-up at once; the snapshot path is unchanged.
  */
 export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
   readonly subscribeLive: Effect.Effect<Stream.Stream<OrchestrationEvent, E>, never, Scope.Scope>;
@@ -104,6 +107,7 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
     throughSequenceInclusive: number,
   ) => Stream.Stream<OrchestrationEvent, E>;
   readonly resumeFromSequence?: number | undefined;
+  readonly batchReplay?: boolean | undefined;
   /**
    * Guards the resume shortcut against a subject that no longer exists. A hard
    * purge removes a thread's rows while unrelated events keep the journal head
@@ -229,10 +233,19 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
             input.resnapshotEscalation?.tracker.recordHealthyStart(
               input.resnapshotEscalation.streamKey,
             );
-            const replay = Stream.fromIterable(resumeRows).pipe(
-              Stream.map((event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event })),
-              Stream.ensuring(Effect.sync(releaseResumeRows)),
-            );
+            // With `batchReplay` the bounded gap goes out as one item so the
+            // client can apply the whole catch-up in a single store update.
+            const replayItems: Stream.Stream<SnapshotLiveStreamItem<Snapshot>> =
+              input.batchReplay === true
+                ? resumeRows.length === 0
+                  ? Stream.empty
+                  : Stream.succeed({ kind: "replay", events: [...resumeRows] })
+                : Stream.fromIterable(resumeRows).pipe(
+                    Stream.map(
+                      (event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event }),
+                    ),
+                  );
+            const replay = replayItems.pipe(Stream.ensuring(Effect.sync(releaseResumeRows)));
             return Stream.concat(finite(replay), liveAfterFence);
           }
         }

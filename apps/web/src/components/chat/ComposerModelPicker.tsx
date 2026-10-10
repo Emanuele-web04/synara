@@ -72,6 +72,7 @@ import {
   resolveComposerTraitStatusLabel,
   showsComposerFastModeBadge,
 } from "./composerTraits";
+import type { FastModeNotice } from "~/lib/fastModeState";
 import { MENU_NAVIGATION_KEYS } from "./PickerPanelShell";
 import {
   PICKER_PANEL_GROUP_LABEL_CLASS_NAME,
@@ -120,6 +121,8 @@ type ComposerModelPickerProps = {
   hideModelLabel?: boolean;
   hideStatusLabel?: boolean;
   contextWindowLabel?: string | null;
+  // Set when the thread's provider reported that the requested fast mode is not serving.
+  fastModeNotice?: FastModeNotice | null;
   disabled?: boolean;
   // "menu" (default) lists effort as a footer row; "slider" renders the ladder as a
   // stepped slider card in the footer instead.
@@ -539,6 +542,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
         contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}
         showsFastBadge={showsComposerFastModeBadge(currentTraitSelection)}
+        fastModeNotice={activeProvider === "claudeAgent" ? props.fastModeNotice : null}
         hideModelLabel={props.hideModelLabel}
         hideStatusLabel={props.hideStatusLabel}
         disabled={props.disabled}
@@ -687,6 +691,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
             effortControl={effortControl}
+            fastModeNotice={props.provider === "claudeAgent" ? props.fastModeNotice : null}
           />
         </div>
       </ComposerPickerMenuPopup>

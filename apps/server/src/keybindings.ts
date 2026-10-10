@@ -142,6 +142,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
   { key: "cmd+l", command: "composer.focus.toggle", when: "!terminalFocus" },
   { key: "mod+f", command: "chat.find", when: "!terminalFocus" },
+  // Workspace search palette: file names and snippet content. Keep these off terminal focus
+  // so Ctrl+P/Ctrl+Shift+F remain available to the shell on Windows/Linux.
+  { key: "mod+p", command: "search.files", when: "!terminalFocus" },
+  { key: "mod+shift+f", command: "search.content", when: "!terminalFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   // Cycle models within the active provider (favorites first, then remaining list).
   { key: "alt+]", command: "model.next", when: "!terminalFocus" },
@@ -898,7 +902,8 @@ export interface KeybindingsShape {
    * Start the keybindings runtime and attach file watching.
    *
    * Safe to call multiple times. The first successful call establishes the
-   * runtime; later calls await the same startup.
+   * runtime; later calls await the same startup. A failed attempt can be
+   * retried after its underlying filesystem problem is repaired.
    */
   readonly start: Effect.Effect<void, KeybindingsConfigError>;
 
@@ -968,10 +973,12 @@ const makeKeybindings = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const upsertSemaphore = yield* Semaphore.make(1);
+  const startupSemaphore = yield* Semaphore.make(1);
   const resolvedConfigCacheKey = "resolved" as const;
   const changesPubSub = yield* PubSub.unbounded<KeybindingsChangeEvent>();
   const startedRef = yield* Ref.make(false);
-  const startedDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
+  const initialStartedDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
+  const startedDeferredRef = yield* Ref.make(initialStartedDeferred);
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
   const emitChange = (configState: KeybindingsConfigState) =>
@@ -1237,58 +1244,80 @@ const makeKeybindings = Effect.gen(function* () {
     }),
   );
 
-  const startWatcher = Effect.gen(function* () {
-    const keybindingsConfigDir = path.dirname(keybindingsConfigPath);
-    const keybindingsConfigFile = path.basename(keybindingsConfigPath);
-    const keybindingsConfigPathResolved = path.resolve(keybindingsConfigPath);
+  const startWatcher = (attemptScope: Scope.Scope) =>
+    Effect.gen(function* () {
+      const keybindingsConfigDir = path.dirname(keybindingsConfigPath);
+      const keybindingsConfigFile = path.basename(keybindingsConfigPath);
+      const keybindingsConfigPathResolved = path.resolve(keybindingsConfigPath);
 
-    yield* fs.makeDirectory(keybindingsConfigDir, { recursive: true }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new KeybindingsConfigError({
-            configPath: keybindingsConfigPath,
-            detail: "failed to prepare keybindings config directory",
-            cause,
-          }),
-      ),
-    );
+      yield* fs.makeDirectory(keybindingsConfigDir, { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new KeybindingsConfigError({
+              configPath: keybindingsConfigPath,
+              detail: "failed to prepare keybindings config directory",
+              cause,
+            }),
+        ),
+      );
 
-    const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
+      const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
 
-    yield* Stream.runForEach(fs.watch(keybindingsConfigDir), (event) => {
-      const isTargetConfigEvent =
-        event.path === keybindingsConfigFile ||
-        event.path === keybindingsConfigPath ||
-        path.resolve(keybindingsConfigDir, event.path) === keybindingsConfigPathResolved;
-      if (!isTargetConfigEvent) {
-        return Effect.void;
-      }
-      return revalidateAndEmitSafely;
-    }).pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(watcherScope), Effect.asVoid);
-  });
-
-  const start = Effect.gen(function* () {
-    const alreadyStarted = yield* Ref.get(startedRef);
-    if (alreadyStarted) {
-      return yield* Deferred.await(startedDeferred);
-    }
-
-    yield* Ref.set(startedRef, true);
-    const startup = Effect.gen(function* () {
-      yield* startWatcher;
-      yield* syncDefaultKeybindingsOnStartup;
-      yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
-      yield* loadConfigStateFromCacheOrDisk;
+      yield* Stream.runForEach(fs.watch(keybindingsConfigDir), (event) => {
+        const isTargetConfigEvent =
+          event.path === keybindingsConfigFile ||
+          event.path === keybindingsConfigPath ||
+          path.resolve(keybindingsConfigDir, event.path) === keybindingsConfigPathResolved;
+        if (!isTargetConfigEvent) {
+          return Effect.void;
+        }
+        return revalidateAndEmitSafely;
+      }).pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(attemptScope), Effect.asVoid);
     });
 
-    const startupExit = yield* Effect.exit(startup);
-    if (startupExit._tag === "Failure") {
-      yield* Deferred.failCause(startedDeferred, startupExit.cause).pipe(Effect.orDie);
-      return yield* Effect.failCause(startupExit.cause);
-    }
+  const start = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      // Serialize admission only: callers arriving during an attempt share its
+      // result, including failure, rather than immediately starting another retry.
+      const { alreadyStarted, startedDeferred } = yield* startupSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const alreadyStarted = yield* Ref.get(startedRef);
+          const startedDeferred = yield* Ref.get(startedDeferredRef);
+          yield* Ref.set(startedRef, true);
+          return { alreadyStarted, startedDeferred };
+        }),
+      );
+      if (alreadyStarted) {
+        return yield* restore(Deferred.await(startedDeferred));
+      }
 
-    yield* Deferred.succeed(startedDeferred, undefined).pipe(Effect.orDie);
-  });
+      const attemptScope = yield* Scope.fork(watcherScope);
+      const startup = Effect.gen(function* () {
+        yield* syncDefaultKeybindingsOnStartup;
+        yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
+        yield* loadConfigStateFromCacheOrDisk;
+        yield* startWatcher(attemptScope);
+      });
+
+      const startupExit = yield* Effect.exit(restore(startup));
+      if (startupExit._tag === "Failure") {
+        // Finalization stays uninterruptible so cancellation also releases the
+        // attempt's watcher and publishes failure before installing a retry gate.
+        yield* Scope.close(attemptScope, startupExit);
+        yield* startupSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            yield* Deferred.failCause(startedDeferred, startupExit.cause);
+            const retryDeferred = yield* Deferred.make<void, KeybindingsConfigError>();
+            yield* Ref.set(startedDeferredRef, retryDeferred);
+            yield* Ref.set(startedRef, false);
+          }),
+        );
+        return yield* Effect.failCause(startupExit.cause);
+      }
+
+      yield* Deferred.succeed(startedDeferred, undefined);
+    }),
+  );
 
   const validateUpsertRule = (rule: KeybindingRule) =>
     compileResolvedKeybindingRule(rule) === null
@@ -1339,7 +1368,10 @@ const makeKeybindings = Effect.gen(function* () {
 
   return {
     start,
-    ready: Deferred.await(startedDeferred),
+    ready: Effect.gen(function* () {
+      const startedDeferred = yield* Ref.get(startedDeferredRef);
+      return yield* Deferred.await(startedDeferred);
+    }),
     syncDefaultKeybindingsOnStartup,
     loadConfigState: loadConfigStateFromCacheOrDisk,
     getSnapshot: loadConfigStateFromCacheOrDisk,

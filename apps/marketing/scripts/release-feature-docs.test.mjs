@@ -49,6 +49,19 @@ test("workspace search shortcuts and destination behavior are documented", () =>
   assert.ok(organize.includes("right-dock file pane"));
 });
 
+test("new chat actions and side chat shortcut are documented", () => {
+  const shortcuts = read("content/docs/reference/keyboard-shortcuts.mdx");
+
+  for (const shortcut of [
+    "`mod+alt+s`",
+    "`mod+alt+shift+a`",
+    "`mod+alt+shift+s`",
+    "`mod+alt+shift+u`",
+  ]) {
+    assert.ok(shortcuts.includes(shortcut), `keyboard reference is missing ${shortcut}`);
+  }
+});
+
 test("the feature map links to the durable v0.7.2 guides", () => {
   const links = extractInternalLinks(read("content/docs/features/overview.mdx"));
 

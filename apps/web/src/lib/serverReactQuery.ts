@@ -98,17 +98,59 @@ const latestProviderStatusSnapshotByQueryClient = new WeakMap<
   ProviderStatusSnapshot
 >();
 
+const configRefreshRevisionByQueryClient = new WeakMap<QueryClient, number>();
+const providerConfigHydrationByQueryClient = new WeakMap<QueryClient, Promise<ServerConfig>>();
+
 export function hasReconciledServerProviderStatuses(queryClient: QueryClient): boolean {
   return latestProviderStatusSnapshotByQueryClient.get(queryClient)?.reconciled === true;
+}
+
+function providerStatusIdentity(
+  status: Pick<ServerProviderStatus, "provider" | "driver" | "instanceId">,
+): string {
+  const driver = status.driver ?? status.provider;
+  return `${driver}:${status.instanceId ?? status.provider}`;
+}
+
+function mergeProviderStatusSnapshots(
+  previous: readonly ServerProviderStatus[] | undefined,
+  next: readonly ServerProviderStatus[],
+): readonly ServerProviderStatus[] {
+  if (!previous || previous.length === 0) {
+    return next;
+  }
+
+  const previousByIdentity = new Map(
+    previous.map((status) => [providerStatusIdentity(status), status]),
+  );
+  return next.map((status) => {
+    const prior = previousByIdentity.get(providerStatusIdentity(status));
+    if (!prior) {
+      return status;
+    }
+
+    // Provider refreshes can overlap: a slow initial Pi probe may publish its
+    // warning after the fast recovery probe has already published ready.
+    // checkedAt is stamped when each probe begins, so never let an older
+    // snapshot resurrect a stale banner/toast in the web cache.
+    const priorCheckedAt = Date.parse(prior.checkedAt);
+    const nextCheckedAt = Date.parse(status.checkedAt);
+    return Number.isFinite(priorCheckedAt) &&
+      Number.isFinite(nextCheckedAt) &&
+      nextCheckedAt < priorCheckedAt
+      ? prior
+      : status;
+  });
 }
 
 function recordProviderStatusSnapshot(
   queryClient: QueryClient,
   providers: readonly ServerProviderStatus[],
 ): ProviderStatusSnapshot {
+  const previous = latestProviderStatusSnapshotByQueryClient.get(queryClient);
   const snapshot = {
-    revision: (latestProviderStatusSnapshotByQueryClient.get(queryClient)?.revision ?? 0) + 1,
-    providers,
+    revision: (previous?.revision ?? 0) + 1,
+    providers: mergeProviderStatusSnapshots(previous?.providers, providers),
     reconciled: true,
   };
   latestProviderStatusSnapshotByQueryClient.set(queryClient, snapshot);
@@ -127,30 +169,60 @@ export async function reconcileServerProviderStatuses(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
-  recordProviderStatusSnapshot(queryClient, providers);
+  const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+  const snapshot = recordProviderStatusSnapshot(queryClient, providers);
+  const effectiveProviders = mergeProviderStatusSnapshots(
+    currentConfig?.providers,
+    snapshot.providers,
+  );
+  if (effectiveProviders !== snapshot.providers) {
+    latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+      ...snapshot,
+      providers: effectiveProviders,
+    });
+  }
 
   let applied = false;
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
     if (!current) return current;
     applied = true;
-    return { ...current, providers };
+    return {
+      ...current,
+      providers: mergeProviderStatusSnapshots(current.providers, effectiveProviders),
+    };
   });
   if (applied) return;
 
   const loadConfig =
     options?.loadConfig ??
-    (() =>
-      queryClient.fetchQuery({
-        ...serverConfigQueryOptions(),
-        staleTime: 0,
-      }));
+    (async () => {
+      const inFlight = providerConfigHydrationByQueryClient.get(queryClient);
+      if (inFlight) return inFlight;
+      // Coalesce initial stream hydration without fetchQuery's automatic cache
+      // write, which would erase a newer cache writer before reconciliation.
+      const request = ensureNativeApi().server.getConfig();
+      providerConfigHydrationByQueryClient.set(queryClient, request);
+      try {
+        return await request;
+      } finally {
+        providerConfigHydrationByQueryClient.delete(queryClient);
+      }
+    });
   const hydratedConfig = await loadConfig();
-  const latestProviders =
-    latestProviderStatusSnapshotByQueryClient.get(queryClient)?.providers ?? providers;
-  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => ({
-    ...(current ?? hydratedConfig),
-    providers: latestProviders,
-  }));
+  const latestSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient) ?? snapshot;
+  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
+    // Hydration and another cache writer may both know about a newer probe.
+    // Keep stream membership, but choose the freshest status for each instance.
+    const reconciledProviders = mergeProviderStatusSnapshots(
+      current?.providers,
+      mergeProviderStatusSnapshots(hydratedConfig.providers, latestSnapshot.providers),
+    );
+    latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+      ...latestSnapshot,
+      providers: reconciledProviders,
+    });
+    return { ...(current ?? hydratedConfig), providers: reconciledProviders };
+  });
 }
 
 /**
@@ -163,29 +235,45 @@ export async function refreshServerConfigAfterTransportOpen(
     readonly loadConfig?: () => Promise<ServerConfig>;
   },
 ): Promise<void> {
+  const configRefreshRevision = (configRefreshRevisionByQueryClient.get(queryClient) ?? 0) + 1;
+  configRefreshRevisionByQueryClient.set(queryClient, configRefreshRevision);
   const providerSnapshotAtStart = latestProviderStatusSnapshotByQueryClient.get(queryClient);
+  const configSnapshotAtStart = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
   const providerRevisionAtStart = providerSnapshotAtStart?.revision ?? 0;
   latestProviderStatusSnapshotByQueryClient.set(queryClient, {
     revision: providerRevisionAtStart,
     providers: providerSnapshotAtStart?.providers ?? [],
     reconciled: false,
   });
-  const loadConfig =
-    options?.loadConfig ??
-    (() =>
-      queryClient.fetchQuery({
-        ...serverConfigQueryOptions(),
-        staleTime: 0,
-      }));
+  // A reconnect must issue a fresh projection read. fetchQuery can share an
+  // older in-flight request and write its stale membership before we reconcile.
+  const loadConfig = options?.loadConfig ?? (() => ensureNativeApi().server.getConfig());
   const config = await loadConfig();
+  if (configRefreshRevisionByQueryClient.get(queryClient) !== configRefreshRevision) return;
   const latestProviderSnapshot = latestProviderStatusSnapshotByQueryClient.get(queryClient);
+  const streamArrivedDuringRefresh =
+    latestProviderSnapshot?.reconciled === true &&
+    latestProviderSnapshot.revision > providerRevisionAtStart;
+  const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+  const providers = mergeProviderStatusSnapshots(
+    configSnapshotAtStart?.providers,
+    mergeProviderStatusSnapshots(
+      currentConfig?.providers,
+      streamArrivedDuringRefresh
+        ? mergeProviderStatusSnapshots(config.providers, latestProviderSnapshot.providers)
+        : mergeProviderStatusSnapshots(providerSnapshotAtStart?.providers, config.providers),
+    ),
+  );
+  // A configuration refresh can be newer than the last stream event. Retain
+  // its statuses too, without pretending a fresh stream snapshot has arrived.
+  latestProviderStatusSnapshotByQueryClient.set(queryClient, {
+    revision: latestProviderSnapshot?.revision ?? providerRevisionAtStart,
+    providers,
+    reconciled: streamArrivedDuringRefresh,
+  });
   queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), {
     ...config,
-    providers:
-      latestProviderSnapshot?.reconciled === true &&
-      latestProviderSnapshot.revision > providerRevisionAtStart
-        ? latestProviderSnapshot.providers
-        : config.providers,
+    providers,
   });
 }
 

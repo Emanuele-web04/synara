@@ -1365,6 +1365,41 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.some((row) => row.kind === "proposed-plan")).toBe(true);
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
   });
+
+  it("keeps an answered question visible while the rest of the turn collapses", () => {
+    const answered: TimelineEntry = {
+      id: "entry-answered",
+      kind: "work",
+      createdAt: "2026-01-01T00:00:03Z",
+      entry: {
+        id: "answered",
+        createdAt: "2026-01-01T00:00:03Z",
+        label: "User input submitted",
+        tone: "info",
+        activityKind: "user-input.resolved",
+        userInputExchange: [
+          { id: "q", header: "Color", question: "Which color?", options: [], answer: "Amber" },
+        ],
+      },
+    };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        answered,
+        workEntry("w2", "2026-01-01T00:00:04Z", "tool 2"),
+        assistantEntry("a1", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "final",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "user-input", "message"]);
+    expect(collapsedSignature(messageRow(rows, "a1")!)).toEqual(["work:w1", "work:w2"]);
+  });
   const workerMonitorEntry = (id: string, createdAt: string, label: string): TimelineEntry => ({
     id: `entry-${id}`,
     kind: "work",

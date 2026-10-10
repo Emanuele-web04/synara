@@ -6,6 +6,7 @@ import {
   computeFocusedIndex,
   computeGaussianWeights,
   computeTrailGeometry,
+  computeTrailWindow,
   createActiveTrailStore,
   deriveMessageTrailItems,
   resolveActiveTrailMessageId,
@@ -235,6 +236,27 @@ describe("computeTrailGeometry", () => {
     expect(geom.centerYs[count - 1]).toBe(padding + (count - 1) * spacing);
     expect(geom.contentHeight).toBe(2 * padding + (count - 1) * spacing);
     expect(allFinite(geom.centerYs)).toBe(true);
+  });
+});
+
+describe("computeTrailWindow", () => {
+  it("bounds frame work to the viewport with overscan across long histories", () => {
+    const geometry = computeTrailGeometry({ count: 1_000 })!;
+    expect(computeTrailWindow(geometry, 5_000, 480)).toEqual({ start: 494, end: 552 });
+    expect(computeTrailWindow(geometry, 0, 480)).toEqual({ start: 0, end: 52 });
+    expect(computeTrailWindow(geometry, 9_534, 480)).toEqual({ start: 948, end: 1_000 });
+  });
+
+  it("keeps short and unmeasured rails range safe", () => {
+    expect(computeTrailWindow(null, 0, 0)).toEqual({ start: 0, end: 0 });
+    expect(computeTrailWindow(computeTrailGeometry({ count: 2 }), 0, 480)).toEqual({
+      start: 0,
+      end: 2,
+    });
+    expect(computeTrailWindow(computeTrailGeometry({ count: 1_000 }), 0, 0)).toEqual({
+      start: 0,
+      end: 4,
+    });
   });
 });
 

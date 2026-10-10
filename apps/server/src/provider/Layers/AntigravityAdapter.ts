@@ -103,7 +103,12 @@ type TranscriptStep = {
 type PendingTool = {
   readonly stepIndex: number;
   readonly itemId: RuntimeItemId;
-  readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
+  readonly itemType:
+    | "command_execution"
+    | "file_change"
+    | "dynamic_tool_call"
+    | "web_search"
+    | "image_generation";
   readonly name: string;
   readonly args?: Record<string, unknown>;
   /** Set when the transcript already reported this call as a background task. */
@@ -733,6 +738,7 @@ function parseModelLines(output: string): ProviderListModelsResult["models"] {
 
 function toolItemType(name: string): PendingTool["itemType"] {
   if (name === "run_command") return "command_execution";
+  if (name === "generate_image") return "image_generation";
   if (
     name === "write_to_file" ||
     name === "replace_file_content" ||

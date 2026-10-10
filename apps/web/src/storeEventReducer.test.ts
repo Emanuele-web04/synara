@@ -36,8 +36,90 @@ import {
   threadsOf,
 } from "./storeTestFixtures";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
+import { derivePendingApprovals, derivePendingUserInputs } from "./pendingInteractionDerivation";
 
 describe("store event reducer", () => {
+  it.each(["approval", "userInput"] as const)(
+    "closes stale %s rows without depending on retained failure activities",
+    (interactionKind) => {
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const requestId = ApprovalRequestId.makeUnsafe("request-stale");
+      const requestKind = interactionKind === "approval" ? "approval" : "user-input";
+      const createdAt = "2026-10-06T19:53:00.000Z";
+      const resolvedAt = "2026-10-06T22:16:27.000Z";
+      const request = makeActivity({
+        id: "request-stale",
+        kind: `${requestKind}.requested`,
+        createdAt,
+        sequence: 2_479_474,
+        payload: {
+          requestId,
+          lifecycleGeneration: "stale-generation",
+          requestKind: "command",
+          questions: [{ id: "next", header: "Next", question: "Continue?", options: [] }],
+        },
+      });
+      for (const status of ["pending", "responding", "uncertain"] as const) {
+        for (const reduce of [applyOrchestrationEvents, applyOrchestrationEventsHotPath]) {
+          const responseCommandId =
+            status === "responding" ? CommandId.makeUnsafe("response-stale") : null;
+          const initial = makeState(
+            makeThread({
+              activities: [request],
+              pendingInteractions: [
+                {
+                  interactionKind,
+                  requestId,
+                  threadId,
+                  lifecycleGeneration: "stale-generation",
+                  turnId: null,
+                  status,
+                  decision: null,
+                  responseCommandId,
+                  responseRequestedAt: null,
+                  createdAt,
+                  resolvedAt: null,
+                },
+              ],
+            }),
+          );
+          const next = reduce(initial, [
+            makeDomainEvent("thread.activity-appended", {
+              threadId,
+              activity: makeActivity({
+                id: "failure-stale",
+                kind: `provider.${requestKind}.respond.failed`,
+                createdAt: resolvedAt,
+                sequence: 874_284,
+                payload: {
+                  requestId,
+                  lifecycleGeneration: "stale-generation",
+                  ...(responseCommandId ? { responseCommandId } : {}),
+                  settlementStatus: "uncertain",
+                  detail: `Stale pending ${requestKind} request: ${requestId}. Restart the turn to continue.`,
+                },
+              }),
+            }),
+          ]);
+          const thread = threadsOf(next)[0]!;
+          expect(thread.pendingInteractions?.[0]).toMatchObject({
+            status: "confirmed",
+            resolvedAt,
+          });
+          const derive =
+            interactionKind === "approval" ? derivePendingApprovals : derivePendingUserInputs;
+          expect(
+            derive([request], thread.pendingInteractions, {
+              authoritativeHasPending: false,
+              latestTurnId: undefined,
+              responseClaimReferenceAt: resolvedAt,
+            }),
+          ).toEqual([]);
+        }
+      }
+    },
+  );
+
   it("projects durable cache review transitions and clears them without touching the draft message", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const messageId = MessageId.makeUnsafe("held-message");
@@ -677,6 +759,107 @@ describe("store event reducer", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  describe("text segments from a mid-stream snapshot", () => {
+    const assistantId = MessageId.makeUnsafe("assistant-segmented");
+    const turnId = TurnId.makeUnsafe("turn-segmented");
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const segmentedState = () =>
+      makeState(
+        makeThread({
+          messages: [
+            {
+              id: assistantId,
+              role: "assistant",
+              text: "Reading files. Found it.",
+              textSegments: [
+                {
+                  sequence: 10,
+                  startedAt: "2026-02-27T00:01:05.000Z",
+                  endedAt: "2026-02-27T00:01:06.000Z",
+                  text: "Reading files.",
+                },
+                {
+                  sequence: 20,
+                  startedAt: "2026-02-27T00:01:07.000Z",
+                  endedAt: "2026-02-27T00:01:08.000Z",
+                  text: " Found it.",
+                },
+              ],
+              turnId,
+              createdAt: "2026-02-27T00:01:05.000Z",
+              streaming: true,
+              source: "native",
+            },
+          ],
+        }),
+      );
+    const delta = (
+      sequence: number,
+      text: string,
+      options: { streaming?: boolean; segmentStartedAt?: string; segmentSequence?: number } = {},
+    ) =>
+      makeDomainEvent(
+        "thread.message-sent",
+        {
+          threadId,
+          messageId: assistantId,
+          role: "assistant",
+          text,
+          turnId,
+          streaming: options.streaming ?? true,
+          ...(options.segmentStartedAt ? { segmentStartedAt: options.segmentStartedAt } : {}),
+          ...(options.segmentSequence !== undefined
+            ? { segmentSequence: options.segmentSequence }
+            : {}),
+          createdAt: "2026-02-27T00:01:05.000Z",
+          updatedAt: `2026-02-27T00:01:${String(sequence).padStart(2, "0")}.000Z`,
+          source: "native",
+        },
+        { sequence },
+      );
+
+    it("keeps the segments in step with deltas streamed after the snapshot", () => {
+      for (const reduce of [applyOrchestrationEvents, applyOrchestrationEventsHotPath]) {
+        const next = reduce(segmentedState(), [
+          delta(30, " The bug"),
+          delta(31, " is here.", {
+            segmentStartedAt: "2026-02-27T00:01:31.000Z",
+            segmentSequence: 40,
+          }),
+          delta(32, " Fixed."),
+          delta(33, "", { streaming: false }),
+        ]);
+        const message = threadsOf(next)[0]?.messages[0];
+        expect(message?.text).toBe("Reading files. Found it. The bug is here. Fixed.");
+        expect(message?.streaming).toBe(false);
+        expect(message?.textSegments?.map((segment) => segment.text)).toEqual([
+          "Reading files.",
+          " Found it. The bug",
+          " is here. Fixed.",
+        ]);
+        expect(message?.textSegments?.map((segment) => segment.sequence)).toEqual([10, 20, 40]);
+        expect(message?.textSegments?.at(-1)?.endedAt).toBe("2026-02-27T00:01:33.000Z");
+        // Whatever renders the segments must render the whole final text.
+        expect(message?.textSegments?.map((segment) => segment.text).join("")).toBe(message?.text);
+      }
+    });
+
+    it("drops segments that no longer describe a diverging completion text", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const next = applyOrchestrationEvents(segmentedState(), [
+          delta(30, " The bug"),
+          delta(31, "Rewritten final answer.", { streaming: false }),
+        ]);
+        const message = threadsOf(next)[0]?.messages[0];
+        expect(message?.text).toBe("Rewritten final answer.");
+        expect(message?.textSegments).toBeUndefined();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
   });
 
   it("replaces a non-streaming user message when an active-tail edit reuses its message id", () => {
