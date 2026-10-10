@@ -1,6 +1,7 @@
 import type { PendingClaudeCacheReview } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 import { DiagnosticReportAction } from "../DiagnosticReportAction";
+import { toastManager } from "../ui/toast";
 import { diagnosticIssueReason, reportHandledIssue } from "~/lib/rendererErrorDiagnostics";
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { cn } from "~/lib/utils";
@@ -20,6 +21,7 @@ export function ComposerClaudeCacheReviewPanel({
   compactDisabledReason,
   isCompactionRequest = false,
   onRespond,
+  onStopAsking,
 }: {
   review: PendingClaudeCacheReview;
   compactDisabledReason: string | null;
@@ -28,6 +30,8 @@ export function ComposerClaudeCacheReviewPanel({
     review: PendingClaudeCacheReview,
     decision: ClaudeCacheReviewDecision,
   ) => Promise<void>;
+  /** Turns the review off for later sends; called once a "Don't ask again" choice is accepted. */
+  onStopAsking: () => Promise<void>;
 }) {
   const submittedReviewRef = useRef<PendingClaudeCacheReview | null>(null);
   const [submittedReview, setSubmittedReview] = useState<PendingClaudeCacheReview | null>(null);
@@ -59,7 +63,7 @@ export function ComposerClaudeCacheReviewPanel({
         ? "Compaction will read the expired context"
         : "Claude's prompt cache likely expired";
 
-  const respondOnce = (decision: ClaudeCacheReviewDecision) => {
+  const respondOnce = (decision: ClaudeCacheReviewDecision, stopAsking = false) => {
     if (disabled || submittedReviewRef.current === review) return;
     if (decision === "compact" && (compactDisabledReason !== null || isCompactionRequest)) return;
     submittedReviewRef.current = review;
@@ -68,22 +72,39 @@ export function ComposerClaudeCacheReviewPanel({
     setDiagnostic(null);
     const generation = ++reportGenerationRef.current;
     const startedAt = performance.now();
-    void onRespond(review, decision).catch((error: unknown) => {
-      if (submittedReviewRef.current !== review) return;
-      submittedReviewRef.current = null;
-      setSubmittedReview(null);
-      setDispatchError(
-        error instanceof Error ? error.message : "Could not submit this choice. Try again.",
-      );
-      void reportHandledIssue({
-        code: "claude.cache.request-failed",
-        reason: diagnosticIssueReason(error),
-        durationMs: performance.now() - startedAt,
-      }).then((id) => {
-        if (id && reportGenerationRef.current === generation)
-          setDiagnostic({ reviewId: review.reviewId, id });
-      });
-    });
+    void onRespond(review, decision).then(
+      async () => {
+        if (!stopAsking) return;
+        try {
+          await onStopAsking();
+        } catch {
+          // The choice was accepted already: keep it locked, and use a toast
+          // because the durable response may have unmounted this review panel.
+          toastManager.add({
+            type: "error",
+            title: "Cache preference not saved",
+            description:
+              "Your current choice was accepted. Future cache confirmations may still appear. Change the preference in Settings.",
+          });
+        }
+      },
+      (error: unknown) => {
+        if (submittedReviewRef.current !== review) return;
+        submittedReviewRef.current = null;
+        setSubmittedReview(null);
+        setDispatchError(
+          error instanceof Error ? error.message : "Could not submit this choice. Try again.",
+        );
+        void reportHandledIssue({
+          code: "claude.cache.request-failed",
+          reason: diagnosticIssueReason(error),
+          durationMs: performance.now() - startedAt,
+        }).then((id) => {
+          if (id && reportGenerationRef.current === generation)
+            setDiagnostic({ reviewId: review.reviewId, id });
+        });
+      },
+    );
   };
 
   if (!isClaudeCacheReviewPanelVisible(review)) return null;
@@ -144,6 +165,13 @@ export function ComposerClaudeCacheReviewPanel({
           description="Keep this conversation without sending the held message"
           disabled={disabled}
           onSelect={() => respondOnce("cancel")}
+        />
+        <ComposerChoiceRow
+          shortcut={null}
+          label="Don't ask again"
+          description={`${isCompactionRequest ? "Compact now" : "Continue with full context now"} and skip this check from now on. Turn it back on in Settings.`}
+          disabled={disabled}
+          onSelect={() => respondOnce("continue", true)}
         />
       </div>
     </section>

@@ -8,9 +8,11 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type SidechatExpiry,
+  type ThreadAutoArchive,
 } from "@synara/contracts";
 import { GROUPS_ON, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
+import { CLAUDE_LARGE_CONTEXT_TOKENS } from "@synara/shared/claudeCache";
 import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
@@ -109,6 +111,7 @@ import { KeepAwakeSettingsSection } from "../components/KeepAwakeControls";
 import { useTheme } from "../hooks/useTheme";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
+import { formatContextWindowTokens } from "../lib/contextWindow";
 import { isElectron } from "../env";
 import { ResetIcon } from "../lib/icons";
 import {
@@ -204,6 +207,13 @@ const SIDECHAT_EXPIRY_OPTIONS = [
   { value: "24h", label: "24 hours" },
   { value: "never", label: "Never" },
 ] as const satisfies ReadonlyArray<{ value: SidechatExpiry; label: string }>;
+
+const THREAD_AUTO_ARCHIVE_OPTIONS = [
+  { value: "7d", label: "7 days" },
+  { value: "14d", label: "14 days" },
+  { value: "30d", label: "30 days" },
+  { value: "never", label: "Never" },
+] as const satisfies ReadonlyArray<{ value: ThreadAutoArchive; label: string }>;
 
 const GITHUB_LINK_OPEN_TARGET_LABELS = {
   app: "In Synara",
@@ -514,6 +524,7 @@ function SettingsRouteView() {
       : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
     ...(settings.sidechatExpiry !== defaults.sidechatExpiry ? ["Side chat expiry"] : []),
+    ...(settings.threadAutoArchive !== defaults.threadAutoArchive ? ["Archive idle threads"] : []),
     ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
       ? ["Enter while dictating"]
       : []),
@@ -555,6 +566,9 @@ function SettingsRouteView() {
       : []),
     ...(settings.confirmThreadArchive !== defaults.confirmThreadArchive
       ? ["Archive confirmation"]
+      : []),
+    ...(settings.confirmClaudeCacheResume !== defaults.confirmClaudeCacheResume
+      ? ["Expired Claude cache confirmation"]
       : []),
     ...(settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose
       ? ["Terminal close confirmation"]
@@ -1402,6 +1416,31 @@ function SettingsRouteView() {
         />
 
         <SettingsRow
+          title="Archive idle threads"
+          description="Archive a thread after it sits idle for this long. Pinned, snoozed, running and automation threads are never archived, and archived threads can be restored."
+          resetAction={
+            settings.threadAutoArchive !== defaults.threadAutoArchive ? (
+              <SettingResetButton
+                label="archive idle threads"
+                onClick={() =>
+                  updateSettings({
+                    threadAutoArchive: defaults.threadAutoArchive,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.threadAutoArchive}
+              onValueChange={(value) => updateSettings({ threadAutoArchive: value })}
+              ariaLabel="Archive idle threads"
+              options={THREAD_AUTO_ARCHIVE_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
           title="Enter while dictating"
           description="Choose what Enter does while a voice note is recording: stop and transcribe into the composer, or stop and send the message once it is transcribed."
           resetAction={
@@ -1590,6 +1629,14 @@ function SettingsRouteView() {
           description: "Ask before archiving a thread.",
           resetLabel: "archive confirmation",
           ariaLabel: "Confirm thread archive",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "confirmClaudeCacheResume",
+          title: "Expired Claude cache confirmation",
+          description: `Hold a message for review before Claude re-reads a conversation over ${formatContextWindowTokens(CLAUDE_LARGE_CONTEXT_TOKENS)} tokens whose prompt cache likely expired.`,
+          resetLabel: "expired Claude cache confirmation",
+          ariaLabel: "Confirm expired Claude cache resume",
         })}
 
         {renderBooleanSettingRow({

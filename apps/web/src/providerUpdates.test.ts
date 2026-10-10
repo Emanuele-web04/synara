@@ -63,6 +63,8 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     addProjectBaseDirectory: "",
     githubInboxIncludeUpstreams: false,
     sidechatExpiry: "1h",
+    threadAutoArchive: "7d",
+    confirmClaudeCacheResume: true,
     sourceControlWritingStyle: "repository",
     sourceControlCustomInstructions: "",
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
