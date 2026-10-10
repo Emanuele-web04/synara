@@ -7,6 +7,7 @@ import { ThreadId, TurnId, type MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
+import { makeActivity } from "../../storeTestFixtures";
 import {
   deriveSubagentRunCard,
   describeSubagentRunHeader,
@@ -244,6 +245,104 @@ describe("foldSubagentRunWorkEntries", () => {
 
 describe("deriveSubagentRunCard", () => {
   const launchedAt = "2026-10-10T00:00:00.000Z";
+
+  it("keeps a reused child's answer, action and descendants in their original invocation", () => {
+    const resumedAt = "2026-10-10T00:01:00.000Z";
+    const endedAt = "2026-10-10T00:00:08.000Z";
+    const folded = foldSubagentRunWorkEntries([
+      spawn("first", launchedAt, [{ threadId: "a", rawStatus: "completed" }]),
+      spawn("resume", resumedAt, [{ threadId: "a", rawStatus: "completed" }], "turn-2"),
+    ]);
+    const child = childThread("subagent:parent:a", {
+      latestTurn: completedTurn(resumedAt, "2026-10-10T00:01:03.000Z"),
+      messages: [
+        { ...assistantMessage("First result"), createdAt: endedAt },
+        { ...assistantMessage("Second result"), createdAt: "2026-10-10T00:01:03.000Z" },
+      ],
+      activities: [
+        makeActivity({
+          id: "first-command",
+          turnId: "child-first-turn",
+          createdAt: "2026-10-10T00:00:02.000Z",
+          kind: "item.completed",
+          payload: {
+            itemType: "command_execution",
+            data: { toolCallId: "first-tool", command: "cat first.txt" },
+          },
+        }),
+        makeActivity({
+          id: "second-command",
+          turnId: "child-resumed-turn",
+          createdAt: "2026-10-10T00:01:02.000Z",
+          kind: "item.completed",
+          payload: {
+            itemType: "command_execution",
+            data: { toolCallId: "second-tool", command: "cat second.txt" },
+          },
+        }),
+      ],
+    });
+    const laterDescendant = childThread("subagent:parent:later", {
+      createdAt: "2026-10-10T00:01:01.000Z",
+      sourceThreadId: child.id,
+      session: { status: "running" } as SubagentRunThread["session"],
+    });
+    const taskEndByToolUseId = new Map([
+      [
+        "a",
+        {
+          outcome: "completed" as const,
+          endedAt: "2026-10-10T00:01:03.000Z",
+          previous: { outcome: "completed" as const, endedAt },
+        },
+      ],
+    ]);
+    const cards = folded.map((work) =>
+      deriveSubagentRunCard({
+        subagents: work.subagents ?? [],
+        run: work.subagentRun!,
+        threads: [child, laterDescendant],
+        parentThreadId: PARENT,
+        launchTurnLive: false,
+        taskEndByToolUseId,
+      }),
+    );
+    expect(cards.map((model) => model.rows[0]!.outcomeText)).toEqual([
+      "First result",
+      "Second result",
+    ]);
+    expect(cards.map((model) => model.rows[0]!.action?.command)).toEqual([
+      "cat first.txt",
+      "cat second.txt",
+    ]);
+    expect(cards.map((model) => model.nestedCount)).toEqual([0, 1]);
+    expect(cards[0]!.isLive).toBe(false);
+  });
+
+  it("omits a historical preview when only a later invocation's evidence is loaded", () => {
+    const folded = foldSubagentRunWorkEntries([
+      spawn("first", launchedAt, [{ threadId: "a", rawStatus: "failed" }]),
+      spawn("resume", "2026-10-10T00:01:00.000Z", [{ threadId: "a" }], "turn-2"),
+    ]);
+    const child = childThread("subagent:parent:a", {
+      error: "Later failure",
+      latestTurn: completedTurn(
+        "2026-10-10T00:01:00.000Z",
+        "2026-10-10T00:01:03.000Z",
+        "error" as never,
+      ),
+      messages: [{ ...assistantMessage("Later answer"), createdAt: "2026-10-10T00:01:03.000Z" }],
+    });
+    const model = deriveSubagentRunCard({
+      subagents: folded[0]!.subagents ?? [],
+      run: folded[0]!.subagentRun!,
+      threads: [child],
+      parentThreadId: PARENT,
+      launchTurnLive: false,
+    });
+    expect(model.rows[0]!.outcomeText).toBeNull();
+    expect(model.rows[0]!.endedAtMs).toBeNull();
+  });
 
   it("uses the completion of the matching invocation instead of a later resume", () => {
     const folded = foldSubagentRunWorkEntries([
