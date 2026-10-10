@@ -9,6 +9,7 @@ import { useCallback } from "react";
 
 import { newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { isThreadDetailAwaitingVerification } from "~/threadDetailAuthority";
 
 import { toastManager } from "../ui/toast";
 
@@ -23,7 +24,8 @@ export function useSubagentRunControls(stripSourceThreadId: ThreadId | null) {
       const api = readNativeApi();
       // The Task tool_use lives on the strip source thread (the parent while a
       // subagent thread is open), so route the command there.
-      if (!api || !stripSourceThreadId) return;
+      if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
+        return;
       try {
         await api.orchestration.dispatchCommand({
           type: "thread.task.background",
@@ -52,13 +54,16 @@ export function useSubagentRunControls(stripSourceThreadId: ThreadId | null) {
   const stopSubagent = useCallback(
     async (item: SubagentRunTarget) => {
       const api = readNativeApi();
-      if (!api || !stripSourceThreadId) return;
+      if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
+        return;
+      const childThreadId = localSubagentThreadId(stripSourceThreadId, item.providerThreadId);
+      if (isThreadDetailAwaitingVerification(childThreadId)) return;
       try {
         await api.orchestration.dispatchCommand({
           type: "thread.turn.interrupt",
           requestedBy: "user",
           commandId: newCommandId(),
-          threadId: localSubagentThreadId(stripSourceThreadId, item.providerThreadId),
+          threadId: childThreadId,
           createdAt: new Date().toISOString(),
         });
       } catch (error) {

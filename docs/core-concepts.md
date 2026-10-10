@@ -66,6 +66,10 @@ composer; it is not sent twice.
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
+  Long conversations open at recent work. Load earlier messages, Find, pinned-message navigation,
+  and Go to first message can reach their earlier history. Reloads can reuse private local detail
+  after verifying the connected server; actions wait for reconciliation.
+  See [Thread history and reload recovery](thread-history.md) for compatibility and storage limits.
   The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
   summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
   where finished subagents stay one click away after the strip hides. In split view, the list

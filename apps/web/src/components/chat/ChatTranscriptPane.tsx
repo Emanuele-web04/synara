@@ -1,13 +1,17 @@
+import { useStore } from "../../store";
+import { ensureThreadHistoryLoaded, useThreadHistory } from "../../threadHistory";
 // FILE: ChatTranscriptPane.tsx
 // Purpose: Isolate the transcript shell so composer state changes do not re-render it unnecessarily.
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
-import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
+import { type MessageId, ThreadId, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useCallback,
   useState,
   useSyncExternalStore,
@@ -22,7 +26,8 @@ import {
 } from "react";
 import { type MessageTrailAudioSource, type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";
-import { ArrowDownIcon } from "~/lib/icons";
+import { IconButton } from "../ui/icon-button";
+import { ArrowDownIcon, ArrowUpIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { getAudioLevelSubscriber, isAudioLevelAvailable } from "~/lib/audioLevel";
 import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
@@ -284,6 +289,29 @@ export function ChatTranscriptPane({
   useEffect(() => {
     activeTrailStore.set(null);
   }, [activeThreadId, activeTrailStore]);
+  const nativeHistory = useThreadHistory(activeThreadId);
+  const historyNavigationOwner = useRef<string | null>(activeThreadId);
+  const historyNavigationGeneration = useRef(0);
+  useLayoutEffect(() => {
+    historyNavigationOwner.current = activeThreadId;
+    return () => {
+      historyNavigationOwner.current = null;
+    };
+  }, [activeThreadId]);
+  const loadFirstMessage = async () => {
+    onNavigate?.();
+    const id = ThreadId.makeUnsafe(activeThreadId);
+    const generation = ++historyNavigationGeneration.current;
+    const cancelled = () =>
+      historyNavigationOwner.current !== id || historyNavigationGeneration.current !== generation;
+    await ensureThreadHistoryLoaded(id, undefined, cancelled);
+    // The store update precedes rendering the prepended rows.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (cancelled()) return;
+    const first = useStore.getState().messageIdsByThreadId?.[id]?.[0];
+    if (first) timelineControllerRef?.current?.scrollToMessage(first);
+    else listRef?.current?.scrollToOffset({ offset: 0, animated: false });
+  };
   const importedHistory = useImportedHistory(
     activeThreadId,
     isProjectImport === true && !isTemporaryThread && !isLocalDraft,
@@ -323,6 +351,7 @@ export function ChatTranscriptPane({
   );
   const trailItems = deriveMessageTrailItems(visibleTimelineEntries);
   const handleTrailSelect = (messageId: MessageId) => {
+    historyNavigationGeneration.current += 1;
     timelineControllerRef?.current?.scrollToMessage(messageId);
   };
 
@@ -358,6 +387,13 @@ export function ChatTranscriptPane({
   return (
     <div
       data-chat-transcript-pane="true"
+      onKeyDownCapture={(event) => {
+        const target = event.target as HTMLElement;
+        if (event.key === "Home" && !target.closest("input,textarea,[contenteditable=true]")) {
+          event.preventDefault();
+          void loadFirstMessage();
+        }
+      }}
       inert={terminalWorkspaceTerminalTabActive}
       className={cn(
         "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -396,11 +432,36 @@ export function ChatTranscriptPane({
               {...(onStopBackgroundTask ? { onStopBackgroundTask } : {})}
               subagentThread={subagentThread ?? null}
               historyHeader={
-                importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
-                  <ImportedHistoryButton history={importedHistory} />
-                ) : subagentThread ? (
-                  <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
-                ) : undefined
+                <>
+                  {subagentThread ? (
+                    <SubagentThreadIntro subagent={subagentThread} onOpenThread={onOpenThread} />
+                  ) : null}
+                  {nativeHistory.available ? (
+                    <ImportedHistoryButton
+                      history={{
+                        ...nativeHistory,
+                        load: () => {
+                          onNavigate?.();
+                          return nativeHistory.load();
+                        },
+                      }}
+                      completeLabel="Start of conversation"
+                      onFirstMessage={() => {
+                        void loadFirstMessage();
+                      }}
+                    />
+                  ) : null}
+                  {importedHistory.nextCursor ||
+                  importedHistory.error ||
+                  importedHistory.loading ? (
+                    <ImportedHistoryButton
+                      history={importedHistory}
+                      {...(nativeHistory.available
+                        ? { loadLabel: "Load original chat history" }
+                        : {})}
+                    />
+                  ) : null}
+                </>
               }
               hasMessages={hasMessages}
               isWorking={isWorking}
@@ -410,6 +471,7 @@ export function ChatTranscriptPane({
               {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
               activeTurnId={activeTurnId ?? null}
               activeTurnInProgress={activeTurnInProgress}
+              allowLiveTurnTransitions={nativeHistory.detailAuthoritative}
               subagentsRunning={subagentsRunning === true}
               collapseFinishedTurns={collapseFinishedTurns !== false}
               activeTurnStartedAt={activeTurnStartedAt}
@@ -457,11 +519,20 @@ export function ChatTranscriptPane({
               onMessagesScroll={onMessagesScroll}
               onMessagesClickCapture={onMessagesClickCapture}
               onMessagesMouseUp={onMessagesMouseUp}
-              onMessagesWheel={onMessagesWheel}
-              onMessagesPointerDown={onMessagesPointerDown}
+              onMessagesWheel={(event) => {
+                historyNavigationGeneration.current += 1;
+                onMessagesWheel(event);
+              }}
+              onMessagesPointerDown={(event) => {
+                historyNavigationGeneration.current += 1;
+                onMessagesPointerDown(event);
+              }}
               onMessagesPointerUp={onMessagesPointerUp}
               onMessagesPointerCancel={onMessagesPointerCancel}
-              onMessagesTouchStart={onMessagesTouchStart}
+              onMessagesTouchStart={(event) => {
+                historyNavigationGeneration.current += 1;
+                onMessagesTouchStart(event);
+              }}
               onMessagesTouchMove={onMessagesTouchMove}
               onMessagesTouchEnd={onMessagesTouchEnd}
               markdownCwd={markdownCwd}
@@ -560,6 +631,19 @@ export function ChatTranscriptPane({
           </div>
         ) : null}
 
+        {!agentActivityDetail && nativeHistory.nextCursor ? (
+          <IconButton
+            label="Go to first message"
+            data-scroll-anchor-ignore
+            className="absolute left-1 top-2 z-20"
+            disabled={nativeHistory.loading}
+            onClick={() => {
+              void loadFirstMessage();
+            }}
+          >
+            <ArrowUpIcon className="size-3" />
+          </IconButton>
+        ) : null}
         {!agentActivityDetail ? (
           <MessageTrail
             items={trailItems}

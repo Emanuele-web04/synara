@@ -4,6 +4,10 @@
 
 import {
   type MessageId,
+  type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadHistory,
+  type OrchestrationThreadHistoryCursor,
+  type OrchestrationThreadActivityHistoryCursor,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
@@ -19,6 +23,7 @@ import {
   retainThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
+import { inheritThreadHistoryOwner } from "./threadHistoryOwnership";
 import {
   arraysShallowEqual,
   capThreadActivities,
@@ -690,19 +695,25 @@ function clearThreadDetailSyncState(state: AppState, threadId: ThreadId): AppSta
   // with `retainThreadDetailResumeCursors`, the read-model resync resets all.
   clearThreadDetailResumeCursor(threadId);
   if (
-    state.threadDetailSyncById === undefined ||
-    !Object.hasOwn(state.threadDetailSyncById, threadId)
+    !Object.hasOwn(state.threadDetailSyncById ?? {}, threadId) &&
+    !state.threadHistoryById?.[threadId] &&
+    state.threadDetailAppliedSequenceById?.[threadId] === undefined
   ) {
     return state;
   }
-  const { [threadId]: _removed, ...threadDetailSyncById } = state.threadDetailSyncById;
-  return { ...state, threadDetailSyncById };
+  const { [threadId]: _removed, ...threadDetailSyncById } = state.threadDetailSyncById ?? {};
+  const { [threadId]: _history, ...threadHistoryById } = state.threadHistoryById ?? {};
+  const { [threadId]: _sequence, ...threadDetailAppliedSequenceById } =
+    state.threadDetailAppliedSequenceById ?? {};
+  return { ...state, threadDetailSyncById, threadHistoryById, threadDetailAppliedSequenceById };
 }
 
 export function markThreadDetailSyncFailedInClientState(
   state: AppState,
   threadId: ThreadId,
 ): AppState {
+  // A failed verification cannot make persisted controls authoritative.
+  if (state.threadDetailSyncById?.[threadId] === "cached") return state;
   // A "synced" thread downgrades too: the caller reports a terminally dead
   // stream, and keeping "synced" would let the client treat frozen cached
   // detail as live. Cached timeline entries keep rendering regardless
@@ -792,13 +803,14 @@ function writeThreadState(state: AppState, nextThread: Thread, previousThread?: 
   if (previousThread?.activities !== nextThread.activities) {
     const previousIds = nextState.activityIdsByThreadId?.[nextThread.id];
     const previousById = nextState.activityByThreadId?.[nextThread.id];
-    const activities = capThreadActivities(
-      dedupeActivitiesByIdAfterAppend(
-        nextThread.activities,
-        previousThread?.activities,
-        previousById,
-      ),
+    const dedupedActivities = dedupeActivitiesByIdAfterAppend(
+      nextThread.activities,
+      previousThread?.activities,
+      previousById,
     );
+    const activities = state.threadHistoryById?.[nextThread.id]
+      ? dedupedActivities
+      : capThreadActivities(dedupedActivities);
     const slice = buildNormalizedSlice(
       activities,
       activityId,
@@ -1342,6 +1354,11 @@ export function syncServerShellSnapshot(
       nextThreadIds,
     ),
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
+    threadHistoryById: retainThreadScopedRecord(state.threadHistoryById, nextThreadIds),
+    threadDetailAppliedSequenceById: retainThreadScopedRecord(
+      state.threadDetailAppliedSequenceById,
+      nextThreadIds,
+    ),
   };
 
   const threads = getThreadsFromState(normalizedState);
@@ -1379,18 +1396,27 @@ function syncServerThreadDetailWithOptions(
   options?: {
     updateSidebarSummary?: boolean;
     snapshotSequence?: number;
+    preserveLoadedHistory?: boolean;
+    replaceHistoricalRevision?: boolean;
   },
 ): AppState {
   const previousThread = getThreadFromState(state, thread.id);
-  const nextThreadDetail = options
-    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread, options.snapshotSequence)
-    : thread;
+  const nextThreadDetail =
+    options && !options.replaceHistoricalRevision
+      ? mergeReadModelThreadDetailWithLiveHotPath(
+          thread,
+          previousThread,
+          options.snapshotSequence,
+          options.preserveLoadedHistory,
+        )
+      : thread;
   return writeThreadDetailSyncState(
     commitThreadProjection(
       writeThreadState(
         state,
         normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence, {
           restoringSession: !state.threadsHydrated,
+          preserveMessageHistory: state.threadHistoryById?.[thread.id] !== undefined,
         }),
         previousThread,
       ),
@@ -1418,6 +1444,7 @@ export function syncServerThreadDetailHotPath(
   state: AppState,
   thread: ReadModelThread,
   snapshotSequence?: number,
+  history?: OrchestrationThreadHistory,
 ): AppState {
   if (
     state.deletedProjectIdsById?.[thread.projectId] !== undefined ||
@@ -1425,10 +1452,30 @@ export function syncServerThreadDetailHotPath(
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, {
+  const withHistory = history ? applyThreadHistoryMetadata(state, thread.id, history) : state;
+  const next = syncServerThreadDetailWithOptions(withHistory, thread, {
     updateSidebarSummary: false,
+    replaceHistoricalRevision:
+      history !== undefined &&
+      state.threadHistoryById?.[thread.id] !== undefined &&
+      (history.revisionSequence !== state.threadHistoryById[thread.id]!.revisionSequence ||
+        history.totalMessageCount < state.threadHistoryById[thread.id]!.totalMessageCount),
+    preserveLoadedHistory:
+      state.threadHistoryById?.[thread.id] !== undefined &&
+      (!history ||
+        (history.revisionSequence === state.threadHistoryById[thread.id]!.revisionSequence &&
+          history.totalMessageCount >= state.threadHistoryById[thread.id]!.totalMessageCount)),
     ...(snapshotSequence !== undefined ? { snapshotSequence } : {}),
   });
+  return snapshotSequence === undefined
+    ? next
+    : {
+        ...next,
+        threadDetailAppliedSequenceById: {
+          ...next.threadDetailAppliedSequenceById,
+          [thread.id]: snapshotSequence,
+        },
+      };
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
@@ -1546,6 +1593,11 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       nextThreadIds,
     ),
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
+    threadHistoryById: retainThreadScopedRecord(state.threadHistoryById, nextThreadIds),
+    threadDetailAppliedSequenceById: retainThreadScopedRecord(
+      state.threadDetailAppliedSequenceById,
+      nextThreadIds,
+    ),
   };
   for (const thread of nextThreads) {
     // Read-model threads carry full detail (messages, activities), so they are synced by definition.
@@ -1617,4 +1669,150 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     livePresentThreadIds,
     livePresentProjectIds,
   );
+}
+
+/** Restored display remains unverified until the stream confirms the whole gap. */
+export function restoreCachedThreadDetail(
+  state: AppState,
+  snapshot: OrchestrationThreadDetailSnapshot,
+): AppState {
+  const id = snapshot.thread.id;
+  if (
+    !state.threadShellById?.[id] ||
+    state.deletedThreadIdsById?.[id] !== undefined ||
+    state.deletedProjectIdsById?.[snapshot.thread.projectId] !== undefined ||
+    state.threadDetailSyncById?.[id] !== undefined
+  )
+    return state;
+  const restored = syncServerThreadDetailHotPath(
+    state,
+    snapshot.thread,
+    snapshot.snapshotSequence,
+    snapshot.history,
+  );
+  return {
+    ...restored,
+    threadDetailSyncById: { ...restored.threadDetailSyncById, [id]: "cached" },
+    ...(snapshot.history
+      ? { threadHistoryById: { ...restored.threadHistoryById, [id]: snapshot.history } }
+      : {}),
+  };
+}
+
+export function confirmThreadDetailReplay(state: AppState, id: ThreadId): AppState {
+  return state.threadDetailSyncById?.[id] === "cached"
+    ? writeThreadDetailSyncState(state, id, "synced")
+    : state;
+}
+
+export function applyThreadHistoryMetadata(
+  state: AppState,
+  id: ThreadId,
+  history: OrchestrationThreadHistory | undefined,
+): AppState {
+  if (!history) return state;
+  const previous = state.threadHistoryById?.[id];
+  // A latest-tail reconciliation must not discard pages the reader has loaded.
+  const keepOlder =
+    previous &&
+    history.revisionSequence === previous.revisionSequence &&
+    history.totalMessageCount >= previous.totalMessageCount &&
+    (previous.olderCursor === null ||
+      (previous.olderCursor &&
+        history.olderCursor &&
+        previous.olderCursor.messageId !== history.olderCursor.messageId &&
+        state.messageByThreadId?.[id]?.[previous.olderCursor.messageId]));
+  const keepActivityCursor =
+    previous &&
+    history.revisionSequence === previous.revisionSequence &&
+    (previous.olderActivityCursor === null ||
+      (previous.olderActivityCursor &&
+        history.olderActivityCursor &&
+        previous.olderActivityCursor.activityId !== history.olderActivityCursor.activityId &&
+        state.activityByThreadId?.[id]?.[previous.olderActivityCursor.activityId]));
+  const next = {
+    ...history,
+    ...(keepOlder ? { olderCursor: previous.olderCursor } : {}),
+    ...(keepActivityCursor ? { olderActivityCursor: previous.olderActivityCursor } : {}),
+  };
+  return { ...state, threadHistoryById: { ...state.threadHistoryById, [id]: next } };
+}
+
+/** A historical page supplies missing text only; live metadata and rows win. */
+export function mergeThreadHistoryPage(
+  state: AppState,
+  page: OrchestrationThreadDetailSnapshot,
+  expectedCursor: OrchestrationThreadHistoryCursor | null,
+  expectedActivityCursor?: OrchestrationThreadActivityHistoryCursor | null,
+): AppState {
+  const id = page.thread.id;
+  const history = state.threadHistoryById?.[id];
+  const thread = getThreadFromState(state, id);
+  if (
+    !thread ||
+    !page.history ||
+    state.deletedThreadIdsById?.[id] !== undefined ||
+    !history ||
+    (!history.olderCursor && !history.olderActivityCursor) ||
+    !deepEqualJson(history.olderCursor, expectedCursor) ||
+    (expectedActivityCursor !== undefined &&
+      !deepEqualJson(history.olderActivityCursor, expectedActivityCursor)) ||
+    history.revisionSequence !== page.history.revisionSequence
+  )
+    return state;
+  const byId = new Set(thread.messages.map((message) => message.id));
+  const older = expectedCursor
+    ? page.thread.messages.filter((message) => !byId.has(message.id))
+    : [];
+  const activityIds = new Set(thread.activities.map((activity) => activity.id));
+  const olderActivities = expectedActivityCursor
+    ? page.thread.activities.filter((activity) => !activityIds.has(activity.id))
+    : [];
+  const normalized = normalizeThreadFromReadModel(
+    { ...page.thread, messages: older, activities: olderActivities },
+    undefined,
+    undefined,
+    { preserveMessageHistory: true },
+  );
+  const next = writeThreadState(
+    state,
+    {
+      ...thread,
+      messages: [...normalized.messages, ...thread.messages],
+      activities: [...normalized.activities, ...thread.activities],
+    },
+    thread,
+  );
+  return {
+    ...next,
+    threadHistoryById: {
+      ...next.threadHistoryById,
+      [id]: inheritThreadHistoryOwner(
+        {
+          ...page.history,
+          // A dimension absent from the request returns its latest tail, not its
+          // older page. Keep its exhausted cursor and ignore that repeated tail.
+          olderCursor: expectedCursor ? page.history.olderCursor : history.olderCursor,
+          olderActivityCursor: expectedActivityCursor
+            ? page.history.olderActivityCursor
+            : history.olderActivityCursor,
+          totalMessageCount: Math.max(
+            history.totalMessageCount,
+            page.history.totalMessageCount,
+            next.messageIdsByThreadId?.[id]?.length ?? 0,
+          ),
+          ...(page.history.totalActivityCount !== undefined
+            ? {
+                totalActivityCount: Math.max(
+                  history.totalActivityCount ?? 0,
+                  page.history.totalActivityCount,
+                  next.activityIdsByThreadId?.[id]?.length ?? 0,
+                ),
+              }
+            : {}),
+        },
+        history,
+      ),
+    },
+  };
 }
