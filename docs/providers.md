@@ -42,6 +42,22 @@ continues in the background. After restart, Synara resumes from the settled even
 the delivery journal, preserving completed deliveries and requiring reconciliation for ambiguous
 provider calls. A task waiting on a slow provider operation does not hold another task's lane.
 
+Runtime events are journaled before live subscribers receive them. Codex and Claude can combine
+contiguous assistant-text deltas into one durable event, with a 25 ms admission window, at most
+32 KiB of UTF-8 text and 256 source events. A different thread, turn, item, stream kind, or
+metadata ends the batch. Tools, reasoning, terminal events and errors flush preceding text
+immediately; Stop, session replacement and graceful shutdown flush before retiring its owner.
+Unknown metadata or nonempty raw payloads retain their original events.
+
+This optimization requires the adapter's explicit `fresh-ids-once` delivery guarantee: each
+canonical event gets a fresh local ID and comes from an owned destructive queue. Reconnection
+and resubscription never redeliver consumed canonical IDs. Codex mints those IDs around native
+notifications; Claude mints them with each event stamp. Other adapters keep each original ID.
+A batch retains its first canonical ID and timestamp, and retries exactly the same content
+after an uncertain commit. Recovery reads the accepted journal rows with the existing ordered
+consumer cursor; a batch is never published before acceptance. Abrupt process death can lose
+text still inside the admission window, as it can lose other events not yet accepted.
+
 Checkpoint capture and undo remain ordered for tasks sharing the same physical workspace.
 Slow Git work in one workspace leaves other workspaces free to progress. Recovery preserves
 completed captures and undo outcomes; an interrupted operation with an uncertain outcome
