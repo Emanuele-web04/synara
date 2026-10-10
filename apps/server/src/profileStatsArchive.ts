@@ -729,10 +729,13 @@ const makeProfileStatsArchive = Effect.gen(function* () {
             json_extract(a.payload_json, '$.provider')
           ) AS instanceId,
           COALESCE(json_extract(a.payload_json, '$.provider'), tm.provider) AS counterProvider,
-          COALESCE(
-            NULLIF(CAST(json_extract(a.payload_json, '$.usageSessionId') AS TEXT), ''),
-            ''
-          ) AS usageSessionId,
+          CASE
+            WHEN json_extract(a.payload_json, '$.provider') = 'codex'
+              AND INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') > 0
+            THEN SUBSTR(json_extract(a.payload_json, '$.usageSessionId'), 1,
+              INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') - 1)
+            ELSE COALESCE(CAST(json_extract(a.payload_json, '$.usageSessionId') AS TEXT), '')
+          END AS usageSessionId,
           tm.model AS model,
           pm.dispatch_origin AS dispatchOrigin,
           a.created_at AS createdAt

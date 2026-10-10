@@ -705,8 +705,9 @@ export function userPromptEventsQuery(
 // Counters are per provider: each provider's runtime keeps its own running
 // total, so deltas are taken within (thread, emitting provider). A thread that
 // goes Codex → OpenCode → Codex must not subtract OpenCode's counter from
-// Codex's. Session ids are deliberately not part of the partition: older rows
-// lack them and a resumed session keeps its running total.
+// Codex's. Native usage session ids separate independent counters; resuming
+// the same id preserves its baseline. Legacy rows without an id keep their
+// existing provider-wide series.
 // Counter scale: totalProcessedTokens is the preferred cumulative counter.
 // Some provider/model groups only emit usedTokens; keep those as separate
 // fallback series so a mixed-provider thread does not drop their tokens.
@@ -786,8 +787,16 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           END,
           'unknown'
         ) AS model,
-        COALESCE(NULLIF(CAST(json_extract(a.payload_json, '$.usageSessionId') AS TEXT), ''), '')
-          AS usageSessionId,
+        CASE
+          -- Codex restores lifetime counters on native-thread resume. Older
+          -- projection rows stamped a runtime generation after its UUID;
+          -- that process identity must not start a second lifetime baseline.
+          WHEN json_extract(a.payload_json, '$.provider') = 'codex'
+            AND INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') > 0
+          THEN SUBSTR(json_extract(a.payload_json, '$.usageSessionId'), 1,
+            INSTR(json_extract(a.payload_json, '$.usageSessionId'), ':') - 1)
+          ELSE COALESCE(CAST(json_extract(a.payload_json, '$.usageSessionId') AS TEXT), '')
+        END AS usageSessionId,
         CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tp,
         CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
         pm.dispatch_origin AS dispatch_origin,
