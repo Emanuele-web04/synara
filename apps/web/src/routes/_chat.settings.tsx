@@ -38,6 +38,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { AccountsSettingsPanel } from "~/components/settings/AccountsSettingsPanel";
 import { AdvancedSettingsPanel } from "~/components/settings/AdvancedSettingsPanel";
 import { AppIconPicker } from "~/components/settings/AppIconPicker";
 import {
@@ -1737,6 +1738,12 @@ function SettingsRouteView() {
                   updateSettings={updateSettings}
                   updateSettingsAndWait={updateSettingsAndWait}
                   resetEpoch={resetEpoch}
+                />
+                <AccountsSettingsPanel
+                  active={activeSection === "accounts"}
+                  connectProvider={
+                    typeof routeSearch.connect === "string" ? routeSearch.connect : null
+                  }
                 />
                 <ExternalMcpSettingsPanel active={activeSection === "integrations"} />
                 <AdvancedSettingsPanel

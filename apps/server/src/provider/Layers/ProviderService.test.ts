@@ -1,3 +1,8 @@
+import {
+  ProviderAccounts,
+  ProviderAccountsError,
+  type ProviderAccountsShape,
+} from "../../providerAccounts/Services/ProviderAccounts.ts";
 // FILE: ProviderService.test.ts
 // Purpose: Verifies cross-provider routing, persistence, recovery, and runtime lifecycle behavior.
 // Layer: Provider service integration tests
@@ -582,6 +587,7 @@ const waitUntilEffect = <E = never, R = never>(
 function makeProviderServiceLayer(
   options?: Parameters<typeof makeProviderServiceLive>[0],
   providers?: {
+    readonly accountResolver?: ProviderAccountsShape["resolveLaunch"];
     readonly includeRestartRollbackDroid?: boolean;
     readonly includePi?: boolean;
     readonly codexDidResumeSession?: NonNullable<
@@ -642,6 +648,26 @@ function makeProviderServiceLayer(
       Layer.provide(providerAdapterLayer),
       Layer.provide(directoryLayer),
       Layer.provide(serverSettingsLayer),
+      Layer.provide(
+        providers?.accountResolver
+          ? Layer.succeed(ProviderAccounts, {
+              resolveLaunch: providers.accountResolver,
+              getSnapshot: Effect.die("unused test service"),
+              getIntegrationStatus: Effect.die("unused test service"),
+              getDoctorReport: Effect.die("unused test service"),
+              beginConnect: () => Effect.die("unused test service"),
+              getConnectStatus: () => Effect.die("unused test service"),
+              cancelConnect: () => Effect.die("unused test service"),
+              setActive: () => Effect.die("unused test service"),
+              disconnectBinding: () => Effect.die("unused test service"),
+              hide: () => Effect.die("unused test service"),
+              launch: () => Effect.die("unused test service"),
+              updateCliIntegration: () => Effect.die("unused test service"),
+              getThreadBinding: () => Effect.die("unused test service"),
+              planAppLaunch: () => Effect.die("unused test service"),
+            })
+          : Layer.empty,
+      ),
     ),
     directoryLayer,
     runtimeRepositoryLayer,
@@ -8405,6 +8431,277 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       assert.equal(binding?.status, "stopped");
       const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
       assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
+    }),
+  );
+});
+
+const managedAccountRouting = makeProviderServiceLayer(undefined, {
+  accountResolver: (input) =>
+    Effect.gen(function* () {
+      if (
+        input.threadBinding &&
+        input.explicitOrdinal !== undefined &&
+        input.threadBinding.ordinal !== input.explicitOrdinal
+      ) {
+        return yield* new ProviderAccountsError({
+          operation: "test.resolve",
+          detail: "binding-conflict",
+        });
+      }
+      const ordinal = input.threadBinding?.ordinal ?? input.explicitOrdinal ?? 2;
+      const profilePath = path.join(
+        defaultCodexFixtureRoot!,
+        `managed-${input.provider}-${ordinal}`,
+      );
+      fs.mkdirSync(profilePath, { recursive: true });
+      return {
+        provider: input.provider,
+        ordinal,
+        generation: ordinal === 0 ? 1 : 7,
+        surface: input.surface,
+        supportLevel: "supported" as const,
+        profilePath,
+        environment: { CLAUDE_CONFIG_DIR: profilePath, ANTHROPIC_API_KEY: "managed-test-secret" },
+      };
+    }),
+});
+managedAccountRouting.layer("ProviderService managed account lifecycle", (it) => {
+  it.effect("leaves the original binding intact when renewal cleanup fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("managed-renew-cleanup-failure");
+      const original = {
+        threadId,
+        provider: "claudeAgent" as const,
+        status: "stopped" as const,
+        resumeCursor: { sessionId: "old-principal" },
+        runtimePayload: { accountBinding: { ordinal: 2, agentGeneration: 6 } },
+      };
+      yield* directory.upsert(original);
+      const persisted = Option.getOrThrow(yield* directory.getBinding(threadId));
+      managedAccountRouting.claude.stopSession.mockReturnValueOnce(
+        Effect.fail(
+          new ProviderAdapterProcessError({
+            provider: "claudeAgent",
+            threadId,
+            detail: "cleanup not proven",
+          }),
+        ),
+      );
+      const error = yield* provider.rebindAccount!({
+        threadId,
+        provider: "claudeAgent",
+        ordinal: 2,
+        expectedGeneration: 6,
+        targetGeneration: 7,
+      }).pipe(Effect.flip);
+      assert.include(error.message, "cleanup not proven");
+      const after = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.deepEqual(after.resumeCursor, original.resumeCursor);
+      assert.deepEqual(after, persisted);
+    }),
+  );
+
+  it.effect(
+    "renews only the confirmed idle account generation and clears native continuation",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("managed-renew");
+        yield* directory.upsert({
+          threadId,
+          provider: "claudeAgent",
+          status: "stopped",
+          resumeCursor: { sessionId: "old-principal-session" },
+          runtimePayload: {
+            accountBinding: { ordinal: 2, agentGeneration: 6 },
+            activeTurnId: null,
+          },
+        });
+        const input = {
+          threadId,
+          provider: "claudeAgent" as const,
+          ordinal: 2,
+          expectedGeneration: 6,
+          targetGeneration: 7,
+        };
+        const stale = yield* provider.rebindAccount!({ ...input, targetGeneration: 8 }).pipe(
+          Effect.flip,
+        );
+        assert.include(stale.message, "reconnected again");
+        assert.deepEqual(Option.getOrThrow(yield* directory.getBinding(threadId)).resumeCursor, {
+          sessionId: "old-principal-session",
+        });
+        yield* provider.rebindAccount!(input);
+        const renewed = Option.getOrThrow(yield* directory.getBinding(threadId));
+        assert.equal(renewed.resumeCursor, null);
+        assert.equal(renewed.status, "stopped");
+        assert.deepEqual((renewed.runtimePayload as Record<string, unknown>).accountBinding, {
+          ordinal: 2,
+          agentGeneration: 7,
+        });
+        assert.notInclude(JSON.stringify(renewed), "managed-test-secret");
+        assert.include(
+          (yield* provider.rebindAccount!(input).pipe(Effect.flip)).message,
+          "thread account changed",
+        );
+        yield* provider.startSession(threadId, {
+          threadId,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        assert.equal(
+          managedAccountRouting.claude.startSession.mock.calls.at(-1)![0].accountLaunch?.generation,
+          7,
+        );
+      }),
+  );
+
+  it.effect("rejects active, changed-slot, native and custom-instance account renewal", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("managed-renew-busy");
+      const input = {
+        threadId,
+        provider: "claudeAgent" as const,
+        ordinal: 2,
+        expectedGeneration: 6,
+        targetGeneration: 7,
+      };
+      yield* directory.upsert({
+        threadId,
+        provider: "claudeAgent",
+        status: "running",
+        runtimePayload: {
+          accountBinding: { ordinal: 2, agentGeneration: 6 },
+          activeTurnId: "busy",
+        },
+      });
+      assert.include(
+        (yield* provider.rebindAccount!(input).pipe(Effect.flip)).message,
+        "Stop the active turn",
+      );
+      for (const changed of [
+        { ...input, ordinal: 3 },
+        { ...input, ordinal: 0 },
+        { ...input, expectedGeneration: 5 },
+      ]) {
+        assert.include(
+          (yield* provider.rebindAccount!(changed).pipe(Effect.flip)).message,
+          "thread account changed",
+        );
+      }
+      const unchanged = Option.getOrThrow(yield* directory.getBinding(threadId));
+      yield* directory.upsert({
+        ...unchanged,
+        providerInstanceId: "custom-account-instance",
+        runtimePayload: { accountBinding: { ordinal: 2, agentGeneration: 6 }, activeTurnId: null },
+      });
+      assert.include(
+        (yield* provider.rebindAccount!(input).pipe(Effect.flip)).message,
+        "thread account changed",
+      );
+    }),
+  );
+
+  it.effect("does not let a managed default replace an explicit provider instance", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsService;
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("custom-instance-keeps-identity");
+      yield* settings.updateSettings({
+        providerInstances: {
+          claude_custom: {
+            driver: "claudeAgent",
+            config: {},
+            environment: [
+              { name: "ANTHROPIC_API_KEY", value: "instance-test-secret", sensitive: true },
+            ],
+          },
+        },
+      });
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: "claudeAgent",
+        providerInstanceId: "claude_custom",
+        runtimeMode: "full-access",
+      });
+      const input = managedAccountRouting.claude.startSession.mock.calls.at(-1)![0];
+      assert.equal(
+        input.providerOptions?.claudeAgent?.environment?.ANTHROPIC_API_KEY,
+        "instance-test-secret",
+      );
+      assert.equal(input.accountLaunch, undefined);
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.deepEqual((binding.runtimePayload as Record<string, unknown>).accountBinding, {
+        ordinal: 0,
+        agentGeneration: 1,
+      });
+      const rejected = yield* provider
+        .startSession(asThreadId("custom-instance-reject-managed"), {
+          threadId: asThreadId("custom-instance-reject-managed"),
+          provider: "claudeAgent",
+          providerInstanceId: "claude_custom",
+          accountOrdinal: 2,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+      assert.include(rejected.message, "default provider instance");
+    }),
+  );
+
+  it.effect("persists and forks the selected account without persisting its credential", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const source = asThreadId("managed-source");
+      const target = asThreadId("managed-fork");
+      yield* provider.startSession(source, {
+        threadId: source,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        accountOrdinal: 2,
+      });
+      const before = Option.getOrThrow(yield* directory.getBinding(source));
+      assert.deepEqual((before.runtimePayload as Record<string, unknown>).accountBinding, {
+        ordinal: 2,
+        agentGeneration: 7,
+      });
+      assert.notInclude(JSON.stringify(before), "managed-test-secret");
+      const forked = yield* provider.forkThread!({
+        threadId: target,
+        sourceThreadId: source,
+        runtimeMode: "full-access",
+      });
+      assert.notEqual(forked, null);
+      const binding = Option.getOrThrow(yield* directory.getBinding(target));
+      assert.deepEqual((binding.runtimePayload as Record<string, unknown>).accountBinding, {
+        ordinal: 2,
+        agentGeneration: 7,
+      });
+      assert.notInclude(JSON.stringify(binding), "managed-test-secret");
+      const conflict = yield* provider
+        .startSession(source, {
+          threadId: source,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+          accountOrdinal: 3,
+        })
+        .pipe(Effect.flip);
+      assert.include(conflict.message, "binding-conflict");
+      assert.deepEqual(
+        (
+          Option.getOrThrow(yield* directory.getBinding(source)).runtimePayload as Record<
+            string,
+            unknown
+          >
+        ).accountBinding,
+        { ordinal: 2, agentGeneration: 7 },
+      );
     }),
   );
 });

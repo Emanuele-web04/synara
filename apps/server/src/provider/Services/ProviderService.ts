@@ -17,6 +17,8 @@ import type {
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
+  ProviderAppLaunchPlan,
+  ProviderAccountsRebindThreadInput,
   ProviderKind,
   ModelSelection,
   RuntimeMode,
@@ -87,6 +89,10 @@ export interface PersistedProviderSessionProfile {
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  /** Owner-confirmed renewal of the same account slot; never changes account identity implicitly. */
+  readonly rebindAccount?: (
+    input: ProviderAccountsRebindThreadInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
   readonly startClaudeCompaction?: (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
@@ -260,6 +266,15 @@ export interface ProviderServiceShape {
   readonly getCapabilities: (
     provider: ProviderKind,
   ) => Effect.Effect<ProviderAdapterCapabilities, ProviderServiceError>;
+
+  /**
+   * Build a provider desktop app launch plan when the routed adapter supports
+   * it. The plan environment can carry credentials and is server-private.
+   */
+  readonly launchApp?: (input: {
+    readonly provider: ProviderKind;
+    readonly ordinal?: number;
+  }) => Effect.Effect<ProviderAppLaunchPlan, ProviderServiceError>;
 
   /**
    * Roll back provider conversation state by a number of turns.

@@ -1,3 +1,9 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { beforeEach, vi } from "vitest";
+import { resolveAcpPermissionPolicy } from "./AcpAdapterSupport";
+import { buildAcpSpawnProcessEnv } from "./AcpSessionRuntime";
 import { Effect } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
@@ -92,6 +98,50 @@ describe("buildGrokAcpSpawnInput", () => {
       "--always-approve",
       "stdio",
     ]);
+  });
+
+  it("applies managed-account overrides onto the child environment", () => {
+    const previousXaiApiKey = process.env.XAI_API_KEY;
+    process.env.XAI_API_KEY = "xai-native-key";
+    try {
+      const spawn = buildGrokAcpSpawnInput(undefined, "/tmp/project", "approval-required", {
+        ordinal: 1,
+        generation: 1,
+        profilePath: "/accounts/grok/1/agent/home",
+        environment: {
+          GROK_HOME: "/accounts/grok/1/agent/home",
+          XAI_API_KEY: "",
+          GROK_CODE_XAI_API_KEY: "",
+        },
+      });
+
+      expect(buildAcpSpawnProcessEnv(spawn)?.GROK_HOME).toBe("/accounts/grok/1/agent/home");
+      // The unset sentinel removes inherited native keys entirely.
+      expect(buildAcpSpawnProcessEnv(spawn)).not.toHaveProperty("XAI_API_KEY");
+      expect(buildAcpSpawnProcessEnv(spawn)).not.toHaveProperty("GROK_CODE_XAI_API_KEY");
+    } finally {
+      if (previousXaiApiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = previousXaiApiKey;
+      }
+    }
+  });
+
+  it("injects the managed API key over any inherited value", () => {
+    const spawn = buildGrokAcpSpawnInput(undefined, "/tmp/project", "approval-required", {
+      ordinal: 2,
+      generation: 1,
+      profilePath: "/accounts/grok/2/agent/home",
+      environment: {
+        GROK_HOME: "/accounts/grok/2/agent/home",
+        XAI_API_KEY: "xai-managed-key",
+        GROK_CODE_XAI_API_KEY: "",
+      },
+    });
+
+    expect(buildAcpSpawnProcessEnv(spawn)?.XAI_API_KEY).toBe("xai-managed-key");
+    expect(buildAcpSpawnProcessEnv(spawn)).not.toHaveProperty("GROK_CODE_XAI_API_KEY");
   });
 });
 
@@ -243,6 +293,74 @@ describe("resolveGrokAcpAuthMethodId", () => {
   });
 });
 
+describe("Grok ACP permission policy", () => {
+  const options = [
+    { kind: "allow_once", optionId: "allow-once" },
+    { kind: "reject_once", optionId: "reject-once" },
+  ] as const;
+
+  it("surfaces approval-required requests to Synara", () => {
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        options,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("auto-allows Full Access requests with the provider's request-scoped option", () => {
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        options,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "allow-once" });
+  });
+
+  it("keeps Plan mode fail-closed above Full Access", () => {
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "reject-once" });
+  });
+
+  it("examines the supplied child environment instead of process globals", async () => {
+    const savedXaiApiKey = process.env.XAI_API_KEY;
+    try {
+      process.env.XAI_API_KEY = "xai-native-key";
+
+      await expect(
+        Effect.runPromise(
+          resolveGrokAcpAuthMethodIdForEnv({ GROK_HOME: "/accounts/grok/1/agent/home" })(
+            initializeWithAuthMethods(["cached_token", "xai.api_key"]),
+          ),
+        ),
+      ).resolves.toBe("cached_token");
+
+      delete process.env.XAI_API_KEY;
+
+      await expect(
+        Effect.runPromise(
+          resolveGrokAcpAuthMethodIdForEnv({ XAI_API_KEY: "xai-managed-key" })(
+            initializeWithAuthMethods(["cached_token", "xai.api_key"]),
+          ),
+        ),
+      ).resolves.toBe("xai.api_key");
+    } finally {
+      if (savedXaiApiKey === undefined) {
+        delete process.env.XAI_API_KEY;
+      } else {
+        process.env.XAI_API_KEY = savedXaiApiKey;
+      }
+    }
+  });
+});
+
 describe("applyGrokAcpModelSelection", () => {
   it("does not call Grok's unsupported ACP config-option method", async () => {
     const calls: Array<
@@ -352,4 +470,15 @@ describe("runGrokAcpCompactionCommand", () => {
     expect(error.message).toContain("does not advertise the /compact command");
     expect(promptCalled).toBe(false);
   });
+});
+
+let isolatedTestHome: string;
+beforeEach(() => {
+  isolatedTestHome = mkdtempSync(join(tmpdir(), "synara-managed-acp-"));
+  vi.stubEnv("HOME", isolatedTestHome);
+  vi.stubEnv("USERPROFILE", isolatedTestHome);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(isolatedTestHome, { recursive: true, force: true });
 });

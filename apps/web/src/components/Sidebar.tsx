@@ -1,3 +1,5 @@
+import { ProviderAccountMenu } from "./ProviderAccountMenu";
+import { UsersIcon } from "~/lib/icons";
 import { useProjectImportDialogStore } from "~/projectImport/projectImportDialogStore";
 // FILE: Sidebar.tsx
 // Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
@@ -6954,6 +6956,9 @@ export default function Sidebar() {
             void navigate({ to: "/settings", search: { section: "usage" } });
           }}
         />
+        <ProviderAccountMenu triggerClassName="sidebar-icon-button inline-flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
+          <UsersIcon className="size-4" />
+        </ProviderAccountMenu>
         <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
         {showDesktopUpdateButton && desktopUpdateState ? (
           <DesktopUpdateRailButton

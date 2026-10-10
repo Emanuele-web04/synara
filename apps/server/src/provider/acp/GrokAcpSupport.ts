@@ -3,7 +3,11 @@
  *
  * @module GrokAcpSupport
  */
-import { type GrokModelOptions, type RuntimeMode } from "@synara/contracts";
+import {
+  type GrokModelOptions,
+  type ProviderAccountLaunchContext,
+  type RuntimeMode,
+} from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
@@ -35,6 +39,7 @@ export interface GrokAcpRuntimeInput extends Omit<
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly grokSettings: GrokAcpRuntimeSettings | null | undefined;
   readonly runtimeMode: RuntimeMode;
+  readonly accountLaunch?: ProviderAccountLaunchContext;
 }
 
 export interface GrokAcpModelSelectionErrorContext {
@@ -106,6 +111,7 @@ export function buildGrokAcpSpawnInput(
   grokSettings: GrokAcpRuntimeSettings | null | undefined,
   cwd: string,
   runtimeMode: RuntimeMode,
+  accountLaunch?: ProviderAccountLaunchContext,
 ): AcpSpawnInput {
   // Keep Grok's request-based mode as the explicit baseline. Full Access also
   // needs the process-scoped override because some Grok builds deny before
@@ -133,7 +139,15 @@ export function buildGrokAcpSpawnInput(
     providerEnvironment: {
       driver: "grok",
       ...(grokSettings?.instanceId !== undefined ? { instanceId: grokSettings.instanceId } : {}),
-      ...(grokSettings?.environment !== undefined ? { environment: grokSettings.environment } : {}),
+      ...(accountLaunch
+        ? {
+            environment: Object.fromEntries(
+              Object.entries(accountLaunch.environment).filter(([, value]) => value !== ""),
+            ),
+          }
+        : grokSettings?.environment !== undefined
+          ? { environment: grokSettings.environment }
+          : {}),
       ...(grokSettings?.homeDir !== undefined ? { homeDir: grokSettings.homeDir } : {}),
       ...(grokSettings?.isolationRootDir !== undefined
         ? { isolationRootDir: grokSettings.isolationRootDir }
@@ -228,12 +242,18 @@ export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
+    const spawn = buildGrokAcpSpawnInput(
+      input.grokSettings,
+      input.cwd,
+      input.runtimeMode,
+      input.accountLaunch,
+    );
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.runtimeMode),
+        spawn,
         resolveAuthMethodId: resolveGrokAcpAuthMethodIdForEnv(
-          input.grokSettings?.environment,
+          input.accountLaunch?.environment ?? input.grokSettings?.environment,
           input.grokSettings?.instanceId,
           input.grokSettings?.homeDir,
           input.grokSettings?.isolationRootDir,

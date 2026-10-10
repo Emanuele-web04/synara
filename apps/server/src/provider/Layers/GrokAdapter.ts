@@ -1111,6 +1111,7 @@ export function makeGrokAdapter(
             reasoningEffort: effectiveGrokSettings.reasoningEffort,
             alwaysApprove: input.runtimeMode === "full-access",
             binaryPath: effectiveGrokSettings.binaryPath ?? "grok",
+            accountOrdinal: input.accountLaunch?.ordinal,
           });
 
           const acp = yield* makeGrokAcpRuntime({
@@ -1118,6 +1119,7 @@ export function makeGrokAdapter(
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,
+            ...(input.accountLaunch !== undefined ? { accountLaunch: input.accountLaunch } : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
             // Grok registers client hooks from session setup metadata, not
