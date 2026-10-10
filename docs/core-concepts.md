@@ -51,7 +51,11 @@ composer; it is not sent twice.
   Failed — and its details show the agent's recent activity, let you approve a pending request
   without opening the chat, and show the agent's latest reply for review before you mark it done. A
   List / Kanban switch in the header opens the Kanban board instead, and the Tasks entry remembers
-  the view you picked.
+  the view you picked. An agent can also keep the list from a chat: ask it to note something for
+  later and it adds a to-do with `synara_create_todo`, filed under the chat's project unless the
+  to-do is unrelated to it. `synara_list_todos` reads the list and `synara_update_todo` edits a
+  to-do or marks it done. Adding a to-do starts no agent work; handing a to-do to a chat and
+  deleting it stay in the Tasks view.
 - **Kanban** — the Attention view groups chat cards into Draft, In Progress, Awaiting you,
   and Done; Classic keeps the three-column layout. Approval/input requests, failures, and
   stalled work surface in Awaiting you. Needs review requires a live-confirmed open PR in a
@@ -60,12 +64,21 @@ composer; it is not sent twice.
   The `synara_*_kanban_*` gateway tools read and drive durable cards within the caller's
   ordinary project; local composer drafts remain client-only. Gateway draft creation uses
   the local checkout; isolated worktree callers can create a task instead. These tools do
-  not change the Tasks to-do records.
+  not change the Tasks to-do records; the `synara_*_todo` tools do.
 - **Inbox** (Stable and Beta) — chats needing attention, running and finished work, review
   requests, and the day’s agent recap, starting at 4am. Inbox also shows today’s due and overdue
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
+  Long conversations open at recent work. Load earlier messages, Find, pinned-message navigation,
+  and Go to first message can reach their earlier history. Reloads can reuse private local detail
+  after verifying the connected server; actions wait for reconciliation.
+  See [Thread history and reload recovery](thread-history.md) for compatibility and storage limits.
+  The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
+  summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
+  where finished subagents stay one click away after the strip hides. In split view, the list
+  stays beside the chat in its pane when opening a child or returning to its parent. Failed
+  Stop or background requests report an error so the run is not mistaken for stopped.
   In a split view, dragging the divider resizes both chats continuously; releasing it saves the layout.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
@@ -143,6 +156,20 @@ A turn is one cycle inside that task:
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
 
+Each settled turn has a **Worked** header with its duration, completion time, and final state.
+The model appears when it changes from the previous turn. Expand the header to read the tools and
+full narration; turning off finished-turn folding keeps the same header with the work visible.
+**Stopped by you** requires a request explicitly marked as user Stop, followed by an interrupted
+outcome for that turn. Agent, automatic, steering, and historical interruptions without that actor
+say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
+keep one row as they run and settle; a completion that wakes the provider starts a separate **Resumed**
+response with its own live and settled duration, even when the provider reuses the launch's turn ID.
+
+**Stop** settles the turn once the provider accepts the interrupt and no provider turn is still
+running, even if the provider had already finished and its final events are still arriving.
+Output that arrives after a turn ended is added to its message without marking it as streaming
+again. An assistant item that ends without any text does not add an empty response row.
+
 Chat code blocks above 250,000 characters display their complete source as plain text,
 using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
 
@@ -159,6 +186,14 @@ Thread runtime errors appear above the transcript. Use **Show details** to read 
 or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
 quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
 not offer a generic Retry because an error message alone cannot prove that resending is safe.
+
+Messages queued above the composer while a turn runs are sent one by one after it completes.
+If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it
+stays visible with **Queue paused** and the reason. **Resume** sends the queue in order;
+**Edit** moves the next queued message back into the composer. Sending a new message
+yourself goes first, and the queue resumes once that turn completes. The pause is per
+thread and survives a reload. A message already shown in the conversation was accepted by
+the server rather than queued here, and the server still sends it after a Stop.
 
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.

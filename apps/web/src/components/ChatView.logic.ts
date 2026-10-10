@@ -790,7 +790,7 @@ export type ThreadDetailHydration = "ready" | "loading" | "failed";
 export function resolveThreadDetailHydration(input: {
   readonly isServerThread: boolean;
   readonly hasTimelineEntries: boolean;
-  readonly detailSyncState: "synced" | "failed" | null;
+  readonly detailSyncState: "synced" | "failed" | "cached" | null;
 }): ThreadDetailHydration {
   if (!input.isServerThread || input.hasTimelineEntries || input.detailSyncState === "synced") {
     return "ready";
@@ -2213,7 +2213,13 @@ export function enrichSubagentWorkEntries(
       if (terminalStatusLabel ?? status.label ?? fallbackStatusLabel) {
         nextSubagent.statusLabel = terminalStatusLabel ?? status.label ?? fallbackStatusLabel;
       }
-      if (status.isActive || fallbackStatusLabel === "Running") {
+      if (
+        status.isActive ||
+        (fallbackStatusLabel === "Running" &&
+          status.label !== "Closed" &&
+          status.label !== "Error" &&
+          !matchedThread?.latestTurn?.completedAt)
+      ) {
         nextSubagent.isActive = true;
       }
       return nextSubagent;

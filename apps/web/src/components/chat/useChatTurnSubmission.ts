@@ -29,6 +29,7 @@ import {
 } from "../../lib/composerSend";
 import { appendFileCommentsToPrompt } from "../../lib/fileComments";
 import { appendPullRequestContextsToPrompt } from "../../lib/pullRequestContext";
+import { prepareQueuedComposerResumeAfterSend } from "../../lib/queuedComposerDrain";
 import {
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
   appendTerminalContextsToPrompt,
@@ -60,6 +61,7 @@ import { resolveChatPromptCaptures } from "./resolveChatPromptCaptures";
 import { useChatTurnExecution } from "./useChatTurnExecution";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 
 // One toast per chat: pressing Send again refreshes it instead of stacking copies.
 function notifyBlockedComposerSend(threadId: ThreadId, reason: BlockedComposerSendReason): void {
@@ -285,10 +287,11 @@ export function useChatTurnSubmission({
         isSendBusy ||
         sendPreflightInFlightRef.current ||
         sendInFlightRef.current;
-      if (sendInFlight || isConnecting) {
+      const awaitingVerification = isThreadDetailAwaitingVerification(activeThread.id);
+      if (sendInFlight || isConnecting || awaitingVerification) {
         const blockedReason = resolveBlockedComposerSendReason({
           sendInFlight,
-          sessionStarting: isConnecting,
+          sessionStarting: isConnecting || awaitingVerification,
           hasComposerContent:
             (composerEditorRef.current?.readSnapshot().value ?? promptRef.current).trim().length >
               0 ||
@@ -302,8 +305,13 @@ export function useChatTurnSubmission({
         return false;
       }
       const hasPendingCacheReview = () =>
-        getThreadFromState(useStore.getState(), activeThread.id)?.claudeCacheReview != null;
+        getThreadFromState(useStore.getState(), activeThread.id)?.claudeCacheReview != null ||
+        isThreadDetailAwaitingVerification(activeThread.id);
       if (hasPendingCacheReview()) return false;
+      const resumeQueueAfterSend =
+        !queuedTurn || dispatchMode === "steer"
+          ? prepareQueuedComposerResumeAfterSend(activeThread.id)
+          : undefined;
       sendPreflightInFlightRef.current = true;
       const editorSaved = await flushWorkspaceEditors(
         queryClient,
@@ -510,6 +518,7 @@ export function useChatTurnSubmission({
             text: followUp.text,
             interactionMode: followUp.interactionMode,
             dispatchMode,
+            ...(resumeQueueAfterSend ? { resumeQueueAfterSend } : {}),
           });
         }
       }
@@ -945,7 +954,7 @@ export function useChatTurnSubmission({
         scheduleComposerFocus();
       }
 
-      return executePreparedTurn({
+      const sent = await executePreparedTurn({
         nextThreadEnvMode,
         nextThreadBranch,
         nextThreadWorktreePath,
@@ -996,6 +1005,12 @@ export function useChatTurnSubmission({
         composerSkillsSnapshot,
         composerMentionsSnapshot,
       });
+      // A message the user sends by hand (or steers from the queue) resumes a queue
+      // paused by Stop; it goes first and the queue follows once its turn ends.
+      if (sent) {
+        resumeQueueAfterSend?.();
+      }
+      return sent;
     },
     [
       threadId,

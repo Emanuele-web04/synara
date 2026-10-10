@@ -42,6 +42,25 @@ continues in the background. After restart, Synara resumes from the settled even
 the delivery journal, preserving completed deliveries and requiring reconciliation for ambiguous
 provider calls. A task waiting on a slow provider operation does not hold another task's lane.
 
+Runtime events are journaled before live subscribers receive them. Codex and Claude can combine
+contiguous assistant-text deltas into one durable event, with a 25 ms admission window, at most
+32 KiB of UTF-8 text and 256 source events. A different thread, turn, item, stream kind, or
+metadata ends the batch. Tools, reasoning, terminal events and errors flush preceding text
+immediately. Native interruption and session teardown begin before waiting for text persistence.
+Session teardown and the text drain run concurrently under the old lifecycle generation;
+retirement waits for both, and a teardown failure preserves that generation and the accepted text.
+Stop, session replacement and graceful shutdown flush before retiring the text's owner.
+Unknown metadata or nonempty raw payloads retain their original events.
+
+This optimization requires the adapter's explicit `fresh-ids-once` delivery guarantee: each
+canonical event gets a fresh local ID and comes from an owned destructive queue. Reconnection
+and resubscription never redeliver consumed canonical IDs. Codex mints those IDs around native
+notifications; Claude mints them with each event stamp. Other adapters keep each original ID.
+A batch retains its first canonical ID and timestamp, and retries exactly the same content
+after an uncertain commit. Recovery reads the accepted journal rows with the existing ordered
+consumer cursor; a batch is never published before acceptance. Abrupt process death can lose
+text still inside the admission window, as it can lose other events not yet accepted.
+
 Checkpoint capture and undo remain ordered for tasks sharing the same physical workspace.
 Slow Git work in one workspace leaves other workspaces free to progress. Recovery preserves
 completed captures and undo outcomes; an interrupted operation with an uncertain outcome
@@ -161,6 +180,12 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+OMP's internal sub-agent roles are not user-selectable models. Synara discovers the runtime's
+model catalog without reading `modelRoles` from repository configuration. A stale saved `role:`
+selection that the runtime does not advertise requires an explicit model choice; Synara does
+not silently substitute another model or account. Concrete model selections saved by the old
+role picker retain their model, account and thinking options, including custom selectors.
+
 Claude Code may discover a model under an alias while reporting its concrete model ID separately.
 For a release newer than Synara's catalog, the picker shows the concrete ID. Agent Gateway accepts
 that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
@@ -229,6 +254,15 @@ turn active for recovery to retry.
 Rollback commits a cut at a user-turn boundary with provider file restoration disabled because
 Synara owns workspace checkpoints.
 
+## Claude Monitor notifications
+
+Claude Monitor can wake a session with output batches that the SDK does not forward.
+Synara reads the bounded session-transcript tail to recover those notifications without
+splitting the assistant reply. Each notification keeps its timestamp and task identity.
+The transcript shows a compact Monitor update or terminal outcome; its output is available
+in the shared detail disclosure. Failed and stopped outcomes stay explicit. Updates do not
+mean the Monitor finished, and tool-only notifications do not enable assistant auto-follow.
+
 ## Provider sessions
 
 Use [Import projects](project-import.md) to bring local Codex and Claude Code projects and
@@ -249,6 +283,36 @@ The session may preserve provider-specific behavior such as:
 - Provider-native subagents or workflows
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
+
+### Provider-native subagents
+
+Each subagent a Claude or Codex agent launches gets its own child thread under the task. Its
+brief, and any later message its launcher sends it on resume, opens the child thread as a
+message marked as sent by the agent. A resumed Claude subagent continues on the same child
+thread while its routing identity is retained. Claude bounds each inactive ownership cache to
+200 recent entries, keeping live work, nested launchers and unfinished task owners pinned.
+If an older identity expired, an explicit native task id on a resume recovers a child under that
+identity; the previous child thread and its recorded history remain available. Work a subagent
+starts itself (a background command, a monitor, a nested subagent) is recorded on that subagent's
+thread; the parent thread keeps only each subagent's own start,
+progress and outcome. A nested subagent's thread hangs off the task like the others and records
+the subagent that launched it as its source thread. A background subagent's final outcome
+(completed, failed or stopped) updates the call that launched it.
+
+Children are named after their description, nickname or brief, never after a provider id.
+Codex multi-agent v2 encrypts spawn briefs, so its children are named after their task name and
+open without a brief. Synara shows up to 20 provider-native subagents per turn and notes on the
+parent thread when more ran.
+
+The parent transcript groups adjacent child launches from the same turn in a compact card at
+their launch position; assistant narration separates groups. Cards start collapsed and preserve
+each invocation's status, elapsed time, current step and short result. Their compact headers stay
+visible after the parent turn ends, including while background children continue working. A running card outside the viewport
+gets a floating chip that brings it back into view. Stop all stays visible on a live header;
+expanded rows show per-child controls, with Message on hover or keyboard focus. The header counts direct children and labels additional nested
+subagents separately; their rows start collapsed. The sidebar shows the same source-thread
+tree under the open parent, with neutral names and status dots. Child threads link back to
+their launcher, show agent-sent briefs as cards and mark the completed answer delivered to it.
 
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
 Once native background work settles, it keeps the app-server process alive, unsubscribes the

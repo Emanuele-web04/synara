@@ -95,3 +95,24 @@ export function drainPreSnapshotThreadEvents<TEvent extends SequencedEvent>(
   }
   return { events, lostEvents: false };
 }
+
+/** A persisted display becomes authoritative only after its whole ordered gap lands. */
+export function isCompleteAppliedThreadReplay(input: {
+  readonly threadId: string;
+  readonly resumeSeedSequence: number | undefined;
+  readonly appliedSequence: number | undefined;
+  readonly events: ReadonlyArray<{ aggregateKind: string; aggregateId: string; sequence: number }>;
+}): boolean {
+  if (input.resumeSeedSequence === undefined || input.appliedSequence === undefined) return false;
+  let through = input.resumeSeedSequence;
+  for (const event of input.events) {
+    if (
+      event.aggregateKind !== "thread" ||
+      event.aggregateId !== input.threadId ||
+      event.sequence <= through
+    )
+      return false;
+    through = event.sequence;
+  }
+  return input.appliedSequence >= through;
+}

@@ -5,7 +5,6 @@
 
 import {
   type ModelSlug,
-  type OmpModelOptions,
   type ProviderInstanceId,
   ProviderKind,
   type ServerProviderStatus,
@@ -15,7 +14,10 @@ import * as Schema from "effect/Schema";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { appHistory } from "../../appNavigation";
-import { formatProviderModelOptionName } from "../../providerModelOptions";
+import {
+  formatProviderModelOptionName,
+  getOmpModelSelectionIssue,
+} from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
 import {
   Menu,
@@ -254,6 +256,9 @@ function resolveSelectedModelLabel(input: {
   model: string;
   options: ReadonlyArray<ProviderModelOption>;
 }): string {
+  if (input.provider === "omp" && getOmpModelSelectionIssue(input.model, input.options)) {
+    return "Select OMP model";
+  }
   const resolvedSlug = resolveSelectableModel(input.provider, input.model, input.options);
   if (resolvedSlug) {
     const resolvedOption = input.options.find((option) => option.slug === resolvedSlug);
@@ -308,11 +313,6 @@ type ProviderModelMenuItemsProps = {
     provider: ProviderKind,
     model: ModelSlug,
     instanceId?: ProviderInstanceId,
-  ) => void;
-  onProviderModelRoleSelect?: (
-    model: ModelSlug,
-    options: OmpModelOptions,
-    instanceId: ProviderInstanceId,
   ) => void;
   // Invoked after a model selection commits so callers can close ancestor
   // menus and refocus the composer.
@@ -481,24 +481,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     if (props.disabled) return;
     if (!value) return;
     const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
-    const selectedOption = providerOptions.find((option) => option.slug === value);
-    if (selectedOption?.role) {
-      if (props.onProviderModelRoleSelect) {
-        props.onProviderModelRoleSelect(
-          selectedOption.role.model,
-          selectedOption.role.thinkingLevel
-            ? { thinkingLevel: selectedOption.role.thinkingLevel }
-            : {},
-          instanceId,
-        );
-      } else {
-        // Surfaces without the role callback still commit the role's model so
-        // picking a role can never close the menu with a silent no-op.
-        props.onProviderModelChange(provider, selectedOption.role.model, instanceId);
-      }
-      onAfterSelection?.();
-      return;
-    }
+    if (provider === "omp" && getOmpModelSelectionIssue(value, providerOptions)) return;
     const resolvedModel = resolveSelectableModel(provider, value, providerOptions);
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel, instanceId);
@@ -507,6 +490,12 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
   const handleInstanceChange = (provider: ProviderKind, instanceId: ProviderInstanceId) => {
     if (props.disabled || !instanceId) return;
+    // Choosing an OMP account is not a model choice. Preserve opaque selectors
+    // and stale role keys for explicit selection/validation in that account.
+    if (provider === "omp" && activeProvider === provider) {
+      props.onProviderModelChange(provider, props.model, instanceId);
+      return;
+    }
     const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
     const model = activeProvider === provider ? props.model : (providerOptions[0]?.slug ?? "");
     if (!model) return;
@@ -641,10 +630,23 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           })
         : groupProviderModelOptions(filteredOptions);
 
+    const modelSelectionIssue =
+      provider === "omp" && isActiveAccount
+        ? getOmpModelSelectionIssue(props.model, providerOptions)
+        : null;
     const discoveryError = props.discoveryErrorsByProvider?.[provider];
-    const discoveryErrorElement = discoveryError ? (
-      <div className="px-2 py-1.5 text-ui leading-snug text-destructive">{discoveryError}</div>
-    ) : null;
+    const discoveryErrorElement = (
+      <>
+        {modelSelectionIssue ? (
+          <div role="status" className="px-2 py-1.5 text-ui leading-snug text-destructive">
+            {modelSelectionIssue}
+          </div>
+        ) : null}
+        {discoveryError ? (
+          <div className="px-2 py-1.5 text-ui leading-snug text-destructive">{discoveryError}</div>
+        ) : null}
+      </>
+    );
 
     const activeModelSlug = isActiveAccount
       ? (resolveSelectableModel(provider, props.model, providerOptions) ?? props.model)
@@ -950,11 +952,6 @@ type ProviderModelPickerProps = {
     model: ModelSlug,
     instanceId?: ProviderInstanceId,
   ) => void;
-  onProviderModelRoleSelect?: (
-    model: ModelSlug,
-    options: OmpModelOptions,
-    instanceId: ProviderInstanceId,
-  ) => void;
 };
 
 export const ProviderModelPicker = function ProviderModelPicker(props: ProviderModelPickerProps) {
@@ -1120,9 +1117,6 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
             : {})}
           {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
           onProviderModelChange={props.onProviderModelChange}
-          {...(props.onProviderModelRoleSelect
-            ? { onProviderModelRoleSelect: props.onProviderModelRoleSelect }
-            : {})}
           onAfterSelection={handleAfterSelection}
         />
       </ComposerPickerMenuPopup>

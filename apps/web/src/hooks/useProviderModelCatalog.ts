@@ -31,7 +31,11 @@ import {
   providerDiscoveryQueryKeys,
   providerModelsQueryOptions,
 } from "../lib/providerDiscoveryReactQuery";
-import { mergeDynamicModelOptions, type ProviderModelOption } from "../providerModelOptions";
+import {
+  getOmpModelSelectionIssue,
+  mergeDynamicModelOptions,
+  type ProviderModelOption,
+} from "../providerModelOptions";
 import type { ProviderModelOptionsByProviderInstance } from "../components/chat/ProviderModelPicker";
 
 export interface ProviderModelCatalog {
@@ -80,15 +84,12 @@ function selectQueryData<Data>(
   return results.map((result) => result.data);
 }
 
-// OMP's catalog is global, but its `modelRoles` merge a project layer, so the
-// composer keeps cwd in the key for roles to reflect the active project.
 const CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS: ReadonlySet<ProviderKind> = new Set([
   "antigravity",
   "droid",
   "opencode",
   "pi",
   "devin",
-  "omp",
 ]);
 
 function readProviderOptionString(options: unknown, key: string): string | null {
@@ -508,7 +509,13 @@ export function useProviderModelCatalog(input: {
       ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
       devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
-      omp: getAppModelOptions("omp", customModelsByProvider.omp, modelHintByProvider?.omp),
+      // Old role picker slugs are internal routing, not custom models. Never
+      // promote a persisted role selection back into a selectable placeholder.
+      omp: getAppModelOptions(
+        "omp",
+        customModelsByProvider.omp,
+        modelHintByProvider?.omp?.trim().startsWith("role:") ? null : modelHintByProvider?.omp,
+      ),
     };
     const result: Record<
       ProviderKind,
@@ -555,15 +562,15 @@ export function useProviderModelCatalog(input: {
         });
       }
     }
-    // OMP modelRoles describe internal sub-agent routing. They remain part of
-    // discovery for the ACP/runtime path, but are not user-selectable models
-    // and must never become `role:*` entries in the composer catalog.
     // Terminal OMP discovery failure: drop the hint placeholder but keep
     // user-configured custom models — the picker still renders the
     // discovery error line above whatever options remain.
     if (ompDiscoveryFailed) {
       result.omp = staticOptions.omp.filter((option) => option.isCustom === true);
     }
+    // Stored custom entries cannot make picker-only role keys into real models.
+    // Keep opaque selectors, including exact discovery-proven role: ids.
+    result.omp = result.omp.filter((option) => !getOmpModelSelectionIssue(option.slug, result.omp));
     return result;
   }, [
     antigravityModelsQuery.data,
@@ -592,7 +599,13 @@ export function useProviderModelCatalog(input: {
         instance.provider === selectedProvider && instance.instanceId === selectedInstanceId
           ? modelHintByProvider?.[instance.provider]
           : null;
-      const staticOptions = getAppModelOptions(instance.provider, customModels, selectedModelHint);
+      const staticOptions = getAppModelOptions(
+        instance.provider,
+        customModels,
+        instance.provider === "omp" && selectedModelHint?.trim().startsWith("role:")
+          ? null
+          : selectedModelHint,
+      );
       const discovery = dynamicModelsByProviderInstance[instance.instanceId];
       const dynamicModels = discovery?.models;
       const hasCodexCatalog =
@@ -607,6 +620,12 @@ export function useProviderModelCatalog(input: {
               dynamicModels,
             })
           : staticOptions;
+      if (instance.provider === "omp") {
+        const options = byInstance[instance.instanceId]!;
+        byInstance[instance.instanceId] = options.filter(
+          (option) => !getOmpModelSelectionIssue(option.slug, options),
+        );
+      }
     }
     return byInstance;
   }, [

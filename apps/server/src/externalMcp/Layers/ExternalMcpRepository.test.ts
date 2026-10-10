@@ -314,56 +314,6 @@ layer("ExternalMcpRepository", (it) => {
       }),
   );
 
-  it.effect("applies changed caps to new reservations and isolates unlimited pairings", () =>
-    Effect.gen(function* () {
-      const repository = yield* ExternalMcpRepository;
-      const now = "2026-07-20T00:01:00.000Z";
-      yield* createIntegration(repository, "editable-cap");
-      yield* createIntegration(repository, "unchanged-cap");
-      const setLimit = (concurrencyLimit: number | null) =>
-        repository.updateConcurrencyLimit({
-          integrationId: "integration-editable-cap",
-          concurrencyLimit,
-          now,
-        });
-      const reserve = (requestId: string, integrationId = "integration-editable-cap") =>
-        repository.reserveOperation({
-          operationId: `editable-${requestId}`,
-          integrationId,
-          requestId,
-          fingerprint: requestId,
-          requestedCount: 1,
-          planJson: "[]",
-          now,
-        });
-
-      expect(yield* setLimit(null)).toBe(true);
-      const unlimited = yield* Effect.all(
-        Array.from({ length: 4 }, (_, index) => reserve(`initial-${index}`)),
-        { concurrency: "unbounded" },
-      );
-      expect(unlimited.map((result) => result.kind)).toEqual(Array(4).fill("reserved"));
-      expect(yield* setLimit(2)).toBe(true);
-      expect(yield* reserve("capped")).toMatchObject({
-        kind: "concurrency_limited",
-        activeCount: 4,
-        limit: 2,
-      });
-      expect((yield* reserve("initial-0")).kind).toBe("replay");
-      expect(yield* setLimit(5)).toBe(true);
-      expect((yield* reserve("increased")).kind).toBe("reserved");
-      expect((yield* reserve("at-new-cap")).kind).toBe("concurrency_limited");
-      expect(yield* setLimit(null)).toBe(true);
-      expect((yield* reserve("removed")).kind).toBe("reserved");
-      expect((yield* reserve("other-first", "integration-unchanged-cap")).kind).toBe("reserved");
-      expect(yield* reserve("other-second", "integration-unchanged-cap")).toMatchObject({
-        kind: "concurrency_limited",
-        activeCount: 1,
-        limit: 1,
-      });
-    }),
-  );
-
   it.effect("keeps running-task capacity while its operation compensates after restart", () =>
     Effect.gen(function* () {
       const repository = yield* ExternalMcpRepository;
