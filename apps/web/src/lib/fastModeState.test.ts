@@ -1,11 +1,11 @@
-import type { OrchestrationThreadActivity } from "@synara/contracts";
+import { EventId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { deriveFastModeNotice } from "./fastModeState";
 
 function fastModeActivity(payload: Record<string, unknown>): OrchestrationThreadActivity {
   return {
-    id: `activity-${JSON.stringify(payload)}`,
+    id: EventId.makeUnsafe(`activity-${JSON.stringify(payload)}`),
     kind: "fast-mode.state",
     tone: "info",
     summary: "Fast mode state reported",
@@ -46,7 +46,12 @@ describe("deriveFastModeNotice", () => {
 
   it("forgets the prior account state after a completed handoff but retains it after a failed one", () => {
     const blocked = fastModeActivity({ state: "off", disabledReason: "free" });
-    const handoff = { ...blocked, id: "handoff", kind: "provider.handoff", payload: {} };
+    const handoff = {
+      ...blocked,
+      id: EventId.makeUnsafe("handoff"),
+      kind: "provider.handoff",
+      payload: {},
+    };
     expect(deriveFastModeNotice([blocked, handoff])).toBeNull();
     expect(
       deriveFastModeNotice([blocked, { ...handoff, kind: "provider.handoff.failed" }])?.kind,
