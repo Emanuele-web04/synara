@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import { IsoDateTime, MessageId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderKind, RuntimeMode } from "./orchestration";
+import { ProviderInstanceId } from "./providerInstance";
 
 export const EXTERNAL_MCP_AUDIENCE = "synara.external-mcp" as const;
 export const EXTERNAL_MCP_MAX_PROMPT_CHARS = 100_000;
@@ -127,6 +128,7 @@ export const ExternalMcpCreateTaskInput = Schema.Struct({
   requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_REQUEST_ID_LENGTH)),
   projectId: ProjectId,
   provider: ProviderKind,
+  instanceId: Schema.optional(ProviderInstanceId),
   model: TrimmedNonEmptyString,
   options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(EXTERNAL_MCP_MAX_PROMPT_CHARS)),
