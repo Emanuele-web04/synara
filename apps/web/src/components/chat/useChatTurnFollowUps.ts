@@ -1,3 +1,4 @@
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { MessageId, ThreadId, type ProviderKind, type TurnId } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -161,6 +162,7 @@ export function useChatTurnFollowUps({
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
+      (activeThread && isThreadDetailAwaitingVerification(activeThread.id)) ||
       sendInFlightRef.current
     ) {
       return false;
@@ -237,6 +239,8 @@ export function useChatTurnFollowUps({
           planDispatchSettings.modelSelection.provider,
         providerOptions: planDispatchSettings.providerOptions,
       });
+      if (isThreadDetailAwaitingVerification(threadIdForSend))
+        throw new Error("Wait for the conversation to reconnect before sending.");
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -510,6 +514,7 @@ export function useChatTurnFollowUps({
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
+      (activeThread && isThreadDetailAwaitingVerification(activeThread.id)) ||
       sendInFlightRef.current
     ) {
       return;
@@ -561,6 +566,8 @@ export function useChatTurnFollowUps({
         createdAt,
       })
       .then(() => {
+        if (isThreadDetailAwaitingVerification(activeThread.id))
+          throw new Error("Wait for the conversation to reconnect before sending.");
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
           provider: implementationDispatchSettings.modelSelection.provider,

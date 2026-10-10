@@ -28,6 +28,7 @@ import {
 
 import { advanceMessageTextSegments } from "./messageTextSegments";
 import { getThreadFromState } from "./threadDerivation";
+import { updateThreadHistoryLiveCount } from "./threadHistoryOwnership";
 import { isSessionRunningTurn } from "./session-logic";
 import {
   MAX_THREAD_MESSAGES,
@@ -566,13 +567,21 @@ function retainThreadProposedPlansAfterRevert(
 function rollbackThreadMessagesFromMessage(
   messages: ReadonlyArray<ChatMessage>,
   messageId: string,
+  clearUnknownWindow = false,
 ): {
   readonly messages: ChatMessage[];
   readonly removedTurnIds: ReadonlySet<string>;
 } {
   const targetIndex = messages.findIndex((message) => message.id === messageId);
   if (targetIndex < 0) {
-    return { messages: [...messages], removedTurnIds: new Set() };
+    return clearUnknownWindow
+      ? {
+          messages: [],
+          removedTurnIds: new Set(
+            messages.flatMap((message) => (message.turnId ? [message.turnId] : [])),
+          ),
+        }
+      : { messages: [...messages], removedTurnIds: new Set() };
   }
 
   const removedMessages = messages.slice(targetIndex);
@@ -1776,11 +1785,15 @@ function applyOrchestrationEvent(
           const rollback = rollbackThreadMessagesFromMessage(
             thread.messages,
             event.payload.messageId,
+            state.threadHistoryById?.[thread.id] !== undefined,
           );
           const removedTurnIds = new Set([
             ...rollback.removedTurnIds,
             ...(event.payload.removedTurnIds ?? []),
           ]);
+          const messages = rollback.messages.filter(
+            (message) => !message.turnId || !removedTurnIds.has(message.turnId),
+          );
           if (rollback.messages.length === thread.messages.length && removedTurnIds.size === 0) {
             return thread;
           }
@@ -1804,8 +1817,8 @@ function applyOrchestrationEvent(
             ...thread,
             turnDiffSummaries,
             messages: clearRemovedAsyncUserInputResponses(
-              rollback.messages,
-              new Set(rollback.messages.map((message) => message.id)),
+              messages,
+              new Set(messages.map((message) => message.id)),
               event.sequence,
             ).slice(state.threadHistoryById?.[thread.id] ? 0 : -MAX_THREAD_MESSAGES),
             proposedPlans,
@@ -1813,7 +1826,7 @@ function applyOrchestrationEvent(
             pendingSourceProposedPlan: undefined,
             latestHumanMessageAt: deriveThreadSummaryMetadata({
               ...thread,
-              messages: rollback.messages,
+              messages,
             }).latestHumanMessageAt,
             latestTurn:
               latestCheckpoint === null
@@ -2004,7 +2017,7 @@ export function applyOrchestrationEventsHotPath(
           ...nextState,
           threadHistoryById: {
             ...nextState.threadHistoryById,
-            [id]: { ...history, totalMessageCount: history.totalMessageCount + 1 },
+            [id]: updateThreadHistoryLiveCount(history, history.totalMessageCount + 1),
           },
         };
       }

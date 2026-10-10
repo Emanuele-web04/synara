@@ -108,10 +108,12 @@ export function ImportedHistoryButton({
   history,
   onFirstMessage,
   completeLabel,
+  loadLabel = "Load earlier messages",
 }: {
   history: { nextCursor: unknown; loading: boolean; error: string | null; load: () => unknown };
   onFirstMessage?: () => void;
   completeLabel?: string;
+  loadLabel?: string;
 }) {
   const complete = !history.nextCursor && !history.error && !history.loading;
   if (complete && !completeLabel) return null;
@@ -134,7 +136,7 @@ export function ImportedHistoryButton({
             ? "Loading earlier messages…"
             : history.error
               ? "Retry loading earlier messages"
-              : "Load earlier messages"}
+              : loadLabel}
       </Button>
       {onFirstMessage && (history.nextCursor || completeLabel) ? (
         <Button size="sm" variant="ghost" disabled={history.loading} onClick={onFirstMessage}>

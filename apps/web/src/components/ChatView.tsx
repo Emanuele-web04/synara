@@ -231,6 +231,7 @@ import {
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../threadDetailAuthority";
 import { retryThreadDetailSync } from "../threadDetailSyncRetry";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import {
@@ -865,7 +866,7 @@ export default function ChatView({
     return () => {
       cancelled = true;
     };
-  }, [threadFindOpen, threadId]);
+  }, [threadFindOpen, threadId, threadDetailSyncState, threadHistory.owner]);
   const [threadFindFocusNonce, setThreadFindFocusNonce] = useState(0);
   const [threadFindHighlightStore] = useState(() => createThreadFindHighlightStore());
   const handleThreadFindJump = (match: ThreadFindMatch) => {
@@ -1472,7 +1473,7 @@ export default function ChatView({
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
 
   const phase = derivePhase(activeThread?.session ?? null);
-  const isConnecting = phase === "connecting";
+  const isConnecting = phase === "connecting" || threadDetailSyncState === "cached";
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   const {
@@ -2323,7 +2324,8 @@ export default function ChatView({
   const onRespondToClaudeCacheReview = useCallback(
     async (review: PendingClaudeCacheReview, decision: ClaudeCacheReviewDecision) => {
       const api = readNativeApi();
-      if (!api) throw new Error("Reconnect before choosing how to resume.");
+      if (!api || isThreadDetailAwaitingVerification(threadId))
+        throw new Error("Reconnect before choosing how to resume.");
       await api.orchestration.dispatchCommand({
         type: "thread.claude-cache.respond",
         commandId: newCommandId(),
@@ -3266,6 +3268,7 @@ export default function ChatView({
       !api ||
       !isServerThread ||
       !activeThread ||
+      isThreadDetailAwaitingVerification(activeThread.id) ||
       activeThread.session === null ||
       activeThread.session.status === "closed"
     ) {
@@ -3716,7 +3719,7 @@ export default function ChatView({
 
   const onInterrupt = useCallback(async () => {
     const api = readNativeApi();
-    if (!api || !activeThread) return;
+    if (!api || !activeThread || isThreadDetailAwaitingVerification(activeThread.id)) return;
     // A user Stop pauses the waiting queue instead of sending it after the turn.
     const releaseQueueHold = holdQueuedComposerTurnsForStop(activeThread.id);
     await api.orchestration
@@ -3753,7 +3756,7 @@ export default function ChatView({
   const onStopBackgroundTask = useCallback(
     (taskId: string) => {
       const api = readNativeApi();
-      if (!api || !activeThread) return;
+      if (!api || !activeThread || isThreadDetailAwaitingVerification(activeThread.id)) return;
       void api.orchestration
         .dispatchCommand({
           type: "thread.task.stop",
@@ -3775,7 +3778,13 @@ export default function ChatView({
 
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
-    if (!api || !activeThread || !workflowRunState) return;
+    if (
+      !api ||
+      !activeThread ||
+      !workflowRunState ||
+      isThreadDetailAwaitingVerification(activeThread.id)
+    )
+      return;
     await api.orchestration.dispatchCommand({
       type: "thread.task.stop",
       commandId: newCommandId(),
@@ -3790,7 +3799,8 @@ export default function ChatView({
       const api = readNativeApi();
       // The Task tool_use lives on the strip source thread (the parent while a
       // subagent thread is open), so route the command there.
-      if (!api || !stripSourceThreadId) return;
+      if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
+        return;
       await api.orchestration.dispatchCommand({
         type: "thread.task.background",
         commandId: newCommandId(),
@@ -3810,7 +3820,8 @@ export default function ChatView({
   const onStopSubagentStripItem = useCallback(
     async (item: ComposerSubagentStripItem) => {
       const api = readNativeApi();
-      if (!api || !stripSourceThreadId) return;
+      if (!api || !stripSourceThreadId || isThreadDetailAwaitingVerification(stripSourceThreadId))
+        return;
       await api.orchestration.dispatchCommand({
         type: "thread.turn.interrupt",
         requestedBy: "user",
@@ -3832,14 +3843,16 @@ export default function ChatView({
   // read as paused (with a resume affordance) instead of plain stopped, across
   // reloads too.
   const onPauseWorkflowRun = useCallback(async () => {
-    if (!workflowRunState || !activeThreadId) return;
+    if (!workflowRunState || !activeThreadId || isThreadDetailAwaitingVerification(activeThreadId))
+      return;
     const { workflowTaskId } = workflowRunState;
     markWorkflowRunPaused(activeThreadId, workflowTaskId);
     await onStopWorkflowRun();
   }, [activeThreadId, markWorkflowRunPaused, onStopWorkflowRun, workflowRunState]);
 
   const onDismissWorkflowRun = useCallback(() => {
-    if (!workflowRunState || !activeThreadId) return;
+    if (!workflowRunState || !activeThreadId || isThreadDetailAwaitingVerification(activeThreadId))
+      return;
     const { workflowTaskId } = workflowRunState;
     markWorkflowRunDismissed(activeThreadId, workflowTaskId);
   }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
@@ -6813,14 +6826,14 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
-                    onStopBackgroundTask={onStopBackgroundTask}
+                    {...(threadDetailSyncState === "cached" ? {} : { onStopBackgroundTask })}
                     computerControlEnabled={enableComputerControl}
                     onEnableComputerControl={handleEnableComputerControlFromDenial}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
-                    onRespondToAsyncUserInput={onRespondToAsyncUserInput}
+                    {...(threadDetailSyncState === "cached" ? {} : { onRespondToAsyncUserInput })}
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}

@@ -38,6 +38,14 @@ const open = () =>
     label: "conversation cache",
   });
 
+function pruneTombstones(store: IDBObjectStore, records: RecordEntry[]) {
+  records
+    .filter((record) => record.payload === null)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(MAX_TOMBSTONES)
+    .forEach((record) => store.delete(record.key));
+}
+
 export async function readThreadDetailCache(
   namespace: ThreadDetailCacheNamespace,
   id: ThreadId,
@@ -133,11 +141,7 @@ export async function writeThreadDetailCache(
           )
             store.delete(record.key);
         });
-        records
-          .filter((record) => record.payload === null)
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-          .slice(MAX_TOMBSTONES)
-          .forEach((record) => store.delete(record.key));
+        pruneTombstones(store, records);
       } catch {
         transaction.abort();
       }
@@ -158,18 +162,30 @@ export async function deleteThreadDetailCache(
   try {
     database = await open();
     const transaction = database.transaction(STORE, "readwrite");
-    transaction
-      .objectStore(STORE)
-      .put({
-        key: recordKey(namespace, id),
-        namespace: namespaceKey(namespace),
-        version: SCHEMA_VERSION,
-        updatedAt: Date.now(),
-        bytes: 0,
-        sequence: Number.MAX_SAFE_INTEGER,
-        payload: null,
-      } satisfies RecordEntry);
-    await waitForIdbTransaction(transaction, "Conversation cache deletion");
+    const completion = waitForIdbTransaction(transaction, "Conversation cache deletion");
+    const store = transaction.objectStore(STORE);
+    const entry: RecordEntry = {
+      key: recordKey(namespace, id),
+      namespace: namespaceKey(namespace),
+      version: SCHEMA_VERSION,
+      updatedAt: Date.now(),
+      bytes: 0,
+      sequence: Number.MAX_SAFE_INTEGER,
+      payload: null,
+    };
+    const request = store.getAll();
+    request.addEventListener("success", () => {
+      try {
+        store.put(entry);
+        pruneTombstones(store, [
+          entry,
+          ...(request.result as RecordEntry[]).filter((record) => record.key !== entry.key),
+        ]);
+      } catch {
+        transaction.abort();
+      }
+    });
+    await completion;
   } catch {
     /* Optional cache. */
   } finally {

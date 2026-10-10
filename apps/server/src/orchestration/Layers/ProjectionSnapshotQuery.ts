@@ -2130,6 +2130,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     AND json_extract(later.payload_json, '$.taskId') = json_extract(activity.payload_json, '$.taskId')
                     AND (later.created_at > activity.created_at OR (later.created_at = activity.created_at AND later.activity_id > activity.activity_id))
                 ))
+                -- Task updates are patches. Keep the most recent value of each
+                -- field instead of losing ownership to a later partial update.
+                OR (activity.kind IN ('task.updated', 'task.progress') AND EXISTS (
+                  SELECT 1 FROM json_each(activity.payload_json) patch
+                  WHERE patch.key != 'taskId' AND NOT EXISTS (
+                    SELECT 1 FROM projection_thread_activities later
+                    WHERE later.thread_id = activity.thread_id
+                      AND later.kind IN ('task.updated', 'task.progress', 'task.completed')
+                      AND json_extract(later.payload_json, '$.taskId') = json_extract(activity.payload_json, '$.taskId')
+                      AND (later.kind = 'task.completed' OR EXISTS (
+                        SELECT 1 FROM json_each(later.payload_json) newer_patch
+                        WHERE newer_patch.key = patch.key
+                      ))
+                      AND (later.created_at > activity.created_at OR (later.created_at = activity.created_at AND later.activity_id > activity.activity_id))
+                  )
+                ))
+                OR (activity.kind = 'turn.tasks.updated' AND NOT EXISTS (
+                  SELECT 1 FROM projection_thread_activities later
+                  WHERE later.thread_id = activity.thread_id AND later.kind = 'turn.tasks.updated'
+                    AND (later.created_at > activity.created_at OR (later.created_at = activity.created_at AND later.activity_id > activity.activity_id))
+                ))
                 OR (activity.kind = 'runtime.warning' AND json_extract(activity.payload_json, '$.nativeEventType') = 'background_tasks_changed' AND NOT EXISTS (
                   SELECT 1 FROM projection_thread_activities later WHERE later.thread_id = activity.thread_id
                     AND later.kind = 'runtime.warning' AND json_extract(later.payload_json, '$.nativeEventType') = 'background_tasks_changed'

@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import type { AppState } from "./storeState";
 import { getThreadFromState } from "./threadDerivation";
 import { useStore } from "./store";
+import { evictThreadDetailFromClientState } from "./storeProjection";
 import {
   getVerifiedThreadCacheIdentity,
   subscribeThreadCacheIdentity,
@@ -191,15 +192,22 @@ export function startThreadDetailCachePersistence(): () => void {
     pending.clear();
     deletions.clear();
     if (previous !== null) {
-      useStore
-        .getState()
-        .evictThreadDetails(
-          Object.keys(useStore.getState().threadDetailSyncById ?? {}) as ThreadId[],
-        );
-      useStore.setState({
-        shellSnapshotSequence: 0,
-        deletedThreadIdsById: {},
-        deletedProjectIdsById: {},
+      useStore.setState((state) => {
+        const ids = Object.keys(state.threadDetailSyncById ?? {}) as ThreadId[];
+        let evicted: AppState = state;
+        for (const id of ids) evicted = evictThreadDetailFromClientState(evicted, id);
+        return {
+          ...evicted,
+          // Clear old display/cursors atomically, while actions remain blocked
+          // until this process supplies an authoritative snapshot.
+          threadDetailSyncById: {
+            ...evicted.threadDetailSyncById,
+            ...Object.fromEntries(ids.map((id) => [id, "cached" as const])),
+          },
+          shellSnapshotSequence: 0,
+          deletedThreadIdsById: {},
+          deletedProjectIdsById: {},
+        };
       });
     }
   });

@@ -23,6 +23,7 @@ import { newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useStore } from "../../store";
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
@@ -45,7 +46,7 @@ export async function respondToThreadApproval(input: {
   const api = readNativeApi();
   if (!api) return;
   const { threadId, requestId, decision, lifecycleGeneration } = input;
-  if (useStore.getState().threadDetailSyncById?.[threadId] === "cached") {
+  if (isThreadDetailAwaitingVerification(threadId)) {
     throw new Error("Wait for the conversation to reconnect before answering.");
   }
   const setThreadError = useStore.getState().setError;

@@ -23,6 +23,7 @@ import {
   retainThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
+import { inheritThreadHistoryOwner } from "./threadHistoryOwnership";
 import {
   arraysShallowEqual,
   capThreadActivities,
@@ -1760,11 +1761,13 @@ export function mergeThreadHistoryPage(
   )
     return state;
   const byId = new Set(thread.messages.map((message) => message.id));
-  const older = page.thread.messages.filter((message) => !byId.has(message.id));
+  const older = expectedCursor
+    ? page.thread.messages.filter((message) => !byId.has(message.id))
+    : [];
   const activityIds = new Set(thread.activities.map((activity) => activity.id));
-  const olderActivities = page.thread.activities.filter(
-    (activity) => !activityIds.has(activity.id),
-  );
+  const olderActivities = expectedActivityCursor
+    ? page.thread.activities.filter((activity) => !activityIds.has(activity.id))
+    : [];
   const normalized = normalizeThreadFromReadModel(
     { ...page.thread, messages: older, activities: olderActivities },
     undefined,
@@ -1784,23 +1787,32 @@ export function mergeThreadHistoryPage(
     ...next,
     threadHistoryById: {
       ...next.threadHistoryById,
-      [id]: {
-        ...page.history,
-        totalMessageCount: Math.max(
-          history.totalMessageCount,
-          page.history.totalMessageCount,
-          next.messageIdsByThreadId?.[id]?.length ?? 0,
-        ),
-        ...(page.history.totalActivityCount !== undefined
-          ? {
-              totalActivityCount: Math.max(
-                history.totalActivityCount ?? 0,
-                page.history.totalActivityCount,
-                next.activityIdsByThreadId?.[id]?.length ?? 0,
-              ),
-            }
-          : {}),
-      },
+      [id]: inheritThreadHistoryOwner(
+        {
+          ...page.history,
+          // A dimension absent from the request returns its latest tail, not its
+          // older page. Keep its exhausted cursor and ignore that repeated tail.
+          olderCursor: expectedCursor ? page.history.olderCursor : history.olderCursor,
+          olderActivityCursor: expectedActivityCursor
+            ? page.history.olderActivityCursor
+            : history.olderActivityCursor,
+          totalMessageCount: Math.max(
+            history.totalMessageCount,
+            page.history.totalMessageCount,
+            next.messageIdsByThreadId?.[id]?.length ?? 0,
+          ),
+          ...(page.history.totalActivityCount !== undefined
+            ? {
+                totalActivityCount: Math.max(
+                  history.totalActivityCount ?? 0,
+                  page.history.totalActivityCount,
+                  next.activityIdsByThreadId?.[id]?.length ?? 0,
+                ),
+              }
+            : {}),
+        },
+        history,
+      ),
     },
   };
 }
