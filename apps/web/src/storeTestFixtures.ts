@@ -93,7 +93,6 @@ export function makeActivity(overrides: {
   payload?: OrchestrationThreadActivity["payload"];
   turnId?: string;
   sequence?: number;
-  sequenceSource?: OrchestrationThreadActivity["sequenceSource"];
 }): OrchestrationThreadActivity {
   return {
     id: EventId.makeUnsafe(overrides.id ?? crypto.randomUUID()),
@@ -104,7 +103,6 @@ export function makeActivity(overrides: {
     payload: overrides.payload ?? {},
     turnId: overrides.turnId ? TurnId.makeUnsafe(overrides.turnId) : null,
     ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
-    ...(overrides.sequenceSource !== undefined ? { sequenceSource: overrides.sequenceSource } : {}),
   };
 }
 

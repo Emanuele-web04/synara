@@ -6,8 +6,8 @@
 import type { MessageId, OrchestrationMessage, TurnId } from "@synara/contracts";
 
 /**
- * - `latest`: the fork point is the source's latest conversation point, so the
- *   provider may fork its native history as it stands.
+ * - `latest`: no explicit message was selected for this whole-thread fork, so
+ *   the provider may fork its native history as it stands.
  * - `turn`: native history must stop at the end of this source turn.
  * - `unavailable`: no native boundary matches the chosen point; the fork must
  *   be rebuilt from its imported transcript instead of forking at the latest point.
@@ -39,8 +39,10 @@ export function resolveForkSourceCutoff(input: {
     return { kind: "unavailable", reason: "fork message is no longer in the source thread" };
   }
   const laterMessages = messages.slice(index + 1).filter(isConversationMessage);
-  if (laterMessages.length === 0) {
-    return { kind: "latest" };
+  // An explicit message stays pinned even when currently latest: the source
+  // can advance between reading this projection and the native fork call.
+  if (message.role !== "assistant") {
+    return { kind: "unavailable", reason: "fork message is not an assistant turn boundary" };
   }
   const turnId = message.turnId;
   if (!turnId) {

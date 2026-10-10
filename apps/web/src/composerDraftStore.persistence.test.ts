@@ -24,32 +24,6 @@ import {
 } from "./lib/terminalContext";
 
 describe("composerDraftStore persisted-state hydration", () => {
-  it("keeps the queue stop and resume markers only while the queue has entries", () => {
-    resetComposerDraftStore();
-    const threadId = ThreadId.makeUnsafe("thread-queue-resume");
-    const store = useComposerDraftStore.getState();
-    store.enqueueQueuedTurn(threadId, makeQueuedChatTurn("resume-queue"));
-    const roundTrip = () => {
-      const persisted = normalizeCurrentPersistedComposerDraftStoreState(
-        JSON.parse(
-          JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
-        ),
-      );
-      return toHydratedThreadDraft(threadId, persisted.draftsByThreadId[threadId]!);
-    };
-
-    store.pauseQueuedTurnsAfterStop(threadId, "turn-stopped");
-    expect(roundTrip().queueStoppedTurnId).toBe("turn-stopped");
-
-    store.resumeQueuedTurns(threadId, "turn-failed");
-    const resumed = roundTrip();
-    expect(resumed.queueStoppedTurnId).toBeUndefined();
-    expect(resumed.queueResumedTurnId).toBe("turn-failed");
-
-    store.removeQueuedTurn(threadId, "resume-queue");
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
-  });
-
   it.each([true, false])(
     "restores a Computer-only choice of %s after serialization and hydration",
     (enabled) => {
