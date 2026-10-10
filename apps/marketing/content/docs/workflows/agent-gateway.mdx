@@ -59,7 +59,11 @@ A creation plan should specify:
 - Provider/model target discovered from capabilities
 - Local or worktree environment
 - Base ref when a worktree must start from a specific revision
-- Approval-required or full-access runtime mode
+- Optional approval-required or full-access runtime mode override
+
+Hub tasks inherit the coordinator thread’s approval mode when `runtimeMode` is omitted, including **Approve for me** (Auto). The mode is saved when the Hub accepts the task and retained while it waits in the queue. An explicit `runtimeMode` takes precedence; the MCP input supports approval-required and full-access overrides.
+
+The access selector reflects the saved thread mode. A mode changed during an active turn is marked **next turn**: Synara saves it immediately and applies it when the next turn prepares the provider session. The current turn keeps its original permissions.
 
 Prefer a managed worktree for an independently editing child.
 

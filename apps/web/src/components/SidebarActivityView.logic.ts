@@ -84,11 +84,36 @@ function compareThreadIds(
 
 export interface ActivityViewModel {
   pinned: SidebarThreadSummary[];
-  /** Unpinned chats with an unsent composer message; they lead the feed until sent or cleared. */
+  /**
+   * Unpinned, idle chats with an unsent composer message, other than the open one;
+   * they lead the feed until sent or cleared.
+   */
   drafts: SidebarThreadSummary[];
   active: SidebarThreadSummary[];
   settled: SidebarThreadSummary[];
   snoozed: SidebarThreadSummary[];
+}
+
+/**
+ * True when an unsent composer draft should lift the thread into Drafts (or to
+ * the top of Pinned). The open thread and threads that are working or starting
+ * a turn keep their place, so typing a follow-up never makes a row jump; their
+ * pencil glyph still marks the draft.
+ */
+function isParkedActivityDraft(
+  thread: Pick<SidebarThreadSummary, "id" | "hasLiveTailWork" | "session" | "latestTurn">,
+  input: {
+    draftThreadIdSet: ReadonlySet<ThreadId> | null;
+    activeThreadId: ThreadId | null;
+  },
+): boolean {
+  if (!input.draftThreadIdSet?.has(thread.id)) return false;
+  if (thread.id === input.activeThreadId) return false;
+  return !(
+    isThreadRunningForActivity(thread) ||
+    thread.session?.orchestrationStatus === "starting" ||
+    thread.latestTurn?.state === "running"
+  );
 }
 
 /**
@@ -99,12 +124,18 @@ export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   draftThreadIdSet?: ReadonlySet<ThreadId>;
+  /** The open thread: its draft is being typed, so it never moves to Drafts. */
+  activeThreadId?: ThreadId | null;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   /** Project scope as a set so merged scopes (all project-less chats) filter as one. */
   projectFilterIds?: ReadonlySet<ProjectId> | null;
 }): ActivityViewModel {
   const projectFilterIds = input.projectFilterIds ?? null;
-  const draftThreadIdSet = input.draftThreadIdSet ?? null;
+  const draftOptions = {
+    draftThreadIdSet: input.draftThreadIdSet ?? null,
+    activeThreadId: input.activeThreadId ?? null,
+  };
+  const isDraft = (thread: SidebarThreadSummary) => isParkedActivityDraft(thread, draftOptions);
   const pinned: SidebarThreadSummary[] = [];
   const drafts: SidebarThreadSummary[] = [];
   const active: SidebarThreadSummary[] = [];
@@ -124,7 +155,7 @@ export function buildActivityViewModel(input: {
       pinned.push(thread);
       continue;
     }
-    if (draftThreadIdSet?.has(thread.id)) {
+    if (isDraft(thread)) {
       drafts.push(thread);
       continue;
     }
@@ -138,7 +169,6 @@ export function buildActivityViewModel(input: {
   const compareRecency = (left: SidebarThreadSummary, right: SidebarThreadSummary) =>
     resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
     compareThreadIds(left, right);
-  const isDraft = (thread: SidebarThreadSummary) => draftThreadIdSet?.has(thread.id) ?? false;
   pinned.sort(
     (left, right) => Number(isDraft(right)) - Number(isDraft(left)) || compareRecency(left, right),
   );

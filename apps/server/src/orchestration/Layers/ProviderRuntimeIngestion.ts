@@ -79,6 +79,8 @@ import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/Pro
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -197,6 +199,8 @@ const NATIVE_CHILD_IDS_BY_SOURCE_TURN_CACHE_CAPACITY = 2_048;
 const NATIVE_CHILD_IDS_BY_SOURCE_TURN_TTL = Duration.minutes(360);
 const ASSISTANT_DELIVERY_MODE_BY_TURN_CACHE_CAPACITY = 2_048;
 const ASSISTANT_DELIVERY_MODE_BY_TURN_TTL = Duration.minutes(60);
+const SETTLED_TURN_STATE_CACHE_CAPACITY = 2_048;
+const SETTLED_TURN_STATE_TTL = Duration.minutes(60);
 // One turn realistically produces a handful of images; the cap only bounds a
 // pathological provider replaying image completions in a loop.
 const MAX_PENDING_GENERATED_IMAGES_PER_TURN = 32;
@@ -244,9 +248,22 @@ type RuntimeIngestionInput =
       event: RuntimeIngestionDomainEvent;
     };
 
+type AssistantSegmentState = {
+  hasText: boolean;
+  splitPending: boolean;
+  /** Journal sequence of the last delta, with the boundary decision it made. */
+  lastSequence?: number;
+  lastStartedNewSegment?: boolean;
+  /** Last journal sequence whose text was committed to the buffered caches. */
+  bufferedThroughSequence?: number;
+};
+// `appliedThroughSequence` makes appends idempotent: a journal row retried
+// after a later dispatch in the same event failed must not append its delta
+// to the process-local buffer a second time.
 type BufferedToolOutput = {
   readonly text: string;
   readonly truncated: boolean;
+  readonly appliedThroughSequence?: number;
 };
 type BufferedReasoningSummary = {
   readonly parts: ReadonlyMap<number, string>;
@@ -254,7 +271,13 @@ type BufferedReasoningSummary = {
   readonly createdAt: string;
   readonly sequence: number | undefined;
   readonly lastPreviewAt?: number;
+  readonly appliedThroughSequence?: number;
 };
+
+const alreadyApplied = (appliedThroughSequence: number | undefined, sequence: number | undefined) =>
+  appliedThroughSequence !== undefined &&
+  sequence !== undefined &&
+  sequence <= appliedThroughSequence;
 type AssistantDeliveryModeBindingState = {
   readonly pendingModesByThreadId: ReadonlyMap<ThreadId, ReadonlyArray<AssistantDeliveryMode>>;
   readonly unmatchedTurnIdsByThreadId: ReadonlyMap<ThreadId, ReadonlyArray<TurnId>>;
@@ -272,6 +295,8 @@ type ProviderDiffPlaceholder = {
 type NativeChildSlotState = {
   initialized: boolean;
   readonly childIds: Set<string>;
+  // The notice is attempted once per budget; refused identities are not retained.
+  overflowNoticeAttempted: boolean;
 };
 
 /**
@@ -411,6 +436,11 @@ function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
       return isToolLifecycleItemType(itemType) || itemType === "context_compaction";
     }
     case "runtime.warning":
+      // A Claude Monitor event is dated before the reply it woke, so it may be
+      // read back mid-reply but never renders inside it.
+      return (
+        (event.payload.detail as { subtype?: unknown } | undefined)?.subtype !== "monitor_event"
+      );
     case "user-input.requested":
     case "user-input.resolved":
       return true;
@@ -652,6 +682,7 @@ interface SubagentIdentity {
   readonly role?: string;
   readonly model?: string;
   readonly modelIsRequestedHint?: boolean;
+  readonly prompt?: string;
 }
 
 function extractCollabPayload(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
@@ -676,10 +707,29 @@ function extractSubagentIdentity(
   ) as SubagentIdentity | undefined;
 }
 
+const SUBAGENT_PROMPT_TITLE_MAX_CHARS = 60;
+
+// A subagent's own words beat any placeholder: providers that name no
+// nickname or role (Codex spawns) are titled from the clipped prompt. A raw
+// provider id (tool_use or conversation id) is never a title.
+function subagentPromptTitle(prompt: string | undefined): string | undefined {
+  const firstLine = prompt
+    ?.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) {
+    return undefined;
+  }
+  const collapsed = firstLine.replace(/\s+/gu, " ");
+  return collapsed.length > SUBAGENT_PROMPT_TITLE_MAX_CHARS
+    ? `${collapsed.slice(0, SUBAGENT_PROMPT_TITLE_MAX_CHARS - 1).trimEnd()}…`
+    : collapsed;
+}
+
 function subagentThreadTitle(identity: {
   nickname?: string | undefined;
   role?: string | undefined;
-  providerThreadId?: string | undefined;
+  prompt?: string | undefined;
 }): string {
   if (identity.nickname && identity.role) {
     return `${identity.nickname} [${identity.role}]`;
@@ -687,16 +737,52 @@ function subagentThreadTitle(identity: {
   if (identity.nickname) {
     return identity.nickname;
   }
+  const promptTitle = subagentPromptTitle(identity.prompt);
+  if (promptTitle && identity.role) {
+    return `${promptTitle} [${identity.role}]`;
+  }
+  if (promptTitle) {
+    return promptTitle;
+  }
   if (identity.role) {
     return `Subagent [${identity.role}]`;
   }
-  return identity.providerThreadId ? `Subagent ${identity.providerThreadId}` : "Subagent";
+  return "Subagent";
 }
 
-const takeCached = <Key, Value>(cache: Cache.Cache<Key, Value>, key: Key) =>
-  Cache.getOption(cache, key).pipe(
-    Effect.flatMap((value) => Cache.invalidate(cache, key).pipe(Effect.as(value))),
-  );
+// Titles a child created before its identity arrived ("Subagent", or the raw
+// "Subagent <provider id>" older builds persisted) can still be replaced.
+function isPlaceholderSubagentThreadTitle(title: string): boolean {
+  return /^Subagent(?: \S+)?$/u.test(title.trim());
+}
+
+// The title an existing child thread should move to, or undefined to keep it.
+// A nickname always wins; without one, a prompt-derived title is only set over
+// a placeholder and is never downgraded back to "Subagent [role]".
+function nextSubagentThreadTitle(
+  existing: {
+    readonly title: string;
+    readonly subagentNickname?: string | null | undefined;
+    readonly subagentRole?: string | null | undefined;
+  },
+  identity: Pick<SubagentIdentity, "nickname" | "role" | "prompt"> | undefined,
+): string | undefined {
+  const nickname = identity?.nickname ?? existing.subagentNickname ?? undefined;
+  const role = identity?.role ?? existing.subagentRole ?? undefined;
+  let next: string | undefined;
+  if (nickname !== undefined) {
+    next =
+      identity?.nickname !== undefined || identity?.role !== undefined
+        ? subagentThreadTitle({ nickname, role })
+        : undefined;
+  } else if (isPlaceholderSubagentThreadTitle(existing.title)) {
+    next =
+      identity?.prompt !== undefined || identity?.role !== undefined
+        ? subagentThreadTitle({ role, prompt: identity?.prompt })
+        : undefined;
+  }
+  return next !== undefined && next !== existing.title ? next : undefined;
+}
 
 export function selectProviderRuntimeJournalStream(input: {
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
@@ -736,6 +822,7 @@ const make = Effect.gen(function* () {
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
+  const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const runtimeEvents = yield* ProviderRuntimeEventRepository;
   const commandReceipts = yield* OrchestrationCommandReceiptRepository;
@@ -995,11 +1082,50 @@ const make = Effect.gen(function* () {
     timeToLive: ACTIVITY_UPDATE_FINGERPRINT_TTL,
     lookup: () => Effect.succeed(undefined),
   });
+  // Turns whose terminal event already finalized their assistant messages. A
+  // provider delta that arrives afterwards is delivered and settled at once:
+  // nothing would ever complete that turn's messages again.
+  const finalizedTurnKeys = yield* Cache.make<string, boolean>({
+    capacity: SETTLED_TURN_STATE_CACHE_CAPACITY,
+    timeToLive: SETTLED_TURN_STATE_TTL,
+    lookup: () => Effect.succeed(false),
+  });
+  // An empty completed assistant item creates no row. Remember it per turn so
+  // an artifact-only turn's generated images still become that item's body.
+  const skippedEmptyAssistantMessageByTurnKey = yield* Cache.make<string, MessageId | undefined>({
+    capacity: SETTLED_TURN_STATE_CACHE_CAPACITY,
+    timeToLive: SETTLED_TURN_STATE_TTL,
+    lookup: () => Effect.succeed(undefined),
+  });
+  const isTurnFinalized = (threadId: ThreadId, turnId: TurnId) =>
+    Effect.gen(function* () {
+      const key = providerTurnKey(threadId, turnId);
+      const cached = yield* Cache.getOption(finalizedTurnKeys, key);
+      if (Option.isSome(cached)) return cached.value;
+      // A restart (or cache eviction) must not leave a new item of an ended
+      // turn streaming. Cache open turns too, keeping this lookup off their
+      // per-delta path; lifecycle events update that cached state below.
+      const turn = yield* projectionTurnRepository.getByTurnId({ threadId, turnId });
+      const finalized =
+        Option.isSome(turn) &&
+        (turn.value.state === "completed" ||
+          turn.value.state === "interrupted" ||
+          turn.value.state === "error");
+      yield* Cache.set(finalizedTurnKeys, key, finalized);
+      return finalized;
+    });
+  const markTurnFinalized = (threadId: ThreadId, turnId: TurnId) =>
+    Cache.set(finalizedTurnKeys, providerTurnKey(threadId, turnId), true);
   const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
   const nativeChildIdsBySourceTurn = yield* Cache.make<string, NativeChildSlotState>({
     capacity: NATIVE_CHILD_IDS_BY_SOURCE_TURN_CACHE_CAPACITY,
     timeToLive: NATIVE_CHILD_IDS_BY_SOURCE_TURN_TTL,
-    lookup: () => Effect.succeed({ initialized: false, childIds: new Set<string>() }),
+    lookup: () =>
+      Effect.succeed({
+        initialized: false,
+        childIds: new Set<string>(),
+        overflowNoticeAttempted: false,
+      }),
   });
 
   const claimNativeChildSlot = Effect.fnUntraced(function* (
@@ -1026,7 +1152,9 @@ const make = Effect.gen(function* () {
       return { admitted: true, budgetKey } as const;
     }
     if (childIds.size >= MAX_NATIVE_CHILDREN_PER_PARENT_TURN) {
-      return { admitted: false, budgetKey } as const;
+      const firstOverflow = !slotState.overflowNoticeAttempted;
+      slotState.overflowNoticeAttempted = true;
+      return { admitted: false, budgetKey, firstOverflow } as const;
     }
     childIds.add(childThreadId);
     return { admitted: true, budgetKey } as const;
@@ -1236,24 +1364,14 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageIdsForTurn = (threadId: ThreadId, turnId: TurnId) =>
     Cache.invalidate(turnMessageIdsByTurnKey, providerTurnKey(threadId, turnId));
 
-  const appendBufferedAssistantText = (messageId: MessageId, delta: string) =>
-    Cache.getOption(bufferedAssistantTextByMessageId, messageId).pipe(
-      Effect.flatMap((existingText) =>
-        Effect.gen(function* () {
-          const nextText = Option.match(existingText, {
-            onNone: () => delta,
-            onSome: (text) => `${text}${delta}`,
-          });
-          if (nextText.length <= MAX_BUFFERED_ASSISTANT_CHARS) {
-            yield* Cache.set(bufferedAssistantTextByMessageId, messageId, nextText);
-            return "";
-          }
-
-          // Safety valve: flush full buffered text as an assistant delta to cap memory.
-          yield* Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
-          return nextText;
-        }),
-      ),
+  const getTrackedAssistantTurnIdsForThread = (threadId: ThreadId) =>
+    Cache.keys(turnMessageIdsByTurnKey).pipe(
+      Effect.map((keys) => {
+        const prefix = `${threadId}:`;
+        return Array.from(keys)
+          .filter((key) => key.startsWith(prefix))
+          .map((key) => TurnId.makeUnsafe(key.slice(prefix.length)));
+      }),
     );
 
   const getBufferedAssistantText = (messageId: MessageId) =>
@@ -1277,18 +1395,20 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const takeBufferedProposedPlan = (planId: string) =>
-    takeCached(bufferedProposedPlanById, planId).pipe(Effect.map(Option.getOrUndefined));
+  const getBufferedProposedPlan = (planId: string) =>
+    Cache.getOption(bufferedProposedPlanById, planId).pipe(Effect.map(Option.getOrUndefined));
 
-  const appendBufferedToolOutput = (key: string, delta: string) =>
+  const appendBufferedToolOutput = (key: string, delta: string, sequence: number) =>
     Cache.getOption(bufferedToolOutputByKey, key).pipe(
       Effect.flatMap((existingEntry) => {
         const existing = Option.getOrUndefined(existingEntry);
+        if (alreadyApplied(existing?.appliedThroughSequence, sequence)) return Effect.void;
         const existingText = existing?.text ?? "";
         const truncated = existingText.length + delta.length > MAX_BUFFERED_TOOL_OUTPUT_CHARS;
         return Cache.set(bufferedToolOutputByKey, key, {
           text: appendCappedBufferedText(existingText, delta, MAX_BUFFERED_TOOL_OUTPUT_CHARS),
           truncated: existing?.truncated === true || truncated,
+          appliedThroughSequence: sequence,
         });
       }),
     );
@@ -1297,9 +1417,6 @@ const make = Effect.gen(function* () {
     Cache.getOption(bufferedToolOutputByKey, key).pipe(
       Effect.map((existingEntry) => Option.getOrUndefined(existingEntry)),
     );
-
-  const takeBufferedToolOutput = (key: string) =>
-    takeCached(bufferedToolOutputByKey, key).pipe(Effect.map(Option.getOrUndefined));
 
   const appendBufferedReasoningSummary = (
     key: string,
@@ -1318,6 +1435,9 @@ const make = Effect.gen(function* () {
           return Effect.void;
         }
         const existingSummary = Option.getOrUndefined(existingEntry);
+        if (alreadyApplied(existingSummary?.appliedThroughSequence, sequence)) {
+          return Effect.void;
+        }
         const parts = new Map(existingSummary?.parts ?? []);
         const existingPart = parts.get(summaryIndex) ?? "";
         const otherChars = Array.from(parts.entries()).reduce(
@@ -1335,12 +1455,13 @@ const make = Effect.gen(function* () {
           sourceEvent: event,
           createdAt: existingSummary?.createdAt ?? event.createdAt,
           sequence: existingSummary?.sequence ?? sequence,
+          ...(sequence !== undefined ? { appliedThroughSequence: sequence } : {}),
         });
       }),
     );
 
-  const takeBufferedReasoningSummary = (key: string) =>
-    takeCached(bufferedReasoningSummaryByKey, key).pipe(Effect.map(Option.getOrUndefined));
+  const getBufferedReasoningSummary = (key: string) =>
+    Cache.getOption(bufferedReasoningSummaryByKey, key).pipe(Effect.map(Option.getOrUndefined));
 
   // Publish one stable row while Claude thinks, without a projection write for every token.
   // Event time keeps the same coalescing behavior when the runtime journal is replayed.
@@ -1387,11 +1508,11 @@ const make = Effect.gen(function* () {
         Effect.forEach(
           Array.from(keys).filter((key) => key.startsWith(prefix)),
           (key) =>
-            takeBufferedReasoningSummary(key).pipe(
+            getBufferedReasoningSummary(key).pipe(
               Effect.flatMap((summary) => {
                 const detail = joinedBufferedReasoningSummary(summary);
                 if (!summary || !detail || !summary.sourceEvent.itemId) {
-                  return Effect.void;
+                  return Cache.invalidate(bufferedReasoningSummaryByKey, key);
                 }
                 const completionEvent: ProviderRuntimeEvent = {
                   ...summary.sourceEvent,
@@ -1410,13 +1531,15 @@ const make = Effect.gen(function* () {
                     detail,
                   },
                 };
+                // Consume the buffer only once its row is durable, so a retried
+                // terminal event can still settle it.
                 return Effect.forEach(
                   projectProviderRuntimeActivities(
                     completionEvent,
                     summary.sourceEvent.provider === "claudeAgent" ? summary.sequence : undefined,
                   ),
                   (activity) => dispatchActivityUpdate(completionEvent, threadId, activity),
-                ).pipe(Effect.asVoid);
+                ).pipe(Effect.andThen(Cache.invalidate(bufferedReasoningSummaryByKey, key)));
               }),
             ),
         ).pipe(Effect.asVoid),
@@ -1453,6 +1576,15 @@ const make = Effect.gen(function* () {
           if (knownAssistantMessageIds.has(eventMessageId)) {
             return eventMessageId;
           }
+          // A completion that names its own item may only adopt the
+          // turn-scoped message created by deltas that carried no item id.
+          // Any other live message belongs to a different provider item, and
+          // attaching this completion (or its fallback text) to it would
+          // finalize the wrong row.
+          const turnScopedMessageId = MessageId.makeUnsafe(`assistant:${input.turnId}`);
+          return knownAssistantMessageIds.has(turnScopedMessageId)
+            ? turnScopedMessageId
+            : eventMessageId;
         }
         if (knownAssistantMessageIds.size === 1) {
           const [onlyMessageId] = knownAssistantMessageIds;
@@ -1485,9 +1617,7 @@ const make = Effect.gen(function* () {
             return preferredKnownMessage.id;
           }
         }
-        return input.event.itemId
-          ? MessageId.makeUnsafe(`assistant:${input.event.itemId}`)
-          : MessageId.makeUnsafe(`assistant:${input.turnId}`);
+        return MessageId.makeUnsafe(`assistant:${input.turnId}`);
       }
 
       if (input.event.itemId) {
@@ -1504,6 +1634,10 @@ const make = Effect.gen(function* () {
    * boundary start time, so the projection keeps the interleaved timeline
    * (reasoning next to the tool rows that interrupted it). Oversized/spilled
    * buffers fall back to a single delta with the first segment's start.
+   *
+   * The segment buffers are left in place: the caller clears them only after
+   * every command of the flush (including the completion) succeeded, so a
+   * retried journal row rebuilds the same commands under the same ids.
    */
   const dispatchFinalAssistantTextSegments = (input: {
     event: ProviderRuntimeEvent;
@@ -1536,8 +1670,6 @@ const make = Effect.gen(function* () {
             createdAt: input.createdAt,
           });
         }
-        bufferedTextSegmentsByMessageKey.delete(segmentKey);
-        bufferedTextSpilledByMessageKey.delete(segmentKey);
         return;
       }
       const bufferedSegmentStartedAt = spilled ? undefined : segments[0]?.startedAt;
@@ -1555,8 +1687,6 @@ const make = Effect.gen(function* () {
           : {}),
         createdAt: input.createdAt,
       });
-      bufferedTextSegmentsByMessageKey.delete(segmentKey);
-      bufferedTextSpilledByMessageKey.delete(segmentKey);
     });
 
   const flushBufferedAssistantMessageDelta = (input: {
@@ -1585,6 +1715,9 @@ const make = Effect.gen(function* () {
         tagBase: input.commandTag,
         text: bufferedText,
       });
+      const segmentKey = assistantMessageSegmentKey(input.threadId, input.messageId);
+      bufferedTextSegmentsByMessageKey.delete(segmentKey);
+      bufferedTextSpilledByMessageKey.delete(segmentKey);
       yield* Cache.invalidate(bufferedAssistantTextByMessageId, input.messageId);
       return true;
     });
@@ -1640,6 +1773,28 @@ const make = Effect.gen(function* () {
       yield* clearAssistantMessageIdsForTurn(input.threadId, input.turnId);
     });
 
+  // Late buffered text of a turn whose terminal event already ran stays held
+  // until a late item completion claims it. The thread's next lifecycle
+  // boundary proves no such completion is coming: flush and settle it then.
+  const settleLateBufferedTurns = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    createdAt: string;
+  }) =>
+    Effect.gen(function* () {
+      for (const trackedTurnId of yield* getTrackedAssistantTurnIdsForThread(input.threadId)) {
+        if (!(yield* isTurnFinalized(input.threadId, trackedTurnId))) continue;
+        yield* finalizeBufferedAssistantMessagesForTurn({
+          event: input.event,
+          threadId: input.threadId,
+          turnId: trackedTurnId,
+          createdAt: input.createdAt,
+          commandTag: "assistant-complete-late",
+          finalDeltaCommandTag: "assistant-delta-late",
+        });
+      }
+    });
+
   const finalizeAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1670,10 +1825,26 @@ const make = Effect.gen(function* () {
           tagBase: input.finalDeltaCommandTag,
           text,
         });
-      } else {
-        const segmentKey = assistantMessageSegmentKey(input.threadId, input.messageId);
-        bufferedTextSegmentsByMessageKey.delete(segmentKey);
-        bufferedTextSpilledByMessageKey.delete(segmentKey);
+      } else if (
+        !input.asyncQuestions &&
+        Option.isNone(
+          yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+            threadId: input.threadId,
+            messageId: input.messageId,
+          }),
+        )
+      ) {
+        // Nothing streamed and nothing to say: completing would create an
+        // empty "(empty response)" row for a message that never existed.
+        if (input.turnId) {
+          yield* Cache.set(
+            skippedEmptyAssistantMessageByTurnKey,
+            providerTurnKey(input.threadId, input.turnId),
+            input.messageId,
+          );
+        }
+        yield* clearAssistantMessageState(input.threadId, input.messageId);
+        return;
       }
 
       yield* orchestrationEngine.dispatch({
@@ -1809,27 +1980,38 @@ const make = Effect.gen(function* () {
       const imagePaths = [
         ...new Set([...cachedImagePaths, ...collectPersistedGeneratedImagePaths(persistedRecords)]),
       ];
+      const skippedEmptyKey = providerTurnKey(input.thread.id, input.turnId);
       if (imagePaths.length === 0) {
+        yield* Cache.invalidate(skippedEmptyAssistantMessageByTurnKey, skippedEmptyKey);
         return;
       }
+      // An intentionally empty final item (no row was created for it) is the
+      // turn's terminal answer: the image markdown becomes its body.
+      const skippedEmptyMessageId = Option.getOrUndefined(
+        yield* Cache.getOption(skippedEmptyAssistantMessageByTurnKey, skippedEmptyKey),
+      );
       // The terminal assistant message is the newest of the turn: the transcript UI
       // gives the last assistant row ownership of the settled turn and folds every
       // earlier assistant row, so this is the only row that stays visible.
-      const terminalMessage = input.thread.messages
-        .filter((message) => message.role === "assistant" && message.turnId === input.turnId)
-        .toSorted(
-          (left, right) =>
-            right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
-        )[0];
+      const terminalMessage = skippedEmptyMessageId
+        ? undefined
+        : input.thread.messages
+            .filter((message) => message.role === "assistant" && message.turnId === input.turnId)
+            .toSorted(
+              (left, right) =>
+                right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+            )[0];
       yield* appendGeneratedImagesToAssistantMessage({
         event: input.event,
         threadId: input.thread.id,
         targetMessage: terminalMessage,
-        newMessageId: MessageId.makeUnsafe(`assistant:image:${input.turnId}`),
+        newMessageId:
+          skippedEmptyMessageId ?? MessageId.makeUnsafe(`assistant:image:${input.turnId}`),
         imagePaths,
         turnId: input.turnId,
         createdAt: input.createdAt,
       });
+      yield* Cache.invalidate(skippedEmptyAssistantMessageByTurnKey, skippedEmptyKey);
     });
 
   /**
@@ -1933,7 +2115,7 @@ const make = Effect.gen(function* () {
     updatedAt: string;
   }) =>
     Effect.gen(function* () {
-      const bufferedPlan = yield* takeBufferedProposedPlan(input.planId);
+      const bufferedPlan = yield* getBufferedProposedPlan(input.planId);
       const bufferedMarkdown = normalizeNonEmptyString(bufferedPlan?.text);
       const fallbackMarkdown = normalizeNonEmptyString(input.fallbackMarkdown);
       const planMarkdown = bufferedMarkdown ?? fallbackMarkdown;
@@ -1985,6 +2167,13 @@ const make = Effect.gen(function* () {
         key.startsWith(prefix)
           ? Cache.invalidate(pendingGeneratedImagesByTurnKey, key)
           : Effect.void,
+      );
+      yield* Effect.forEach(
+        Array.from(yield* Cache.keys(skippedEmptyAssistantMessageByTurnKey)),
+        (key) =>
+          key.startsWith(prefix)
+            ? Cache.invalidate(skippedEmptyAssistantMessageByTurnKey, key)
+            : Effect.void,
       );
     });
 
@@ -2116,10 +2305,7 @@ const make = Effect.gen(function* () {
   // accumulates one text slice per segment so the final flush can fan the
   // segments back out as separate deltas (bufferedTextSpilledByMessageKey marks
   // turns whose spill boundary invalidated that fan-out).
-  const segmentStateByThreadId = new Map<
-    ThreadId,
-    Map<MessageId, { hasText: boolean; splitPending: boolean }>
-  >();
+  const segmentStateByThreadId = new Map<ThreadId, Map<MessageId, AssistantSegmentState>>();
   const bufferedTextSegmentsByMessageKey = new Map<
     string,
     ReadonlyArray<{ readonly sequence: number; readonly startedAt: string; readonly text: string }>
@@ -2144,18 +2330,37 @@ const make = Effect.gen(function* () {
         : yield* getThreadShellDetail(event.threadId);
       if (!parentThread) return;
 
+      // A subagent launched from inside another subagent's conversation (a
+      // nested spawn) still hangs off the main thread, but records the spawning
+      // child thread as its source so the nesting is not lost.
+      const eventProviderThreadId = normalizeNonEmptyString(event.providerRefs?.providerThreadId);
+      const eventProviderParentThreadId = normalizeNonEmptyString(
+        event.providerRefs?.providerParentThreadId,
+      );
+      const spawningThreadId =
+        eventProviderThreadId !== undefined &&
+        eventProviderParentThreadId !== undefined &&
+        eventProviderThreadId !== eventProviderParentThreadId
+          ? ThreadId.makeUnsafe(`subagent:${parentThread.id}:${eventProviderThreadId}`)
+          : parentThread.id;
+
       const ensureSubagentThread = (
         providerThreadId: string,
         identity?: Pick<
           SubagentIdentity,
-          "agentId" | "nickname" | "role" | "model" | "modelIsRequestedHint"
+          "agentId" | "nickname" | "role" | "model" | "modelIsRequestedHint" | "prompt"
         >,
+        options?: { readonly spawnedByThreadId?: ThreadId },
       ) =>
         Effect.gen(function* () {
           const childThreadId = ThreadId.makeUnsafe(
             `subagent:${parentThread.id}:${providerThreadId}`,
           );
           const sourceTurnId = toTurnId(event.turnId) ?? null;
+          const sourceThreadId =
+            options?.spawnedByThreadId !== undefined && options.spawnedByThreadId !== childThreadId
+              ? options.spawnedByThreadId
+              : parentThread.id;
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
           // Mirror the parent load: only this event's heavy-detail handlers read the
@@ -2196,27 +2401,48 @@ const make = Effect.gen(function* () {
             }
             const slot = yield* claimNativeChildSlot(parentThread.id, sourceTurnId, childThreadId);
             if (!slot.admitted) {
-              const overflowId = EventId.makeUnsafe(
-                `provider-native-child-overflow:${slot.budgetKey}`,
-              );
-              yield* orchestrationEngine.dispatch({
-                type: "thread.activity.append",
-                commandId: CommandId.makeUnsafe(`provider:native-child-overflow:${slot.budgetKey}`),
+              // The refused child keeps running in the provider; say so on the
+              // parent thread once per budget instead of dropping it silently.
+              yield* Effect.logWarning("provider runtime ingestion capped native subagents", {
+                eventId: event.eventId,
                 threadId: parentThread.id,
-                activity: {
-                  id: overflowId,
-                  tone: "error",
-                  kind: "subagent.materialization.capped",
-                  summary: `Synara limited this provider turn to ${MAX_NATIVE_CHILDREN_PER_PARENT_TURN} visible native subagents.`,
-                  payload: {
-                    source: "provider_native",
-                    cap: MAX_NATIVE_CHILDREN_PER_PARENT_TURN,
-                  },
-                  turnId: sourceTurnId,
-                  createdAt: now,
-                },
-                createdAt: now,
+                childThreadId,
+                cap: MAX_NATIVE_CHILDREN_PER_PARENT_TURN,
               });
+              if (slot.firstOverflow) {
+                const overflowId = EventId.makeUnsafe(
+                  `provider-native-child-overflow:${slot.budgetKey}`,
+                );
+                yield* orchestrationEngine
+                  .dispatch({
+                    type: "thread.activity.append",
+                    commandId: CommandId.makeUnsafe(
+                      `provider:native-child-overflow:${slot.budgetKey}`,
+                    ),
+                    threadId: parentThread.id,
+                    activity: {
+                      id: overflowId,
+                      tone: "error",
+                      kind: "subagent.materialization.capped",
+                      summary: `Subagent limit reached: Synara shows up to ${MAX_NATIVE_CHILDREN_PER_PARENT_TURN} subagents per turn. Additional subagents keep running, but their work is not shown.`,
+                      payload: {
+                        source: "provider_native",
+                        cap: MAX_NATIVE_CHILDREN_PER_PARENT_TURN,
+                      },
+                      turnId: sourceTurnId,
+                      createdAt: now,
+                    },
+                    createdAt: now,
+                  })
+                  // A restart forgets the in-memory budget; the durable notice
+                  // from before the restart already says this.
+                  .pipe(
+                    Effect.catchTag(
+                      "OrchestrationCommandIdentityCollisionError",
+                      () => Effect.void,
+                    ),
+                  );
+              }
               return undefined;
             }
             yield* orchestrationEngine.dispatch({
@@ -2227,7 +2453,7 @@ const make = Effect.gen(function* () {
               title: subagentThreadTitle({
                 nickname: identity?.nickname,
                 role: identity?.role,
-                providerThreadId,
+                prompt: identity?.prompt,
               }),
               modelSelection: resolvedModelSelection ?? parentThread.modelSelection,
               runtimeMode: parentThread.runtimeMode,
@@ -2240,7 +2466,7 @@ const make = Effect.gen(function* () {
               associatedWorktreeRef: parentThread.associatedWorktreeRef,
               parentThreadId: parentThread.id,
               creationSource: "provider_native",
-              sourceThreadId: parentThread.id,
+              sourceThreadId,
               ...(sourceTurnId !== null ? { sourceTurnId } : {}),
               subagentAgentId: identity?.agentId ?? null,
               subagentNickname: identity?.nickname ?? null,
@@ -2249,26 +2475,19 @@ const make = Effect.gen(function* () {
             });
           } else {
             const existingThreadShell = existingThread.value;
+            const nextTitle = nextSubagentThreadTitle(existingThreadShell, identity);
             if (
               identity?.agentId !== undefined ||
               identity?.nickname !== undefined ||
               identity?.role !== undefined ||
-              (identity?.model !== undefined && identity.modelIsRequestedHint !== true)
+              (identity?.model !== undefined && identity.modelIsRequestedHint !== true) ||
+              nextTitle !== undefined
             ) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: providerCommandId(event, "subagent-thread-meta-update", childThreadId),
                 threadId: childThreadId,
-                ...(identity?.nickname !== undefined || identity?.role !== undefined
-                  ? {
-                      title: subagentThreadTitle({
-                        nickname:
-                          identity?.nickname ?? existingThreadShell.subagentNickname ?? undefined,
-                        role: identity?.role ?? existingThreadShell.subagentRole ?? undefined,
-                        providerThreadId,
-                      }),
-                    }
-                  : {}),
+                ...(nextTitle !== undefined ? { title: nextTitle } : {}),
                 parentThreadId: parentThread.id,
                 ...(resolvedModelSelection !== undefined &&
                 existingThreadShell.modelSelection.model !== resolvedModelSelection.model
@@ -2293,11 +2512,11 @@ const make = Effect.gen(function* () {
                 title: subagentThreadTitle({
                   nickname: identity?.nickname,
                   role: identity?.role,
-                  providerThreadId,
+                  prompt: identity?.prompt,
                 }),
                 parentThreadId: parentThread.id,
                 creationSource: "provider_native" as const,
-                sourceThreadId: parentThread.id,
+                sourceThreadId,
                 sourceTurnId,
                 gatewayOperationId: null,
                 gatewayOperationIndex: null,
@@ -2332,32 +2551,65 @@ const make = Effect.gen(function* () {
           extractSubagentIdentityHints(collabItem),
         );
         for (const receiverThreadId of receiverThreadIds) {
+          // A subagent that messages or waits on the conversation that launched
+          // it (Codex's "root") names that conversation as a receiver; it is
+          // the launcher, never a new subagent of the subagent.
+          if (receiverThreadId === eventProviderParentThreadId) {
+            continue;
+          }
           yield* ensureSubagentThread(
             receiverThreadId,
             resolveSubagentIdentityFromDirectory(identityDirectory, {
               providerThreadId: receiverThreadId,
             }) as SubagentIdentity | undefined,
+            { spawnedByThreadId: spawningThreadId },
           );
         }
       }
 
-      const providerThreadId = normalizeNonEmptyString(event.providerRefs?.providerThreadId);
-      const providerParentThreadId = normalizeNonEmptyString(
-        event.providerRefs?.providerParentThreadId,
-      );
       const targetThreadResolution =
-        providerThreadId !== undefined &&
-        providerParentThreadId !== undefined &&
-        providerThreadId !== providerParentThreadId
+        eventProviderThreadId !== undefined &&
+        eventProviderParentThreadId !== undefined &&
+        eventProviderThreadId !== eventProviderParentThreadId
           ? yield* ensureSubagentThread(
-              providerThreadId,
-              extractSubagentIdentity(event, providerThreadId),
+              eventProviderThreadId,
+              extractSubagentIdentity(event, eventProviderThreadId),
             )
           : { threadId: parentThread.id, thread: parentThread };
       if (targetThreadResolution === undefined) {
         return;
       }
       const thread = targetThreadResolution.thread;
+
+      // A subagent's brief (or a later message it got on resume) arrives as a
+      // user-message item on its child thread. Record it there as a message
+      // from the agent that launched it; the main thread's own user messages
+      // already exist, so only child threads take these.
+      const subagentBriefText =
+        event.type === "item.completed" &&
+        event.payload.itemType === "user_message" &&
+        thread.id !== parentThread.id
+          ? normalizeNonEmptyString(event.payload.detail)
+          : undefined;
+      if (subagentBriefText !== undefined) {
+        const briefKey = event.itemId ?? event.eventId;
+        yield* orchestrationEngine.dispatch({
+          type: "thread.messages.import",
+          commandId: providerCommandId(event, "subagent-brief", thread.id),
+          threadId: thread.id,
+          messages: [
+            {
+              messageId: MessageId.makeUnsafe(`subagent-brief:${thread.id}:${briefKey}`),
+              role: "user",
+              text: subagentBriefText,
+              dispatchOrigin: "agent",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        });
+      }
 
       // Durable last-activity signal (worker-monitoring silence is measured
       // from this, not from session lifecycle rows): every runtime event of
@@ -2406,6 +2658,23 @@ const make = Effect.gen(function* () {
         terminalApplicability?.resolvedTurnId !== undefined
           ? TurnId.makeUnsafe(terminalApplicability.resolvedTurnId)
           : rawEventTurnId;
+      // A turnless terminal event while more than one turn is outstanding
+      // proves no particular turn ended. It must not fall back to the active
+      // turn for any turn-scoped cleanup (messages, reasoning, tool rows).
+      const isAmbiguousTerminal = terminalApplicability?.reason === "ambiguous-missing-turn-id";
+      if (event.type === "turn.started" && rawEventTurnId) {
+        yield* Cache.set(finalizedTurnKeys, providerTurnKey(thread.id, rawEventTurnId), false);
+      }
+
+      const shouldApplyThreadLifecycle =
+        event.type === "turn.started"
+          ? !STRICT_PROVIDER_LIFECYCLE_GUARD ||
+            isStartedTurnApplicable({ activeTurnId, eventTurnId })
+          : event.type === "session.exited" && thread.id !== parentThread.id
+            ? rawEventTurnId === undefined ||
+              activeTurnId === null ||
+              rawEventTurnId === activeTurnId
+            : !isTerminalTurnEvent || (terminalApplicability?.applicable ?? true);
 
       // In-flight tool tracking: a started-but-unfinished tool call counts as
       // activity for the whole duration it runs (a 12-minute test suite must
@@ -2428,6 +2697,9 @@ const make = Effect.gen(function* () {
       if (
         event.type === "item.completed" &&
         event.itemId !== undefined &&
+        (rawEventTurnId === undefined ||
+          activeTurnId === null ||
+          rawEventTurnId === activeTurnId) &&
         isToolLifecycleItemType(event.payload.itemType)
       ) {
         yield* projectionThreadSessionRepository
@@ -2437,7 +2709,7 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.catchCause(() => Effect.void));
       }
-      if (event.type === "turn.started" && eventTurnId) {
+      if (event.type === "turn.started" && eventTurnId && shouldApplyThreadLifecycle) {
         yield* projectionThreadSessionRepository
           .clearActiveTools({
             threadId: thread.id,
@@ -2445,7 +2717,10 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.catchCause(() => Effect.void));
       }
-      if (isTerminalTurnEvent || event.type === "session.exited") {
+      if (
+        ((isTerminalTurnEvent && !isAmbiguousTerminal) || event.type === "session.exited") &&
+        shouldApplyThreadLifecycle
+      ) {
         yield* projectionThreadSessionRepository
           .clearActiveTools({
             threadId: thread.id,
@@ -2458,11 +2733,6 @@ const make = Effect.gen(function* () {
         flushMap.delete(thread.id);
       }
 
-      const shouldApplyThreadLifecycle =
-        event.type === "turn.started"
-          ? !STRICT_PROVIDER_LIFECYCLE_GUARD ||
-            isStartedTurnApplicable({ activeTurnId, eventTurnId })
-          : !isTerminalTurnEvent || (terminalApplicability?.applicable ?? true);
       if (isTerminalTurnEvent) {
         if (eventTurnId) {
           yield* forgetOutstandingTurn(thread.id, eventTurnId);
@@ -2762,7 +3032,7 @@ const make = Effect.gen(function* () {
           event.payload.streamKind === "file_change_output") &&
         event.payload.delta.length > 0
       ) {
-        yield* appendBufferedToolOutput(toolOutputKey, event.payload.delta);
+        yield* appendBufferedToolOutput(toolOutputKey, event.payload.delta, runtimeSequence);
       }
 
       const reasoningSummaryKey = reasoningSummaryBufferKey(event, thread.id);
@@ -2783,81 +3053,145 @@ const make = Effect.gen(function* () {
           `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
         );
         const turnId = toTurnId(event.turnId);
-        if (turnId) {
+        const turnFinalized = turnId !== undefined && (yield* isTurnFinalized(thread.id, turnId));
+        if (turnId && !turnFinalized) {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
           // Some providers can emit content before (or without) turn.started.
           // Treat the first concrete assistant delta as an equivalent arrival
           // signal so the FIFO request mode is bound before delivery is chosen.
+          // (Skipped for a finished turn: it must not claim a later request.)
           yield* matchStartedTurnAssistantDeliveryMode(thread.id, turnId);
+          // Later text gives the turn a real terminal row again, which the
+          // image flush finds on its own; an earlier empty item no longer
+          // stands in for the answer.
+          yield* Cache.invalidate(
+            skippedEmptyAssistantMessageByTurnKey,
+            providerTurnKey(thread.id, turnId),
+          );
         }
 
         const assistantDeliveryMode = yield* getAssistantDeliveryMode(
           thread.id,
           turnId ?? activeTurnId ?? undefined,
         );
+        // The turn's terminal event already finalized its messages. Buffered
+        // delivery keeps holding late text (a late item completion, the next
+        // turn lifecycle event or the session exit flushes it); live delivery
+        // shows it and settles the message at once, since nothing else would.
+        const lateForFinalizedTurn = turnFinalized && assistantDeliveryMode !== "buffered";
+        if (turnId && turnFinalized && !lateForFinalizedTurn) {
+          yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
+        }
         // First delta of a message, or a row-making event since the last
-        // delta, starts a new segment positioned at this event's time.
+        // delta, starts a new segment positioned at this event's time. A
+        // retried journal row reuses the decision it made the first time, so
+        // its command payloads (and fingerprints) stay identical.
         const statesForThread = segmentStateByThreadId.get(thread.id) ?? new Map();
         segmentStateByThreadId.set(thread.id, statesForThread);
-        const segmentState = statesForThread.get(assistantMessageId) ?? {
+        const segmentState: AssistantSegmentState = statesForThread.get(assistantMessageId) ?? {
           hasText: false,
           splitPending: false,
         };
         statesForThread.set(assistantMessageId, segmentState);
-        const startsNewSegment = !segmentState.hasText || segmentState.splitPending;
+        const startsNewSegment =
+          segmentState.lastSequence === runtimeSequence
+            ? segmentState.lastStartedNewSegment === true
+            : !segmentState.hasText || segmentState.splitPending;
         const segmentStartedAt = startsNewSegment ? now : undefined;
         segmentState.hasText = true;
         segmentState.splitPending = false;
+        segmentState.lastSequence = runtimeSequence;
+        segmentState.lastStartedNewSegment = startsNewSegment;
         const bufferedSegmentKey = assistantMessageSegmentKey(thread.id, assistantMessageId);
-        if (assistantDeliveryMode === "buffered") {
-          // Buffer the delta as part of the current segment: a row-making
-          // provider event between deltas closes the current segment and the
-          // next delta starts a new one at its own time. On final flush the
-          // segments fan out as separate deltas so the projection keeps the
-          // interleaved boundaries instead of one whole-text blob.
-          if (!bufferedTextSpilledByMessageKey.has(bufferedSegmentKey)) {
-            const existingSegments = bufferedTextSegmentsByMessageKey.get(bufferedSegmentKey);
-            const tail = existingSegments?.[existingSegments.length - 1];
-            if (segmentStartedAt === undefined && tail !== undefined) {
-              bufferedTextSegmentsByMessageKey.set(bufferedSegmentKey, [
-                ...existingSegments!.slice(0, -1),
-                {
-                  sequence: tail.sequence,
-                  startedAt: tail.startedAt,
-                  text: `${tail.text}${assistantDelta}`,
-                },
-              ]);
-            } else {
-              bufferedTextSegmentsByMessageKey.set(bufferedSegmentKey, [
-                ...(existingSegments ?? []),
-                {
-                  sequence: runtimeSequence,
-                  startedAt: segmentStartedAt ?? now,
-                  text: assistantDelta,
-                },
-              ]);
-            }
-          }
-          const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
-          if (spillChunk.length > 0) {
-            // Oversized turn: the spill boundary splits the buffered text, so
-            // per-segment fan-out can no longer reproduce the cache's
-            // truncation. Fall back to the single-delta flush at completion.
-            bufferedTextSegmentsByMessageKey.delete(bufferedSegmentKey);
-            bufferedTextSpilledByMessageKey.add(bufferedSegmentKey);
+        if (lateForFinalizedTurn) {
+          // Never leave a late row streaming: no terminal event for this turn
+          // is coming to complete it.
+          const known = (yield* orchestrationEngine.getReadModel()).threads
+            .find((entry) => entry.id === thread.id)
+            ?.messages.find((message) => message.id === assistantMessageId);
+          yield* orchestrationEngine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: providerCommandId(event, "assistant-delta-late", assistantMessageId),
+            threadId: thread.id,
+            messageId: assistantMessageId,
+            delta: assistantDelta,
+            ...(turnId ? { turnId } : {}),
+            createdAt: now,
+          });
+          // The decider already re-settles a known finalized message.
+          if (!known || known.streaming) {
             yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.delta",
-              commandId: providerCommandId(
-                event,
-                "assistant-delta-buffer-spill",
-                assistantMessageId,
-              ),
+              type: "thread.message.assistant.complete",
+              commandId: providerCommandId(event, "assistant-complete-late", assistantMessageId),
               threadId: thread.id,
               messageId: assistantMessageId,
-              delta: spillChunk,
               ...(turnId ? { turnId } : {}),
               createdAt: now,
             });
+          }
+          yield* clearAssistantMessageState(thread.id, assistantMessageId);
+        } else if (assistantDeliveryMode === "buffered") {
+          // A retried row whose buffering already committed must not append
+          // its delta again.
+          if (!alreadyApplied(segmentState.bufferedThroughSequence, runtimeSequence)) {
+            const existingText = yield* getBufferedAssistantText(assistantMessageId);
+            const nextText = `${existingText}${assistantDelta}`;
+            if (nextText.length > MAX_BUFFERED_ASSISTANT_CHARS) {
+              // Safety valve: flush the whole buffered text to cap memory. The
+              // spill is dispatched before any buffer changes so a retry
+              // rebuilds the same chunk instead of losing the buffered prefix.
+              yield* orchestrationEngine.dispatch({
+                type: "thread.message.assistant.delta",
+                commandId: providerCommandId(
+                  event,
+                  "assistant-delta-buffer-spill",
+                  assistantMessageId,
+                ),
+                threadId: thread.id,
+                messageId: assistantMessageId,
+                delta: nextText,
+                ...(turnId ? { turnId } : {}),
+                createdAt: now,
+              });
+              // Oversized turn: the spill boundary splits the buffered text,
+              // so per-segment fan-out can no longer reproduce it. Fall back to
+              // the single-delta flush at completion.
+              bufferedTextSegmentsByMessageKey.delete(bufferedSegmentKey);
+              bufferedTextSpilledByMessageKey.add(bufferedSegmentKey);
+              yield* Cache.invalidate(bufferedAssistantTextByMessageId, assistantMessageId);
+            } else {
+              // Buffer the delta as part of the current segment: a row-making
+              // provider event between deltas closes the current segment and
+              // the next delta starts a new one at its own time. On final
+              // flush the segments fan out as separate deltas so the
+              // projection keeps the interleaved boundaries instead of one
+              // whole-text blob.
+              if (!bufferedTextSpilledByMessageKey.has(bufferedSegmentKey)) {
+                const existingSegments = bufferedTextSegmentsByMessageKey.get(bufferedSegmentKey);
+                const tail = existingSegments?.[existingSegments.length - 1];
+                if (segmentStartedAt === undefined && tail !== undefined) {
+                  bufferedTextSegmentsByMessageKey.set(bufferedSegmentKey, [
+                    ...existingSegments!.slice(0, -1),
+                    {
+                      sequence: tail.sequence,
+                      startedAt: tail.startedAt,
+                      text: `${tail.text}${assistantDelta}`,
+                    },
+                  ]);
+                } else {
+                  bufferedTextSegmentsByMessageKey.set(bufferedSegmentKey, [
+                    ...(existingSegments ?? []),
+                    {
+                      sequence: runtimeSequence,
+                      startedAt: segmentStartedAt ?? now,
+                      text: assistantDelta,
+                    },
+                  ]);
+                }
+              }
+              yield* Cache.set(bufferedAssistantTextByMessageId, assistantMessageId, nextText);
+            }
+            segmentState.bufferedThroughSequence = runtimeSequence;
           }
         } else {
           yield* orchestrationEngine.dispatch({
@@ -2911,6 +3245,11 @@ const make = Effect.gen(function* () {
         );
         const shouldApplyFallbackCompletionText =
           !existingAssistantMessage || existingAssistantMessage.text.length === 0;
+        const completedMessageHasText =
+          hasRenderableAssistantText(existingAssistantMessage?.text) ||
+          (shouldApplyFallbackCompletionText &&
+            hasRenderableAssistantText(assistantCompletion.fallbackText)) ||
+          hasRenderableAssistantText(yield* getBufferedAssistantText(assistantMessageId));
         if (turnId) {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
@@ -2932,6 +3271,14 @@ const make = Effect.gen(function* () {
         });
 
         if (turnId) {
+          if (completedMessageHasText) {
+            // A real later answer replaces an earlier skipped empty item as
+            // the terminal message that owns this turn's generated images.
+            yield* Cache.invalidate(
+              skippedEmptyAssistantMessageByTurnKey,
+              providerTurnKey(thread.id, turnId),
+            );
+          }
           yield* forgetAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
       }
@@ -2993,8 +3340,11 @@ const make = Effect.gen(function* () {
       }
 
       if (isTerminalTurnEvent) {
-        const finalizedTurnId = eventTurnId ?? activeTurnId ?? undefined;
+        const finalizedTurnId = isAmbiguousTerminal
+          ? undefined
+          : (eventTurnId ?? activeTurnId ?? undefined);
         if (finalizedTurnId) {
+          yield* markTurnFinalized(thread.id, finalizedTurnId);
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(
             thread.id,
             finalizedTurnId,
@@ -3034,10 +3384,15 @@ const make = Effect.gen(function* () {
         }
       }
 
+      if (event.type === "turn.started" || isTerminalTurnEvent) {
+        yield* settleLateBufferedTurns({ event, threadId: thread.id, createdAt: now });
+      }
+
       if (event.type === "session.exited") {
         yield* clearOutstandingTurns(thread.id);
         const exitedTurnId = eventTurnId ?? activeTurnId ?? undefined;
         if (exitedTurnId) {
+          yield* markTurnFinalized(thread.id, exitedTurnId);
           yield* finalizeBufferedAssistantMessagesForTurn({
             event,
             threadId: thread.id,
@@ -3055,6 +3410,28 @@ const make = Effect.gen(function* () {
           });
           yield* clearProviderDiffPlaceholder(thread.id, exitedTurnId);
         }
+        // A session stop settles the session (activeTurnId: null) before the
+        // runtime exits, and several adapters' exit events name no turn, so the
+        // turn resolved above can be missing. Every turn still tracked for this
+        // thread died with the session: finalize its messages before the buffers
+        // below are dropped, or their text is lost and they stay streaming.
+        yield* Effect.forEach(
+          yield* getTrackedAssistantTurnIdsForThread(thread.id),
+          (orphanedTurnId) =>
+            markTurnFinalized(thread.id, orphanedTurnId).pipe(
+              Effect.andThen(
+                finalizeBufferedAssistantMessagesForTurn({
+                  event,
+                  threadId: thread.id,
+                  turnId: orphanedTurnId,
+                  createdAt: now,
+                  commandTag: "assistant-complete-session-exit",
+                  finalDeltaCommandTag: "assistant-delta-session-exit",
+                }),
+              ),
+            ),
+          { discard: true },
+        );
         yield* clearTurnStateForSession(thread.id);
       }
 
@@ -3064,6 +3441,11 @@ const make = Effect.gen(function* () {
         const erroredTurnId = eventTurnId ?? activeTurnId ?? undefined;
 
         if (erroredTurnId) {
+          // A runtime error ends its turn just like a terminal turn event:
+          // keeping it outstanding would make every later turnless terminal
+          // ambiguous and strand turnless interactions as "Awaiting Input".
+          yield* forgetOutstandingTurn(thread.id, erroredTurnId);
+          yield* markTurnFinalized(thread.id, erroredTurnId);
           yield* finalizeBufferedAssistantMessagesForTurn({
             event,
             threadId: thread.id,
@@ -3216,10 +3598,18 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const completedReasoning =
-        event.type === "item.completed" && reasoningSummaryKey
-          ? yield* takeBufferedReasoningSummary(reasoningSummaryKey)
-          : undefined;
+      // Completed items read their buffers without consuming them; the
+      // buffers are dropped below only once the activity is durable, so a
+      // retried row still carries the buffered detail.
+      const completedReasoningKey =
+        event.type === "item.completed" && reasoningSummaryKey ? reasoningSummaryKey : null;
+      const completedToolOutputKey =
+        event.type === "item.completed" && !reasoningSummaryKey && toolOutputKey
+          ? toolOutputKey
+          : null;
+      const completedReasoning = completedReasoningKey
+        ? yield* getBufferedReasoningSummary(completedReasoningKey)
+        : undefined;
       const activityEvent =
         event.type === "item.completed" && reasoningSummaryKey
           ? withBufferedReasoningSummary(
@@ -3228,8 +3618,11 @@ const make = Effect.gen(function* () {
                 : event,
               completedReasoning,
             )
-          : event.type === "item.completed" && toolOutputKey
-            ? withBufferedToolOutputData(event, yield* takeBufferedToolOutput(toolOutputKey))
+          : completedToolOutputKey
+            ? withBufferedToolOutputData(
+                event,
+                yield* getBufferedToolOutput(completedToolOutputKey),
+              )
             : event.type === "item.updated" && toolOutputKey
               ? withBufferedToolOutputData(event, yield* getBufferedToolOutput(toolOutputKey))
               : event;
@@ -3242,7 +3635,9 @@ const make = Effect.gen(function* () {
           ? { ...activityEvent, turnId: activityTurnId }
           : activityEvent;
       if (isTerminalTurnEvent) {
-        yield* settleBufferedReasoningSummaries(thread.id, event, toTurnId(event.turnId));
+        if (!isAmbiguousTerminal) {
+          yield* settleBufferedReasoningSummaries(thread.id, event, toTurnId(event.turnId));
+        }
       } else if (event.type === "session.exited") {
         yield* settleBufferedReasoningSummaries(thread.id, event);
       } else if (event.type === "runtime.error") {
@@ -3287,6 +3682,12 @@ const make = Effect.gen(function* () {
           suppressProgressActivity && snapshotKey !== undefined ? [] : activities,
           (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
         );
+      }
+      if (completedReasoningKey) {
+        yield* Cache.invalidate(bufferedReasoningSummaryByKey, completedReasoningKey);
+      }
+      if (completedToolOutputKey) {
+        yield* Cache.invalidate(bufferedToolOutputByKey, completedToolOutputKey);
       }
 
       // Exact-turn delivery modes deliberately survive terminal events for a
@@ -3922,6 +4323,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
       ProviderRuntimeEventRepositoryLive,
       OrchestrationCommandReceiptRepositoryLive,
       ProjectionThreadSessionRepositoryLive,
+      ProjectionThreadMessageRepositoryLive,
     ),
   ),
 );
