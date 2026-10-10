@@ -68,7 +68,7 @@ describe("native browser presentation ownership", () => {
       pageZoomFactor: 1,
     });
   });
-  it("leaves existing renderer guests on their original CSS-scaled surface", () => {
+  it("uses the authored renderer slot and page-zoom presentation contract", () => {
     expect(
       resolveBrowserRuntimePresentation({
         native: false,

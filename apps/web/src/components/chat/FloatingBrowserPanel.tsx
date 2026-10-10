@@ -514,7 +514,7 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
           type="button"
           aria-label="Expand browser"
           data-floating-browser-preview-shield="true"
-          className="pointer-events-auto absolute inset-0 z-50 cursor-grab rounded-[inherit] active:cursor-grabbing"
+          className="pointer-events-auto absolute inset-0 z-0 cursor-grab rounded-[inherit] active:cursor-grabbing"
           onPointerDown={(event) => startHandleGesture(event, true)}
           onClick={(event) => {
             if (event.detail === 0) props.onPopToSidebar();
