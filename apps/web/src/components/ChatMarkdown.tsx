@@ -49,6 +49,7 @@ import remarkMath from "remark-math";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
+import { MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS } from "../lib/syntaxHighlightingLimits";
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
@@ -1256,17 +1257,21 @@ const MARKDOWN_COMPONENTS: Components = {
 
     return (
       <MarkdownCodeBlock code={code} fence={fence}>
-        <CodeHighlightErrorBoundary fallback={highlightedFallback}>
-          <Suspense fallback={highlightedFallback}>
-            <SuspenseShikiCodeBlock
-              language={fence.language}
-              code={code}
-              themeName={diffThemeName}
-              isStreaming={isStreaming}
-              sourceOffset={sourceOffset}
-            />
-          </Suspense>
-        </CodeHighlightErrorBoundary>
+        {code.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS ? (
+          highlightedFallback
+        ) : (
+          <CodeHighlightErrorBoundary fallback={highlightedFallback}>
+            <Suspense fallback={highlightedFallback}>
+              <SuspenseShikiCodeBlock
+                language={fence.language}
+                code={code}
+                themeName={diffThemeName}
+                isStreaming={isStreaming}
+                sourceOffset={sourceOffset}
+              />
+            </Suspense>
+          </CodeHighlightErrorBoundary>
+        )}
       </MarkdownCodeBlock>
     );
   },
