@@ -1084,6 +1084,18 @@ export function createWsNativeApi(): NativeApi {
         }
         throw new Error("Copying the browser link requires the desktop app.");
       },
+      clearSiteData: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.clearSiteData(input);
+        }
+        throw new Error("Clearing browser data requires the desktop app.");
+      },
+      clearAllData: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.clearAllData(input);
+        }
+        throw new Error("Clearing browser data requires the desktop app.");
+      },
       copyScreenshotToClipboard: async (input) => {
         if (window.desktopBridge) {
           await window.desktopBridge.browser.copyScreenshotToClipboard(input);

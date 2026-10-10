@@ -375,6 +375,18 @@ function isAllowedBrowserRuntimeNavigation(url: string, currentUrl: string): boo
   }
 }
 
+// Only web origins carry site data worth clearing; local previews and blank
+// pages have nothing scoped to a site.
+export function resolveClearableSiteOrigins(url: string | null): string[] {
+  if (!url) return [];
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? [parsed.origin] : [];
+  } catch {
+    return [];
+  }
+}
+
 function normalizeAutomationKey(value: string): string {
   if (value === "Space" || value === "Spacebar" || value === " ") {
     return " ";
@@ -2242,6 +2254,33 @@ export class DesktopBrowserManager {
   // focus, so the React toolbar button routes through here for reliability.
   copyLink(input: BrowserTabInput): void {
     this.copyTabLink(input.threadId, input.tabId);
+  }
+
+  // Clears cookies, storage and cache for the tab's site, then reloads it.
+  // Chromium removes cookies at the registrable-domain level when filtering by
+  // origin, so this also signs the user out of sibling subdomains; the UI says
+  // so. Vault credentials live outside the session and are not touched.
+  async clearSiteData(input: BrowserTabInput): Promise<ThreadBrowserState> {
+    const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
+    const origins = resolveClearableSiteOrigins(
+      this.resolveCopyableTabUrl(input.threadId, input.tabId, runtime),
+    );
+    if (origins.length === 0) {
+      throw new Error("This page has no site data to clear.");
+    }
+    await electronSession.fromPartition(BROWSER_SESSION_PARTITION).clearData({ origins });
+    return this.reload(input);
+  }
+
+  // Wipes every cookie, storage bucket and cache entry in the in-app browser
+  // session, then reloads the active tab so it reflects the signed-out state.
+  async clearAllData(input: BrowserThreadInput): Promise<ThreadBrowserState> {
+    await electronSession.fromPartition(BROWSER_SESSION_PARTITION).clearData();
+    const state = this.ensureWorkspace(input.threadId);
+    if (!state.activeTabId) {
+      return this.snapshotThreadState(input.threadId, state);
+    }
+    return this.reload({ threadId: input.threadId, tabId: state.activeTabId });
   }
 
   // Writes the current browser viewport screenshot straight to the native
