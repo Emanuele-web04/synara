@@ -4691,6 +4691,33 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           },
         });
 
+        for (const commandId of [
+          "agent:probe:interrupt",
+          "agent-recovery:probe",
+          "unknown-interrupt",
+        ]) {
+          yield* appendAndProject({
+            type: "thread.turn-interrupt-requested",
+            eventId: EventId.makeUnsafe(`evt-neutral-${commandId}`),
+            aggregateKind: "thread",
+            aggregateId: ThreadId.makeUnsafe("thread-conflict"),
+            occurredAt: "2026-02-26T13:00:02.000Z",
+            commandId: CommandId.makeUnsafe(commandId),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe(commandId),
+            metadata: {},
+            payload: {
+              threadId: ThreadId.makeUnsafe("thread-conflict"),
+              turnId: TurnId.makeUnsafe("turn-interrupted"),
+              createdAt: "2026-02-26T13:00:02.000Z",
+            },
+          });
+        }
+        assert.deepEqual(
+          yield* sql`SELECT kind FROM projection_thread_activities WHERE thread_id = 'thread-conflict'`,
+          [],
+        );
+
         yield* appendAndProject({
           type: "thread.turn-interrupt-requested",
           eventId: EventId.makeUnsafe("evt-conflict-3"),
@@ -4704,9 +4731,33 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           payload: {
             threadId: ThreadId.makeUnsafe("thread-conflict"),
             turnId: TurnId.makeUnsafe("turn-interrupted"),
+            requestedBy: "user",
             createdAt: "2026-02-26T13:00:02.000Z",
           },
         });
+
+        const stopRows = yield* sql<{
+          readonly turnId: string;
+          readonly kind: string;
+          readonly payload: string;
+        }>`
+          SELECT turn_id AS "turnId", kind, payload_json AS payload FROM projection_thread_activities
+          WHERE thread_id = 'thread-conflict'
+        `;
+        assert.deepEqual(
+          stopRows.map(({ turnId, kind, payload }) => ({
+            turnId,
+            kind,
+            payload: JSON.parse(payload),
+          })),
+          [
+            {
+              turnId: "turn-interrupted",
+              kind: "turn.stop-requested",
+              payload: { requestedBy: "user" },
+            },
+          ],
+        );
 
         yield* appendAndProject({
           type: "thread.message-sent",
@@ -5641,6 +5692,90 @@ it.layer(
           },
         ]);
       }
+    }),
+  );
+
+  it.effect("keeps an interrupted turn interrupted when its checkpoint lands afterwards", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-interrupted-checkpoint");
+      const turnId = TurnId.makeUnsafe("turn-interrupted-checkpoint");
+      const session = (status: "running" | "interrupted", updatedAt: string) => ({
+        threadId,
+        session: {
+          threadId,
+          status,
+          providerName: "claudeAgent",
+          providerInstanceId: "claudeAgent",
+          runtimeMode: "full-access" as const,
+          activeTurnId: status === "running" ? turnId : null,
+          lastError: null,
+          updatedAt,
+        },
+      });
+      const base = (key: string, occurredAt: string) => ({
+        eventId: EventId.makeUnsafe(`evt-interrupted-checkpoint-${key}`),
+        aggregateKind: "thread" as const,
+        aggregateId: threadId,
+        occurredAt,
+        commandId: CommandId.makeUnsafe(`cmd-interrupted-checkpoint-${key}`),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe(`cmd-interrupted-checkpoint-${key}`),
+        metadata: {},
+      });
+
+      yield* eventStore.append({
+        ...base("running", "2026-10-09T19:55:36.172Z"),
+        type: "thread.session-set",
+        payload: session("running", "2026-10-09T19:55:36.172Z"),
+      });
+      yield* eventStore.append({
+        ...base("interrupted", "2026-10-09T19:55:51.826Z"),
+        type: "thread.session-set",
+        payload: session("interrupted", "2026-10-09T19:55:51.826Z"),
+      });
+      yield* eventStore.append({
+        ...base("diff", "2026-10-09T19:55:51.826Z"),
+        type: "thread.turn-diff-completed",
+        payload: {
+          threadId,
+          turnId,
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/interrupted/turn/1"),
+          status: "missing",
+          files: [],
+          assistantMessageId: null,
+          completedAt: "2026-10-09T19:55:51.826Z",
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{
+        readonly state: string;
+        readonly startedAt: string | null;
+        readonly completedAt: string | null;
+        readonly checkpointTurnCount: number | null;
+      }>`
+        SELECT
+          state,
+          started_at AS "startedAt",
+          completed_at AS "completedAt",
+          checkpoint_turn_count AS "checkpointTurnCount"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+      `;
+      assert.deepEqual(rows, [
+        {
+          state: "interrupted",
+          startedAt: "2026-10-09T19:55:36.172Z",
+          completedAt: "2026-10-09T19:55:51.826Z",
+          checkpointTurnCount: 1,
+        },
+      ]);
     }),
   );
 
