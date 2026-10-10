@@ -43,6 +43,7 @@ import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
@@ -654,7 +655,10 @@ export function useChatTurnExecution({
           providerOptions: dispatchSettings.providerOptions,
         });
         await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {
-          if (getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null) {
+          if (
+            getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null ||
+            isThreadDetailAwaitingVerification(threadIdForSend)
+          ) {
             throw new Error(
               "Choose how to resume the held message before sending another message.",
             );

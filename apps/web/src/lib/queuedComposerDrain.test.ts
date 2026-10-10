@@ -12,7 +12,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
-import { makeActivity, makeState, makeThread } from "../storeTestFixtures";
+import { makeActivity, makeReadModelThread, makeState, makeThread } from "../storeTestFixtures";
 import type { Thread, ThreadSession } from "../types";
 import {
   armQueuedComposerSteerGate,
@@ -320,6 +320,71 @@ describe("queued composer drain watcher", () => {
     resetQueuedComposerDrainForTests();
     resetComposerDraftStore();
     useStore.setState(initialState);
+  });
+
+  it.each(["cached", "failed"] as const)(
+    "holds %s history queues until authoritative detail returns",
+    async (sync) => {
+      seedThread(makeThread({ id: THREAD_ID, session: makeSession("ready") }));
+      useStore.setState({
+        threadDetailSyncById: { [THREAD_ID]: sync === "failed" ? "synced" : "cached" },
+        threadHistoryById: { [THREAD_ID]: { totalMessageCount: 0, olderCursor: null } },
+      });
+      if (sync === "failed") useStore.getState().markThreadDetailSyncFailed(THREAD_ID);
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("restored-queue"));
+      await flushDrain();
+      expect(dispatch).not.toHaveBeenCalled();
+      if (sync === "cached") useStore.getState().confirmThreadDetailReplay(THREAD_ID);
+      else
+        useStore.getState().syncServerThreadDetailHotPath(
+          makeReadModelThread({
+            id: THREAD_ID,
+            session: {
+              threadId: THREAD_ID,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-02-13T00:00:00.000Z",
+            },
+          }),
+          1,
+          {
+            totalMessageCount: 0,
+            olderCursor: null,
+          },
+        );
+      await flushDrain();
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps a restored user-stop pause after cache verification until explicit Resume", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+        latestTurn: makeLatestTurn("completed"),
+      }),
+    );
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("paused-restored"));
+    holdQueuedComposerTurnsForStop(THREAD_ID);
+    useStore.setState({ threadDetailSyncById: { [THREAD_ID]: "cached" } });
+    await flushDrain();
+    useStore.getState().confirmThreadDetailReplay(THREAD_ID);
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId).toBe(
+      LIVE_TURN_ID,
+    );
+    useComposerDraftStore.getState().resumeQueuedTurns(THREAD_ID, LIVE_TURN_ID);
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("holds every cache review status without consuming retries and resumes after clearance", async () => {

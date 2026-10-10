@@ -655,7 +655,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     ]);
   });
 
-  it("emits no replay item when the batched resume gap is empty", async () => {
+  it("confirms an empty batched resume gap before delivering live events", async () => {
     const items = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -670,12 +670,15 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
             resumeFromSequence: 5,
             batchReplay: true,
             replay: () => Stream.fromEffect(PubSub.publish(live, event(6))).pipe(Stream.drain),
-          }).pipe(Stream.take(1), Stream.runCollect);
+          }).pipe(Stream.take(2), Stream.runCollect);
         }),
       ),
     );
 
-    expect(Array.from(items)).toEqual([{ kind: "event", event: event(6) }]);
+    expect(Array.from(items)).toEqual([
+      { kind: "replay", events: [] },
+      { kind: "event", event: event(6) },
+    ]);
   });
 
   it("keeps per-event replay after a snapshot even when batching is requested", async () => {

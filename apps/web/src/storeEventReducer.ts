@@ -27,6 +27,8 @@ import {
 } from "@synara/shared/pendingInteractions";
 
 import { advanceMessageTextSegments } from "./messageTextSegments";
+import { getThreadFromState } from "./threadDerivation";
+import { updateThreadHistoryLiveCount } from "./threadHistoryOwnership";
 import { isSessionRunningTurn } from "./session-logic";
 import {
   MAX_THREAD_MESSAGES,
@@ -554,13 +556,21 @@ function retainThreadProposedPlansAfterRevert(
 function rollbackThreadMessagesFromMessage(
   messages: ReadonlyArray<ChatMessage>,
   messageId: string,
+  clearUnknownWindow = false,
 ): {
   readonly messages: ChatMessage[];
   readonly removedTurnIds: ReadonlySet<string>;
 } {
   const targetIndex = messages.findIndex((message) => message.id === messageId);
   if (targetIndex < 0) {
-    return { messages: [...messages], removedTurnIds: new Set() };
+    return clearUnknownWindow
+      ? {
+          messages: [],
+          removedTurnIds: new Set(
+            messages.flatMap((message) => (message.turnId ? [message.turnId] : [])),
+          ),
+        }
+      : { messages: [...messages], removedTurnIds: new Set() };
   }
 
   const removedMessages = messages.slice(targetIndex);
@@ -792,7 +802,11 @@ function mergeStreamingMessage(
   };
 }
 
-function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
+function applyThreadMessageSentEvent(
+  thread: Thread,
+  event: ThreadMessageSentEvent,
+  preserveHistory = false,
+): Thread {
   const payload = event.payload;
   // Single backward scan: streaming deltas target the newest message, so walking from the tail
   // finds it in O(1) instead of scanning the (up to MAX_THREAD_MESSAGES) list front-to-back on
@@ -837,7 +851,8 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       messages = thread.messages.with(existingIndex, mergedMessage);
     }
   } else {
-    messages = [...thread.messages, incomingMessage].slice(-MAX_THREAD_MESSAGES);
+    messages = [...thread.messages, incomingMessage];
+    if (!preserveHistory) messages = messages.slice(-MAX_THREAD_MESSAGES);
   }
 
   const turnDiffSummaries =
@@ -1294,7 +1309,12 @@ function applyOrchestrationEvent(
       return applyThreadUpdate(
         state,
         event.payload.threadId,
-        (thread) => applyThreadMessageSentEvent(thread, event),
+        (thread) =>
+          applyThreadMessageSentEvent(
+            thread,
+            event,
+            state.threadHistoryById?.[event.payload.threadId] !== undefined,
+          ),
         {
           ...options,
           recomputeSummarySignals: threadMessageUpdatesSummary(event),
@@ -1438,6 +1458,7 @@ function applyOrchestrationEvent(
           const activities = normalizeActivities(
             [...thread.activities, activity],
             thread.activities,
+            state.threadHistoryById?.[thread.id] !== undefined,
           );
           return activities === thread.activities ? thread : { ...thread, activities };
         },
@@ -1597,6 +1618,7 @@ function applyOrchestrationEvent(
           const nextActivities = normalizeActivities(
             [...thread.activities, sequencedActivity],
             thread.activities,
+            state.threadHistoryById?.[thread.id] !== undefined,
           );
           const pendingInteractions = reconcilePendingInteractionsFromActivity(
             thread.id,
@@ -1722,7 +1744,7 @@ function applyOrchestrationEvent(
             retainedMessages,
             new Set(retainedMessages.map((message) => message.id)),
             event.sequence,
-          ).slice(-MAX_THREAD_MESSAGES);
+          ).slice(state.threadHistoryById?.[thread.id] ? 0 : -MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,
             retainedTurnIds,
@@ -1773,11 +1795,15 @@ function applyOrchestrationEvent(
           const rollback = rollbackThreadMessagesFromMessage(
             thread.messages,
             event.payload.messageId,
+            state.threadHistoryById?.[thread.id] !== undefined,
           );
           const removedTurnIds = new Set([
             ...rollback.removedTurnIds,
             ...(event.payload.removedTurnIds ?? []),
           ]);
+          const messages = rollback.messages.filter(
+            (message) => !message.turnId || !removedTurnIds.has(message.turnId),
+          );
           if (rollback.messages.length === thread.messages.length && removedTurnIds.size === 0) {
             return thread;
           }
@@ -1801,16 +1827,16 @@ function applyOrchestrationEvent(
             ...thread,
             turnDiffSummaries,
             messages: clearRemovedAsyncUserInputResponses(
-              rollback.messages,
-              new Set(rollback.messages.map((message) => message.id)),
+              messages,
+              new Set(messages.map((message) => message.id)),
               event.sequence,
-            ).slice(-MAX_THREAD_MESSAGES),
+            ).slice(state.threadHistoryById?.[thread.id] ? 0 : -MAX_THREAD_MESSAGES),
             proposedPlans,
             activities,
             pendingSourceProposedPlan: undefined,
             latestHumanMessageAt: deriveThreadSummaryMetadata({
               ...thread,
-              messages: rollback.messages,
+              messages,
             }).latestHumanMessageAt,
             latestTurn:
               latestCheckpoint === null
@@ -1890,7 +1916,10 @@ function applyThreadActivityEventBatch(
     (thread) => {
       // One accumulator for the whole batch: appending N activities used to re-normalize the
       // full activity list N times (O(batch x activities)); it is now O(batch) amortised.
-      const activityAccumulator = createThreadActivityAccumulator(thread.activities);
+      const activityAccumulator = createThreadActivityAccumulator(
+        thread.activities,
+        state.threadHistoryById?.[thread.id] !== undefined,
+      );
       let nextPendingInteractions = thread.pendingInteractions;
       let updatedAt = thread.updatedAt ?? thread.createdAt;
       for (const event of events) {
@@ -1973,5 +2002,51 @@ export function applyOrchestrationEventsHotPath(
     }
     nextState = applyOrchestrationEvent(nextState, event, normalizedOptions);
   }
-  return nextState;
+  const seenNewMessages = new Set<string>();
+  for (const event of events) {
+    if (event.aggregateKind !== "thread") continue;
+    const id = event.aggregateId as ThreadId;
+    const history = nextState.threadHistoryById?.[id];
+    if (!history) continue;
+    if (event.type === "thread.reverted" || event.type === "thread.conversation-rolled-back") {
+      nextState = {
+        ...nextState,
+        threadHistoryById: {
+          ...nextState.threadHistoryById,
+          [id]: { ...history, revisionSequence: event.sequence },
+        },
+      };
+    } else if (event.type === "thread.message-sent") {
+      const key = JSON.stringify([id, event.payload.messageId]);
+      if (
+        !state.messageByThreadId?.[id]?.[event.payload.messageId] &&
+        !seenNewMessages.has(key) &&
+        event.payload.createdAt >= (getThreadFromState(state, id)?.messages.at(-1)?.createdAt ?? "")
+      ) {
+        seenNewMessages.add(key);
+        nextState = {
+          ...nextState,
+          threadHistoryById: {
+            ...nextState.threadHistoryById,
+            [id]: updateThreadHistoryLiveCount(history, history.totalMessageCount + 1),
+          },
+        };
+      }
+    }
+  }
+  let applied = nextState.threadDetailAppliedSequenceById;
+  for (const event of events) {
+    if (event.aggregateKind !== "thread") continue;
+    const id = event.aggregateId as ThreadId;
+    if (
+      nextState.threadDetailSyncById?.[id] &&
+      nextState.messageByThreadId?.[id] &&
+      applied?.[id] !== undefined
+    ) {
+      if (event.sequence > applied[id]!) applied = { ...applied, [id]: event.sequence };
+    }
+  }
+  return applied === nextState.threadDetailAppliedSequenceById
+    ? nextState
+    : { ...nextState, threadDetailAppliedSequenceById: applied! };
 }

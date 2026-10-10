@@ -5,7 +5,6 @@ import {
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
   resolveSubagentPresentationForThread,
-  resolveSubagentThreadStatusKind,
 } from "./subagentPresentation";
 
 describe("resolveSubagentPresentation", () => {
@@ -14,6 +13,7 @@ describe("resolveSubagentPresentation", () => {
       nickname: "Halley",
       role: "Explorer",
       title: "New Thread",
+      fallbackId: "subagent:thread-1",
     });
 
     expect(presentation.primaryLabel).toBe("Halley");
@@ -25,6 +25,7 @@ describe("resolveSubagentPresentation", () => {
   it("parses bracketed labels from child-thread titles", () => {
     const presentation = resolveSubagentPresentation({
       title: "Harvey [worker]",
+      fallbackId: "subagent:thread-2",
     });
 
     expect(presentation.nickname).toBe("Harvey");
@@ -37,6 +38,7 @@ describe("resolveSubagentPresentation", () => {
       nickname: "Halley",
       role: "worker-low",
       title: null,
+      fallbackId: "subagent:thread-1",
     });
 
     expect(presentation.role).toBeNull();
@@ -47,6 +49,7 @@ describe("resolveSubagentPresentation", () => {
   it("strips worker-tier suffixes baked into persisted thread titles", () => {
     const presentation = resolveSubagentPresentation({
       title: "Research scheduling market - players [worker-medium]",
+      fallbackId: "subagent:thread-2",
     });
 
     expect(presentation.nickname).toBe("Research scheduling market - players");
@@ -58,6 +61,7 @@ describe("resolveSubagentPresentation", () => {
   it("falls back past worker-tier-only placeholder titles", () => {
     const presentation = resolveSubagentPresentation({
       title: "Subagent [worker-high]",
+      fallbackId: "subagent:thread-1:agent-1",
     });
 
     expect(presentation.role).toBeNull();
@@ -68,6 +72,7 @@ describe("resolveSubagentPresentation", () => {
   it("treats provider-id placeholder titles as generic subagent labels", () => {
     const presentation = resolveSubagentPresentation({
       title: "Subagent 019d8cae-0628-7bf1-bf86-5cbc31cd582c",
+      fallbackId: "subagent:thread-1:agent-1",
     });
 
     expect(presentation.title).toBeNull();
@@ -77,6 +82,7 @@ describe("resolveSubagentPresentation", () => {
   it("never shows a raw provider id as the label until richer metadata arrives", () => {
     const presentation = resolveSubagentPresentation({
       title: "Subagent 019d8cae-0628-7bf1-bf86-5cbc31cd582c",
+      fallbackId: "subagent:thread-1:019d8cae-0628-7bf1-bf86-5cbc31cd582c",
     });
 
     expect(presentation.primaryLabel).toBe("Subagent");
@@ -86,6 +92,7 @@ describe("resolveSubagentPresentation", () => {
   it("keeps the role parsed from a generic bracketed placeholder title", () => {
     const presentation = resolveSubagentPresentation({
       title: "Subagent [code reviewer]",
+      fallbackId: "subagent:thread-1:toolu_01P6abc",
     });
 
     expect(presentation.role).toBe("code reviewer");
@@ -95,6 +102,7 @@ describe("resolveSubagentPresentation", () => {
 
   it("uses the caller placeholder when no identity is known", () => {
     const presentation = resolveSubagentPresentation({
+      fallbackId: "toolu_01P6abc",
       placeholderLabel: "Starting subagent…",
     });
 
@@ -102,36 +110,12 @@ describe("resolveSubagentPresentation", () => {
     expect(presentation.fullLabel).toBe("Starting subagent…");
   });
 
-  it("never shows a provider id as the label of an anonymous row", () => {
-    expect(resolveSubagentPresentation({}).primaryLabel).toBe("Subagent");
-  });
-});
+  it("keeps the accent color seeded by the provider id for anonymous rows", () => {
+    const first = resolveSubagentPresentation({ fallbackId: "subagent:p:toolu_01P6abc" });
+    const again = resolveSubagentPresentation({ fallbackId: "subagent:p:toolu_01P6abc" });
 
-describe("resolveSubagentThreadStatusKind", () => {
-  it("reads live work first, then the latest turn's outcome", () => {
-    expect(
-      resolveSubagentThreadStatusKind({
-        session: { status: "ready" },
-        latestTurn: { state: "completed", completedAt: "2026-10-10T00:00:10.000Z" },
-        hasLiveTailWork: true,
-      }),
-    ).toBe("running");
-    expect(resolveSubagentThreadStatusKind({ session: { status: "running" } })).toBe("running");
-    expect(
-      resolveSubagentThreadStatusKind({
-        session: { status: "ready" },
-        latestTurn: { state: "completed", completedAt: "2026-10-10T00:00:10.000Z" },
-      }),
-    ).toBe("completed");
-    expect(
-      resolveSubagentThreadStatusKind({
-        session: { status: "ready" },
-        latestTurn: { state: "interrupted", completedAt: "2026-10-10T00:00:10.000Z" },
-      }),
-    ).toBe("stopped");
-    expect(resolveSubagentThreadStatusKind({ latestTurn: { state: "error" } })).toBe("failed");
-    expect(resolveSubagentThreadStatusKind({ error: "boom" })).toBe("failed");
-    expect(resolveSubagentThreadStatusKind({ session: null, latestTurn: null })).toBeNull();
+    expect(first.primaryLabel).toBe("Subagent");
+    expect(first.accentColor).toBe(again.accentColor);
   });
 });
 

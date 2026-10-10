@@ -1,3 +1,4 @@
+import { isThreadDetailAwaitingVerification } from "../threadDetailAuthority";
 import type { MessageId, ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toastManager, reportToastIssue } from "../components/ui/toast";
@@ -63,6 +64,7 @@ export function useClaudeContextCompaction({
     if (
       inFlightThreadIdsRef.current.has(threadId) ||
       disabledReason !== null ||
+      isThreadDetailAwaitingVerification(threadId) ||
       useClaudeCompactionRequests.persist?.hasHydrated() === false
     )
       return false;

@@ -5,6 +5,7 @@ import {
   createPreSnapshotThreadEventBuffer,
   drainPreSnapshotThreadEvents,
   shouldApplyThreadStreamSnapshot,
+  isCompleteAppliedThreadReplay,
 } from "./-threadDetailSnapshotOrdering";
 
 describe("shouldApplyThreadStreamSnapshot", () => {
@@ -90,5 +91,35 @@ describe("pre-snapshot thread event buffer", () => {
     // Events 2..5 were dropped; a snapshot at 3 does not cover 4 and 5, so
     // applying 6..9 would leave a hole in the thread.
     expect(drainPreSnapshotThreadEvents(buffer, 3)).toEqual({ events: [], lostEvents: true });
+  });
+});
+
+describe("restored detail replay verification", () => {
+  const input = { threadId: "thread-1", resumeSeedSequence: 10, appliedSequence: 10, events: [] };
+  it("accepts a validated empty gap but never a cursor without applied detail", () => {
+    expect(isCompleteAppliedThreadReplay(input)).toBe(true);
+    expect(isCompleteAppliedThreadReplay({ ...input, appliedSequence: undefined })).toBe(false);
+    expect(isCompleteAppliedThreadReplay({ ...input, resumeSeedSequence: undefined })).toBe(false);
+  });
+  it("requires every ordered event to land before granting authority", () => {
+    const event = { aggregateKind: "thread", aggregateId: "thread-1", sequence: 12 };
+    expect(isCompleteAppliedThreadReplay({ ...input, events: [event] })).toBe(false);
+    expect(isCompleteAppliedThreadReplay({ ...input, events: [event], appliedSequence: 12 })).toBe(
+      true,
+    );
+    expect(
+      isCompleteAppliedThreadReplay({
+        ...input,
+        events: [{ ...event, aggregateId: "other" }],
+        appliedSequence: 12,
+      }),
+    ).toBe(false);
+    expect(
+      isCompleteAppliedThreadReplay({
+        ...input,
+        events: [event, { ...event, sequence: 11 }],
+        appliedSequence: 12,
+      }),
+    ).toBe(false);
   });
 });
