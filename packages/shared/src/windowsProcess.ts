@@ -107,7 +107,13 @@ export function resolveWindowsCommandPath(
   }
 
   const env = input.env ?? process.env;
-  return resolveExecutable(command, { platform: "win32", env }) ?? command;
+  return (
+    resolveExecutable(command, {
+      platform: "win32",
+      env,
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+    }) ?? command
+  );
 }
 
 export function prepareWindowsSafeProcess(

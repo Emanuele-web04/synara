@@ -133,6 +133,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Open the chat Environment panel automatically on normal threads. default closed open environment panel preference",
   },
   {
+    id: "general:environment-subagents",
+    section: "general",
+    title: "Subagents",
+    keywords:
+      "Show a compact summary of the chat's subagents in the Environment panel and open the full list in the right dock. agents roster lineage running done stop background",
+  },
+  {
     id: "general:environment-usage",
     section: "general",
     title: "Usage",

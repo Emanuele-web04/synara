@@ -1747,6 +1747,10 @@ export class DesktopBrowserManager {
     // A hidden browser must never leave the miniature presentation zoom on a
     // runtime that automation or a later screenshot can reacquire.
     this.resetRuntimePageZoomForThread(input.threadId);
+    // The panel is gone, so its last rectangle is no longer on screen. Keeping it
+    // would let open(), navigate() or a screenshot repaint the native page over
+    // whatever chat is showing now, where no later hide() can take it down.
+    this.clearActiveBoundsForThread(input.threadId);
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
@@ -2676,9 +2680,13 @@ export class DesktopBrowserManager {
         continue;
       }
 
-      const runtime = this.runtimes.get(buildRuntimeKey(threadId, tab.id));
+      const runtimeKey = buildRuntimeKey(threadId, tab.id);
+      const runtime = this.runtimes.get(runtimeKey);
       if (runtime) {
-        if (warmRuntimeTabIds.has(tab.id)) {
+        if (
+          warmRuntimeTabIds.has(tab.id) ||
+          (this.automationRuntimeProtectedUntilByKey.get(runtimeKey) ?? 0) > Date.now()
+        ) {
           this.scheduleInactiveTabSuspend(threadId, tab.id);
           continue;
         }
@@ -2725,6 +2733,13 @@ export class DesktopBrowserManager {
       ) {
         continue;
       }
+      if (
+        (this.automationRuntimeProtectedUntilByKey.get(buildRuntimeKey(threadId, tab.id)) ?? 0) >
+        Date.now()
+      ) {
+        this.scheduleInactiveTabSuspend(threadId, tab.id);
+        continue;
+      }
       this.destroyRuntime(threadId, tab.id);
       didChange = suspendTabState(tab) || didChange;
     }
@@ -2760,6 +2775,12 @@ export class DesktopBrowserManager {
       const state = this.states.get(threadId);
       const tab = state ? this.getTab(state, tabId) : null;
       if (!state || !tab) {
+        return;
+      }
+      // A background tool may have claimed this tab after its old inactivity
+      // deadline was scheduled. Renew the deadline instead of closing its page.
+      if ((this.automationRuntimeProtectedUntilByKey.get(key) ?? 0) > Date.now()) {
+        this.scheduleInactiveTabSuspend(threadId, tabId);
         return;
       }
 

@@ -597,6 +597,11 @@ const TaskProgressPayload = Schema.Struct({
   // Live per-agent snapshots for workflow tasks, polled from the run's
   // transcript directory while the workflow is running.
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentRuntimeSnapshot)),
+  // Set when the task is a provider-native subagent: the spawning tool call id
+  // (the child thread's provider thread id) and the subagent's own title, so
+  // progress is attributed to that subagent instead of the parent's reasoning.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentTitle: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
 
@@ -624,6 +629,8 @@ const TaskCompletedPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   workflowTaskId: Schema.optional(RuntimeTaskId),
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
+  // Spawning tool call id when the task is a provider-native subagent.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 
