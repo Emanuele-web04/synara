@@ -14,6 +14,8 @@ import { AgentProfileRepositoryLive } from "../../externalAgents/AgentProfileRep
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { makeExternalAgentAdapter } from "./ExternalAgentAdapter.ts";
 
+const WORKSPACE_REPORT_PREFIX = "external-cli-fixture-workspace:";
+
 it.each([true, false])(
   "runs a pinned ACP turn (%s thread cwd)",
   async (hasThreadCwd) => {
@@ -210,10 +212,23 @@ it.each([
         expect(completions[0]).toMatchObject({ turnId: turn.turnId, payload: { state } });
         expect(JSON.stringify(events)).not.toContain("wrong attribution");
         if (state === "completed") {
-          const reply = events
-            .flatMap((event) => (event.type === "content.delta" ? [event.payload.delta] : []))
-            .join("");
-          expect(JSON.parse(reply)).toEqual({ cwd: expectedCwd, pwd: expectedCwd });
+          const turnStartIndex = events.findIndex(
+            (event) => event.type === "turn.started" && event.turnId === turn.turnId,
+          );
+          expect(turnStartIndex).toBeGreaterThanOrEqual(0);
+          // Basic CLI startup text can drain after turn acceptance. Read only
+          // the explicitly framed fixture report, keeping the full event stream.
+          const workspaceReports = events
+            .slice(turnStartIndex + 1)
+            .flatMap((event) =>
+              event.type === "content.delta" &&
+              event.turnId === turn.turnId &&
+              event.payload.delta.startsWith(WORKSPACE_REPORT_PREFIX)
+                ? [event.payload.delta.slice(WORKSPACE_REPORT_PREFIX.length)]
+                : [],
+            );
+          expect(workspaceReports).toHaveLength(1);
+          expect(JSON.parse(workspaceReports[0]!)).toEqual({ cwd: expectedCwd, pwd: expectedCwd });
         }
         if (mode === "structured-failure")
           expect(JSON.stringify(completions)).toContain("fixture refused the turn");
