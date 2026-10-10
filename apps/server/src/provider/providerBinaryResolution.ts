@@ -46,8 +46,13 @@ export function commandExistsOnPath(
   options: ProviderBinaryResolutionOptions = {},
 ): boolean {
   const resolved = resolveOptions(options);
+  // PATH presence alone does not prove that a CLI can be spawned: directories
+  // and POSIX files without execute permission must not pass discovery.
+  // Preserve the existing pathExists seam for callers with synthetic test FS.
+  const canExecute =
+    options.isExecutable ?? (options.pathExists ? resolved.pathExists : resolved.isExecutable);
   for (const candidate of executableCandidates(command, resolved)) {
-    if (resolved.pathExists(candidate.path)) return true;
+    if (canExecute(candidate.path)) return true;
   }
   return false;
 }
@@ -66,9 +71,11 @@ export function resolveWindowsLocalAppDataBinary(
       : undefined);
   if (!localAppData) return undefined;
 
+  const canExecute =
+    options.isExecutable ?? (options.pathExists ? resolved.pathExists : resolved.isExecutable);
   for (const relativePath of relativeCandidates) {
     const candidate = win32.join(localAppData, ...relativePath);
-    if (resolved.pathExists(candidate)) return candidate;
+    if (canExecute(candidate)) return candidate;
   }
   return undefined;
 }

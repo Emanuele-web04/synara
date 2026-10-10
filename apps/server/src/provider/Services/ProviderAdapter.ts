@@ -243,6 +243,13 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
+  /**
+   * Renew retired tool authority after all native background work has settled.
+   * True keeps the current session/generation; false requires full replacement.
+   * The adapter must keep admission fenced until renewal is proven complete.
+   */
+  readonly renewAgentGatewayCredential?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
+
   /** Validate and retire before generation rotation; the returned start retains per-attempt preflight. */
   readonly prepareSessionReplacement?: (input: ProviderSessionStartInput) => Effect.Effect<
     | {

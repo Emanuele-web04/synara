@@ -31,7 +31,7 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 
 ## Transcript and UI safeguards
 
-- Auto-follow represents real assistant text streaming, not generic work, buffering, reconnecting, pending approvals, or tool-only activity. Tool/work rows must not retrigger message-arrival auto-stick behavior.
+- Keep end-follow while the reader remains at the bottom, including tool/work growth between assistant messages and the final settled layout. User navigation away from the bottom releases follow. Generic work, buffering, reconnecting, pending approvals, and tool-only activity must not rearm a detached reader or retrigger message-arrival auto-stick behavior.
 - Keep the common transcript path simple. Introduce virtualization only with measured need; never couple virtualizer measurement to a bottom-stick/height-follow feedback loop. Cover scrolling and measurement changes with focused transcript tests.
 - Reuse [disclosureMotion.ts](apps/web/src/lib/disclosureMotion.ts) and its existing disclosure components for open/close transitions, including reduced-motion behavior. Do not duplicate timing constants or bespoke toggle animations.
 - Reuse before you build. Before adding a dialog, sheet, input, button, row, hook, store, or helper function, search the codebase for one that already does the job and use it, extending it with a prop or variant when it almost fits. When a second surface needs the same shape as an existing one, extract the shared piece (as [AnnouncementSheet.tsx](apps/web/src/components/AnnouncementSheet.tsx) does for one-time announcements) and switch both to it instead of copying markup or logic. Write something from scratch only when nothing comparable exists, and say so in the completion report.

@@ -16,10 +16,13 @@ import {
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
-  it.each(["inbox", "pull-request-auto-fix"])("offers %s in Stable and Beta", (feature) => {
-    expect(isBetaFeatureEnabled(feature, "production")).toBe(true);
-    expect(isBetaFeatureEnabled(feature, "beta")).toBe(true);
-  });
+  it.each(["inbox", "pull-request-auto-fix", "tasks"])(
+    "offers %s in Stable and Beta",
+    (feature) => {
+      expect(isBetaFeatureEnabled(feature, "production")).toBe(true);
+      expect(isBetaFeatureEnabled(feature, "beta")).toBe(true);
+    },
+  );
 
   it("enables Oh My Pi in Stable and all other flavors", () => {
     for (const flavor of [
@@ -32,11 +35,6 @@ describe("isBetaFeatureEnabled", () => {
     ] as const) {
       expect(isBetaFeatureEnabled("omp", flavor)).toBe(true);
     }
-  });
-
-  it("keeps Tasks in Beta while Stable keeps Kanban", () => {
-    expect(isBetaFeatureEnabled("tasks", "beta")).toBe(true);
-    expect(isBetaFeatureEnabled("tasks", "production")).toBe(false);
   });
 
   it("keeps Groups out of Stable only", () => {

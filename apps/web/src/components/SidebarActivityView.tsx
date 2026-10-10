@@ -271,17 +271,19 @@ export function ActivityThreadRow({
             <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
-            {isWorktree ? (
-              <WorktreeIcon
-                className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-                aria-label="Worktree"
-              />
-            ) : null}
-            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
+              {isWorktree ? (
+                <span className="inline-flex size-5 shrink-0 items-center justify-center">
+                  <WorktreeIcon
+                    className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                    aria-label="Worktree"
+                  />
+                </span>
+              ) : null}
               {pr ? (
                 <PrStateChip
                   pr={pr}
-                  className="[&_svg]:size-2.5"
+                  className="min-h-5 min-w-5 justify-center [&_svg]:size-3"
                   onOpen={(event) => onOpenPullRequest(event, pr)}
                 />
               ) : null}

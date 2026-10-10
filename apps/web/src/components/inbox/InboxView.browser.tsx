@@ -84,9 +84,10 @@ it("opens a Stable Inbox deep link", async () => {
   }
 });
 
-it("loads the Stable Inbox without offering or requesting Beta to-dos", async () => {
+it("offers Tasks in the Stable Inbox", async () => {
   fixture.navigate.mockReset();
   fixture.listTodos.mockReset();
+  fixture.listTodos.mockResolvedValue({ todos: [] });
   fixture.activity.mockReturnValue({ visibleNonGroupThreads: [] });
   fixture.getRecap.mockRejectedValue({ code: "FEATURE_UNAVAILABLE" });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -102,11 +103,9 @@ it("loads the Stable Inbox without offering or requesting Beta to-dos", async ()
       .toBeVisible();
     expect(fixture.getRecap).toHaveBeenCalled();
     expect(fixture.navigate).not.toHaveBeenCalled();
-    expect(fixture.listTodos).not.toHaveBeenCalled();
-    await expect
-      .element(view.getByRole("heading", { name: "Today’s tasks" }))
-      .not.toBeInTheDocument();
-    await expect.element(view.getByRole("button", { name: "All tasks" })).not.toBeInTheDocument();
+    expect(fixture.listTodos).toHaveBeenCalled();
+    await expect.element(view.getByRole("heading", { name: "Today’s tasks" })).toBeVisible();
+    await expect.element(view.getByRole("button", { name: "All tasks" })).toBeVisible();
   } finally {
     await view.unmount();
     client.clear();

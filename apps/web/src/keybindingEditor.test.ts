@@ -240,9 +240,9 @@ describe("evaluateRecordedShortcut", () => {
   it("refuses the chords Synara handles before any binding", () => {
     const source = sourceWith();
 
-    expect(record(source, "terminal.toggle", shortcut("p", { modKey: true })).recording).toEqual({
+    expect(record(source, "terminal.toggle", shortcut(",", { modKey: true })).recording).toEqual({
       status: "problem",
-      message: "⌘P always opens file search. Try another.",
+      message: "⌘, always opens Settings. Try another.",
     });
     expect(record(source, "terminal.toggle", shortcut("[", { modKey: true })).recording).toEqual({
       status: "problem",
@@ -252,6 +252,34 @@ describe("evaluateRecordedShortcut", () => {
     expect(
       record(linux, "terminal.toggle", shortcut("arrowleft", { altKey: true })).recording.status,
     ).toBe("problem");
+  });
+
+  it.each([
+    ["search.files", "p", false, "Search files"],
+    ["search.content", "f", true, "Search snippets"],
+  ] as const)("can take the configured chord from %s", (command, key, shiftKey, label) => {
+    const searchRule = rule(command, key, { modKey: true, shiftKey }, not(id("terminalFocus")));
+    const source = sourceWith([...SHIPPED, searchRule]);
+    const { replacing, recording } = record(
+      source,
+      "terminal.toggle",
+      shortcut(key, { modKey: true, shiftKey }),
+    );
+
+    expect(recording.status).toBe("ready");
+    if (recording.status !== "ready") throw new Error("search chord must be remappable");
+    expect(recording.conflicts).toEqual([{ rule: searchRule, label }]);
+    expect(shortcutSaveEdits(recording, replacing)).toEqual([
+      {
+        type: "remove",
+        rule: { command, key: shiftKey ? "mod+shift+f" : "mod+p", when: "!terminalFocus" },
+      },
+      {
+        type: "set",
+        rule: { command: "terminal.toggle", key: shiftKey ? "mod+shift+f" : "mod+p" },
+        replacing: { command: "terminal.toggle", key: "mod+j" },
+      },
+    ]);
   });
 
   it("refuses the terminal's search chord only where the terminal can have focus", () => {

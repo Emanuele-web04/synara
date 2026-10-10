@@ -111,7 +111,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { TurnCheckpointCoordinatorLive } from "./TurnCheckpointCoordinator.ts";
 import { TurnCheckpointCoordinator } from "../Services/TurnCheckpointCoordinator.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
-import { StudioOutputReactorLive } from "./StudioOutputReactor.ts";
+import { HubOutputReactorLive } from "./HubOutputReactor.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
@@ -137,10 +137,7 @@ import {
   type OrchestrationDispatchError,
 } from "../Errors.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
-import {
-  StudioOutputReactor,
-  type StudioOutputReactorShape,
-} from "../Services/StudioOutputReactor.ts";
+import { HubOutputReactor, type HubOutputReactorShape } from "../Services/HubOutputReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
 import { PROVIDER_DEBUG_MODE_PROMPT_PREFIX } from "../../provider/debugMode.ts";
@@ -331,7 +328,7 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
     readonly conversationRollback?: "native" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
-    readonly studioOutputReactor?: Partial<StudioOutputReactorShape>;
+    readonly hubOutputReactor?: Partial<HubOutputReactorShape>;
     readonly forkThreadResult?: ProviderForkThreadResult | null;
     readonly startReactor?: boolean;
     readonly interruptTurn?: ProviderServiceShape["interruptTurn"];
@@ -668,20 +665,18 @@ describe("ProviderCommandReactor", () => {
             }),
           )),
     );
-    const captureStudioOutputBaseline = vi.fn<
-      StudioOutputReactorShape["captureBaselineBeforeTurn"]
-    >(
-      input?.studioOutputReactor?.captureBaselineBeforeTurn ??
+    const captureStudioOutputBaseline = vi.fn<HubOutputReactorShape["captureBaselineBeforeTurn"]>(
+      input?.hubOutputReactor?.captureBaselineBeforeTurn ??
         (() => Effect.succeed({ status: "completed" as const })),
     );
     const cancelPendingStudioOutputBaseline = vi.fn<
-      StudioOutputReactorShape["cancelPendingTurnBaseline"]
-    >(input?.studioOutputReactor?.cancelPendingTurnBaseline ?? (() => Effect.void));
-    const studioOutputReactor: StudioOutputReactorShape = {
+      HubOutputReactorShape["cancelPendingTurnBaseline"]
+    >(input?.hubOutputReactor?.cancelPendingTurnBaseline ?? (() => Effect.void));
+    const hubOutputReactor: HubOutputReactorShape = {
       captureBaselineBeforeTurn: captureStudioOutputBaseline,
       cancelPendingTurnBaseline: cancelPendingStudioOutputBaseline,
-      start: input?.studioOutputReactor?.start ?? Effect.void,
-      drain: input?.studioOutputReactor?.drain ?? Effect.void,
+      start: input?.hubOutputReactor?.start ?? Effect.void,
+      drain: input?.hubOutputReactor?.drain ?? Effect.void,
     };
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
@@ -786,7 +781,7 @@ describe("ProviderCommandReactor", () => {
           streamChanges: Stream.empty,
         } as unknown as ProviderHealthShape),
       ),
-      Layer.provideMerge(Layer.succeed(StudioOutputReactor, studioOutputReactor)),
+      Layer.provideMerge(Layer.succeed(HubOutputReactor, hubOutputReactor)),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(GitCore, {
@@ -2218,7 +2213,7 @@ describe("ProviderCommandReactor", () => {
         threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
         startReactor: phase !== "replay" && phase !== "subscriber-lag",
         getClaudeCacheObservation: getObservation,
-        ...(phase === "baseline" ? { studioOutputReactor: { captureBaselineBeforeTurn } } : {}),
+        ...(phase === "baseline" ? { hubOutputReactor: { captureBaselineBeforeTurn } } : {}),
         cancelClaudeCompactionDiscovery: cancelDiscovery,
       });
       if (phase === "idle-interrupt" || phase === "service-cancel") {
@@ -13249,10 +13244,10 @@ describe("ProviderCommandReactor", () => {
   });
 
   it.each(["git-and-studio-failed", "studio-failed", "not-applicable"] as const)(
-    "reports real Studio preparation state when %s",
+    "reports real Hub preparation state when %s",
     async (mode) => {
       const studioRuntime = ManagedRuntime.make(
-        StudioOutputReactorLive.pipe(
+        HubOutputReactorLive.pipe(
           Layer.provide(
             Layer.succeed(ProviderService, {
               streamEvents: Stream.empty,
@@ -13264,7 +13259,7 @@ describe("ProviderCommandReactor", () => {
               getThreadShellById: () =>
                 mode === "not-applicable"
                   ? Effect.succeed(Option.none())
-                  : Effect.die(new Error("Studio workspace lookup failed")),
+                  : Effect.die(new Error("Hub workspace lookup failed")),
             } as never),
           ),
           Layer.provide(NodeServices.layer),
@@ -13272,7 +13267,7 @@ describe("ProviderCommandReactor", () => {
         ),
       );
       try {
-        const studio = await studioRuntime.runPromise(Effect.service(StudioOutputReactor));
+        const studio = await studioRuntime.runPromise(Effect.service(HubOutputReactor));
         const harness = await createHarness({
           checkpointStore: {
             isGitRepository: () => Effect.succeed(true),
@@ -13289,7 +13284,7 @@ describe("ProviderCommandReactor", () => {
                   ),
             hasCheckpointRef: () => Effect.succeed(false),
           },
-          studioOutputReactor: {
+          hubOutputReactor: {
             captureBaselineBeforeTurn: (threadId) =>
               Effect.promise(() =>
                 studioRuntime.runPromise(studio.captureBaselineBeforeTurn(threadId)),
@@ -13311,11 +13306,11 @@ describe("ProviderCommandReactor", () => {
           checkpointBaseline: mode === "studio-failed" ? "captured" : "unavailable",
           studioPreparation: mode === "not-applicable" ? "not-applicable" : "unavailable",
           detail: expect.stringContaining(
-            mode === "not-applicable" ? "not applicable" : "Studio workspace lookup failed",
+            mode === "not-applicable" ? "not applicable" : "Hub workspace lookup failed",
           ),
         });
         expect(JSON.stringify(notices?.[0]?.payload)).not.toContain(
-          "Completed Studio preparation is preserved",
+          "Completed Hub preparation is preserved",
         );
       } finally {
         await studioRuntime.dispose();
@@ -13324,7 +13319,7 @@ describe("ProviderCommandReactor", () => {
   );
 
   it.each(["git-failed", "not-git", "prepared"] as const)(
-    "retains independently prepared Studio baseline when Git preparation is %s",
+    "retains independently prepared Hub baseline when Git preparation is %s",
     async (mode) => {
       let studioPrepared = false;
       const harness = await createHarness({
@@ -13342,7 +13337,7 @@ describe("ProviderCommandReactor", () => {
                 )
               : Effect.void,
         },
-        studioOutputReactor: {
+        hubOutputReactor: {
           captureBaselineBeforeTurn: () =>
             Effect.sync(() => {
               studioPrepared = true;
@@ -13400,7 +13395,7 @@ describe("ProviderCommandReactor", () => {
       vi.stubEnv("SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS", "15000");
       const harness = await createHarness({
         preTurnBaselineTimeout: Duration.millis(30),
-        studioOutputReactor: {
+        hubOutputReactor: {
           captureBaselineBeforeTurn: () =>
             (kind === "studio" ? hungCapture : Effect.void).pipe(
               Effect.as({ status: "completed" as const }),
@@ -13478,7 +13473,7 @@ describe("ProviderCommandReactor", () => {
           ),
         hasCheckpointRef: () => Effect.sync(() => published),
       },
-      studioOutputReactor: {
+      hubOutputReactor: {
         captureBaselineBeforeTurn: () => Effect.succeed({ status: "completed" as const }),
         cancelPendingTurnBaseline: () =>
           Effect.sync(() => {
@@ -13515,7 +13510,7 @@ describe("ProviderCommandReactor", () => {
         captureCheckpoint: () => Deferred.await(release),
         hasCheckpointRef: () => Effect.succeed(false),
       },
-      studioOutputReactor: {
+      hubOutputReactor: {
         captureBaselineBeforeTurn: () =>
           Deferred.await(release).pipe(Effect.as({ status: "completed" as const })),
       },
@@ -13531,7 +13526,7 @@ describe("ProviderCommandReactor", () => {
         (activity) => activity.kind === "checkpoint.baseline.skipped",
       );
       expect(notices).toHaveLength(1);
-      expect(notices?.[0]?.payload).toMatchObject({ detail: expect.stringContaining("Studio") });
+      expect(notices?.[0]?.payload).toMatchObject({ detail: expect.stringContaining("Hub") });
       expect(notices?.[0]?.payload).toMatchObject({
         detail: expect.stringContaining("checkpoint"),
       });
@@ -13540,16 +13535,16 @@ describe("ProviderCommandReactor", () => {
     }
   });
 
-  it("waits for the Studio output baseline before sending the provider turn", async () => {
+  it("waits for the Hub output baseline before sending the provider turn", async () => {
     let releaseCapture: (() => void) | undefined;
     const captureGate = new Promise<void>((resolve) => {
       releaseCapture = resolve;
     });
-    const captureBaselineBeforeTurn = vi.fn<StudioOutputReactorShape["captureBaselineBeforeTurn"]>(
+    const captureBaselineBeforeTurn = vi.fn<HubOutputReactorShape["captureBaselineBeforeTurn"]>(
       () => Effect.promise(() => captureGate).pipe(Effect.as({ status: "completed" as const })),
     );
     const harness = await createHarness({
-      studioOutputReactor: { captureBaselineBeforeTurn },
+      hubOutputReactor: { captureBaselineBeforeTurn },
     });
     const now = new Date().toISOString();
 
@@ -20794,18 +20789,18 @@ describe("ProviderCommandReactor", () => {
       );
     });
     expect(harness.respondToRequest).not.toHaveBeenCalled();
-    const retryableApproval = await Effect.runPromise(
+    const expiredApproval = await Effect.runPromise(
       harness.pendingInteractionRepository.getByIdentity({
         threadId: ThreadId.makeUnsafe("thread-1"),
         interactionKind: "approval",
         requestId: asApprovalRequestId("approval-request-stopped"),
       }),
     );
-    expect(Option.getOrUndefined(retryableApproval)).toMatchObject({
-      status: "uncertain",
+    expect(Option.getOrUndefined(expiredApproval)).toMatchObject({
+      status: "confirmed",
       responseCommandId: "cmd-approval-respond-stopped",
       decision: "accept",
-      resolvedAt: null,
+      resolvedAt: expect.any(String),
     });
   });
 
@@ -20882,10 +20877,10 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     expect(Option.getOrUndefined(expiredUserInput)).toMatchObject({
-      status: "uncertain",
+      status: "confirmed",
       responseCommandId: "cmd-user-input-respond-stopped",
       decision: null,
-      resolvedAt: null,
+      resolvedAt: expect.any(String),
     });
   });
 
@@ -21039,18 +21034,18 @@ describe("ProviderCommandReactor", () => {
       settlementStatus: "uncertain",
       detail: expect.stringContaining("Stale pending approval request: approval-request-1"),
     });
-    const uncertainApproval = await Effect.runPromise(
+    const expiredApproval = await Effect.runPromise(
       harness.pendingInteractionRepository.getByIdentity({
         threadId: ThreadId.makeUnsafe("thread-1"),
         interactionKind: "approval",
         requestId: asApprovalRequestId("approval-request-1"),
       }),
     );
-    expect(Option.getOrUndefined(uncertainApproval)).toMatchObject({
-      status: "uncertain",
+    expect(Option.getOrUndefined(expiredApproval)).toMatchObject({
+      status: "confirmed",
       responseCommandId: "cmd-approval-respond-stale",
       decision: "acceptForSession",
-      resolvedAt: null,
+      resolvedAt: failureActivity?.createdAt,
     });
     const responseEvents = await Effect.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(
@@ -21280,18 +21275,18 @@ describe("ProviderCommandReactor", () => {
         settlementStatus: "uncertain",
         detail: expect.stringContaining("Stale pending user-input request: user-input-request-1"),
       });
-      const uncertainUserInput = await Effect.runPromise(
+      const expiredUserInput = await Effect.runPromise(
         harness.pendingInteractionRepository.getByIdentity({
           threadId: ThreadId.makeUnsafe("thread-1"),
           interactionKind: "userInput",
           requestId: asApprovalRequestId("user-input-request-1"),
         }),
       );
-      expect(Option.getOrUndefined(uncertainUserInput)).toMatchObject({
-        status: "uncertain",
+      expect(Option.getOrUndefined(expiredUserInput)).toMatchObject({
+        status: "confirmed",
         responseCommandId: "cmd-user-input-respond-stale",
         decision: null,
-        resolvedAt: null,
+        resolvedAt: failureActivity?.createdAt,
       });
 
       const resolvedActivity = thread?.activities.find(
@@ -21317,23 +21312,24 @@ describe("ProviderCommandReactor", () => {
           createdAt: new Date().toISOString(),
         }),
       );
-      await waitFor(
-        async () =>
-          (await readHarnessThread(harness))?.activities.filter(
-            (activity) => activity.kind === "provider.user-input.respond.failed",
-          ).length === 2,
-      );
+      await harness.drain();
+      expect(
+        (await readHarnessThread(harness))?.activities.filter(
+          (activity) => activity.kind === "provider.user-input.respond.failed",
+        ),
+      ).toHaveLength(1);
       expect(harness.respondToUserInput).toHaveBeenCalledTimes(1);
-      const reclaimedUserInput = await Effect.runPromise(
+      const settledUserInputAfterRetry = await Effect.runPromise(
         harness.pendingInteractionRepository.getByIdentity({
           threadId: ThreadId.makeUnsafe("thread-1"),
           interactionKind: "userInput",
           requestId: asApprovalRequestId("user-input-request-1"),
         }),
       );
-      expect(Option.getOrUndefined(reclaimedUserInput)).toMatchObject({
-        status: "uncertain",
+      expect(Option.getOrUndefined(settledUserInputAfterRetry)).toMatchObject({
+        status: "confirmed",
         responseCommandId: "cmd-user-input-respond-stale",
+        resolvedAt: failureActivity?.createdAt,
       });
     },
   );

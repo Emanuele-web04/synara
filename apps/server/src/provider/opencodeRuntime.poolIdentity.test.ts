@@ -59,7 +59,12 @@ function openCodeRuntimePoolTestLayer(state: {
       reserveLoopbackPort: () => Effect.succeed(59_000),
       findAvailablePort: () => Effect.succeed(59_000),
     },
-    fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+    fetchImpl: (url) =>
+      Promise.resolve(
+        String(url).endsWith("/api/info")
+          ? new Response(null, { status: 404 })
+          : Response.json({ all: [], connected: [], default: {} }),
+      ),
     teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
   }).pipe(Layer.provide(mockPooledOpenCodeServerSpawnerLayer(state)));
 }

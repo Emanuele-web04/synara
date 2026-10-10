@@ -42,7 +42,6 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { CommandId, EventId } from "@synara/contracts";
-import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
 import {
   derivePendingThreadRequestIds,
   type PendingThreadRequestKind,
@@ -143,17 +142,12 @@ function planStalePendingRequestCommands(input: {
 }): ReadonlyArray<ThreadActivityAppendCommand> {
   const commands: ThreadActivityAppendCommand[] = [];
   if (input.thread.pendingInteractions !== undefined) {
-    const isAlreadyStale = createStalePendingInteractionMatcher(input.thread.activities ?? []);
     for (const interaction of input.thread.pendingInteractions) {
       // A process restart loses every live provider callback. Pending,
       // responding, and previously retryable rows are therefore no longer
-      // answerable. Uncertain user-input responses are also retryable unless
-      // their callback has already been explicitly invalidated.
-      if (
-        interaction.status === "confirmed" ||
-        isAlreadyStale(interaction) ||
-        (interaction.status === "uncertain" && interaction.interactionKind === "approval")
-      ) {
+      // answerable. Legacy uncertain rows also need durable terminal settlement,
+      // even if a stale failure already removed them from the activity summary.
+      if (!isUnsettledPendingInteraction(interaction)) {
         continue;
       }
       commands.push(

@@ -30,9 +30,10 @@ import { SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
 // to a floor that still fits the icon, a few characters, and the close button. Past the
 // floor the strip scrolls instead of crushing the tabs further. The floor never exceeds
 // the strip itself, so a strip squeezed by a narrow window still shows one whole tab.
-const CONTENT_TAB_SIZE_CLASS_NAME = "min-w-[min(9em,100%)] grow-0 shrink basis-[18em]";
+// Width also supplies the strip's intrinsic size; the basis still drives tab shrinking.
+const CONTENT_TAB_SIZE_CLASS_NAME = "w-[18em] min-w-[min(9em,100%)] grow-0 shrink basis-[18em]";
 const CONTENT_TAB_FROZEN_SIZE_CLASS_NAME =
-  "min-w-0 grow-0 shrink-0 basis-[var(--surface-tab-frozen-width)]";
+  "w-[var(--surface-tab-frozen-width)] min-w-0 grow-0 shrink-0 basis-[var(--surface-tab-frozen-width)]";
 // The strip sits on the rail's shell band, above the card it belongs to (the chat, or the
 // dock's panes). The active tab takes the card's own surface, so it reads as the open
 // content rather than as a hovered tab (hover tints with ink; the shared chip's active fill
@@ -140,7 +141,11 @@ export function SurfaceContentTabs<Key extends string>(props: {
   };
 
   const strip = (
-    <SurfaceTabStrip activeKey={activeKey} dividers className="flex-1">
+    <SurfaceTabStrip
+      activeKey={activeKey}
+      dividers
+      className="surface-content-tabs w-max max-w-full"
+    >
       {tabs.map((tab) => {
         const active = tab.key === activeKey;
         const { onClose } = tab;

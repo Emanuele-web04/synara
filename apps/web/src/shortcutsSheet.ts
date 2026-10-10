@@ -199,6 +199,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Search the open file preview and jump between matching text.",
   },
   {
+    command: "search.files",
+    label: "Search files",
+    description: "Open the workspace file-name search palette.",
+  },
+  {
+    command: "search.content",
+    label: "Search snippets",
+    description: "Open the workspace content search palette across file snippets.",
+  },
+  {
     command: "terminal.toggle",
     label: "Toggle terminal",
     description: "Show or hide the terminal surface for the active thread.",

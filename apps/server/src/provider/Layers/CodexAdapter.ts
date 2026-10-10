@@ -2741,6 +2741,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       respondToRequest,
       respondToUserInput,
       stopSession,
+      renewAgentGatewayCredential: (threadId) =>
+        Effect.tryPromise({
+          try: () => manager.renewAgentGatewayCredential(threadId),
+          catch: (cause) => toRequestError(threadId, "thread/resume", cause),
+        }),
       listSessions,
       listGeneratedImageHomePaths,
       hasSession,

@@ -62,6 +62,7 @@ import {
 } from "./provider/codexCliVersion";
 import {
   buildCodexMcpConfigToml,
+  buildCodexMcpThreadConfig,
   SYNARA_AGENT_GATEWAY_TOKEN_ENV,
   SYNARA_MCP_SERVER_NAME,
 } from "./agentGateway/mcpInjection.ts";
@@ -208,9 +209,12 @@ interface CodexSessionContext {
   authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
-  readonly gatewaySessionLease?: AgentGatewaySessionLease;
+  gatewaySessionLease?: AgentGatewaySessionLease;
   /** Set once this runtime's bearer is permanently fenced to a terminal turn. */
   gatewayCredentialRetired?: boolean;
+  gatewayCredentialRenewable?: boolean;
+  gatewayRenewalInProgress?: boolean;
+  serviceTier?: string | null;
   activeInteractionMode?: ProviderInteractionMode | undefined;
   session: ProviderSession;
   lifecycleGeneration?: string;
@@ -723,6 +727,7 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
 }
 
 interface CodexThreadSessionOverrides {
+  readonly config?: ReturnType<typeof buildCodexMcpThreadConfig>;
   readonly model: string | null;
   readonly serviceTier?: string;
   readonly cwd: string;
@@ -875,13 +880,17 @@ function spawnCodexAppServer(input: {
   if (!sourceHomePath) {
     throw new Error("Codex app-server requires a verified shared continuation home.");
   }
-  return spawnProcess(input.binaryPath, buildCodexAppServerArgs(sourceHomePath), {
-    lowerPriority: input.lowerPriority,
-    requireExecutable: true,
-    cwd: input.cwd,
-    env: input.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  return spawnProcess(
+    input.binaryPath,
+    [...buildCodexAppServerArgs(sourceHomePath), "--config", "thread_unload_delay_secs=0"],
+    {
+      lowerPriority: input.lowerPriority,
+      requireExecutable: true,
+      cwd: input.cwd,
+      env: input.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
 }
 
 export function normalizeCodexModelSlug(
@@ -1280,12 +1289,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.authRevalidationTimeoutMs = Math.max(1, options?.authRevalidationTimeoutMs ?? 5_000);
   }
 
-  // The Synara MCP server rides on the shared overlay config (no secrets),
-  // while the per-thread bearer token travels through the app-server process
-  // env referenced by `bearer_token_env_var`.
+  // Only the endpoint lives in shared config. Credentials travel over the owned
+  // pipe in thread config, so renewing them does not require a new process env.
   private async buildSessionProcessEnv(
     codexOptions: CodexDiscoveryOptions | undefined,
-    gatewayBearerToken: string | undefined,
     expectedCodexContinuationGeneration?: string,
   ) {
     const processEnvInput = {
@@ -1294,14 +1301,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { expectedSharedContinuationGeneration: expectedCodexContinuationGeneration }
         : {}),
       ...(this.agentGatewayMcp
-        ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
+        ? {
+            appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl(), "thread"),
+          }
         : {}),
     };
     const processLaunch = await buildCodexProcessLaunchContext(processEnvInput);
     const env = processLaunch.env;
-    if (gatewayBearerToken) {
-      env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = gatewayBearerToken;
-    }
+    delete env[SYNARA_AGENT_GATEWAY_TOKEN_ENV];
     return {
       env,
       authTracking: processLaunch.authTracking,
@@ -1411,7 +1418,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       const processLaunch = await this.buildSessionProcessEnv(
         normalizedCodexOptions,
-        gatewaySessionLease?.connection.bearerToken,
         input.expectedCodexContinuationGeneration,
       );
       const launchAuthFingerprint = processLaunch.authFingerprint;
@@ -1424,6 +1430,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       context = {
         autoApproveSynaraTools: input.autoApproveSynaraTools === true,
+        ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         enableComputerControl:
           gatewaySessionLease !== undefined &&
           input.agentGatewayCapabilityInput.enableComputerControl === true,
@@ -1489,6 +1496,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         context.account,
       );
       const sessionOverrides = {
+        ...(gatewaySessionLease
+          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          : {}),
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         cwd: resolvedCwd,
@@ -1761,9 +1771,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
 
+    if (input.serviceTier !== undefined) context.serviceTier = input.serviceTier;
+
     this.updateSession(context, {
       status: "running",
       activeTurnId: turnId,
+      ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
       ...(context.session.resumeCursor !== undefined
         ? { resumeCursor: context.session.resumeCursor }
         : {}),
@@ -1941,6 +1954,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     // Flip the local admission fence before starting asynchronous request
     // drainage. No following turn may reuse this runtime's bearer.
     context.gatewayCredentialRetired = true;
+    context.gatewayCredentialRenewable = false;
     return this.runGatewayTurnCleanup(context, turnId, "retirement", () =>
       lease.retireTurn(turnId),
     );
@@ -1952,6 +1966,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     providerThreadIdOverride?: string,
   ): Promise<void> {
     const context = this.requireSession(threadId);
+    context.gatewayCredentialRenewable = false;
     const effectiveTurnId = turnId ?? context.session.activeTurnId;
 
     // Stop must also unpark codex from any question/approval it is blocked on;
@@ -2437,7 +2452,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
       const processLaunch = await this.buildSessionProcessEnv(
         normalizedCodexOptions,
-        gatewaySessionLease?.connection.bearerToken,
         input.expectedCodexContinuationGeneration,
       );
       signal?.throwIfAborted();
@@ -2453,6 +2467,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       context = {
         ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
+        enableComputerControl:
+          gatewaySessionLease !== undefined && input.enableComputerControl === true,
         ...(input.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: input.lifecycleGeneration }
           : {}),
@@ -2505,6 +2521,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
             )
           : undefined;
       const serviceTier = resolveCodexServiceTier(input.modelSelection);
+      if (serviceTier !== undefined) context.serviceTier = serviceTier;
       signal?.throwIfAborted();
       let lastTurnId: TurnId | undefined;
       if (input.requireCompletedSource) {
@@ -2534,6 +2551,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         lastTurnId = lastTurn?.id;
       }
       const forkParams = {
+        ...(gatewaySessionLease
+          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          : {}),
         threadId: sourceProviderThreadId,
         excludeTurns: true,
         deferGoalContinuation: true,
@@ -3021,6 +3041,105 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
     return this.stopSessionContext(context);
+  }
+
+  /** Keep the app-server warm, but replace the native thread's retired MCP client. */
+  async renewAgentGatewayCredential(threadId: ThreadId): Promise<boolean> {
+    const context = this.sessions.get(threadId);
+    const providerThreadId = context && readResumeCursorThreadId(context.session.resumeCursor);
+    if (
+      !context ||
+      !providerThreadId ||
+      !this.agentGatewayMcp ||
+      !context.gatewaySessionLease ||
+      context.gatewayCredentialRetired !== true ||
+      context.gatewayCredentialRenewable !== true ||
+      context.gatewayRenewalInProgress ||
+      context.session.activeTurnId !== undefined ||
+      context.sessionApprovalOverride ||
+      this.hasPendingHumanRequests(context) ||
+      !this.isContextInitializedAndRoutable(context)
+    )
+      return false;
+
+    let replacement: AgentGatewaySessionLease | undefined;
+    context.gatewayRenewalInProgress = true;
+    context.gatewayCredentialRenewable = false;
+    try {
+      this.assertContextAuthCurrent(context);
+      // Retirement already fenced writes. Revoke reads and drain the old MCP
+      // client too; neither a delayed request nor a descendant gets the new key.
+      context.gatewaySessionLease.release();
+      // A settled native child can still retain its own MCP client. Until all
+      // native clients can be rotated together, preserve full process recovery
+      // whenever this process contains anything besides the parent thread.
+      const loaded = this.readObject(
+        await this.sendRequest(context, "thread/loaded/list", { limit: 100 }, 1_000),
+      );
+      if (
+        !Array.isArray(loaded?.data) ||
+        loaded.data.length !== 1 ||
+        loaded.data[0] !== providerThreadId ||
+        loaded.nextCursor !== null
+      )
+        return false;
+      await this.sendRequest(context, "thread/unsubscribe", { threadId: providerThreadId }, 1_000);
+      // Unsubscribe acknowledges detachment, not shutdown. Never resume until
+      // Codex confirms that the old native thread is gone. Older CLIs which
+      // ignore the zero unload delay take the existing process-restart path.
+      let unloaded = false;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        this.assertContextAuthCurrent(context);
+        const response = this.readObject(
+          await this.sendRequest(context, "thread/loaded/list", { limit: 100 }, 1_000),
+        );
+        if (
+          Array.isArray(response?.data) &&
+          response.data.length === 0 &&
+          response.nextCursor === null
+        ) {
+          unloaded = true;
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+      if (!unloaded || !this.isContextRoutable(context)) return false;
+      replacement = this.agentGatewayMcp.acquireSessionLease(threadId, {
+        enableComputerControl: context.enableComputerControl === true,
+      });
+      const resumed = this.readObject(
+        await this.sendThreadOpenRequest(context, "thread/resume", {
+          threadId: providerThreadId,
+          excludeTurns: true,
+          cwd: context.session.cwd,
+          model: context.session.model ?? null,
+          ...(context.serviceTier !== undefined ? { serviceTier: context.serviceTier } : {}),
+          ...mapCodexRuntimeMode(context.session.runtimeMode),
+          config: buildCodexMcpThreadConfig(replacement.connection),
+        }),
+      );
+      if (
+        this.readString(this.readObject(resumed, "thread"), "id") !== providerThreadId ||
+        !this.isContextRoutable(context)
+      )
+        return false;
+      this.assertContextAuthCurrent(context);
+      context.gatewaySessionLease = replacement;
+      replacement = undefined;
+      context.gatewayCredentialRetired = false;
+      this.markSessionReadyAfterThreadOpen(context, {
+        threadOpenMethod: "thread/resume",
+        providerThreadId,
+      });
+      return true;
+    } catch {
+      // Do not log protocol errors here: a config error can quote a credential.
+      log.info("Codex gateway renewal requires a full process restart", { threadId });
+      return false;
+    } finally {
+      replacement?.release();
+      context.gatewayRenewalInProgress = false;
+    }
   }
 
   private async stopSessionContext(
@@ -4217,6 +4336,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       isChildConversation,
     } = resolvedCollaborationRoute;
     if (
+      context.gatewayRenewalInProgress &&
+      !isChildConversation &&
+      (notification.method === "thread/closed" ||
+        notification.method === "thread/started" ||
+        notification.method === "thread/status/changed")
+    )
+      return;
+    if (
       isChildConversation &&
       this.shouldSuppressChildConversationNotification(notification.method)
     ) {
@@ -4257,6 +4384,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // may admit B as soon as it consumes that event, so A's bearer must already
       // be permanently unable to bind to another latestTurn.
       void this.retireGatewayTurn(context, terminalGatewayTurnId);
+      context.gatewayCredentialRenewable =
+        notification.method === "turn/completed" &&
+        this.readString(this.readObject(notification.params, "turn"), "status") === "completed";
     }
     const eventPayload = gatewayTurnAuthorityRetired
       ? {

@@ -25,6 +25,11 @@ const blockedAddresses = new Net.BlockList();
 const ipv4MappedAddresses = new Net.BlockList();
 ipv4MappedAddresses.addSubnet("0.0.0.0", 0, "ipv4");
 
+// RFC 2544 benchmarking. Fake-ip DNS modes (Clash/Mihomo, Surge) answer lookups
+// with addresses from this range; the issuing proxy intercepts the connection.
+const benchmarkAddresses = new Net.BlockList();
+benchmarkAddresses.addSubnet("198.18.0.0", 15, "ipv4");
+
 for (const [network, prefix] of [
   ["0.0.0.0", 8],
   ["10.0.0.0", 8],
@@ -86,6 +91,16 @@ export function assertExactLoopbackIpAddress(address: string): void {
       "Outbound loopback destination resolved to a non-loopback address.",
     );
   }
+}
+
+/**
+ * Whether an IPv4 address sits in the RFC 2544 benchmarking range
+ * (198.18.0.0/15). It stays on the shared blocklist; callers pinned to
+ * hard-coded origins can opt in per request because the only listener on these
+ * addresses is the fake-ip proxy that issued them.
+ */
+export function isBenchmarkIpAddress(address: string): boolean {
+  return Net.isIP(address) === 4 && benchmarkAddresses.check(address, "ipv4");
 }
 
 function isExactLoopbackHostname(hostname: string): boolean {

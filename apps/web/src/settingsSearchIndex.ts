@@ -580,7 +580,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "usage:sidebar-rings",
     section: "usage",
     title: "Sidebar usage rings",
-    keywords: "Choose which provider usage rings show at the bottom of the sidebar rail. quota",
+    keywords:
+      "Choose up to two provider accounts for usage rings at the bottom of the sidebar rail. multiple Claude accounts quota",
     target: null,
   },
 

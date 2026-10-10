@@ -540,6 +540,18 @@ function resumedThreadEvent(): Extract<OrchestrationEvent, { type: "thread.messa
   };
 }
 
+function sendThreadReplayPush(threadId: ThreadId, events: readonly OrchestrationEvent[]) {
+  const requestId = threadStreamRequestIdByThreadId.get(threadId);
+  const client = threadStreamClientByThreadId.get(threadId);
+  if (!requestId || !client) {
+    throw new Error(`Thread stream is not connected for ${threadId}`);
+  }
+  sendEffectRpcChunk(client, requestId, {
+    kind: "replay",
+    events,
+  });
+}
+
 function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
   const requestId = threadStreamRequestIdByThreadId.get(threadId);
   const client = threadStreamClientByThreadId.get(threadId);
@@ -732,6 +744,7 @@ describe("EventRouter scoped orchestration sync", () => {
       expect(buildThreadSubscribeInput(THREAD_ID)).toEqual({
         threadId: THREAD_ID,
         afterSequence: 1,
+        batchReplay: true,
       });
       expect(subscribeShellRequestCount).toBe(previousShell);
       expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
@@ -2229,6 +2242,77 @@ describe("EventRouter scoped orchestration sync", () => {
         { timeout: 4_000, interval: 16 },
       );
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("applies a batched cursor-resume replay in a single store update", async () => {
+    const mounted = await mountApp();
+    const messageId = MessageId.makeUnsafe("msg-assistant-replay");
+    const observedMessageStates: Array<{ text: string; streaming: boolean }> = [];
+    const unsubscribe = useStore.subscribe((state) => {
+      const message = getThreadFromState(state, THREAD_ID)?.messages.find(
+        (entry) => entry.id === messageId,
+      );
+      const last = observedMessageStates.at(-1);
+      if (message && (last?.text !== message.text || last.streaming !== message.streaming)) {
+        observedMessageStates.push({ text: message.text, streaming: message.streaming });
+      }
+    });
+
+    try {
+      const streamingChunk = {
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-message-replay-1"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:05.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId,
+          role: "assistant",
+          text: "Working",
+          turnId: TurnId.makeUnsafe("turn-replay"),
+          source: "native",
+          streaming: true,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const completedMessage = {
+        ...streamingChunk,
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-message-replay-2"),
+        occurredAt: "2026-03-04T12:00:09.000Z",
+        payload: {
+          ...streamingChunk.payload,
+          text: "Working done.",
+          streaming: false,
+          updatedAt: "2026-03-04T12:00:09.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+
+      // Per-event delivery would flush the first streaming chunk immediately
+      // and render the intermediate state; the batch must land all at once.
+      sendThreadReplayPush(THREAD_ID, [streamingChunk, completedMessage]);
+
+      await vi.waitFor(
+        () => {
+          expect(observedMessageStates.at(-1)).toEqual({
+            text: "Working done.",
+            streaming: false,
+          });
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      expect(observedMessageStates).toEqual([{ text: "Working done.", streaming: false }]);
+    } finally {
+      unsubscribe();
       await mounted.cleanup();
     }
   });

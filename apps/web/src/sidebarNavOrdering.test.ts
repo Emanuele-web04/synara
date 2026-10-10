@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { resolveTasksSurfaceSlot } from "./sidebarNavOrdering";
 
 describe("resolveTasksSurfaceSlot", () => {
-  it("shows Tasks where Beta has it and Kanban elsewhere, in the first of their slots", () => {
+  it("shows Tasks where the server offers it and Kanban elsewhere, in the first of their slots", () => {
     const order = ["newThread", "pullRequests", "kanban", "automations", "tasks"] as const;
     expect(resolveTasksSurfaceSlot(order, true)).toEqual([
       "newThread",

@@ -1,8 +1,7 @@
 // FILE: keepAwake.ts
-// Purpose: Single source of keep-awake (caffeinate) copy and indicator logic
-//          shared by the Settings "System" section and the sidebar footer menu.
+// Purpose: Keep-awake (caffeinate) copy for the Settings "System" section.
 // Layer: Web lib (pure)
-// Exports: KEEP_AWAKE_MODE_OPTIONS, labels/tooltip helpers, keepAwakeIndicatorState
+// Exports: KEEP_AWAKE_MODE_OPTIONS and status label helpers.
 
 import type { KeepAwakeMode, ServerKeepAwakeState } from "@synara/contracts";
 
@@ -34,22 +33,4 @@ export function keepAwakeActivityLabel(active: boolean): "Active" | "Idle" {
 
 export function keepAwakeStatusLabel(state: Pick<ServerKeepAwakeState, "mode" | "active">): string {
   return `${keepAwakeModeLabel(state.mode)} · ${keepAwakeActivityLabel(state.active)}`;
-}
-
-export function keepAwakeTooltip(
-  state: Pick<ServerKeepAwakeState, "mode" | "active" | "error">,
-): string {
-  return `Keep awake: ${state.error ?? keepAwakeStatusLabel(state)}`;
-}
-
-export type KeepAwakeIndicatorState = "dimmed" | "default" | "highlighted" | "error";
-
-export function keepAwakeIndicatorState(
-  mode: KeepAwakeMode,
-  active: boolean,
-  error: string | null,
-): KeepAwakeIndicatorState {
-  if (error !== null) return "error";
-  if (mode === "off") return "dimmed";
-  return active ? "highlighted" : "default";
 }

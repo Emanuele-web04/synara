@@ -22,6 +22,131 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.1",
+    date: "Oct 8",
+    features: [
+      {
+        id: "opencode-v2",
+        title: "OpenCode v2",
+        description:
+          "Connect the new OpenCode v2 runtime while retaining support for existing v1 servers.",
+        details:
+          "Synara detects the server API before sending work and uses the v2 client for models, agents, sessions, streaming, approvals, attachments, forks, rollback and compaction. Keep your OpenCode account and data when migrating. Standard questions appear in Synara; complex forms must be completed in OpenCode. Task-scoped MCP readiness is checked after registration.",
+      },
+      {
+        id: "multiple-projects",
+        title: "Multiple folders in one project",
+        description:
+          "Bring a frontend, API and shared package together under one project and let the agent work across them.",
+        details:
+          "Choose Source folders when creating a project, mark one as Primary and remove folders you do not need. Multi-folder chats currently require Local mode and Codex or Claude. The folder set is fixed at creation; Git actions, checkpoints and file undo cover the primary folder only. Review and recover extra-folder edits separately.",
+      },
+      {
+        id: "tasks-stable",
+        title: "Tasks comes to Stable",
+        description:
+          "Keep to-dos in one list, plan your day in Inbox and hand a task to an agent when you are ready.",
+        details:
+          "Edit notes, due dates, priority and project, then choose a provider, model, effort and a new or existing chat. Task cards show activity, questions, approvals and the reply to review. The List / Kanban switch keeps the board accessible, and a one-time navigation tip introduces Tasks. Older servers without Tasks fall back to Kanban. Hubs remain Beta-only.",
+      },
+      {
+        id: "workspace-search",
+        title: "Find more with workspace search",
+        description:
+          "Find conversations by their saved message text and use the palette to navigate or open settings.",
+        details:
+          "Search reaches persisted messages beyond recently opened chats. File results resolve safely in the active workspace, including registered dot-folder projects. Workspace search can be remapped; shortcuts update without restarting and respect focused terminals.",
+      },
+      {
+        id: "chat-actions",
+        title: "Faster chat actions",
+        description:
+          "Archive, snooze or mark the active chat unread with configurable shortcuts, and undo marking a chat done.",
+        details:
+          "Thread hovers preview unsent drafts and show current effort and Fast status. Mark all read includes chats returned from snooze. New threads created from older drafts receive their creation time instead of the draft’s old timestamp.",
+      },
+      {
+        id: "answered-questions",
+        title: "Keep answered questions in view",
+        description:
+          "Review the agent’s questions and your answers directly in the conversation after responding.",
+        details:
+          "Press Enter to submit async answers. Stale provider questions settle durably so they do not keep chats waiting. Queued follow-ups explain their available actions, and a Claude tip explains model changes and provider handoffs during active work.",
+      },
+      {
+        id: "failure-details",
+        title: "Understand interrupted work",
+        description:
+          "Open and copy thread error details, with failed-turn feedback preserved after recovery.",
+        details:
+          "Reconnecting and busy waits use clearer shared status messages. Server stalls are monitored, buffering stays enabled during turns longer than an hour, and uncertain side effects are not silently replayed as successes.",
+      },
+      {
+        id: "account-rings",
+        title: "Choose accounts for usage rings",
+        description: "Pick the individual provider accounts shown in your sidebar usage rings.",
+        details:
+          "Saved account-ring choices survive temporarily disabling an account. Disabled providers disappear from selectable surfaces; existing conversations remain readable. Provider sign-in actions open the appropriate settings, and OMP’s internal roles stay out of the model picker.",
+      },
+      {
+        id: "keep-awake",
+        title: "Keep macOS awake during agent work",
+        description:
+          "Choose whether to keep your Mac awake during agent work, all the time, or let it sleep normally.",
+        details:
+          "Settings → System → Keep computer awake offers On, Agent and Off, defaulting to Off. Agent mode releases its assertion when work settles, its owner exits or the thread is deleted; On mode lasts while the server runs. This macOS feature does not promise uninterrupted work with the lid closed.",
+      },
+      {
+        id: "files-and-tabs",
+        title: "Keep your place in files and tabs",
+        description:
+          "File tabs remember scroll positions, the dock Explorer keeps its open file across chat switches, and horizontal tabs scroll with the mouse wheel.",
+        details:
+          "Markdown file previews render sanitized HTML, assistant line breaks display correctly, and Markdown follows the selected typography. Project actions open in right-side terminals; independent right-dock terminal tabs are restored.",
+      },
+      {
+        id: "git-workflow",
+        title: "Clearer Git and Kanban actions",
+        description:
+          "Move Kanban cards from their context menu and use the full commit-and-push row to open Git actions.",
+        details:
+          "Git dialogs expose their submit shortcuts. Branch creation avoids namespace conflicts, and checkpoint scheduling reserves capacity for reads and checkpoint work so unrelated workspaces can advance.",
+      },
+      {
+        id: "synara-appearance",
+        title: "Synara is the default theme",
+        description:
+          "New installations start with the complete Synara theme, including the matching controls and workspace styling.",
+        details:
+          "Sidebar text stays sharp after display changes, metadata glyphs align consistently, and the chat header remains draggable. Embedded browser pages retain an opaque backdrop and remain visible behind toolbar overlays.",
+      },
+      {
+        id: "runtime-reliability",
+        title: "Smoother streaming and recovery",
+        description:
+          "Reduce idle chat repaints, reopen flicker and repeated provider work while keeping cancellation and recovery predictable.",
+        details:
+          "Codex reuses its app-server between completed turns. Independent sessions and workspaces no longer share avoidable delivery bottlenecks; replaceable progress is coalesced. Transcript follow survives turn updates, detached readers keep their place, and Pi assistant messages split at message_end.",
+      },
+      {
+        id: "provider-reliability",
+        title: "More reliable provider setup",
+        description:
+          "Provider discovery checks executable candidates and uses the selected account’s environment.",
+        details:
+          "Claude accounts remain isolated without breaking macOS Keychain, idle Claude sessions stop without waiting for the SDK stream, and Computer-off restarts wait for background work. Codex continuation imports retain verified generation, managed MCP names avoid collisions, and provider usage works with compatible fake-IP DNS responses. Health probes do not auto-update Antigravity.",
+      },
+      {
+        id: "desktop-and-startup",
+        title: "More predictable startup and shutdown",
+        description:
+          "Startup announcements appear one at a time, application bundles reveal in Finder, and signal-driven shutdown skips the interactive quit confirmation.",
+        details:
+          "Keybindings load and watch at startup, with recovery after transient filesystem failures. Skills read YAML frontmatter correctly. Beta upload diagnostics and writable-failure handling are hardened with privacy redaction; Stable does not send Beta diagnostics.",
+      },
+    ],
+  },
+  {
     version: "1.0.0",
     date: "Oct 5",
     features: [

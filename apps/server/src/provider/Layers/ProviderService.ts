@@ -2190,10 +2190,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
 
         // Keep the retiring runtime's generation current until all of its
-        // background work has settled and the process is stopped. Otherwise
-        // its terminal task event would be rejected as stale and this drain
+        // background work has settled and authority is renewed or the process
+        // is stopped. Otherwise its terminal task event would be rejected as
+        // stale and this drain
         // could wait forever.
-        yield* lifecycle.runCurrent(threadId, () =>
+        const renewedAdapter = yield* lifecycle.runCurrent(threadId, () =>
           Effect.gen(function* () {
             let binding = yield* getCurrentBinding();
             const requiresCredentialRotation =
@@ -2240,9 +2241,26 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 }),
               );
             }
+            if (
+              adapter.renewAgentGatewayCredential &&
+              (yield* adapter.renewAgentGatewayCredential(threadId))
+            ) {
+              yield* withBindingWriteLock(
+                threadId,
+                directory.upsert({
+                  threadId,
+                  provider: binding.provider,
+                  providerInstanceId: binding.providerInstanceId,
+                  runtimePayload: { [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false },
+                }),
+              );
+              return adapter;
+            }
             yield* adapter.stopSession(threadId);
           }),
         );
+
+        if (renewedAdapter) return renewedAdapter;
 
         return yield* lifecycle.run(threadId, (lease) =>
           Effect.gen(function* () {

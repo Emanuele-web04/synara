@@ -3,7 +3,7 @@ import "../index.css";
 import type { KeepAwakeMode, ServerKeepAwakeUpdatedPayload } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
-import { page, userEvent } from "vitest/browser";
+import { page } from "vitest/browser";
 import { useState } from "react";
 
 const pushes = vi.hoisted(() => ({
@@ -19,21 +19,13 @@ vi.mock("../wsNativeApi", async (original) => ({
 }));
 
 import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
-import { KeepAwakeSettingsSection, SidebarKeepAwakeMenu } from "./KeepAwakeControls";
+import { KeepAwakeSettingsSection } from "./KeepAwakeControls";
 
 function ControlsHarness() {
   const state = useKeepAwakeState();
   const [mode, setMode] = useState<KeepAwakeMode>("off");
   return (
-    <>
-      <SidebarKeepAwakeMenu state={state} onSelectMode={setMode} />
-      <KeepAwakeSettingsSection
-        state={state}
-        mode={mode}
-        defaultMode="off"
-        onSelectMode={setMode}
-      />
-    </>
+    <KeepAwakeSettingsSection state={state} mode={mode} defaultMode="off" onSelectMode={setMode} />
   );
 }
 
@@ -60,38 +52,32 @@ describe("Keep Awake controls", () => {
     push("always", false, false);
     await expect.poll(() => mounted.container.querySelector("button")).toBeNull();
     push("always", true);
-    await expect.element(page.getByTestId("sidebar-keep-awake-button")).toBeVisible();
+    await expect
+      .element(page.getByRole("radiogroup", { name: "Keep computer awake" }))
+      .toBeVisible();
     push("always", false, false);
-    await expect.element(page.getByTestId("sidebar-keep-awake-button")).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("radiogroup", { name: "Keep computer awake" }))
+      .not.toBeInTheDocument();
   });
 
   it("tracks idle, active and error state from server pushes", async () => {
     await render(<ControlsHarness />);
     push("agent");
-    const button = page.getByTestId("sidebar-keep-awake-button");
-    await expect.element(button).toBeVisible();
     await expect.element(page.getByText("Agent · Idle", { exact: true })).toBeVisible();
     push("agent", true);
-    await expect.poll(() => button.element().querySelector(".text-primary") !== null).toBe(true);
     await expect.element(page.getByText("Agent · Active", { exact: true })).toBeVisible();
     push("agent", false, true, "caffeinate could not start");
-    await expect
-      .poll(() => button.element().querySelector(".text-destructive") !== null)
-      .toBe(true);
-    await button.click();
     await expect
       .element(page.getByText("caffeinate could not start", { exact: true }))
       .toBeVisible();
   });
 
-  it("selects a mode from the rail menu and resets it in Settings", async () => {
+  it("selects a mode and resets it in Settings", async () => {
     await render(<ControlsHarness />);
     push("off");
-    await page.getByTestId("sidebar-keep-awake-button").click();
-    await page.getByRole("menuitemradio", { name: /Agent/ }).click();
+    await page.getByRole("radio", { name: "Agent", exact: true }).click();
     await expect.element(page.getByRole("radio", { name: "Agent", exact: true })).toBeChecked();
-    await userEvent.keyboard("{Escape}");
-    await expect.element(page.getByRole("menu")).not.toBeInTheDocument();
     await page.getByRole("button", { name: "Reset keep computer awake to default" }).click();
     await expect.element(page.getByRole("radio", { name: "Off", exact: true })).toBeChecked();
   });
