@@ -358,9 +358,6 @@ export function resolveSubagentPresentation(input: {
   const accentSeed =
     identityLabel ?? fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ?? primaryLabel;
 
-  const accentSeed =
-    identityLabel ?? fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ?? primaryLabel;
-
   return {
     primaryLabel,
     nickname,
