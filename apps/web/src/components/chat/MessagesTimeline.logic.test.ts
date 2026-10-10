@@ -11,6 +11,7 @@ import {
   canSubmitUserMessageEdit,
   capOpenWorkEntryRenderChunks,
   chunkCollapsedTurnItems,
+  collapsibleHiddenRowCount,
   computeMessageDurationStart,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
@@ -1777,7 +1778,7 @@ describe("capOpenWorkEntryRenderChunks", () => {
       planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
       {
         expanded: false,
-        maxVisibleEntries: 2,
+        maxVisibleEntries: 0,
         keep: "last",
         shouldCapEntry: (entry) => entry.tone === "tool",
       },
@@ -1788,12 +1789,38 @@ describe("capOpenWorkEntryRenderChunks", () => {
       ["think1"],
       [],
       ["think2"],
-      ["w4"],
+      [],
       ["think3"],
-      ["w5"],
+      [],
     ]);
     expect(result.hasOverflow).toBe(true);
-    expect(result.hiddenEntryCount).toBe(1);
+    expect(result.hiddenEntryCount).toBe(3);
+  });
+
+  it("never hides one or two rows behind a Show more toggle", () => {
+    for (const maxVisibleEntries of [1, 2]) {
+      const result = capOpenWorkEntryRenderChunks(
+        planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
+        {
+          expanded: false,
+          maxVisibleEntries,
+          keep: "last",
+          shouldCapEntry: (entry) => entry.tone === "tool",
+        },
+      );
+      expect(result.hasOverflow).toBe(false);
+      expect(result.hiddenEntryCount).toBe(0);
+      expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual(
+        singletonRuns.map((entry) => entry.id),
+      );
+    }
+  });
+
+  it("collapses only when at least three rows would hide", () => {
+    expect(collapsibleHiddenRowCount(7, 6)).toBe(0);
+    expect(collapsibleHiddenRowCount(8, 6)).toBe(0);
+    expect(collapsibleHiddenRowCount(9, 6)).toBe(3);
+    expect(collapsibleHiddenRowCount(4, 6)).toBe(0);
   });
 
   it("never caps a live run: it already renders as one line", () => {
@@ -1815,7 +1842,7 @@ describe("capOpenWorkEntryRenderChunks", () => {
   it("restores every open entry when expanded while retaining overflow state", () => {
     const result = capOpenWorkEntryRenderChunks(
       planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
-      { expanded: true, maxVisibleEntries: 2, keep: "last" },
+      { expanded: true, maxVisibleEntries: 0, keep: "last" },
     );
 
     expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual(
