@@ -1,0 +1,580 @@
+{
+  "run": "livecert-mu6w9qvt",
+  "date": "2026-09-18T11:49:20.188Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-ggFWTt/host.sock",
+  "elapsedMs": 80474,
+  "rows": [
+    {
+      "name": "launch-isolation",
+      "verdict": "pass",
+      "detail": "open -g TextEdit pid 96193; front stayed TextEdit",
+      "evidence": {
+        "pid": 96193,
+        "window": 2234,
+        "front": "TextEdit"
+      },
+      "elapsedMs": 635
+    },
+    {
+      "name": "visible-nonkey-write",
+      "verdict": "pass",
+      "detail": "effect=confirmed readback=exact",
+      "evidence": {
+        "effect": "confirmed",
+        "readback": "livecert-mu6w9qvt-visible"
+      },
+      "elapsedMs": 1811
+    },
+    {
+      "name": "hidden-write",
+      "verdict": "pass",
+      "detail": "is_on_screen=false readback=exact",
+      "evidence": {
+        "visible": false,
+        "elements": 37,
+        "readback": "livecert-mu6w9qvt-hidden"
+      },
+      "elapsedMs": 2009
+    },
+    {
+      "name": "minimized-write",
+      "verdict": "pass",
+      "detail": "minimized=off-screen readback=exact",
+      "evidence": {
+        "isOnScreen": false,
+        "readback": "livecert-mu6w9qvt-minimized"
+      },
+      "elapsedMs": 3856
+    },
+    {
+      "name": "concurrent-writes",
+      "verdict": "pass",
+      "detail": "3 targets, readbacks 3/3 exact",
+      "evidence": {
+        "readbacks": [
+          "livecert-mu6w9qvt-conc-0",
+          "livecert-mu6w9qvt-conc-1",
+          "livecert-mu6w9qvt-conc-2"
+        ]
+      },
+      "elapsedMs": 4847
+    },
+    {
+      "name": "operator-typing",
+      "verdict": "pass",
+      "detail": "front doc got human-only=true; hidden doc exact=true",
+      "evidence": {
+        "opValue": "HUMAN-OPERATOR-TYPING",
+        "agentValue": "livecert-mu6w9qvt-bgagent"
+      },
+      "elapsedMs": 6101
+    },
+    {
+      "name": "hidden-launch-default",
+      "verdict": "pass",
+      "detail": "manager.launchApp(no opts) → pid 98021 on_screen=false front 96165→96165",
+      "evidence": {
+        "launch": "{\"computerId\":\"desktop\",\"app\":\"Calculator\",\"window\":null}",
+        "launchPid": 98021,
+        "winNum": 2282,
+        "listed": {
+          "app_name": "Calculator",
+          "bounds": {
+            "height": 408,
+            "width": 230,
+            "x": 350,
+            "y": 559
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 98021,
+          "space_ids": null,
+          "title": "Calculator",
+          "window_id": 2282,
+          "z_index": 112
+        },
+        "frontBefore": 96165,
+        "frontAfter": 96165
+      },
+      "elapsedMs": 4038
+    },
+    {
+      "name": "chromium-semantic",
+      "verdict": "fail",
+      "detail": "pid=99580 on_screen=true elements=210 field=Address and search bar readback=exact front 96165→99580",
+      "evidence": {
+        "chromePid": 99580,
+        "win": 2288,
+        "rehiddenOnScreen": true,
+        "elements": 210,
+        "field": "Address and search bar",
+        "readback": "livecert-mu6w9qvt-chromium",
+        "axFocusExcursionExempted": true,
+        "exemptSpan": {
+          "start": 24409,
+          "end": 34855
+        },
+        "frontBefore": 96165,
+        "frontAfter": 99580,
+        "write": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [3] AXTextField.\\n\\n🪟 Action opened new window(s): Google Chrome.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readback\"}],\"route\":\"accessibility\"}},\"desktopEpoch\":3,\""
+      },
+      "elapsedMs": 11353
+    },
+    {
+      "name": "grant-lifecycle",
+      "verdict": "pass",
+      "detail": "prompts=[\"live-cert-grants-a:Calculator\",\"live-cert-grants-c:Calculator\"] minted=2 listed=1 revoked=true",
+      "evidence": {
+        "prompts": ["live-cert-grants-a:Calculator", "live-cert-grants-c:Calculator"],
+        "grantFor": ["Calculator", "Calculator"],
+        "grant": {
+          "id": "cg_a252c92b-703d-4bf9-bac2-09735ca0e621",
+          "app": {
+            "name": "Calculator",
+            "bundleId": "com.apple.calculator"
+          },
+          "classes": ["lifecycle"],
+          "createdAt": "2026-09-18T11:48:41.148Z",
+          "expiresAt": "2026-09-19T11:48:41.148Z",
+          "createdByThreadId": "live-cert-grants-a"
+        },
+        "listedCount": 1,
+        "identityBundleId": "com.apple.calculator"
+      },
+      "elapsedMs": 2909
+    },
+    {
+      "name": "recording-privacy",
+      "verdict": "pass",
+      "detail": "redacted=true secureFloor=true fullOptIn=true replay=1steps listed=3",
+      "evidence": {
+        "realOp": {
+          "dispatched": true,
+          "confirmed": true,
+          "readbackExact": true
+        },
+        "sessionA": {
+          "leaked": false,
+          "payload": {
+            "chars": 24,
+            "sha256": "sha256:0026a49c66eaf8020d703b4fc9ed64d8705f0530b195700ba8d9177b5d8aaadd"
+          }
+        },
+        "sessionB": {
+          "leaked": false,
+          "payload": {
+            "chars": 24,
+            "sha256": "sha256:0026a49c66eaf8020d703b4fc9ed64d8705f0530b195700ba8d9177b5d8aaadd",
+            "protected": true
+          }
+        },
+        "sessionC": {
+          "captured": true,
+          "payload": {
+            "chars": 24,
+            "sha256": "sha256:0026a49c66eaf8020d703b4fc9ed64d8705f0530b195700ba8d9177b5d8aaadd",
+            "captured": true
+          }
+        },
+        "replay": {
+          "executed": false,
+          "summary": {
+            "total": 1,
+            "ready": 0,
+            "dispatched": 0,
+            "skipped": 0,
+            "blocked": 1,
+            "failed": 0
+          }
+        },
+        "listed": 3,
+        "deleted": true
+      },
+      "elapsedMs": 7917
+    },
+    {
+      "name": "locked-use-reauth",
+      "verdict": "pass",
+      "detail": "grant=true pausedRefused=true reauth=true declineHeld=true pendingSurvived=true resumed=true",
+      "evidence": {
+        "prompts": [
+          "live-cert-lock-a:accept",
+          "live-cert-lock-b:decline",
+          "live-cert-lock-c:accept",
+          "live-cert-lock-a:accept"
+        ],
+        "aGranted": true,
+        "aCached": true,
+        "aSilent": true,
+        "bDeclined": true,
+        "pausedReply": "{\"ok\":true,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"Computer input is paused because the desktop is locked, asleep or inactive. Return to the desktop, then read fresh state before continuing.\"}],\"structuredContent\":{\"effec",
+        "aReauth": true,
+        "aReprompted": true,
+        "bAfter": false,
+        "bNoReprompt": true,
+        "cGranted": true,
+        "resumedOk": true
+      },
+      "elapsedMs": 4633
+    },
+    {
+      "name": "space-roundtrip",
+      "verdict": "pass",
+      "detail": "switch 1→3: true; write: true; back: true",
+      "evidence": {
+        "sw1": "set-current-instant rc=0 active=3 verified=1",
+        "writeOk": true,
+        "sw2": "set-current-instant rc=0 active=1 verified=1",
+        "win": 2328
+      },
+      "elapsedMs": 2853
+    },
+    {
+      "name": "off-space-refusal",
+      "verdict": "pass",
+      "detail": "off-space window: elements=50, write=verified, readback=exact",
+      "evidence": {
+        "win": 2339,
+        "elements": 50,
+        "outcome": "verified, readback=exact"
+      },
+      "elapsedMs": 2876
+    },
+    {
+      "name": "screenshot-fresh",
+      "verdict": "pass",
+      "detail": "png=true valid=true freshness=captured_current_space",
+      "evidence": {
+        "hasPng": true,
+        "valid": true,
+        "freshness": "captured_current_space",
+        "bounds": {
+          "height": 488,
+          "width": 586,
+          "x": 165,
+          "y": 86
+        },
+        "pngBytes": 36816
+      },
+      "elapsedMs": 195
+    },
+    {
+      "name": "hidden-screenshot",
+      "verdict": "pass",
+      "detail": "on_screen=false A=31212b B=95068b changed=true valid=true dimsMatch=true",
+      "evidence": {
+        "onScreen": false,
+        "aBytes": 31212,
+        "bBytes": 95068,
+        "changed": true,
+        "frameValid": true,
+        "dims": [586, 488],
+        "bounds": {
+          "height": 488,
+          "width": 586,
+          "x": 165,
+          "y": 86
+        }
+      },
+      "elapsedMs": 3185
+    },
+    {
+      "name": "stale-token",
+      "verdict": "pass",
+      "detail": "forged token → {\"ok\":true,\"result\":{\"content\":[{\"text\":\"element_token is stale; call get_window_state again to refresh\",\"type\":\"text\"}],\"isError\":true,\"structuredContent\":{\"re",
+      "evidence": {
+        "reply": {
+          "ok": true,
+          "result": {
+            "content": [
+              {
+                "text": "element_token is stale; call get_window_state again to refresh",
+                "type": "text"
+              }
+            ],
+            "isError": true,
+            "structuredContent": {
+              "refusal": {
+                "code": "stale_element_token",
+                "message": "element_token is stale; call get_window_state again to refresh"
+              },
+              "status": "refused"
+            }
+          },
+          "desktopEpoch": 13,
+          "desktopPauses": [],
+          "desktopInterruptions": 1,
+          "hostPlatform": "darwin",
+          "driverNativeRevision": 20
+        }
+      },
+      "elapsedMs": 24
+    },
+    {
+      "name": "verify-state",
+      "verdict": "pass",
+      "detail": "{\"elapsed_ms\":314,\"predicates\":[{\"index\":0,\"observed_json\":\"{\\\"element_index\\\":1,\\\"frame\\\":{\\\"h\\\":382.0,\\\"w\\\":586.0,\\\"x\\\":165.0,\\\"y\\\":186.0},\\\"label\\\":\\\"livecert-mu6w9qvt-conc-0\\\",\\\"role\\\":\\\"AXTextAre",
+      "evidence": {
+        "reply": {
+          "ok": true,
+          "result": {
+            "content": [
+              {
+                "text": "verify_state: satisfied after 2 sample(s) in 314 ms",
+                "type": "text"
+              }
+            ],
+            "structuredContent": {
+              "elapsed_ms": 314,
+              "predicates": [
+                {
+                  "index": 0,
+                  "observed_json": "{\"element_index\":1,\"frame\":{\"h\":382.0,\"w\":586.0,\"x\":165.0,\"y\":186.0},\"label\":\"livecert-mu6w9qvt-conc-0\",\"role\":\"AXTextArea\",\"value\":\"livecert-mu6w9qvt-conc-0\"}",
+                  "status": "satisfied",
+                  "unknown_reason": null
+                }
+              ],
+              "samples": 2,
+              "stable": true,
+              "status": "satisfied"
+            }
+          },
+          "desktopEpoch": 13,
+          "desktopPauses": [],
+          "desktopInterruptions": 1,
+          "hostPlatform": "darwin",
+          "driverNativeRevision": 20
+        }
+      },
+      "elapsedMs": 329
+    },
+    {
+      "name": "masked-activation",
+      "verdict": "pass",
+      "detail": "panel=1 front=13082 (want 13082) masked=1 wrote=true released=true",
+      "evidence": {
+        "engage": {
+          "ok": true,
+          "result": {
+            "engaged": true,
+            "shield_id": "lc88715d23e64b"
+          },
+          "desktopEpoch": 13,
+          "desktopPauses": [],
+          "desktopInterruptions": 1,
+          "hostPlatform": "darwin",
+          "driverNativeRevision": 20
+        },
+        "panels": [
+          {
+            "id": 2361,
+            "bounds": {
+              "x": 165,
+              "y": 86,
+              "width": 586,
+              "height": 488
+            },
+            "layer": 25
+          }
+        ],
+        "raise": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"Brought exact window 2356 for pid 13082 to the foreground.\",\"type\":\"text\"}],\"structuredContent\":{\"activated\":true,\"code\":\"bring_to_front_exact_window_verified\"",
+        "frontPid": 13082,
+        "targetPid": 13082,
+        "write": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readback\"}],\"route\":\"accessibility\"}},\"desktopE",
+        "value": "livecert-mu6w9qvt-masked",
+        "release": {
+          "ok": true,
+          "desktopEpoch": 13,
+          "desktopPauses": [],
+          "desktopInterruptions": 1,
+          "hostPlatform": "darwin",
+          "driverNativeRevision": 20
+        },
+        "panelsAfter": []
+      },
+      "elapsedMs": 5594
+    },
+    {
+      "name": "escape-kill-switch",
+      "verdict": "pass",
+      "detail": "baseline=true hostArmed=true immune=true engaged=true refused=true rearmed=true (physical key unverified — VM)",
+      "evidence": {
+        "armedByHost": true,
+        "escArmEvents": [
+          true,
+          false,
+          true,
+          false,
+          true,
+          false,
+          true,
+          false,
+          true,
+          false,
+          true,
+          false,
+          true,
+          false,
+          true,
+          false
+        ],
+        "baseline": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confi",
+        "afterSynthetic": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readbac",
+        "engaged": true,
+        "refused": "{\"ok\":true,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"Computer input was stopped with the Escape key. It stays stopped until the user re-arms computer control; do not retry actions.\"}],\"structuredContent\":{\"effect\":\"refused\"",
+        "rearm": "{\"ok\":true,\"result\":{\"rearmed\":true,\"wasStopped\":true},\"desktopEpoch\":14,\"desktopPauses\":[],\"desktopInterruptions\":1,\"hostPlatform\":\"darwin\",\"driverNativeRevisi",
+        "afterRearm": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readbac",
+        "value": "livecert-mu6w9qvt-esc-rearmed"
+      },
+      "elapsedMs": 7107
+    },
+    {
+      "name": "cancellation",
+      "verdict": "pass",
+      "detail": "cancelled=true effect=undefined delivered=18/2518 chars",
+      "evidence": {
+        "delivered": 18,
+        "afterLen": 40,
+        "reply": "{\"ok\":false,\"error\":\"Error: Computer operation cancelled. Input already dispatched may have taken effect; do not replay.\"}"
+      },
+      "elapsedMs": 2803
+    },
+    {
+      "name": "focus-invariant",
+      "verdict": "fail",
+      "detail": "2 hard + 0 persistent violations (0 blips)",
+      "evidence": {
+        "theft": [
+          {
+            "index": 1196,
+            "tMs": 35120,
+            "durationMs": 1020,
+            "sampleCount": 52,
+            "changedFields": ["focusedPid"],
+            "observed": [
+              {
+                "pid": 96165,
+                "app": "TextEdit",
+                "keyWin": 2225,
+                "topWin": null,
+                "space": 1,
+                "focusedPid": 99580,
+                "focused": "99580:AXTextField:Address and search bar"
+              },
+              {
+                "pid": 96165,
+                "app": "TextEdit",
+                "keyWin": 2225,
+                "topWin": 2225,
+                "space": 1,
+                "focusedPid": 99580,
+                "focused": "99580:AXTextField:Address and search bar"
+              }
+            ]
+          },
+          {
+            "index": 1249,
+            "tMs": 36180,
+            "durationMs": 25260,
+            "sampleCount": 1019,
+            "changedFields": ["focusedPid"],
+            "observed": [
+              {
+                "pid": 96165,
+                "app": "TextEdit",
+                "keyWin": 2225,
+                "topWin": null,
+                "space": 1,
+                "focusedPid": 99580,
+                "focused": "99580:AXTextField:Address and search bar"
+              },
+              {
+                "pid": 96165,
+                "app": "TextEdit",
+                "keyWin": 2225,
+                "topWin": 2225,
+                "space": 1,
+                "focusedPid": 99580,
+                "focused": "99580:AXTextField:Address and search bar"
+              }
+            ]
+          }
+        ],
+        "persistent": [],
+        "warnings": [],
+        "drift": [],
+        "sampleCount": 2772,
+        "issues": []
+      },
+      "elapsedMs": 0
+    }
+  ],
+  "speed": [
+    {
+      "tool": "bring_to_front",
+      "n": 1,
+      "p50": 348.7,
+      "p95": 348.7,
+      "max": 348.7
+    },
+    {
+      "tool": "get_window_state",
+      "n": 34,
+      "p50": 204.9,
+      "p95": 847.3,
+      "max": 2052.1
+    },
+    {
+      "tool": "launch_app",
+      "n": 1,
+      "p50": 2227.9,
+      "p95": 2227.9,
+      "max": 2227.9
+    },
+    {
+      "tool": "list_windows",
+      "n": 31,
+      "p50": 10,
+      "p95": 259.5,
+      "max": 527.3
+    },
+    {
+      "tool": "set_app_visibility",
+      "n": 1,
+      "p50": 2.8,
+      "p95": 2.8,
+      "max": 2.8
+    },
+    {
+      "tool": "set_value",
+      "n": 20,
+      "p50": 1151,
+      "p95": 2268.5,
+      "max": 3369.3
+    },
+    {
+      "tool": "set_window_minimized",
+      "n": 1,
+      "p50": 553.2,
+      "p95": 553.2,
+      "max": 553.2
+    },
+    {
+      "tool": "verify_state",
+      "n": 1,
+      "p50": 319.8,
+      "p95": 319.8,
+      "max": 319.8
+    }
+  ],
+  "summary": {
+    "total": 21,
+    "pass": 19,
+    "fail": 2,
+    "skipped": 0,
+    "verdict": "fail"
+  }
+}

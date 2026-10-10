@@ -14,6 +14,7 @@ import {
   assertJsonWithinLimits,
   assertOutboundUrlAllowed,
   assertPublicIpAddress,
+  isBenchmarkIpAddress,
   normalizeOutboundOrigin,
   stripOutboundSensitiveHeaders,
 } from "./outboundHttpPolicy";
@@ -54,6 +55,11 @@ export interface OutboundHttpPolicy {
   readonly requirePublicAddress?: boolean;
   /** Permits HTTP only for localhost, 127.0.0.1, or ::1. */
   readonly allowLoopbackHttp?: boolean;
+  /**
+   * Permits the RFC 2544 benchmarking range 198.18.0.0/15, which fake-ip DNS
+   * modes (Clash/Mihomo, Surge) hand out for the hosts they proxy.
+   */
+  readonly allowBenchmarkAddressRange?: boolean;
 }
 
 export interface OutboundHttpRequest {
@@ -266,6 +272,7 @@ async function resolvePinnedAddress(
   url: URL,
   requirePublicAddress: boolean,
   allowLoopbackHttp: boolean,
+  allowBenchmarkAddressRange: boolean,
   signal: AbortSignal,
 ): Promise<{ readonly address: string; readonly family: 4 | 6 }> {
   if (signal.aborted) throw abortedError(signal.reason);
@@ -276,7 +283,10 @@ async function resolvePinnedAddress(
   const requireLoopbackAddress = allowLoopbackHttp && url.protocol === "http:";
   const assertAddressAllowed = (address: string) => {
     if (requireLoopbackAddress) assertExactLoopbackIpAddress(address);
-    else if (requirePublicAddress) assertPublicIpAddress(address);
+    else if (requirePublicAddress) {
+      if (allowBenchmarkAddressRange && isBenchmarkIpAddress(address)) return;
+      assertPublicIpAddress(address);
+    }
   };
   const literalFamily = Net.isIP(hostname);
   if (literalFamily === 4 || literalFamily === 6) {
@@ -313,6 +323,8 @@ async function resolvePinnedAddress(
  * Custom `http`/`https` lookup that always returns the already-pinned address.
  * Modern Node/Bun Happy Eyeballs pass `{ all: true }` and expect the array
  * callback form; the legacy single-address form alone crashes those runtimes.
+ * Defer completion like native DNS so TLS construction and error listeners
+ * finish before a connection can fail (for example, with EADDRNOTAVAIL).
  */
 export function invokePinnedDnsLookup(
   pinned: { readonly address: string; readonly family: 4 | 6 },
@@ -325,11 +337,13 @@ export function invokePinnedDnsLookup(
     family?: number,
   ) => void,
 ): void {
-  if (options?.all) {
-    callback(null, [{ address: pinned.address, family: pinned.family }]);
-    return;
-  }
-  callback(null, pinned.address, pinned.family);
+  queueMicrotask(() => {
+    if (options?.all) {
+      callback(null, [{ address: pinned.address, family: pinned.family }]);
+      return;
+    }
+    callback(null, pinned.address, pinned.family);
+  });
 }
 
 async function requestHop(input: {
@@ -340,12 +354,14 @@ async function requestHop(input: {
   readonly maxResponseBytes: number;
   readonly requirePublicAddress: boolean;
   readonly allowLoopbackHttp: boolean;
+  readonly allowBenchmarkAddressRange: boolean;
   readonly signal: AbortSignal;
 }): Promise<OutboundHttpResponse> {
   const pinned = await resolvePinnedAddress(
     input.url,
     input.requirePublicAddress,
     input.allowLoopbackHttp,
+    input.allowBenchmarkAddressRange,
     input.signal,
   );
 
@@ -509,6 +525,7 @@ export class OutboundHttpClient {
           maxResponseBytes: policy.maxResponseBytes,
           requirePublicAddress: policy.requirePublicAddress ?? true,
           allowLoopbackHttp,
+          allowBenchmarkAddressRange: policy.allowBenchmarkAddressRange === true,
           signal: controller.signal,
         });
         if (!isRedirectStatus(response.status)) return response;

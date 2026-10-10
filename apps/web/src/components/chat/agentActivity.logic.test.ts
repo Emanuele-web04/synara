@@ -6,6 +6,7 @@ import {
   formatAgentActivityEntryTitle,
   isAgentActivityWorkEntry,
   isCodexActivityStatusWorkEntry,
+  isPlainRuntimeNoticeWorkEntry,
   isReasoningUpdateWorkEntry,
   isUnmappedProviderEventWorkEntry,
 } from "./agentActivity.logic";
@@ -54,16 +55,29 @@ describe("deriveAgentActivityTimelineState", () => {
     expect(state.detailById.get("agent-reasoning:reasoning-1")?.entries).toHaveLength(2);
   });
 
-  it("cleans reasoning prefixes for single update previews", () => {
-    const entry = workEntry({
-      id: "reasoning-1",
-      label: "Reasoning update",
-      detail: "Reasoning update Running Complete analysis of the floating panel issue",
-    });
+  it("orders a reasoning trace row by its first update, time and sequence alike", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "reasoning-1",
+        label: "Reasoning update",
+        tone: "info",
+        sequence: 10,
+        createdAt: "2026-06-05T00:00:01.000Z",
+      }),
+      workEntry({
+        id: "reasoning-2",
+        label: "Reasoning update",
+        tone: "info",
+        sequence: 30,
+        createdAt: "2026-06-05T00:00:09.000Z",
+      }),
+    ]);
 
-    expect(formatAgentActivityEntryPreview(entry)).toBe(
-      "Complete analysis of the floating panel issue",
-    );
+    expect(state.timelineWorkEntries[0]).toMatchObject({
+      id: "agent-reasoning:reasoning-1",
+      createdAt: "2026-06-05T00:00:01.000Z",
+      sequence: 10,
+    });
   });
 
   it("keeps canonical reasoning tool calls as separate timeline rows", () => {
@@ -265,5 +279,26 @@ describe("unmapped provider events", () => {
     // normalizeCompactToolLabel strips the trailing "done", which previously
     // fell through to the generic "Activity" label.
     expect(formatAgentActivityEntryTitle(entry)).toBe("Done");
+  });
+});
+
+describe("isPlainRuntimeNoticeWorkEntry", () => {
+  it("matches generic runtime warnings but not notices with their own icon", () => {
+    const warning = workEntry({
+      id: "warning-1",
+      label: "Runtime warning",
+      tone: "info",
+      activityKind: "runtime.warning",
+      detail: "Unhandled Claude system message subtype 'api_retry'.",
+    });
+
+    expect(isPlainRuntimeNoticeWorkEntry(warning)).toBe(true);
+    expect(
+      isPlainRuntimeNoticeWorkEntry({
+        ...warning,
+        nativeEventType: "background_tasks_changed",
+      }),
+    ).toBe(false);
+    expect(isPlainRuntimeNoticeWorkEntry(workEntry({ id: "tool-1" }))).toBe(false);
   });
 });

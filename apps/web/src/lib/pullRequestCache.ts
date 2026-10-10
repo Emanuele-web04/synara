@@ -1,10 +1,12 @@
 import type {
+  GitHubInboxItemKind,
+  GitHubInboxListResult,
+  GitHubInboxState,
   ProjectId,
   PullRequestDetailInput,
   PullRequestProjectContext,
   PullRequestSetPinnedInput,
   PullRequestState,
-  PullRequestsListResult,
 } from "@synara/contracts";
 import {
   coalescePullRequestListEntries,
@@ -16,9 +18,13 @@ import {
 } from "@synara/shared/githubRepository";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
-import { PULL_REQUEST_STATES } from "./pullRequestQueryOptions";
+import { GITHUB_INBOX_STATES } from "./githubInboxQueryOptions";
 
+// List caches are the GitHub inbox lists (`["github-inbox", "list", state, sort]`), which hold pull
+// requests and issues. Pins apply to both kinds; action fields only ever match pull requests
+// because GitHub numbers both kinds from one sequence per repository.
 export type PullRequestListCacheEntry = {
+  kind?: GitHubInboxItemKind;
   projectId: ProjectId;
   projectTitle?: string;
   repository: string;
@@ -31,7 +37,7 @@ export type PullRequestListCacheEntry = {
 };
 
 export type PullRequestListCache = {
-  entries: PullRequestListCacheEntry[];
+  items: PullRequestListCacheEntry[];
 };
 
 export type PinCacheRollback = {
@@ -49,10 +55,15 @@ export type ActionListCacheRollback = {
   previousFields: PullRequestActionListPatch;
 };
 
+/** Mutation scopes span every sort of a state; filters are applied on the client. */
 export type PullRequestListQueryScope = {
-  state: PullRequestState;
-  projectId: ProjectId | null;
+  state: GitHubInboxState;
 };
+
+/** Merged pull requests live in the closed inbox list. */
+export function githubInboxStateForPullRequestState(state: PullRequestState): GitHubInboxState {
+  return state === "open" ? "open" : "closed";
+}
 
 export function pullRequestIdentityKey(
   input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
@@ -92,10 +103,7 @@ function updateEntryProjectPin(
 }
 
 export function isPullRequestListQueryKey(queryKey: QueryKey): boolean {
-  return (
-    queryKey[0] === "pull-requests" &&
-    (queryKey[1] === "list" || queryKey[1] === "list-involvement")
-  );
+  return queryKey[0] === "github-inbox" && queryKey[1] === "list";
 }
 
 export function queryKeysEqual(left: QueryKey, right: QueryKey): boolean {
@@ -104,17 +112,13 @@ export function queryKeysEqual(left: QueryKey, right: QueryKey): boolean {
 
 export function pullRequestListQueryScope(queryKey: QueryKey): PullRequestListQueryScope | null {
   if (!isPullRequestListQueryKey(queryKey)) return null;
-  const stateIndex = queryKey[1] === "list" ? 2 : 3;
-  const projectIdIndex = queryKey[1] === "list" ? 3 : 4;
-  const state = queryKey[stateIndex];
-  const projectId = queryKey[projectIdIndex];
-  if (!PULL_REQUEST_STATES.includes(state as PullRequestState)) return null;
-  if (projectId !== null && typeof projectId !== "string") return null;
-  return { state: state as PullRequestState, projectId: projectId as ProjectId | null };
+  const state = queryKey[2];
+  if (!GITHUB_INBOX_STATES.includes(state as GitHubInboxState)) return null;
+  return { state: state as GitHubInboxState };
 }
 
 function scopeKey(scope: PullRequestListQueryScope): string {
-  return `${scope.state}\u0000${scope.projectId ?? ""}`;
+  return scope.state;
 }
 
 export function listScopesContainingPullRequest(
@@ -125,15 +129,14 @@ export function listScopesContainingPullRequest(
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
-    if (!data?.entries.some((entry) => matchesPullRequestPinIdentity(entry, input))) continue;
+    if (!data?.items.some((entry) => matchesPullRequestPinIdentity(entry, input))) continue;
     const scope = pullRequestListQueryScope(queryKey);
     if (scope) scopes.set(scopeKey(scope), scope);
   }
   return [...scopes.values()];
 }
 
-/** List scopes whose cached rows prove they cover this PR or another PR from its repository.
- * This reaches the relevant state/involvement siblings without invalidating unrelated projects. */
+/** List scopes whose cached rows prove they cover this PR or another item from its repository. */
 export function listScopesContainingPullRequestRepository(
   queryClient: QueryClient,
   input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
@@ -142,7 +145,7 @@ export function listScopesContainingPullRequestRepository(
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
-    const coversRepository = data?.entries.some(
+    const coversRepository = data?.items.some(
       (entry) => entry.repository.toLowerCase() === input.repository.toLowerCase(),
     );
     if (!coversRepository) continue;
@@ -181,26 +184,6 @@ export function cancelPullRequestListScopes(
   });
 }
 
-/** Marks only same-state, same-project LIST-family siblings stale after a forced refresh. */
-export function invalidateOtherPullRequestListQueries(
-  queryClient: QueryClient,
-  refreshedQueryKey: QueryKey,
-) {
-  const refreshedScope = pullRequestListQueryScope(refreshedQueryKey);
-  return queryClient.invalidateQueries({
-    predicate: (query) => {
-      const candidateScope = pullRequestListQueryScope(query.queryKey);
-      return (
-        refreshedScope !== null &&
-        candidateScope !== null &&
-        candidateScope.state === refreshedScope.state &&
-        candidateScope.projectId === refreshedScope.projectId &&
-        !queryKeysEqual(query.queryKey, refreshedQueryKey)
-      );
-    },
-  });
-}
-
 export function optimisticallyPatchPullRequestActionFieldsInListCaches(
   queryClient: QueryClient,
   input: Pick<PullRequestDetailInput, "projectId" | "repository" | "number">,
@@ -211,7 +194,7 @@ export function optimisticallyPatchPullRequestActionFieldsInListCaches(
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
-    const match = data?.entries.find((entry) => matchesPullRequestRemoteIdentity(entry, input));
+    const match = data?.items.find((entry) => matchesPullRequestRemoteIdentity(entry, input));
     if (!match) continue;
     rollbackByQuery.push({
       queryKey,
@@ -224,7 +207,7 @@ export function optimisticallyPatchPullRequestActionFieldsInListCaches(
       current
         ? {
             ...current,
-            entries: current.entries.map((entry) =>
+            items: current.items.map((entry) =>
               matchesPullRequestRemoteIdentity(entry, input) ? { ...entry, ...entryPatch } : entry,
             ),
           }
@@ -245,7 +228,7 @@ export function rollbackPullRequestActionFieldsInListCaches(input: {
       current
         ? {
             ...current,
-            entries: current.entries.map((entry) => {
+            items: current.items.map((entry) => {
               if (!matchesPullRequestRemoteIdentity(entry, input.identity)) return entry;
               const ownedRollback: PullRequestActionListPatch = {};
               if (
@@ -282,7 +265,7 @@ export function patchPullRequestPinInListCaches(
       current
         ? {
             ...current,
-            entries: current.entries.map((entry) =>
+            items: current.items.map((entry) =>
               matchesPullRequestPinIdentity(entry, input)
                 ? updateEntryProjectPin(entry, input.projectId, isPinned)
                 : entry,
@@ -301,7 +284,7 @@ export function optimisticallyPatchPullRequestPinInListCaches(
   for (const [queryKey, data] of queryClient.getQueriesData<PullRequestListCache>({
     predicate: (query) => isPullRequestListQueryKey(query.queryKey),
   })) {
-    const match = data?.entries.find((entry) => matchesPullRequestPinIdentity(entry, input));
+    const match = data?.items.find((entry) => matchesPullRequestPinIdentity(entry, input));
     if (!match) continue;
     rollbackByQuery.push({
       queryKey,
@@ -311,7 +294,7 @@ export function optimisticallyPatchPullRequestPinInListCaches(
       current
         ? {
             ...current,
-            entries: current.entries.map((entry) =>
+            items: current.items.map((entry) =>
               matchesPullRequestPinIdentity(entry, input)
                 ? updateEntryProjectPin(entry, input.projectId, input.isPinned)
                 : entry,
@@ -334,7 +317,7 @@ export function patchOwnedPullRequestPinInCache(input: {
     current
       ? {
           ...current,
-          entries: current.entries.map((entry) =>
+          items: current.items.map((entry) =>
             matchesPullRequestPinIdentity(entry, input.identity) &&
             pullRequestListProjectPin(entry, input.identity.projectId) === input.expectedIsPinned
               ? updateEntryProjectPin(entry, input.identity.projectId, input.nextIsPinned)
@@ -346,17 +329,17 @@ export function patchOwnedPullRequestPinInCache(input: {
 }
 
 export function preserveProtectedPinValues(
-  result: PullRequestsListResult,
+  result: GitHubInboxListResult,
   current: PullRequestListCache | undefined,
   protectedIdentities: ReadonlySet<string>,
-): PullRequestsListResult {
+): GitHubInboxListResult {
   if (!current || protectedIdentities.size === 0) return result;
-  type ResultEntry = PullRequestsListResult["entries"][number];
-  const currentEntries = current.entries as unknown as ReadonlyArray<ResultEntry>;
+  type ResultEntry = GitHubInboxListResult["items"][number];
+  const currentEntries = current.items as unknown as ReadonlyArray<ResultEntry>;
   const currentByRemoteIdentity = new Map(
     currentEntries.map((entry) => [pullRequestRemoteIdentityKey(entry), entry] as const),
   );
-  const resultRemoteIdentities = new Set(result.entries.map(pullRequestRemoteIdentityKey));
+  const resultRemoteIdentities = new Set(result.items.map(pullRequestRemoteIdentityKey));
   const missingProtectedPinnedEntries = currentEntries.filter((entry) => {
     if (resultRemoteIdentities.has(pullRequestRemoteIdentityKey(entry))) return false;
     return pullRequestListProjectContexts(entry).some(
@@ -373,9 +356,9 @@ export function preserveProtectedPinValues(
   });
   return {
     ...result,
-    entries: [
+    items: [
       ...missingProtectedPinnedEntries,
-      ...result.entries.flatMap((entry) => {
+      ...result.items.flatMap((entry): ResultEntry[] => {
         const currentEntry = currentByRemoteIdentity.get(pullRequestRemoteIdentityKey(entry));
         const contexts = pullRequestListProjectContexts(entry);
         const protectedContexts = contexts.filter((context) =>
@@ -431,21 +414,22 @@ export type ProtectedActionFieldsByIdentity = ReadonlyMap<
 >;
 
 export function preserveProtectedActionValues(
-  result: PullRequestsListResult,
+  result: GitHubInboxListResult,
   current: PullRequestListCache | undefined,
   protectedFieldsByIdentity: ProtectedActionFieldsByIdentity,
-): PullRequestsListResult {
+): GitHubInboxListResult {
   if (!current || protectedFieldsByIdentity.size === 0) return result;
   const currentByIdentity = new Map(
-    current.entries.map((entry) => [pullRequestRemoteIdentityKey(entry), entry] as const),
+    current.items.map((entry) => [pullRequestRemoteIdentityKey(entry), entry] as const),
   );
   return {
     ...result,
-    entries: result.entries.map((entry) => {
+    items: result.items.map((entry) => {
       const identityKey = pullRequestRemoteIdentityKey(entry);
       const protectedFields = protectedFieldsByIdentity.get(identityKey);
       const currentEntry = currentByIdentity.get(identityKey);
-      if (!protectedFields || !currentEntry) return entry;
+      // Action fields belong to pull requests; an issue row never carries them.
+      if (!protectedFields || !currentEntry || entry.kind === "issue") return entry;
       return {
         ...entry,
         ...(protectedFields.has("state") && currentEntry.state !== undefined

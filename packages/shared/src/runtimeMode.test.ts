@@ -4,6 +4,7 @@ import {
   normalizeRuntimeModeForProvider,
   autoRuntimeModeSelectionIssue,
   providerSupportsAutoRuntimeMode,
+  providerSupportsLocalAutoRuntimeMode,
   runtimeModeEscalatesPrivilege,
 } from "./runtimeMode";
 
@@ -43,6 +44,7 @@ it.each([
 ] as const)(
   "keeps local Auto available for %s independently of native Auto capabilities",
   (provider) => {
+    expect(providerSupportsLocalAutoRuntimeMode(provider)).toBe(true);
     expect(normalizeRuntimeModeForProvider("auto-local", provider)).toBe("auto-local");
     expect(
       autoRuntimeModeSelectionIssue({
@@ -52,3 +54,14 @@ it.each([
     ).toBeNull();
   },
 );
+
+it("keeps unsupported OMP local Auto selections manual", () => {
+  expect(providerSupportsLocalAutoRuntimeMode("omp")).toBe(false);
+  expect(normalizeRuntimeModeForProvider("auto-local", "omp")).toBe("approval-required");
+  expect(
+    autoRuntimeModeSelectionIssue({
+      runtimeMode: "auto-local",
+      modelSelection: { provider: "omp", model: "test" },
+    }),
+  ).toBe('Provider "omp" does not support local Auto tool approvals.');
+});

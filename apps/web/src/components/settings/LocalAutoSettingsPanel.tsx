@@ -34,7 +34,7 @@ export function LocalAutoSettingsPanel({ active }: { readonly active: boolean })
           description="Let a small model on this device review proposed tool calls in the context of your request and the agent’s actions."
           control={
             ready ? (
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-xs text-primary">
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-ui-xs text-primary">
                 <CentralIcon name="shield-code" className="size-3.5" /> Installed
               </span>
             ) : (
@@ -58,7 +58,7 @@ export function LocalAutoSettingsPanel({ active }: { readonly active: boolean })
             )
           }
         >
-          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-ui-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
               <CentralIcon name="shield-code" className="size-3.5" /> Runs on your device
             </span>
@@ -78,7 +78,7 @@ export function LocalAutoSettingsPanel({ active }: { readonly active: boolean })
             aria-live="polite"
           >
             <p
-              className={`text-xs leading-relaxed ${status?.phase === "error" || error ? "text-destructive" : "text-muted-foreground"}`}
+              className={`text-ui-xs leading-relaxed ${status?.phase === "error" || error ? "text-destructive" : "text-muted-foreground"}`}
             >
               {error ? error.message : (status?.detail ?? "Checking installation…")}
             </p>
@@ -112,7 +112,7 @@ export function LocalAutoSettingsPanel({ active }: { readonly active: boolean })
       <SettingsSection title="Using Auto mode">
         <SettingsRow
           title="Choose Auto (local) in a task"
-          description="After installation, open the task’s permissions menu and select Auto (local). Available with every supported provider."
+          description="After installation, open the task’s permissions menu and select Auto (local). Available with Codex, Claude Code, OpenCode, Cursor, Devin, Antigravity, Grok, Pi, and Droid."
           status="Your existing task permissions stay the same until you select this mode."
         />
         <SettingsRow

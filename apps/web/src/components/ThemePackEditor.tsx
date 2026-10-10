@@ -3,7 +3,8 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { DESKTOP_WINDOW_BLUR_RADIUS_MAX, DESKTOP_WINDOW_BLUR_RADIUS_MIN } from "@synara/contracts";
+import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Button } from "./ui/button";
 import {
@@ -19,9 +20,11 @@ import {
 import { Input } from "./ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
+import { SettingsSegmentedControl } from "./settings/SettingControls";
 import { SettingsCard, SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
@@ -35,6 +38,9 @@ import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "../surfaceStyles"
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
+  VIBRANCY_EQUIVALENT_BLUR_RADIUS,
+  WINDOW_TRANSLUCENCY_OPACITY_MIN,
+  buildThemeCssVariables,
   getAvailableCodeThemes,
   getCodeThemeSeed,
   resolveThemePack,
@@ -47,11 +53,15 @@ type ThemePackEditorProps = {
 };
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const WINDOW_MATERIAL_OPTIONS = [
+  { value: "solid", label: "Solid" },
+  { value: "translucent", label: "Translucent" },
+] as const;
 const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 
 /** Borderless text action in the editor's header chrome (Copy, Import). */
 const EDITOR_TEXT_ACTION_CLASS_NAME = cn(
-  "rounded-md px-2 py-1 text-xs text-[var(--color-text-foreground-secondary)]",
+  "rounded-md px-2 py-1 text-ui leading-snug text-[var(--color-text-foreground-secondary)]",
   ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
 );
 
@@ -60,8 +70,6 @@ export function ThemePackEditor({
   isActive: isActiveProp,
   mode: modeProp,
 }: ThemePackEditorProps) {
-  const isActive = isActiveProp ?? false;
-  const mode = modeProp ?? "system";
   const {
     darkTheme,
     lightTheme,
@@ -70,12 +78,26 @@ export function ThemePackEditor({
     isDefaultThemePack,
     resetThemeVariant,
     setCodeThemeId,
+    setTheme,
+    resolvedTheme,
+    theme: themeMode,
+    systemUiFont,
+    desktopBlurUnavailable,
+    setWindowTranslucency,
+    translucency: translucencyByVariant,
     updateThemePack,
     updateThemeFonts,
   } = useTheme();
+  const isActive = isActiveProp ?? resolvedTheme === variant;
+  const mode = modeProp ?? themeMode;
 
   const pack = variant === "dark" ? darkTheme : lightTheme;
   const theme = pack.theme;
+  const translucency = translucencyByVariant[variant];
+  const previewVariables = useMemo(
+    () => buildThemeCssVariables(pack, variant, { systemUiFont }).variables,
+    [pack, variant, systemUiFont],
+  );
   const defaultTheme = resolveThemePack(DEFAULT_THEME_STATE, variant).theme;
   const codeThemes = useMemo(() => {
     const options = getAvailableCodeThemes(variant);
@@ -124,13 +146,13 @@ export function ThemePackEditor({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-medium text-foreground">{titleLabel}</h3>
+          <h3 className="text-ui-lg font-medium text-foreground">{titleLabel}</h3>
           {!isPristine ? (
             <button
               type="button"
               onClick={() => resetThemeVariant(variant)}
               className={cn(
-                "rounded-md px-1.5 py-0.5 text-[11px] text-[var(--color-text-foreground-secondary)]",
+                "rounded-md px-1.5 py-0.5 text-ui-sm text-[var(--color-text-foreground-secondary)]",
                 ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
               )}
             >
@@ -178,8 +200,40 @@ export function ThemePackEditor({
           </Select>
         </div>
       </div>
-      <div className="border-b border-[color:var(--color-border)] px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)]">
-        {contextLabel}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-3 text-ui-sm text-[var(--color-text-foreground-secondary)]">
+        <span>{contextLabel}</span>
+        {!isActive ? (
+          <Button variant="outline" size="xs" onClick={() => setTheme(variant)}>
+            Use {variant} theme
+          </Button>
+        ) : null}
+      </div>
+      <div className="border-b border-[color:var(--color-border)] px-4 pb-3">
+        <div
+          role="img"
+          aria-label={`${titleLabel} preview: ${codeThemeLabel}`}
+          className="flex items-center justify-between gap-3 rounded-lg border p-3"
+          style={
+            {
+              ...previewVariables,
+              backgroundColor: "var(--color-background-surface)",
+              color: "var(--color-text-foreground)",
+              borderColor: "var(--color-border)",
+              colorScheme: variant,
+            } as CSSProperties
+          }
+        >
+          <span className="text-ui-lg leading-snug font-medium">{codeThemeLabel}</span>
+          <span
+            className="rounded-md px-3 py-1 text-ui leading-snug"
+            style={{
+              backgroundColor: "var(--color-background-accent)",
+              color: "var(--color-text-accent)",
+            }}
+          >
+            Accent preview
+          </span>
+        </div>
       </div>
 
       <div className={SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME}>
@@ -239,6 +293,11 @@ export function ThemePackEditor({
               ariaLabel={`${titleLabel} UI font`}
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
+            {systemUiFont ? (
+              <span className="text-ui-sm text-muted-foreground">
+                Use system UI font is on; theme fonts are not applied.
+              </span>
+            ) : null}
           </div>
         </ThemeRow>
 
@@ -256,17 +315,71 @@ export function ThemePackEditor({
           </div>
         </ThemeRow>
 
-        <ThemeRow label="Translucent sidebar">
-          <Switch
-            checked={!theme.opaqueWindows}
-            onCheckedChange={(checked) => updateThemePack(variant, { opaqueWindows: !checked })}
-            aria-label={`${titleLabel} translucent sidebar`}
-          />
-        </ThemeRow>
+        <div>
+          <ThemeRow label="Window">
+            <SettingsSegmentedControl
+              value={theme.opaqueWindows ? "solid" : "translucent"}
+              onValueChange={(value) =>
+                updateThemePack(variant, { opaqueWindows: value === "solid" })
+              }
+              ariaLabel={`${titleLabel} window material`}
+              options={WINDOW_MATERIAL_OPTIONS}
+            />
+          </ThemeRow>
+          <DisclosureRegion open={!theme.opaqueWindows}>
+            <div
+              className={cn(
+                SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
+                "border-t border-[color:var(--color-border)]",
+              )}
+            >
+              <ThemeRow label="Sidebar only">
+                <Switch
+                  checked={translucency.sidebarOnly}
+                  onCheckedChange={(checked) =>
+                    setWindowTranslucency(variant, { sidebarOnly: checked })
+                  }
+                  aria-label={`${titleLabel} translucent sidebar only`}
+                />
+              </ThemeRow>
+              <ThemeRow label="Opacity">
+                <ThemeSlider
+                  value={translucency.opacity}
+                  min={WINDOW_TRANSLUCENCY_OPACITY_MIN}
+                  max={100}
+                  suffix="%"
+                  onChange={(next) => setWindowTranslucency(variant, { opacity: next })}
+                  ariaLabel={`${titleLabel} translucency opacity`}
+                />
+              </ThemeRow>
+              <ThemeRow label="Blur">
+                {translucency.blur !== null ? (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => setWindowTranslucency(variant, { blur: null })}
+                    aria-label={`${titleLabel} automatic background blur`}
+                  >
+                    {isActive && desktopBlurUnavailable ? "Unavailable, use Auto" : "Auto"}
+                  </Button>
+                ) : null}
+                <ThemeSlider
+                  value={translucency.blur ?? VIBRANCY_EQUIVALENT_BLUR_RADIUS}
+                  {...(translucency.blur === null ? { valueLabel: "Auto" } : {})}
+                  min={DESKTOP_WINDOW_BLUR_RADIUS_MIN}
+                  max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
+                  onChange={(next) => setWindowTranslucency(variant, { blur: next })}
+                  ariaLabel={`${titleLabel} background blur`}
+                />
+              </ThemeRow>
+            </div>
+          </DisclosureRegion>
+        </div>
 
         <ThemeRow label="Contrast">
-          <ContrastSlider
+          <ThemeSlider
             value={theme.contrast}
+            max={100}
             onChange={(next) => updateThemePack(variant, { contrast: next })}
             ariaLabel={`${titleLabel} contrast`}
           />
@@ -286,7 +399,7 @@ function ThemeRow({ label, children }: { label: string; children: React.ReactNod
         "flex min-h-12 items-center justify-between gap-3",
       )}
     >
-      <span className="text-sm text-foreground/90">{label}</span>
+      <span className="text-ui leading-snug text-foreground/90">{label}</span>
       <div className="flex shrink-0 items-center gap-2">{children}</div>
     </div>
   );
@@ -417,7 +530,7 @@ function ColorPill({
             className="block size-5 shrink-0 rounded-full border"
             style={{ borderColor: ringColor }}
           />
-          <span className="font-system-ui flex-1 text-[12px] uppercase">{previewColor}</span>
+          <span className="font-system-ui flex-1 text-ui uppercase">{previewColor}</span>
         </PopoverTrigger>
         <PopoverPopup
           align="end"
@@ -445,7 +558,7 @@ function ColorPill({
               maxLength={7}
               className={cn(
                 SETTINGS_CONTROL_RADIUS_CLASS_NAME,
-                "h-8 border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-xs uppercase outline-none focus:border-[color:var(--color-border-focus)]",
+                "h-8 border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-ui leading-snug uppercase outline-none focus:border-[color:var(--color-border-focus)]",
               )}
               aria-label={`${ariaLabel} hex value`}
             />
@@ -460,7 +573,7 @@ function CodeThemeBadge({ theme }: { theme: ChromeTheme }) {
   return (
     <span
       aria-hidden
-      className="flex size-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-semibold leading-none"
+      className="flex size-5 shrink-0 items-center justify-center rounded-md border text-ui-xs font-semibold leading-none"
       style={{
         backgroundColor: theme.surface,
         borderColor: mixColor(theme.surface, theme.ink, 0.16),
@@ -477,7 +590,7 @@ function CodeThemeSelectOption({ label, theme }: { label: string; theme: ChromeT
     <div className="flex min-w-0 items-center gap-2.5">
       <CodeThemeBadge theme={theme} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] text-[var(--color-text-foreground)]">{label}</div>
+        <div className="truncate text-ui-lg text-[var(--color-text-foreground)]">{label}</div>
       </div>
     </div>
   );
@@ -519,24 +632,33 @@ function FontInput({
 
 // ── Slider ────────────────────────────────────────────────────────────────
 
-function ContrastSlider({
+function ThemeSlider({
   value,
+  min = 0,
+  max,
+  suffix = "",
+  valueLabel,
   onChange,
   ariaLabel,
 }: {
   value: number;
+  min?: number;
+  max: number;
+  suffix?: string;
+  /** Shown instead of the number, e.g. while the value is still the automatic default. */
+  valueLabel?: string;
   onChange: (next: number) => void;
   ariaLabel: string;
 }) {
   const id = useId();
-  const fillPct = Math.max(0, Math.min(100, value));
+  const fillPct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
   return (
     <div className="flex items-center gap-3">
       <input
         id={id}
         type="range"
-        min={0}
-        max={100}
+        min={min}
+        max={max}
         step={1}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
@@ -546,8 +668,8 @@ function ContrastSlider({
           background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${fillPct}%, var(--input) ${fillPct}%, var(--input) 100%)`,
         }}
       />
-      <span className="w-7 text-right font-chat-code text-xs text-muted-foreground tabular-nums">
-        {value}
+      <span className="w-10 text-right font-chat-code text-ui leading-snug text-muted-foreground tabular-nums">
+        {valueLabel ?? `${value}${suffix}`}
       </span>
     </div>
   );
@@ -594,7 +716,7 @@ function ImportThemeDialog({
       <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>Import {variant} theme</DialogTitle>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-ui leading-snug text-muted-foreground">
             Paste a{" "}
             <code className="rounded bg-muted px-1 py-0.5 font-chat-code">codex-theme-v1:</code>{" "}
             share string. The embedded variant must match {variant}, and the selected code theme
@@ -611,10 +733,10 @@ function ImportThemeDialog({
             placeholder='codex-theme-v1:{"codeThemeId":"linear",...}'
             spellCheck={false}
             rows={5}
-            className="font-chat-code text-[11px]"
+            className="font-chat-code text-chat-code"
             aria-label="Theme share string"
           />
-          {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
+          {error ? <p className="mt-2 text-ui leading-snug text-destructive">{error}</p> : null}
         </DialogPanel>
         <DialogFooter>
           <DialogClose

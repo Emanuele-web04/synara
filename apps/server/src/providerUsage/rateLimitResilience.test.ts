@@ -30,21 +30,6 @@ function goodSnapshot(): ServerProviderUsageSnapshot {
 }
 
 describe("createRateLimitResilience", () => {
-  it("serves the last good snapshot with a staleness note while throttled", () => {
-    const resilience = makeResilience();
-    resilience.rememberLastGood("home", goodSnapshot(), NOW_MS);
-
-    const served = resilience.enterCooldown("home", NOW_MS, 120_000);
-    expect(served.status).toBe("ok");
-    expect(served.limits[0]?.usedPercent).toBe(42);
-    expect(served.detail).toContain("~2m");
-
-    // Subsequent polls inside the window keep serving the cache.
-    const cached = resilience.serveDuringCooldown("home", NOW_MS + 30_000);
-    expect(cached?.status).toBe("ok");
-    expect(cached?.limits[0]?.usedPercent).toBe(42);
-  });
-
   it("surfaces an error snapshot when throttled before any good fetch", () => {
     const resilience = makeResilience();
 

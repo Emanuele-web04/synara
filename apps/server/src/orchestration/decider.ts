@@ -7,8 +7,13 @@ import type {
   ThreadGoalAchievement,
 } from "@synara/contracts";
 import {
+  ASYNC_USER_INPUT_ALREADY_ANSWERED,
+  formatAsyncUserInputResponse,
+} from "@synara/shared/asyncUserInput";
+import {
   EventId,
   MAX_PINNED_PROJECTS,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   PINNED_MESSAGES_MAX_COUNT,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
@@ -21,7 +26,10 @@ import {
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
+import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   collectTailTurnIds,
@@ -29,7 +37,10 @@ import {
 } from "@synara/shared/conversationEdit";
 import { Effect } from "effect";
 
+import { computerActivationMetadata } from "../computer/computerActivation.ts";
+
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { withProjectRelocationEvents } from "./projectRelocation.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
@@ -76,10 +87,10 @@ const nowIso = () => new Date().toISOString();
 // an unrecorded preference should degrade to live output, never to a silent
 // buffer that withholds the whole assistant message until turn completion.
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "streaming" as const;
-const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
+const GROUP_CONTAINER_PROJECT_KIND_SET = new Set<ProjectKind>(["studio", "group"]);
 // Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
 // use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
-const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
+const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio", "group"]);
 
 function validateSidechatExecutionAvailable(
   command: Pick<OrchestrationCommand, "type">,
@@ -93,6 +104,30 @@ function validateSidechatExecutionAvailable(
         }),
       )
     : Effect.void;
+}
+
+// A standalone sidechat is a top-level, user-created thread in the project's own checkout:
+// no source thread to fork or return to, no parent, no worktree or branch switch.
+function validateStandaloneSidechatCreate(
+  command: Extract<OrchestrationCommand, { type: "thread.create" }>,
+) {
+  const conflict =
+    command.sourceThreadId !== undefined ||
+    command.sourceTurnId !== undefined ||
+    command.creationSource !== undefined ||
+    command.parentThreadId != null
+      ? "A standalone side chat cannot also have a source or parent thread."
+      : (command.envMode ?? "local") !== "local" || command.worktreePath != null
+        ? "A standalone side chat runs in the project's local checkout."
+        : null;
+  return conflict === null
+    ? Effect.void
+    : Effect.fail(
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: conflict,
+        }),
+      );
 }
 
 function validateAutoRuntimeMode(
@@ -109,6 +144,33 @@ function validateAutoRuntimeMode(
           detail: issue,
         }),
       );
+}
+
+/**
+ * A same-thread provider handoff restarts the session on another provider, so
+ * it shares Hand off's preconditions: no running turn, pending approval, or
+ * pending question the new session could not settle.
+ */
+function validateProviderHandoff(
+  command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
+  thread: OrchestrationThread,
+) {
+  const target = command.modelSelection;
+  // A live session cannot switch between instances of one provider in place
+  // (the turn path rejects that), so those handoffs keep using a new thread.
+  const detail =
+    target === undefined
+      ? "A provider handoff needs a target model selection."
+      : target.provider === thread.modelSelection.provider
+        ? `Thread '${command.threadId}' already runs on '${target.provider}'; hand off to a new thread instead.`
+        : thread.session?.status === "starting" || thread.session?.status === "running"
+          ? `Thread '${command.threadId}' still has a running turn.`
+          : thread.hasPendingApprovals || thread.hasPendingUserInput
+            ? `Thread '${command.threadId}' is waiting for an approval or an answer.`
+            : null;
+  return detail === null
+    ? Effect.void
+    : Effect.fail(new OrchestrationCommandInvariantError({ commandType: command.type, detail }));
 }
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
@@ -358,7 +420,7 @@ function resolveCreatedThreadWorkspaceMetadata(
   projectKind: ProjectKind | undefined,
   command: CreatedThreadWorkspaceCommand,
 ) {
-  if (projectKind === "studio") {
+  if (isGroupContainerKind(projectKind)) {
     return {
       envMode: "local" as const,
       branch: null,
@@ -474,7 +536,7 @@ function resolveThreadWorkspaceMetadataPatch(
   command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
   currentThread: OrchestrationThread,
 ) {
-  if (projectKind === "studio") {
+  if (isGroupContainerKind(projectKind)) {
     return {
       envMode: "local" as const,
       branch: null,
@@ -740,6 +802,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       const nextProjectKind = command.kind ?? "project";
+      const additionalFolders = command.additionalFolders ?? [];
+      if (additionalFolders.length > 0) {
+        if (nextProjectKind !== "project") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Only ordinary projects can have additional folders.",
+          });
+        }
+        const folderProblem = findProjectFolderProblem(
+          [command.workspaceRoot, ...additionalFolders],
+          { platform: process.platform },
+        );
+        if (folderProblem !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: folderProblem,
+          });
+        }
+      }
       if (nextProjectKind === "project") {
         // The app-managed Studio container owns its root exclusively and is never retired here:
         // silently deleting it would orphan Studio threads, so adding its folder as a project
@@ -747,7 +828,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         const existingStudioProject = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
-          { kinds: STUDIO_PROJECT_KIND_SET },
+          { kinds: GROUP_CONTAINER_PROJECT_KIND_SET },
         )[0];
         if (existingStudioProject) {
           return yield* new OrchestrationCommandInvariantError({
@@ -763,7 +844,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           const remainingThreads = listThreadsByProjectId(readModel, existingProject.id).filter(
             (thread) => thread.deletedAt === null,
           );
-          if (remainingThreads.length > 0) {
+          if (remainingThreads.length > 0 || command.preserveExistingProject) {
             return yield* new OrchestrationCommandInvariantError({
               commandType: command.type,
               detail: `Project '${existingProject.id}' already uses workspace root '${existingProject.workspaceRoot}'.`,
@@ -790,9 +871,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           });
         }
       }
-      if (nextProjectKind === "studio") {
+      if (isGroupContainerKind(nextProjectKind)) {
         // Cross-kind on purpose: a regular project already using this root would otherwise
-        // coexist with the Studio container, breaking workspace-root-to-project uniqueness
+        // coexist with the group container, breaking workspace-root-to-project uniqueness
         // that shell snapshot mapping and duplicate recovery rely on.
         const existingOwningProject = listActiveProjectsByWorkspaceRoot(
           readModel,
@@ -848,6 +929,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           scripts: [],
           isPinned: command.isPinned,
           spaceId: creationSpaceId,
+          additionalFolders,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -907,6 +989,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandType: command.type,
           detail: "The legacy Chats container workspace root cannot be changed.",
         });
+      }
+      // Relocating the primary folder must keep the folder set distinct and un-nested.
+      if (
+        command.workspaceRoot !== undefined &&
+        (existingProject.additionalFolders ?? []).length > 0
+      ) {
+        const folderProblem = findProjectFolderProblem(
+          [command.workspaceRoot, ...(existingProject.additionalFolders ?? [])],
+          { platform: process.platform },
+        );
+        if (folderProblem !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: folderProblem,
+          });
+        }
       }
       if (effectiveSpaceId !== null) {
         // Assignability is an invariant of the resulting row, not only of commands that
@@ -969,7 +1067,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         wasPinned: existingProject.isPinned === true,
       });
       const occurredAt = nowIso();
-      return {
+      const event = {
         ...withEventBase({
           aggregateKind: "project",
           aggregateId: command.projectId,
@@ -990,7 +1088,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
           updatedAt: occurredAt,
         },
-      };
+      } satisfies Omit<Extract<OrchestrationEvent, { type: "project.meta-updated" }>, "sequence">;
+      return yield* withProjectRelocationEvents({
+        event,
+        previousProject: existingProject,
+        readModel,
+      });
     }
 
     case "project.delete": {
@@ -1038,6 +1141,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (command.creationSource !== "provider_native") {
         yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
       }
+      const sidechatContext = command.sidechatContext ?? null;
+      if (sidechatContext !== null) {
+        yield* validateStandaloneSidechatCreate(command);
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1054,8 +1161,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
-          createBranchFlowCompleted:
-            project.kind === "studio" ? false : command.createBranchFlowCompleted,
+          createBranchFlowCompleted: isGroupContainerKind(project.kind)
+            ? false
+            : command.createBranchFlowCompleted,
           isPinned: command.isPinned,
           parentThreadId: command.parentThreadId,
           ...(command.creationSource !== undefined
@@ -1071,6 +1179,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentNickname: command.subagentNickname,
           subagentRole: command.subagentRole,
           forkSourceThreadId: null,
+          // A standalone sidechat starts its inactivity clock at creation, like a forked one.
+          ...(sidechatContext !== null
+            ? {
+                sidechatContext,
+                sidechatLastActivityAt: command.createdAt,
+                sidechatExpiredAt: null,
+              }
+            : {}),
           lastKnownPr: command.lastKnownPr,
           handoff: null,
           createdAt: command.createdAt,
@@ -1131,8 +1247,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
-          createBranchFlowCompleted:
-            project.kind === "studio" ? false : command.createBranchFlowCompleted,
+          createBranchFlowCompleted: isGroupContainerKind(project.kind)
+            ? false
+            : command.createBranchFlowCompleted,
           isPinned: false,
           parentThreadId: null,
           subagentAgentId: null,
@@ -1232,14 +1349,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
-          createBranchFlowCompleted:
-            project.kind === "studio" ? false : command.createBranchFlowCompleted,
+          createBranchFlowCompleted: isGroupContainerKind(project.kind)
+            ? false
+            : command.createBranchFlowCompleted,
           isPinned: false,
           parentThreadId: null,
           subagentAgentId: null,
           subagentNickname: null,
           subagentRole: null,
           forkSourceThreadId: command.sourceThreadId,
+          // Resolved against the source lazily, at the provider fork: an
+          // unknown or mid-turn point falls back to the imported transcript.
+          ...(command.throughMessageId !== undefined
+            ? { forkSourceMessageId: command.throughMessageId }
+            : {}),
           sidechatSourceThreadId: command.sidechatSourceThreadId,
           sidechatLastActivityAt: command.sidechatSourceThreadId ? command.createdAt : null,
           sidechatExpiredAt: null,
@@ -1282,7 +1405,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.sidechat.activity.record": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
-      if (!thread.sidechatSourceThreadId) {
+      if (!isSidechatThread(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not a side chat.`,
@@ -1312,7 +1435,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.sidechat.expire": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
-      if (!thread.sidechatSourceThreadId) {
+      if (!isSidechatThread(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not a side chat.`,
@@ -1492,11 +1615,38 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const expectedSnoozedUntil = command.expectedSnoozedUntil;
+      const expiresSnooze = expectedSnoozedUntil !== undefined;
+      if (command.snoozedUntil != null || expiresSnooze) {
+        yield* requireThreadNotArchived({ readModel, command, threadId: command.threadId });
+      }
+      if (expectedSnoozedUntil !== undefined) {
+        if (
+          command.snoozedUntil !== null ||
+          expectedSnoozedUntil === null ||
+          thread.snoozedUntil == null ||
+          Date.parse(thread.snoozedUntil) !== Date.parse(expectedSnoozedUntil)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${command.threadId}' snooze deadline changed before expiry.`,
+          });
+        }
+        if (Date.parse(thread.snoozedUntil) > Date.now()) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${command.threadId}' snooze reminder is not due.`,
+          });
+        }
+      }
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
       // Provider-native threads: see thread.create — the selection mirrors the
       // provider's own subagent, so the Auto-mode capability check doesn't apply.
       if (command.modelSelection !== undefined && thread.creationSource !== "provider_native") {
         yield* validateAutoRuntimeMode(command, command.modelSelection, thread.runtimeMode);
+      }
+      if (command.providerHandoff === true) {
+        yield* validateProviderHandoff(command, thread);
       }
       const occurredAt = nowIso();
       return {
@@ -1518,6 +1668,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.isSettled !== undefined
             ? { settledAt: command.isSettled ? occurredAt : null }
             : {}),
+          ...(command.snoozedUntil !== undefined
+            ? { snoozedUntil: command.snoozedUntil, snoozeReminderAt: null }
+            : {}),
+          ...(expiresSnooze ? { snoozeReminderAt: occurredAt, settledAt: null } : {}),
           ...(command.parentThreadId !== undefined
             ? { parentThreadId: command.parentThreadId }
             : {}),
@@ -1538,6 +1692,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { goalStartBehavior: command.goalStartBehavior }
             : {}),
           ...resolveThreadGoalPatch(command, thread, occurredAt),
+          ...(command.providerHandoff === true
+            ? { providerHandoff: { sourceModelSelection: thread.modelSelection } }
+            : {}),
           updatedAt: occurredAt,
         },
       };
@@ -1725,13 +1882,65 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
+      const questionResponse = command.asyncUserInputResponse;
+      const questionMessage = questionResponse
+        ? targetThread.messages.find((message) => message.id === questionResponse.messageId)
+        : undefined;
+      if (questionResponse) {
+        if (
+          !questionMessage?.asyncUserInput ||
+          questionMessage.role !== "assistant" ||
+          targetThread.modelSelection.provider !== "codex" ||
+          (targetThread.session?.providerName != null &&
+            targetThread.session.providerName !== "codex") ||
+          (command.modelSelection && command.modelSelection.provider !== "codex") ||
+          targetThread.parentThreadId !== null
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "This asynchronous question is unavailable in this Codex thread.",
+          });
+        }
+        // Serialized command admission makes concurrent answers from multiple
+        // clients a single durable submission, even with different command ids.
+        if (questionMessage.asyncUserInput.response) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: ASYNC_USER_INPUT_ALREADY_ANSWERED,
+          });
+        }
+        if (
+          questionResponse.answers.length !== questionMessage.asyncUserInput.questions.length ||
+          targetThread.messages.some((message) => message.id === command.message.messageId)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Provide one answer per question and a new response message id.",
+          });
+        }
+      }
+      const messageText =
+        questionResponse && questionMessage?.asyncUserInput
+          ? formatAsyncUserInputResponse(
+              questionMessage.asyncUserInput.questions,
+              questionResponse.answers,
+            )
+          : command.message.text;
+      if (messageText.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The question response exceeds the maximum message length.",
+        });
+      }
       // A quit-resume command is planned just before commands are admitted.
       // Respect settings changed before its serialized dispatch instead of
       // replaying the planner's stale permission or interaction mode.
       const runtimeMode =
-        command.resumePrecondition === undefined ? command.runtimeMode : targetThread.runtimeMode;
+        command.resumePrecondition === undefined && !questionResponse
+          ? command.runtimeMode
+          : targetThread.runtimeMode;
       const interactionMode =
-        command.resumePrecondition === undefined
+        command.resumePrecondition === undefined && !questionResponse
           ? command.interactionMode
           : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
@@ -1750,7 +1959,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         sourceProposedPlan && sourceThread
           ? sourceThread.proposedPlans.find((entry) => entry.id === sourceProposedPlan.planId)
           : null;
-      const dispatchMode = command.dispatchMode ?? "queue";
+      const dispatchMode = questionResponse ? "steer" : (command.dispatchMode ?? "queue");
       if (sourceProposedPlan && !sourcePlan) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1777,6 +1986,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         (targetThread.claudeCacheReview != null ||
           (isThreadRunning &&
             (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider))));
+      const snoozeEvents: Array<Omit<OrchestrationEvent, "sequence">> =
+        (command.dispatchOrigin ?? "user") === "user" &&
+        (targetThread.snoozedUntil != null || targetThread.snoozeReminderAt != null)
+          ? [
+              {
+                ...withEventBase({
+                  aggregateKind: "thread",
+                  aggregateId: command.threadId,
+                  occurredAt: command.createdAt,
+                  commandId: command.commandId,
+                }),
+                type: "thread.meta-updated",
+                payload: {
+                  threadId: command.threadId,
+                  snoozedUntil: null,
+                  snoozeReminderAt: null,
+                  updatedAt: command.createdAt,
+                },
+              },
+            ]
+          : [];
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1789,7 +2019,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.message.messageId,
           role: "user",
-          text: command.message.text,
+          text: messageText,
           attachments: command.message.attachments,
           ...(command.message.skills !== undefined ? { skills: command.message.skills } : {}),
           ...(command.message.mentions !== undefined ? { mentions: command.message.mentions } : {}),
@@ -1803,7 +2033,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           startsNewTurn: dispatchMode !== "steer" || !isThreadRunning || shouldQueue,
           turnId: null,
           streaming: false,
-          source: "native",
+          source: questionResponse ? "async-user-input" : "native",
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1816,6 +2046,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? { providerOptions: command.providerOptions }
           : {}),
         ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+        ...computerActivationMetadata({ ...command, userMessageText: command.message.text }),
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
         dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -1837,6 +2068,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
       if (shouldQueue && dispatchMode === "steer" && targetThread.claudeCacheReview == null) {
         return [
+          ...snoozeEvents,
           userMessageEvent,
           queuedEvent,
           {
@@ -1856,7 +2088,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         ];
       }
-      return [userMessageEvent, queuedEvent];
+      if (questionResponse && questionMessage?.asyncUserInput) {
+        return [
+          ...snoozeEvents,
+          {
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            }),
+            type: "thread.async-user-input-answered",
+            payload: {
+              threadId: command.threadId,
+              messageId: questionMessage.id,
+              response: {
+                messageId: command.message.messageId,
+                answers: questionResponse.answers,
+              },
+            },
+          },
+          userMessageEvent,
+          queuedEvent,
+        ];
+      }
+      return [...snoozeEvents, userMessageEvent, queuedEvent];
     }
 
     case "thread.claude-cache.set": {
@@ -2029,6 +2285,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { providerOptions: command.providerOptions }
             : {}),
           ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+          ...computerActivationMetadata(command),
           assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
           dispatchMode: command.dispatchMode ?? "queue",
           dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -2356,6 +2613,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.providerOptions !== undefined
             ? { providerOptions: command.providerOptions }
             : {}),
+          ...computerActivationMetadata({ ...command, userMessageText: command.text }),
           ...(command.assistantDeliveryMode !== undefined
             ? { assistantDeliveryMode: command.assistantDeliveryMode }
             : {}),
@@ -2573,6 +2831,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: existingMessage?.text ?? "",
+          ...(command.asyncQuestions
+            ? {
+                asyncUserInput: existingMessage?.asyncUserInput ?? {
+                  questions: command.asyncQuestions,
+                },
+              }
+            : {}),
           turnId: resolveStableMessageTurnId({
             existingTurnId: existingMessage?.turnId,
             incomingTurnId: command.turnId,
@@ -2763,7 +3028,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.activity.append": {
-      yield* requireThread({
+      yield* (command.requireUnarchived ? requireThreadNotArchived : requireThread)({
         readModel,
         command,
         threadId: command.threadId,

@@ -1,0 +1,104 @@
+name: Cua Linux checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cua-linux-check.yml"
+      - ".github/scripts/cua-linux-smoke.ts"
+      - "apps/desktop/patches/cua-driver/**"
+      - "apps/desktop/src/cuaDriverHost*"
+      - "apps/desktop/src/linuxCua*"
+      - "apps/desktop/src/linuxEscapeKillSwitchMonitor*"
+      - "packages/shared/src/cuaDriver*"
+  push:
+    branches: ["codex/cua-linux-verify-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cua-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux host, native driver and X11 browser smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      CUA_DRIVER_RS_TELEMETRY_ENABLED: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
+          electron: "true"
+
+      - name: Run Linux admission, host IPC and protocol regressions
+        run: |
+          bun run --cwd apps/desktop test src/cuaDriverHost.test.ts src/linuxCuaDriverHost.test.ts src/linuxCuaAdmission.test.ts src/linuxEscapeKillSwitchMonitor.test.ts
+          bun run --cwd packages/shared test src/cuaDriverProtocol.test.ts src/cuaActionDiagnostics.test.ts
+          bun run --cwd apps/server test src/browserAutomation/browserHostRpcClient.test.ts src/computer/ComputerManager.test.ts src/computer/CuaComputerBackend.test.ts
+
+      - name: Install Linux build and disposable X11 dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev xvfb xauth xdotool dbus-x11 acl
+
+      - name: Install a trusted system Chrome fixture
+        run: |
+          # Hosted images deliberately make /opt browser payloads world-writable.
+          # The driver must reject those. Reinstall the official payload and
+          # restore root-managed installation permissions on this disposable VM.
+          curl --fail --location --retry 3 https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb --output "$RUNNER_TEMP/cua-smoke-chrome.deb"
+          sudo apt-get install -y --reinstall "$RUNNER_TEMP/cua-smoke-chrome.deb"
+          sudo setfacl -b /opt /opt/google
+          sudo setfacl -Rb /opt/google/chrome
+          sudo chown -R root:root /opt/google/chrome
+          sudo chmod go-w /opt /opt/google
+          sudo chmod -R go-w /opt/google/chrome
+          command -v google-chrome
+          ls -ld / /opt /opt/google /opt/google/chrome /opt/google/chrome/google-chrome
+          google-chrome --version
+
+      - name: Prepare pinned Linux driver source
+        shell: bash
+        run: |
+          set -euo pipefail
+          release=packages/shared/src/cuaDriverRelease.json
+          source_commit=$(jq -r .source "$release")
+          rust_version=$(jq -r .rustVersion "$release")
+          native_patch="$GITHUB_WORKSPACE/apps/desktop/patches/cua-driver/0001-synara-native.patch"
+          linux_patch="$GITHUB_WORKSPACE/apps/desktop/patches/cua-driver/0002-synara-linux-browser.patch"
+          test "$(sha256sum "$native_patch" | cut -d ' ' -f 1)" = "$(jq -r .patchSha256 "$release")"
+          test "$(sha256sum "$linux_patch" | cut -d ' ' -f 1)" = "$(jq -r .linuxBrowserPatchSha256 "$release")"
+          rustup toolchain install "$rust_version" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
+          native_source="$RUNNER_TEMP/cua-linux-source"
+          git init "$native_source"
+          git -C "$native_source" fetch --depth=1 https://github.com/trycua/cua.git "$source_commit"
+          git -C "$native_source" checkout --detach FETCH_HEAD
+          test "$(git -C "$native_source" rev-parse HEAD)" = "$source_commit"
+          git -C "$native_source" apply --check "$native_patch"
+          git -C "$native_source" apply "$native_patch"
+          git -C "$native_source" apply --check "$linux_patch"
+          git -C "$native_source" apply "$linux_patch"
+          echo "CUA_NATIVE_SOURCE=$native_source" >> "$GITHUB_ENV"
+
+      - name: Compile the embedded Linux driver and cursor helper
+        run: cargo build --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver -p cursor-theme-cli
+
+      - name: Test Linux browser cancellation, binding and cursor logic
+        run: |
+          cargo test --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cua-driver-core --lib browser::
+          cargo test --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cursor-overlay --lib compact
+
+      - name: Exercise the actual host and browser on disposable X11
+        run: |
+          bun build .github/scripts/cua-linux-smoke.ts --target=node --format=cjs --external=electron --outfile=apps/desktop/.smoke/cua-linux-smoke.cjs
+          CUA_LINUX_SMOKE_BINARY="$CUA_NATIVE_SOURCE/libs/cua-driver/rust/target/debug/cua-driver" XDG_SESSION_TYPE=x11 dbus-run-session -- xvfb-run -a ./apps/desktop/node_modules/.bin/electron --no-sandbox apps/desktop/.smoke/cua-linux-smoke.cjs

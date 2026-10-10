@@ -15,7 +15,7 @@ only a successful model load and inference self-test mark the installation ready
 
 ## Providers
 
-Auto (local) supports all nine providers: Codex, Claude Code, OpenCode, Cursor, Devin,
+Auto (local) supports these nine providers: Codex, Claude Code, OpenCode, Cursor, Devin,
 Antigravity, Grok, Pi, and Droid. Each integration keeps the provider's permission boundary:
 
 | Provider                   | Approval integration                                                                                                                        |
@@ -25,6 +25,8 @@ Antigravity, Grok, Pi, and Droid. Each integration keeps the provider's permissi
 | OpenCode                   | Native permission requests matched by message/call ID to full tool input. Directory-policy expansion and loop guards remain manual.         |
 | Pi                         | SDK pre-tool hook pauses built-in, extension, and gateway tools. Existing extension vetoes run first.                                       |
 | Antigravity                | CLI `PreToolUse` hook pauses for Synara's one-call response, without `--dangerously-skip-permissions`.                                      |
+
+OMP does not support local Auto tool approvals. Its existing manual approval modes remain available.
 
 Pi and Antigravity expose normal Synara approval prompts while the classifier reviews the call.
 Interrupting or stopping the session cancels their pending hooks; late approvals cannot resume them.

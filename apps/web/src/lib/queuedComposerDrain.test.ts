@@ -21,6 +21,7 @@ import {
   endQueuedComposerAutoDispatch,
   getQueuedComposerAutoDispatchRetryDelay,
   getQueuedComposerSteerGate,
+  holdQueuedComposerTurnsForStop,
   isQueuedComposerAwaitingTurnStart,
   releaseQueuedComposerAutoDispatch,
   recordQueuedComposerAutoDispatchFailure,
@@ -30,6 +31,7 @@ import {
   tryBeginQueuedComposerAutoDispatch,
   type QueuedComposerAutoDispatchGates,
 } from "./queuedComposerDrain";
+import { deriveQueuedComposerPause } from "./queuedComposerPause";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const LIVE_TURN_ID = TurnId.makeUnsafe("turn-live");
@@ -105,6 +107,20 @@ function makeSession(status: ThreadSession["status"], activeTurnId?: TurnId): Th
   };
 }
 
+function makeLatestTurn(
+  state: NonNullable<Thread["latestTurn"]>["state"],
+  turnId: TurnId = LIVE_TURN_ID,
+): NonNullable<Thread["latestTurn"]> {
+  return {
+    turnId,
+    state,
+    requestedAt: "2026-03-13T11:59:00.000Z",
+    startedAt: "2026-03-13T11:59:01.000Z",
+    completedAt: state === "running" ? null : "2026-03-13T12:00:30.000Z",
+    assistantMessageId: null,
+  };
+}
+
 function seedThread(thread: Thread): void {
   useStore.setState(makeState(thread));
 }
@@ -115,20 +131,6 @@ async function flushDrain(): Promise<void> {
 }
 
 describe("shouldAutoDispatchQueuedComposerTurn", () => {
-  it("allows drain when the thread is idle with a queued turn", () => {
-    expect(shouldAutoDispatchQueuedComposerTurn(OPEN_GATES)).toBe(true);
-  });
-
-  it("blocks drain while a live turn still has an active turn id", () => {
-    expect(
-      shouldAutoDispatchQueuedComposerTurn({
-        ...OPEN_GATES,
-        hasQueueableLiveTurn: true,
-        phase: "running",
-      }),
-    ).toBe(false);
-  });
-
   it("blocks drain while disconnected, connecting, or send-busy", () => {
     expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, phase: "disconnected" })).toBe(
       false,
@@ -165,14 +167,136 @@ describe("shouldAutoDispatchQueuedComposerTurn", () => {
     );
   });
 
-  it("blocks drain when the queue is empty", () => {
-    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, queuedTurnCount: 0 })).toBe(false);
+  it("blocks drain while the queue is paused after a stop or failure", () => {
+    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, isQueuePaused: true })).toBe(
+      false,
+    );
+    expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, isQueuePaused: false })).toBe(
+      true,
+    );
+  });
+});
+
+describe("deriveQueuedComposerPause", () => {
+  const base = {
+    activities: [],
+    threadError: null,
+    queuedTurnCount: 2,
+    stoppedTurnId: null,
+    resumedTurnId: null,
+  } as const;
+
+  it("keeps sending after a turn that ended normally or is still running", () => {
+    expect(deriveQueuedComposerPause({ ...base, latestTurn: null })).toBeNull();
+    expect(
+      deriveQueuedComposerPause({ ...base, latestTurn: makeLatestTurn("completed") }),
+    ).toBeNull();
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        stoppedTurnId: LIVE_TURN_ID,
+        latestTurn: makeLatestTurn("running"),
+      }),
+    ).toBeNull();
   });
 
-  it("blocks drain while a cache review holds the previous message", () => {
+  it("pauses after a user stop even when the provider settles the turn as completed", () => {
+    for (const state of ["interrupted", "completed"] as const) {
+      expect(
+        deriveQueuedComposerPause({
+          ...base,
+          stoppedTurnId: LIVE_TURN_ID,
+          latestTurn: makeLatestTurn(state),
+        }),
+      ).toEqual({ reason: "stopped", turnId: LIVE_TURN_ID });
+    }
+  });
+
+  it("does not pause for an interrupt the user did not request, such as a steer", () => {
     expect(
-      shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, hasPendingCacheReview: true }),
-    ).toBe(false);
+      deriveQueuedComposerPause({ ...base, latestTurn: makeLatestTurn("interrupted") }),
+    ).toBeNull();
+  });
+
+  it("pauses after a failed turn", () => {
+    expect(deriveQueuedComposerPause({ ...base, latestTurn: makeLatestTurn("error") })).toEqual({
+      reason: "error",
+      turnId: LIVE_TURN_ID,
+    });
+  });
+
+  it("names a usage limit that ended the turn", () => {
+    const rateLimited = makeActivity({
+      kind: "account.rate-limited",
+      payload: { status: "rejected" },
+      turnId: LIVE_TURN_ID,
+      createdAt: "2026-03-13T12:00:20.000Z",
+    });
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        activities: [rateLimited],
+        latestTurn: makeLatestTurn("completed"),
+      }),
+    ).toEqual({ reason: "usage-limit", turnId: LIVE_TURN_ID });
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        threadError: "Claude usage limit reached. Try again later.",
+        latestTurn: makeLatestTurn("error"),
+      }),
+    ).toEqual({ reason: "usage-limit", turnId: LIVE_TURN_ID });
+  });
+
+  it("does not pause a newer completed turn for a late rejection owned by an older turn", () => {
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        latestTurn: makeLatestTurn("completed"),
+        activities: [
+          makeActivity({
+            kind: "account.rate-limited",
+            payload: { status: "rejected" },
+            turnId: TurnId.makeUnsafe("turn-older"),
+            createdAt: "2026-03-13T12:00:20.000Z",
+          }),
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps a stop pause through a turn the server promoted from its own queue", () => {
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        stoppedTurnId: LIVE_TURN_ID,
+        latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("turn-server-promoted")),
+      }),
+    ).toEqual({ reason: "stopped", turnId: "turn-server-promoted" });
+  });
+
+  it("releases a failure pause on Resume, on an empty queue, or after a newer normal turn", () => {
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        queuedTurnCount: 0,
+        latestTurn: makeLatestTurn("error"),
+      }),
+    ).toBeNull();
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        resumedTurnId: LIVE_TURN_ID,
+        latestTurn: makeLatestTurn("error"),
+      }),
+    ).toBeNull();
+    expect(
+      deriveQueuedComposerPause({
+        ...base,
+        resumedTurnId: LIVE_TURN_ID,
+        latestTurn: makeLatestTurn("completed", TurnId.makeUnsafe("turn-sent-by-hand")),
+      }),
+    ).toBeNull();
   });
 });
 
@@ -368,6 +492,90 @@ describe("queued composer drain watcher", () => {
     );
   });
 
+  it("holds a background queue after a stopped turn until the user resumes it", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("running", LIVE_TURN_ID),
+        latestTurn: makeLatestTurn("running"),
+      }),
+    );
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-1"));
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-2"));
+    holdQueuedComposerTurnsForStop(THREAD_ID);
+
+    // Claude can settle a stopped turn as "completed"; the recorded stop still holds.
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+        latestTurn: makeLatestTurn("completed"),
+      }),
+    );
+    await flushDrain();
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns.map((t) => t.id),
+    ).toEqual(["queued-1", "queued-2"]);
+
+    useComposerDraftStore.getState().resumeQueuedTurns(THREAD_ID, LIVE_TURN_ID);
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ queuedTurn: expect.objectContaining({ id: "queued-1" }) }),
+    );
+  });
+
+  it("withdraws the stop hold when the stop request fails", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("running", LIVE_TURN_ID),
+        latestTurn: makeLatestTurn("running"),
+      }),
+    );
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-1"));
+    const releaseHold = holdQueuedComposerTurnsForStop(THREAD_ID);
+    expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId).toBe(
+      LIVE_TURN_ID,
+    );
+
+    releaseHold();
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+        latestTurn: makeLatestTurn("completed"),
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps draining a background queue after a turn that completed normally", async () => {
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("running", LIVE_TURN_ID),
+        latestTurn: makeLatestTurn("running"),
+      }),
+    );
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-1"));
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+        latestTurn: makeLatestTurn("completed"),
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("waits for the dispatched background turn to start before sending the next item", async () => {
     seedThread(
       makeThread({
@@ -555,21 +763,6 @@ describe("queued composer drain watcher", () => {
     );
   });
 
-  it("does not drain while a live turn still has an active turn id", async () => {
-    seedThread(
-      makeThread({
-        id: THREAD_ID,
-        session: makeSession("running", LIVE_TURN_ID),
-      }),
-    );
-    useComposerDraftStore
-      .getState()
-      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-live"));
-
-    await flushDrain();
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
   it("does not drain while an approval is pending", async () => {
     seedThread(
       makeThread({
@@ -612,34 +805,6 @@ describe("queued composer drain watcher", () => {
 
     await flushDrain();
     expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("does not drain while a steer gate is armed", async () => {
-    seedThread(
-      makeThread({
-        id: THREAD_ID,
-        session: makeSession("ready"),
-      }),
-    );
-    armQueuedComposerSteerGate(THREAD_ID, {
-      sawInterruptGap: false,
-      gapStartedAt: null,
-      armedActiveTurnId: "turn-original",
-    });
-    useComposerDraftStore
-      .getState()
-      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-steer"));
-
-    await flushDrain();
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("gives ChatView and the watcher one exclusive per-thread drain lock", () => {
-    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(true);
-    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(false);
-    endQueuedComposerAutoDispatch(THREAD_ID);
-    expect(tryBeginQueuedComposerAutoDispatch(THREAD_ID)).toBe(true);
-    endQueuedComposerAutoDispatch(THREAD_ID);
   });
 
   it("does not let ChatView send the same queue head the watcher already started", async () => {

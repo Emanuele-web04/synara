@@ -108,10 +108,10 @@ export function ProviderUsageResetCredits({
   } else if (credits === undefined && availableCount > 0) rows.push(undefined);
   const busy = consumeMutation.isPending || confirming;
   const compact = surface === "popover";
-  const rowClass = `flex items-center justify-between gap-2 ${compact ? "text-[length:var(--app-font-size-chat-meta,10px)] leading-tight" : "text-xs"}`;
+  const rowClass = `flex items-center justify-between gap-2 ${compact ? "text-chat-meta leading-tight" : "text-ui leading-snug"}`;
   const subtitleClass = compact
-    ? "text-[length:var(--app-font-size-chat-meta,10px)] leading-tight text-muted-foreground/80"
-    : "text-[11px] text-muted-foreground/80";
+    ? "text-chat-meta leading-tight text-muted-foreground/80"
+    : "text-ui-sm text-muted-foreground/80";
   return (
     <div
       className={`space-y-0.5 border-t border-[color:var(--color-border)] ${compact ? "pt-2" : "pt-3"}`}

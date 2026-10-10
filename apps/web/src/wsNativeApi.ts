@@ -31,9 +31,10 @@ import {
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
+  type ServerKeepAwakeUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
-  type ServerVoiceTranscriptionResult,
+  ServerVoiceTranscriptionResult,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -45,18 +46,25 @@ import {
   type WsWelcomePayload,
   type WsBootstrapNegotiateResult,
   type AutomationStreamEvent,
+  type TodoStreamEvent,
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
   type DeviceEvent,
+  type ProjectAgentStreamEvent,
+  COMPUTER_WS_CHANNELS,
+  COMPUTER_WS_METHODS,
+  type ComputerEvent,
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
+import { Schema } from "effect";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
+import { TASKS_OFFERED_BY_BUILD } from "./tasksSurface";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { withNativeMenuIcons } from "./lib/nativeMenuIcons";
 import { isMacNavigatorPlatform } from "./lib/utils";
-import { WsTransport, type WsThreadStreamFailure } from "./wsTransport";
+import { WsTransport, type WsThreadStreamFailure, type WsShellStreamFailure } from "./wsTransport";
 import { emitWsCompatibilityIssue, emitWsTransportState } from "./wsTransportEvents";
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 
@@ -134,6 +142,7 @@ const serverProviderStatusesUpdatedListeners =
   createListenerRegistry<ServerProviderStatusesUpdatedPayload>();
 const serverMaintenanceUpdatedListeners = createListenerRegistry<ServerLifecycleStreamEvent>();
 const serverSettingsUpdatedListeners = createListenerRegistry<ServerSettingsUpdatedPayload>();
+const serverKeepAwakeUpdatedListeners = createListenerRegistry<ServerKeepAwakeUpdatedPayload>();
 const gitActionProgressListeners = createListenerRegistry<GitActionProgressEvent>();
 const gitWorktreeSetupProgressListeners = createListenerRegistry<GitWorktreeSetupProgressEvent>();
 const projectProvisionProgressListeners =
@@ -158,10 +167,14 @@ function omitNullUserInputAnswers(
 const terminalEventListeners = createListenerRegistry<TerminalEvent>();
 const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
 const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
+const todoEventListeners = createListenerRegistry<TodoStreamEvent>();
 const deviceEventListeners = createListenerRegistry<DeviceEvent>();
+const projectAgentEventListeners = createListenerRegistry<ProjectAgentStreamEvent>();
+const computerEventListeners = createListenerRegistry<ComputerEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
+const shellStreamFailureListeners = createListenerRegistry<WsShellStreamFailure>();
 const threadStreamFailureListeners = createListenerRegistry<WsThreadStreamFailure>();
 const fallbackBrowserStateListeners = createListenerRegistry<ThreadBrowserState>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
@@ -172,17 +185,22 @@ function clearWsNativeApiListeners(): void {
   serverProviderStatusesUpdatedListeners.clear();
   serverMaintenanceUpdatedListeners.clear();
   serverSettingsUpdatedListeners.clear();
+  serverKeepAwakeUpdatedListeners.clear();
   gitActionProgressListeners.clear();
   gitWorktreeSetupProgressListeners.clear();
   projectProvisionProgressListeners.clear();
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
   automationEventListeners.clear();
+  todoEventListeners.clear();
   deviceEventListeners.clear();
+  projectAgentEventListeners.clear();
+  computerEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
   threadStreamFailureListeners.clear();
+  shellStreamFailureListeners.clear();
   fallbackBrowserStateListeners.clear();
 }
 
@@ -250,6 +268,7 @@ async function requestVoiceTranscriptionUpload(
     sampleRateHz: String(input.sampleRateHz),
     durationMs: String(input.durationMs),
     ...(input.threadId ? { threadId: input.threadId } : {}),
+    ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
   });
   const decoded = atob(input.audioBase64);
   const bytes = new Uint8Array(decoded.length);
@@ -260,18 +279,21 @@ async function requestVoiceTranscriptionUpload(
     resolveWsHttpUrl(`${VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH}?${params.toString()}`),
     { method: "POST", credentials: "include", body: bytes },
   );
-  const payload = (await response.json().catch(() => null)) as
-    | ServerVoiceTranscriptionResult
-    | { readonly error?: unknown }
-    | null;
   if (response.status === 404 || response.status === 405) {
+    void response.body?.cancel().catch(() => undefined);
     throw new VoiceUploadRouteUnavailableError();
   }
-  if (!response.ok || !payload || !("text" in payload)) {
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok || !Schema.is(ServerVoiceTranscriptionResult)(payload)) {
     const message =
-      payload && "error" in payload && typeof payload.error === "string"
+      payload !== null &&
+      typeof payload === "object" &&
+      "error" in payload &&
+      typeof payload.error === "string"
         ? payload.error
-        : `Voice transcription failed with status ${response.status}.`;
+        : response.ok
+          ? "The voice transcription service returned an invalid response. Please try again."
+          : `Voice transcription failed with status ${response.status}.`;
     throw new Error(message);
   }
   return payload;
@@ -412,6 +434,19 @@ export function onServerSettingsUpdated(
   });
 }
 
+/** Subscribe to keep-awake (caffeinate) state; replays the latest push. */
+export function onServerKeepAwakeUpdated(
+  listener: (payload: ServerKeepAwakeUpdatedPayload) => void,
+): () => void {
+  const latestKeepAwake =
+    instance?.transport.getLatestPush(WS_CHANNELS.serverKeepAwakeUpdated)?.data ?? null;
+  return subscribeWithReplay({
+    registry: serverKeepAwakeUpdatedListeners,
+    listener,
+    latest: latestKeepAwake,
+  });
+}
+
 /**
  * Subscribe to unrecoverable per-thread stream failures (retries and reconnect
  * exhausted). Lets thread-detail consumers surface a failed hydration state
@@ -421,6 +456,14 @@ export function onThreadStreamFailure(
   listener: (failure: WsThreadStreamFailure) => void,
 ): () => void {
   const unsubscribe = threadStreamFailureListeners.subscribe(listener);
+  return () => void unsubscribe();
+}
+
+/** Subscribe to an exhausted shell stream; retrying it does not reconnect other streams. */
+export function onShellStreamFailure(
+  listener: (failure: WsShellStreamFailure) => void,
+): () => void {
+  const unsubscribe = shellStreamFailureListeners.subscribe(listener);
   return () => void unsubscribe();
 }
 
@@ -434,6 +477,10 @@ export function createWsNativeApi(): NativeApi {
 
   const transport = new WsTransport();
   let unsubscribeDomainEventTransport: (() => void) | null = null;
+  // Multiple consumers (Group panel, settings dialog, future surfaces) subscribe to the
+  // same project-agent event stream; the transport stream stays open until the last one
+  // detaches, so a closed panel can never tear down a dialog's subscription.
+  const projectAgentSubscribeCounts = new Map<string, number>();
   transport.onStateChange((state) => emitWsTransportState(state));
   transport.onCompatibilityIssue((issue) => emitWsCompatibilityIssue(issue), {
     replayCurrent: true,
@@ -454,6 +501,9 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
     serverSettingsUpdatedListeners.emit(message.data);
   });
+  transport.subscribe(WS_CHANNELS.serverKeepAwakeUpdated, (message) => {
+    serverKeepAwakeUpdatedListeners.emit(message.data);
+  });
   transport.subscribe(WS_CHANNELS.gitActionProgress, (message) => {
     gitActionProgressListeners.emit(message.data);
   });
@@ -472,14 +522,29 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
     automationEventListeners.emit(message.data);
   });
+  // Do not open the Tasks stream when the connected server has refused it.
+  if (TASKS_OFFERED_BY_BUILD) {
+    transport.subscribe(WS_CHANNELS.todoEvent, (message) => {
+      todoEventListeners.emit(message.data);
+    });
+  }
   transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
     deviceEventListeners.emit(message.data);
+  });
+  transport.subscribe(WS_CHANNELS.projectAgentEvent, (message) => {
+    projectAgentEventListeners.emit(message.data);
+  });
+  transport.subscribe(COMPUTER_WS_CHANNELS.event, (message) => {
+    computerEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
   });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
     orchestrationThreadEventListeners.emit(message.data);
+  });
+  transport.onShellStreamFailure((failure) => {
+    shellStreamFailureListeners.emit(failure);
   });
   transport.onThreadStreamFailure((failure) => {
     threadStreamFailureListeners.emit(failure);
@@ -625,16 +690,20 @@ export function createWsNativeApi(): NativeApi {
       onActionProgress: gitActionProgressListeners.subscribe,
       onWorktreeSetupProgress: gitWorktreeSetupProgressListeners.subscribe,
     },
+    githubInbox: {
+      list: (input) => transport.request(WS_METHODS.githubInboxList, input),
+      issueDetail: (input) => transport.request(WS_METHODS.githubInboxIssueDetail, input),
+      issueComment: (input) => transport.request(WS_METHODS.githubInboxIssueComment, input),
+    },
     pullRequests: {
-      list: (input) => transport.request(WS_METHODS.pullRequestsList, input),
-      reviewRequestCount: (input) =>
-        transport.request(WS_METHODS.pullRequestsReviewRequestCount, input),
       detail: (input) => transport.request(WS_METHODS.pullRequestsDetail, input),
       diff: (input) => transport.request(WS_METHODS.pullRequestsDiff, input),
       action: (input) =>
         transport.request(WS_METHODS.pullRequestsAction, input, { timeoutMs: null }),
       comment: (input) => transport.request(WS_METHODS.pullRequestsComment, input),
       setPinned: (input) => transport.request(WS_METHODS.pullRequestsSetPinned, input),
+      getAutoFix: (input) => transport.request(WS_METHODS.pullRequestsGetAutoFix, input),
+      setAutoFix: (input) => transport.request(WS_METHODS.pullRequestsSetAutoFix, input),
     },
     contextMenu: {
       show: async <T extends string>(
@@ -704,7 +773,11 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverRevokeExternalMcpIntegration, input),
       refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
         transport.request(WS_METHODS.serverRefreshExternalMcpPairing, input),
-      refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
+      // Claude runs sequential CLI and auth probes, so a refresh can exceed the
+      // generic 60-second RPC deadline. Keep this bounded while allowing slow
+      // probes to finish; onboarding shows an error if this deadline expires.
+      refreshProviders: () =>
+        transport.request(WS_METHODS.serverRefreshProviders, undefined, { timeoutMs: 180_000 }),
       // Provider updates run up to 2 minutes server-side; callers wrap this in
       // withProviderUpdateTimeout, which owns the client-side watchdog.
       updateProvider: (input) =>
@@ -719,6 +792,8 @@ export function createWsNativeApi(): NativeApi {
       consumeCodexResetCredit: (input) =>
         transport.request(WS_METHODS.serverConsumeCodexResetCredit, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      readThreadDiagnostics: (input) =>
+        transport.request(WS_METHODS.serverReadThreadDiagnostics, input),
       generateThreadRecap: (input) =>
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,
@@ -739,11 +814,13 @@ export function createWsNativeApi(): NativeApi {
         }
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+      editKeybindings: (input) => transport.request(WS_METHODS.serverEditKeybindings, input),
     },
     stats: {
       getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
       getProfileTokenStats: (input) =>
         transport.request(WS_METHODS.statsGetProfileTokenStats, input),
+      getRecap: (input) => transport.request(WS_METHODS.statsGetRecap, input),
     },
     provider: {
       getComposerCapabilities: (input) =>
@@ -765,12 +842,18 @@ export function createWsNativeApi(): NativeApi {
       getShellSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot),
       getThreadDetailSnapshot: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot, input),
+      searchThreads: (input) => transport.request(ORCHESTRATION_WS_METHODS.searchThreads, input),
       dispatchCommand: (command) => {
         return transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
           command: omitNullUserInputAnswers(command),
         });
       },
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
+      listProjectImports: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.listProjectImports, input),
+      importProject: (input) => transport.request(ORCHESTRATION_WS_METHODS.importProject, input),
+      loadProjectImportHistory: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.loadProjectImportHistory, input),
       regenerateThreadTitle: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.regenerateThreadTitle, input, {
           timeoutMs: null,
@@ -817,6 +900,65 @@ export function createWsNativeApi(): NativeApi {
       onShellEvent: orchestrationShellEventListeners.subscribe,
       onThreadEvent: orchestrationThreadEventListeners.subscribe,
     },
+    projectAgent: {
+      getOverview: (input) => transport.request(WS_METHODS.projectAgentGetOverview, input),
+      listSummaries: (input = {}) => transport.request(WS_METHODS.projectAgentListSummaries, input),
+      configure: (input) => transport.request(WS_METHODS.projectAgentConfigure, input),
+      linkProject: (input) => transport.request(WS_METHODS.projectAgentLinkProject, input),
+      unlinkProject: (input) => transport.request(WS_METHODS.projectAgentUnlinkProject, input),
+      pauseGroup: (input) => transport.request(WS_METHODS.projectAgentPauseGroup, input),
+      resumeGroup: (input) => transport.request(WS_METHODS.projectAgentResumeGroup, input),
+      archiveGroup: (input) => transport.request(WS_METHODS.projectAgentArchiveGroup, input),
+      unarchiveGroup: (input) => transport.request(WS_METHODS.projectAgentUnarchiveGroup, input),
+      restartCoordinator: (input) =>
+        transport.request(WS_METHODS.projectAgentRestartCoordinator, input),
+      deleteGroup: (input) => transport.request(WS_METHODS.projectAgentDeleteGroup, input),
+      resolveWorker: (input) => transport.request(WS_METHODS.projectAgentResolveWorker, input),
+      startGoal: (input) => transport.request(WS_METHODS.projectAgentStartGoal, input),
+      updateGoal: (input) => transport.request(WS_METHODS.projectAgentUpdateGoal, input),
+      pauseGoal: (input) => transport.request(WS_METHODS.projectAgentPauseGoal, input),
+      resumeGoal: (input) => transport.request(WS_METHODS.projectAgentResumeGoal, input),
+      stopGoal: (input) => transport.request(WS_METHODS.projectAgentStopGoal, input),
+      listTasks: (input) => transport.request(WS_METHODS.projectAgentListTasks, input),
+      createTask: (input) => transport.request(WS_METHODS.projectAgentCreateTask, input),
+      updateTask: (input) => transport.request(WS_METHODS.projectAgentUpdateTask, input),
+      listEvidence: (input) => transport.request(WS_METHODS.projectAgentListEvidence, input),
+      listThreadIndex: (input) => transport.request(WS_METHODS.projectAgentListThreadIndex, input),
+      excludeThread: (input) => transport.request(WS_METHODS.projectAgentExcludeThread, input),
+      backfillSummaries: (input) =>
+        transport.request(WS_METHODS.projectAgentBackfillSummaries, input),
+      listActivity: (input) => transport.request(WS_METHODS.projectAgentListActivity, input),
+      listDocuments: (input) => transport.request(WS_METHODS.projectAgentListDocuments, input),
+      readDocument: (input) => transport.request(WS_METHODS.projectAgentReadDocument, input),
+      writeDocument: (input) => transport.request(WS_METHODS.projectAgentWriteDocument, input),
+      exportDocuments: (input) => transport.request(WS_METHODS.projectAgentExportDocuments, input),
+      refreshDigest: (input) => transport.request(WS_METHODS.projectAgentRefreshDigest, input),
+      library: {
+        list: (input) => transport.request(WS_METHODS.projectAgentLibraryList, input),
+        mkdir: (input) => transport.request(WS_METHODS.projectAgentLibraryMkdir, input),
+        rename: (input) => transport.request(WS_METHODS.projectAgentLibraryRename, input),
+        delete: (input) => transport.request(WS_METHODS.projectAgentLibraryDelete, input),
+        history: (input) => transport.request(WS_METHODS.projectAgentLibraryHistory, input),
+        restore: (input) => transport.request(WS_METHODS.projectAgentLibraryRestore, input),
+        status: (input) => transport.request(WS_METHODS.projectAgentLibraryStatus, input),
+      },
+      subscribe: async (input) => {
+        const count = (projectAgentSubscribeCounts.get(input.projectId) ?? 0) + 1;
+        projectAgentSubscribeCounts.set(input.projectId, count);
+        if (count > 1) return;
+        await transport.request(WS_METHODS.subscribeProjectAgentEvents, input);
+      },
+      unsubscribe: async (input) => {
+        const count = (projectAgentSubscribeCounts.get(input.projectId) ?? 0) - 1;
+        if (count > 0) {
+          projectAgentSubscribeCounts.set(input.projectId, count);
+          return;
+        }
+        projectAgentSubscribeCounts.delete(input.projectId);
+        await transport.unsubscribeProjectAgentEvents(input.projectId);
+      },
+      onEvent: projectAgentEventListeners.subscribe,
+    },
     automation: {
       list: (input) => transport.request(WS_METHODS.automationList, input),
       getMemory: (input) => transport.request(WS_METHODS.automationGetMemory, input),
@@ -829,6 +971,13 @@ export function createWsNativeApi(): NativeApi {
       archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
       resolveProposal: (input) => transport.request(WS_METHODS.automationResolveProposal, input),
       onEvent: automationEventListeners.subscribe,
+    },
+    todo: {
+      list: () => transport.request(WS_METHODS.todoList, {}),
+      create: (input) => transport.request(WS_METHODS.todoCreate, input),
+      update: (input) => transport.request(WS_METHODS.todoUpdate, input),
+      delete: (input) => transport.request(WS_METHODS.todoDelete, input),
+      onEvent: todoEventListeners.subscribe,
     },
     device: {
       list: (input) => transport.request(DEVICE_WS_METHODS.list, input),
@@ -857,6 +1006,19 @@ export function createWsNativeApi(): NativeApi {
       scrollToElement: (input) =>
         transport.request(DEVICE_WS_METHODS.scrollToElement, input, { timeoutMs: null }),
       onEvent: deviceEventListeners.subscribe,
+    },
+    computer: {
+      getStatus: (input) => transport.request(COMPUTER_WS_METHODS.getStatus, input),
+      getAuditHistory: (input) => transport.request(COMPUTER_WS_METHODS.getAuditHistory, input),
+      getState: (input) => transport.request(COMPUTER_WS_METHODS.getState, input),
+      provision: (input) =>
+        transport.request(COMPUTER_WS_METHODS.provision, input, { timeoutMs: null }),
+      getThreadState: (input) => transport.request(COMPUTER_WS_METHODS.getThreadState, input),
+      setControlEnabled: (input) => transport.request(COMPUTER_WS_METHODS.setControlEnabled, input),
+      inputClick: (input) => transport.request(COMPUTER_WS_METHODS.inputClick, input),
+      inputScroll: (input) => transport.request(COMPUTER_WS_METHODS.inputScroll, input),
+      inputKey: (input) => transport.request(COMPUTER_WS_METHODS.inputKey, input),
+      onEvent: computerEventListeners.subscribe,
     },
     browser: {
       ...(window.desktopBridge?.browser?.vault

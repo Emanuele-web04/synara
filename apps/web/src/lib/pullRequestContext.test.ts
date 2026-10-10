@@ -5,7 +5,6 @@ import {
   extractTrailingPullRequestContexts,
   formatPullRequestContextTitleSeed,
   normalizePullRequestContexts,
-  pullRequestContextDedupKey,
   type PullRequestContextDraft,
 } from "./pullRequestContext";
 
@@ -38,17 +37,6 @@ describe("normalizePullRequestContexts", () => {
   });
 });
 
-describe("pullRequestContextDedupKey", () => {
-  it("keys on scope and pull request, not on the card id", () => {
-    expect(pullRequestContextDedupKey(makeCard({ id: "a" }))).toBe(
-      pullRequestContextDedupKey(makeCard({ id: "b" })),
-    );
-    expect(pullRequestContextDedupKey(makeCard({ scope: "comments" }))).not.toBe(
-      pullRequestContextDedupKey(makeCard({ scope: "checks" })),
-    );
-  });
-});
-
 describe("appendPullRequestContextsToPrompt / extractTrailingPullRequestContexts", () => {
   it("appends a trailing block and round-trips the card", () => {
     const message = appendPullRequestContextsToPrompt("Please handle this.", [makeCard()]);
@@ -62,6 +50,7 @@ describe("appendPullRequestContextsToPrompt / extractTrailingPullRequestContexts
       {
         index: 1,
         scope: "checks",
+        itemKind: "pullRequest",
         prNumber: 321,
         prUrl: "https://github.com/example/synara/pull/321",
         title: "1 failing check",
@@ -106,10 +95,43 @@ describe("appendPullRequestContextsToPrompt / extractTrailingPullRequestContexts
   });
 });
 
-describe("formatPullRequestContextTitleSeed", () => {
-  it("names the single card and falls back to the PR for several", () => {
-    expect(formatPullRequestContextTitleSeed([])).toBeNull();
-    expect(formatPullRequestContextTitleSeed([makeCard()])).toBe("1 failing check on PR #321");
-    expect(formatPullRequestContextTitleSeed([makeCard(), makeCard({ id: "2" })])).toBe("PR #321");
+describe("issue cards", () => {
+  const issueCard = makeCard({
+    id: "issue-card",
+    scope: "reference",
+    itemKind: "issue",
+    prNumber: 42,
+    prUrl: "https://github.com/example/synara/issues/42",
+    title: "#42 Crash on launch",
+    subtitle: "Issue in example/synara",
+    text: "Issue #42 — Crash on launch.",
+  });
+
+  it("round-trips the issue kind through the trailing block", () => {
+    const message = appendPullRequestContextsToPrompt("What is the impact?", [
+      issueCard,
+      makeCard(),
+    ]);
+    const extracted = extractTrailingPullRequestContexts(message);
+    expect(extracted.pullRequestContexts.map((context) => context.itemKind)).toEqual([
+      "issue",
+      "pullRequest",
+    ]);
+    expect(extracted.pullRequestContexts[0]).toMatchObject({
+      prNumber: 42,
+      title: "#42 Crash on launch",
+    });
+  });
+
+  it("keeps pull request blocks free of a kind so older transcripts parse the same", () => {
+    const message = appendPullRequestContextsToPrompt("", [makeCard()]);
+    expect(message).not.toContain("itemKind");
+    expect(normalizePullRequestContexts([issueCard])[0]?.itemKind).toBe("issue");
+    expect(normalizePullRequestContexts([makeCard()])[0]).not.toHaveProperty("itemKind");
+  });
+
+  it("titles a thread seeded by an issue card with the issue, not a PR", () => {
+    expect(formatPullRequestContextTitleSeed([issueCard])).toBe("#42 Crash on launch on Issue #42");
+    expect(formatPullRequestContextTitleSeed([issueCard, makeCard()])).toBe("Issue #42");
   });
 });

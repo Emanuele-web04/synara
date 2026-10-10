@@ -1,6 +1,17 @@
 import type { ProviderKind, RuntimeMode } from "@synara/contracts";
 
 const AUTO_RUNTIME_MODE_PROVIDERS = new Set<ProviderKind>(["codex", "claudeAgent"]);
+const LOCAL_AUTO_RUNTIME_MODE_PROVIDERS = new Set<ProviderKind>([
+  "codex",
+  "claudeAgent",
+  "opencode",
+  "cursor",
+  "grok",
+  "devin",
+  "droid",
+  "pi",
+  "antigravity",
+]);
 const RUNTIME_MODE_PRIVILEGE = {
   "approval-required": 0,
   auto: 1,
@@ -10,6 +21,14 @@ const RUNTIME_MODE_PRIVILEGE = {
 
 export function providerSupportsAutoRuntimeMode(provider: ProviderKind): boolean {
   return AUTO_RUNTIME_MODE_PROVIDERS.has(provider);
+}
+
+export function providerSupportsLocalAutoRuntimeMode(provider: ProviderKind): boolean {
+  return LOCAL_AUTO_RUNTIME_MODE_PROVIDERS.has(provider);
+}
+
+export function unsupportedLocalAutoRuntimeModeMessage(provider: ProviderKind): string {
+  return `Provider "${provider}" does not support local Auto tool approvals.`;
 }
 
 export function unsupportedAutoRuntimeModeMessage(provider: ProviderKind): string {
@@ -29,6 +48,11 @@ export function autoRuntimeModeSelectionIssue(input: {
     readonly supportsAutoMode?: boolean | undefined;
   };
 }): string | null {
+  if (input.runtimeMode === "auto-local") {
+    return providerSupportsLocalAutoRuntimeMode(input.modelSelection.provider)
+      ? null
+      : unsupportedLocalAutoRuntimeModeMessage(input.modelSelection.provider);
+  }
   if (input.runtimeMode !== "auto") {
     return null;
   }
@@ -60,7 +84,8 @@ export function normalizeRuntimeModeForProvider(
   runtimeMode: RuntimeMode,
   provider: ProviderKind,
 ): RuntimeMode {
-  return runtimeMode === "auto" && !providerSupportsAutoRuntimeMode(provider)
+  return (runtimeMode === "auto" && !providerSupportsAutoRuntimeMode(provider)) ||
+    (runtimeMode === "auto-local" && !providerSupportsLocalAutoRuntimeMode(provider))
     ? "approval-required"
     : runtimeMode;
 }
