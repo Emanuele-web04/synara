@@ -1,5 +1,5 @@
 // FILE: subagentPresentation.ts
-// Purpose: Normalizes subagent identity, nickname colors, and status labels for sidebar/chat UI.
+// Purpose: Normalizes subagent identity and status (labels, tones, dots) for sidebar/chat UI.
 // Exports: Shared presentation helpers consumed by sidebar rows, chat cards, and thread hydration.
 
 import {
@@ -331,7 +331,7 @@ export function resolveSubagentPresentation(input: {
   title?: string | null | undefined;
   fallbackId?: string | null | undefined;
   // Shown when no nickname, role, or usable title is known (defaults to
-  // "Subagent"); fallbackId only seeds the accent color, never the label.
+  // "Subagent"). Provider ids are never shown as a label.
   placeholderLabel?: string | null | undefined;
 }): SubagentPresentation {
   const explicitNickname = normalizeWhitespace(input.nickname);
@@ -353,8 +353,7 @@ export function resolveSubagentPresentation(input: {
   const primaryLabel =
     identityLabel ?? normalizeWhitespace(input.placeholderLabel) ?? DEFAULT_SUBAGENT_LABEL;
   const fullLabel = role && nickname ? `${nickname} [${role}]` : primaryLabel;
-  // Anonymous rows keep the color their provider id always seeded, so siblings
-  // sharing a placeholder label stay distinguishable.
+
   const accentSeed =
     identityLabel ?? fallbackAccentSeed(normalizeWhitespace(input.fallbackId)) ?? primaryLabel;
 
@@ -493,7 +492,8 @@ export function formatSubagentModelLabel(model: string | null | undefined): stri
 
 // Status is the only hue in the agent panels: the dot always carries it, the
 // text echoes it only while live (running) or when something went wrong
-// (failed); terminal/neutral states read as plain muted text.
+// (failed); terminal/neutral states read as plain muted text. Light themes take
+// the darker shade so the text stays readable on a white surface.
 export function subagentStatusTextToneClassName(
   statusKind: SubagentStatusKind | null | undefined,
 ): string {
@@ -505,6 +505,64 @@ export function subagentStatusTextToneClassName(
     default:
       return "text-muted-foreground/55";
   }
+}
+
+// The past-tense outcome word on a finished subagent row ("Done", "Stopped by
+// you") also names its state, so it takes the dot's hue in a readable shade.
+export function subagentOutcomeTextToneClassName(
+  statusKind: SubagentStatusKind | null | undefined,
+): string {
+  switch (statusKind) {
+    case "completed":
+      return "text-emerald-700 dark:text-emerald-300/85";
+    case "stopped":
+      return "text-amber-700 dark:text-amber-300/85";
+    default:
+      return subagentStatusTextToneClassName(statusKind);
+  }
+}
+
+interface SubagentThreadStatusSource {
+  error?: string | null | undefined;
+  session?: { status: string } | null | undefined;
+  latestTurn?: { state: string; completedAt?: string | null } | null | undefined;
+  hasLiveTailWork?: boolean | undefined;
+}
+
+// A child thread's own state, for places that know only the thread (sidebar
+// rows, nested subagents): live work wins, then the latest turn's outcome. An
+// interrupted turn is a stopped subagent; a thread that never ran has none. A
+// "running" turn only counts while the child has a session: Codex children
+// have none and their turns never close, so it would read as running forever.
+export function resolveSubagentThreadStatusKind(
+  thread: SubagentThreadStatusSource,
+): SubagentStatusKind | null {
+  const sessionStatus = thread.session?.status;
+  const latestTurn = thread.latestTurn ?? null;
+  if (
+    thread.hasLiveTailWork === true ||
+    sessionStatus === "running" ||
+    (latestTurn?.state === "running" &&
+      !latestTurn.completedAt &&
+      sessionStatus !== undefined &&
+      sessionStatus !== "ready" &&
+      sessionStatus !== "closed")
+  ) {
+    return "running";
+  }
+  if (sessionStatus === "connecting") {
+    return "queued";
+  }
+  if (thread.error || sessionStatus === "error" || latestTurn?.state === "error") {
+    return "failed";
+  }
+  if (latestTurn?.state === "interrupted") {
+    return "stopped";
+  }
+  if (latestTurn?.state === "completed") {
+    return "completed";
+  }
+  return null;
 }
 
 export function subagentStatusDotClassName(

@@ -179,6 +179,52 @@ describe("computeStableMessagesTimelineRows", () => {
     result: [],
   });
 
+  it.each(["failure", "settledAt", "nextLaunchedAt"] as const)(
+    "refreshes a subagent card when %s arrives",
+    (field) => {
+      const member = {
+        key: "a",
+        launchedAt: "2026-10-10T00:00:00Z",
+        latestStep: null,
+        outcome: null,
+        failure: null,
+        settledAt: null,
+      };
+      const row: WorkTimelineRow = {
+        kind: "work",
+        id: "run",
+        createdAt: member.launchedAt,
+        groupedEntries: [
+          {
+            id: "run",
+            createdAt: member.launchedAt,
+            label: "Subagents",
+            tone: "info",
+            subagentRun: { members: [member] },
+          },
+        ],
+      };
+      const first = computeStableMessagesTimelineRows([row], emptyStableRows());
+      const next: WorkTimelineRow = {
+        ...row,
+        groupedEntries: [
+          {
+            ...row.groupedEntries[0]!,
+            subagentRun: {
+              members: [
+                {
+                  ...member,
+                  [field]: field === "failure" ? "Launch failed" : "2026-10-10T00:00:08Z",
+                },
+              ],
+            },
+          },
+        ],
+      };
+      expect(computeStableMessagesTimelineRows([next], first).result[0]).toBe(next);
+    },
+  );
+
   it("replaces work rows when later tool metadata adds visible details", () => {
     const firstRows: MessagesTimelineRow[] = [
       {
@@ -828,6 +874,54 @@ describe("deriveMessagesTimelineRows", () => {
 
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
+
+  it("keeps adjacent child groups visible after parent completion without crossing narration", () => {
+    const launch = (id: string, child: string, time: string): TimelineEntry => ({
+      kind: "work",
+      id,
+      createdAt: time,
+      entry: {
+        id,
+        createdAt: time,
+        turnId: TurnId.makeUnsafe("t1"),
+        label: "Subagents",
+        tone: "info",
+        subagents: [{ threadId: child, rawStatus: "running" }],
+        subagentRun: {
+          members: [
+            {
+              key: child,
+              launchedAt: time,
+              latestStep: null,
+              outcome: null,
+              failure: null,
+              settledAt: null,
+            },
+          ],
+        },
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        launch("a", "a", "2026-01-01T00:00:01Z"),
+        launch("b", "b", "2026-01-01T00:00:02Z"),
+        assistantEntry("narration", "2026-01-01T00:00:03Z", { turnId: "t1", text: "Next task" }),
+        launch("c", "c", "2026-01-01T00:00:04Z"),
+        assistantEntry("done", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "Done",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+    expect(
+      rows
+        .filter((row) => row.kind === "work")
+        .map((row) => row.groupedEntries.map((entry) => entry.id)),
+    ).toEqual([["a", "b"], ["c"]]);
+  });
 
   it("keeps async question cards visible after their originating turn settles", () => {
     const question = assistantEntry("question", "2026-01-01T00:00:01Z", {
