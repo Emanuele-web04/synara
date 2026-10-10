@@ -72,6 +72,10 @@ import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
 import { emitWsTransportState } from "../wsTransportEvents";
 import { dispatchKanbanDraftThread } from "../lib/kanbanDispatch";
+import {
+  endQueuedComposerAutoDispatch,
+  tryBeginQueuedComposerAutoDispatch,
+} from "../lib/queuedComposerDrain";
 import { useKanbanUiStore } from "../kanbanUiStore";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
@@ -9105,12 +9109,15 @@ describe("ChatView transcript geometry (full app)", () => {
     const sentQueuedPrompt = () =>
       wsRequests.some((request) => turnStartText(request)?.includes(queuedPrompt) === true);
 
-    async function mountPausedQueue() {
-      const baseSnapshot = createSnapshotForTargetUser({
-        targetMessageId: "msg-user-paused-queue-target" as MessageId,
-        targetText: "paused queue target",
-        sessionStatus: "ready",
-      });
+    async function mountPausedQueue(kind: "chat" | "plan-follow-up" = "chat") {
+      const baseSnapshot =
+        kind === "plan-follow-up"
+          ? createSnapshotWithSettledPlanAwaitingFollowUp()
+          : createSnapshotForTargetUser({
+              targetMessageId: "msg-user-paused-queue-target" as MessageId,
+              targetText: "paused queue target",
+              sessionStatus: "ready",
+            });
       const snapshot: OrchestrationReadModel = {
         ...baseSnapshot,
         threads: baseSnapshot.threads.map((thread) =>
@@ -9131,9 +9138,9 @@ describe("ChatView transcript geometry (full app)", () => {
         ),
       };
       const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
-      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
+      const queuedTurn = {
         id: "queued-turn-paused",
-        kind: "chat",
+        kind: "chat" as const,
         createdAt: NOW_ISO,
         previewText: queuedPrompt,
         prompt: queuedPrompt,
@@ -9147,14 +9154,25 @@ describe("ChatView transcript geometry (full app)", () => {
         pullRequestContexts: [],
         skills: [],
         mentions: [],
-        selectedProvider: "codex",
+        selectedProvider: "codex" as const,
         selectedModel: "gpt-5",
         selectedPromptEffort: null,
-        modelSelection: { provider: "codex", model: "gpt-5" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        envMode: "local",
-      });
+        modelSelection: { provider: "codex" as const, model: "gpt-5" },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        envMode: "local" as const,
+      };
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(
+          THREAD_ID,
+          kind === "plan-follow-up"
+            ? { ...queuedTurn, kind, text: queuedPrompt, interactionMode: "plan" }
+            : queuedTurn,
+        );
+      if (kind === "plan-follow-up") {
+        useComposerDraftStore.getState().setInteractionMode(THREAD_ID, "plan");
+      }
       // Same tick as the enqueue: the Stop action recorded this turn before it settled.
       useComposerDraftStore.getState().pauseQueuedTurnsAfterStop(THREAD_ID, stoppedTurnId);
 
@@ -9196,39 +9214,181 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     });
 
-    it("sends a message typed by hand first and releases the stop pause", async () => {
-      const restoreNativeApi = installDeterministicSendNativeApi();
-      const mounted = await mountPausedQueue();
-      const manualPrompt = "message typed while the queue is paused";
-      try {
-        useComposerDraftStore.getState().setPrompt(THREAD_ID, manualPrompt);
-        const composerEditor = await waitForComposerEditor();
-        await vi.waitFor(() => expect(composerEditor.textContent ?? "").toContain(manualPrompt), {
-          timeout: 8_000,
-          interval: 16,
-        });
-        const sendButton = await waitForSendButton();
-        await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
-          timeout: 8_000,
-          interval: 16,
-        });
-        sendButton.click();
+    it.each(["chat", "plan-follow-up"] as const)(
+      "sends a %s typed by hand first and releases the stop pause",
+      async (kind) => {
+        const restoreNativeApi = installDeterministicSendNativeApi();
+        const mounted = await mountPausedQueue(kind);
+        const manualPrompt = "message typed while the queue is paused";
+        try {
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, manualPrompt);
+          const composerEditor = await waitForComposerEditor();
+          await vi.waitFor(() => expect(composerEditor.textContent ?? "").toContain(manualPrompt), {
+            timeout: 8_000,
+            interval: 16,
+          });
+          if (kind === "plan-follow-up") {
+            await userEvent.click(composerEditor);
+            await userEvent.keyboard("{Enter}");
+          } else {
+            const sendButton = await waitForSendButton();
+            await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+              timeout: 8_000,
+              interval: 16,
+            });
+            sendButton.click();
+          }
 
-        await vi.waitFor(
-          () => {
+          await vi.waitFor(() => {
             expect(
               wsRequests.some((request) => turnStartText(request)?.includes(manualPrompt) === true),
             ).toBe(true);
-            expect(
-              useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId ??
-                null,
-            ).toBe(null);
-          },
-          { timeout: 8_000, interval: 16 },
+          });
+          if (kind === "plan-follow-up") {
+            await page.screenshot({
+              path: "../../../../output/playwright/queue-plan-resume.png",
+            });
+          }
+          await vi.waitFor(
+            () => {
+              expect(
+                wsRequests.some(
+                  (request) => turnStartText(request)?.includes(manualPrompt) === true,
+                ),
+              ).toBe(true);
+              expect(
+                useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId ??
+                  null,
+              ).toBe(null);
+            },
+            { timeout: 8_000, interval: 16 },
+          );
+          // The typed message goes first; the queued one waits for that turn to end.
+          expect(sentQueuedPrompt()).toBe(false);
+        } finally {
+          await mounted.cleanup();
+          restoreNativeApi();
+        }
+      },
+    );
+
+    it("preserves the last queued item and stop hold when Steer fails", async () => {
+      let releaseSend!: () => void;
+      const sendBarrier = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi({
+        beforeTurnStart: () => sendBarrier,
+        rejectTurnStart: true,
+      });
+      const mounted = await mountPausedQueue();
+      const originalQueue =
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]!.queuedTurns;
+      try {
+        const steer = page.getByRole("button", { name: "Steer", exact: true }).first();
+        await steer.click();
+        await vi.waitFor(() => expect(sentQueuedPrompt()).toBe(true));
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns).toEqual(
+          originalQueue,
         );
-        // The typed message goes first; the queued one waits for that turn to end.
-        expect(sentQueuedPrompt()).toBe(false);
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId,
+        ).toBe(stoppedTurnId);
+        const acquired = tryBeginQueuedComposerAutoDispatch(THREAD_ID);
+        if (acquired) endQueuedComposerAutoDispatch(THREAD_ID);
+        expect(acquired).toBe(false);
+        await steer.click();
+        expect(
+          wsRequests.filter((request) => turnStartText(request)?.includes(queuedPrompt)),
+        ).toHaveLength(1);
+        releaseSend();
+        await vi.waitFor(() =>
+          expect(document.body.textContent).toContain("Turn start failed for test."),
+        );
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns).toEqual(
+          originalQueue,
+        );
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId,
+        ).toBe(stoppedTurnId);
       } finally {
+        releaseSend();
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    });
+
+    it("releases the stop hold after a queued plan follow-up Steer succeeds", async () => {
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      const mounted = await mountPausedQueue("plan-follow-up");
+      const queuedTurn =
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]!.queuedTurns[0]!;
+      useComposerDraftStore
+        .getState()
+        .enqueueQueuedTurn(THREAD_ID, { ...queuedTurn, id: "remaining-plan-follow-up" });
+      try {
+        await page.getByRole("button", { name: "Steer", exact: true }).first().click();
+        await vi.waitFor(() => {
+          expect(
+            useComposerDraftStore
+              .getState()
+              .draftsByThreadId[THREAD_ID]?.queuedTurns.map((turn) => turn.id),
+          ).toEqual(["remaining-plan-follow-up"]);
+          expect(
+            useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId ??
+              null,
+          ).toBe(null);
+        });
+        expect(
+          wsRequests.filter((request) => turnStartText(request)?.includes(queuedPrompt)),
+        ).toHaveLength(1);
+      } finally {
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    });
+
+    it("preserves a newer Stop and a replacement queued item while Steer completes", async () => {
+      let releaseSend!: () => void;
+      const sendBarrier = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi({
+        beforeTurnStart: () => sendBarrier,
+      });
+      const mounted = await mountPausedQueue();
+      const queuedTurn =
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]!.queuedTurns[0]!;
+      const newerStoppedTurnId = TurnId.makeUnsafe("newer-stop-while-steering");
+      try {
+        await page.getByRole("button", { name: "Steer", exact: true }).first().click();
+        await vi.waitFor(() => expect(sentQueuedPrompt()).toBe(true));
+        useComposerDraftStore
+          .getState()
+          .enqueueQueuedTurn(THREAD_ID, { ...queuedTurn, id: "edited-queued-turn" });
+        useComposerDraftStore.getState().removeQueuedTurn(THREAD_ID, queuedTurn.id);
+        useComposerDraftStore.getState().pauseQueuedTurnsAfterStop(THREAD_ID, newerStoppedTurnId);
+        releaseSend();
+        await vi.waitFor(() => {
+          const acquired = tryBeginQueuedComposerAutoDispatch(THREAD_ID);
+          if (acquired) endQueuedComposerAutoDispatch(THREAD_ID);
+          expect(acquired).toBe(true);
+        });
+        // Let the accepted turn and its draft effects settle before inspecting newer controls.
+        await waitForLayout();
+        expect(
+          useComposerDraftStore
+            .getState()
+            .draftsByThreadId[THREAD_ID]?.queuedTurns.map((turn) => turn.id),
+        ).toEqual(["edited-queued-turn"]);
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queueStoppedTurnId,
+        ).toBe(newerStoppedTurnId);
+        expect(
+          wsRequests.filter((request) => turnStartText(request)?.includes(queuedPrompt)),
+        ).toHaveLength(1);
+      } finally {
+        releaseSend();
         await mounted.cleanup();
         restoreNativeApi();
       }
