@@ -1362,25 +1362,15 @@ export function BrowserPanel({
           slotHeight: element.clientHeight,
         });
       }
-      const bounds = obscuredByOverlay
-        ? null
-        : (() => {
-            if (rect.width <= 0 || rect.height <= 0) {
-              return null;
-            }
-            // The native view is positioned in window DIPs, which only equal the CSS
-            // pixels measured above while the shell sits at 100% zoom. Convert, or a
-            // zoomed shell leaves the browser surface sized 1/zoom off its DOM slot.
-            const zoom = readDesktopZoomFactor();
-            return resolveDesktopDipRectFromCssRect(
-              { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-              zoom,
-            );
-          })();
-      const surface = isFloatingMode || !usesNativeRuntime ? "renderer" : "native";
-      // Fit the 1280px desktop page into the floating card without reflowing it
-      // as a tiny mobile viewport (which looks zoomed in).
-      const pageZoomFactor = isFloatingMode ? resolveBrowserFloatingZoomFactor(rect.width) : 1;
+      const presentation = resolveBrowserRuntimePresentation({
+        native: usesNativeRuntime,
+        floating: isFloatingMode,
+        rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+        desktopZoom: readDesktopZoomFactor(),
+      });
+      const bounds = obscuredByOverlay || rect.width <= 0 || rect.height <= 0 ? null : presentation.bounds;
+      const surface = presentation.surface;
+      const pageZoomFactor = presentation.pageZoomFactor;
       applyBrowserWebviewPageZoom(webview, pageZoomFactor);
 
       const nextKey = bounds
@@ -2187,7 +2177,8 @@ export function BrowserPanel({
   }
 
   return (
-    <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
+    <div className="contents" data-browser-panel="true">
+      <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
       <div className="flex min-h-0 flex-1 flex-col">
         {!isFloatingMode ? (
           <BrowserTabStrip
@@ -2226,6 +2217,18 @@ export function BrowserPanel({
           {isLiveRuntime && browserPageError ? (
             <BrowserRuntimeError message={browserPageError} onReload={onReloadActiveTab} />
           ) : null}
+          {(isFloatingMode || isBrowserSurfaceOccluded) &&
+          usesNativeRuntime &&
+          !showLocalServersHome &&
+          !browserPageError &&
+          previewFrame?.tabId === activeTabId ? (
+            <img
+              src={previewFrame.src}
+              alt="Browser preview"
+              draggable={false}
+              className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
+            />
+          ) : null}
           {showLocalServersHome ? (
             <BrowserLocalServersHome
               activeTabId={activeTab?.id ?? null}
@@ -2237,7 +2240,8 @@ export function BrowserPanel({
           ) : null}
         </div>
       </div>
-    </DiffPanelShell>
+      </DiffPanelShell>
+    </div>
   );
 }
 
