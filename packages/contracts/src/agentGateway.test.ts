@@ -73,6 +73,17 @@ describe("agent gateway contracts", () => {
         ],
       }),
     );
+
+    const instanceTarget = decodeCreate({
+      requestId: "terra-work",
+      threads: [
+        {
+          ...thread,
+          target: { ...thread.target, instanceId: "codex_work" },
+        },
+      ],
+    });
+    assert.equal(instanceTarget.threads[0]?.target.instanceId, "codex_work");
   });
 
   it("bounds wait targets and timeout", () => {
@@ -121,6 +132,14 @@ describe("agent gateway contracts", () => {
             provider: "codex",
             defaultModel: "gpt-5.5",
             models: [{ slug: "gpt-5.5", name: "GPT-5.5" }],
+            instances: [
+              {
+                instanceId: "codex",
+                displayName: "Codex",
+                isDefault: true,
+                enabled: true,
+              },
+            ],
             enabled: true,
             available: true,
             authStatus: "authenticated",
