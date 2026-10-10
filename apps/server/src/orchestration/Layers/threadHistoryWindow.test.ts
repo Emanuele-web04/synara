@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { EventId, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
@@ -12,12 +13,12 @@ import {
 
 // Compare real SQL output with the existing renderer fold without adding web
 // files to the server's composite TypeScript project.
-const rendererSessionLogicPath = new URL("../../../../web/src/session-logic.ts", import.meta.url)
-  .pathname;
-const rendererWorkflowLogicPath = new URL(
-  "../../../../web/src/components/chat/WorkflowRunCard.logic.ts",
-  import.meta.url,
-).pathname;
+const rendererSessionLogicPath = fileURLToPath(
+  new URL("../../../../web/src/session-logic.ts", import.meta.url),
+);
+const rendererWorkflowLogicPath = fileURLToPath(
+  new URL("../../../../web/src/components/chat/WorkflowRunCard.logic.ts", import.meta.url),
+);
 
 const layer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(
