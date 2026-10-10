@@ -71,3 +71,9 @@ Use `/computer-use` followed by a task to request [Computer Use beta](/docs/feat
 Drag a chat into the composer to mention it as context, or into a supported workspace drop zone to open a split pane. The tabbed model picker lets you star a model together with its effort setting and reuse that combination later.
 
 Supported Codex question cards can be non-blocking, so the agent may continue while you answer. Blocking choice questions support cancellation. Live tool work appears as a compact expandable line with the latest human-readable status. GitHub-style Markdown alerts render as note, tip, important, warning and caution callouts.
+
+## Pause and resume queued messages
+
+In 1.0.2-beta.1, **Stop** holds waiting follow-ups after the active turn settles. A failed turn or a usage-limit rejection also pauses the queue. The notice offers **Resume** when you are ready. Stop markers persist with the composer draft through reload; sending a message manually or emptying the queue also clears a Stop hold. Resume acknowledges the failed or limited turn. An older turn's rate-limit event does not pause a newer unrelated turn.
+
+A cached conversation cannot automatically dispatch queued work until authoritative synchronization returns. Draft text and attachments remain recoverable after a failed send or thread creation. See [conversation history](/docs/features/conversation-history) for reload and connection behavior.
