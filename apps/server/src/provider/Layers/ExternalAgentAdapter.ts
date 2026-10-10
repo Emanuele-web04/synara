@@ -16,7 +16,6 @@ import {
  *
  * @module ExternalAgentAdapterLive
  */
-import * as nodePath from "node:path";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -282,14 +281,18 @@ function resolveExternalLaunchSpawn(input: {
     return undefined;
   }
   const args = launch.revision.launch.args ?? [];
-  const cwd = launch.revision.launch.cwd?.trim()
-    ? nodePath.resolve(launch.revision.launch.cwd.trim())
-    : input.cwd;
+  // Session resolution already applies the profile cwd as a fallback. The
+  // thread's selected workspace must also reach the child and ACP handshake.
+  const env = externalAgentEnvironment(launch.env);
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "PWD") delete env[key];
+  }
+  env.PWD = input.cwd;
   return {
     command,
     args,
-    cwd,
-    env: externalAgentEnvironment(launch.env),
+    cwd: input.cwd,
+    env,
   };
 }
 
@@ -1032,11 +1035,8 @@ export function makeExternalAgentAdapter(options?: ExternalAgentAdapterLiveOptio
             const cliSpawn: ExternalAgentLaunchSpawn = {
               command: cliTier.spawn.command,
               args: [...cliTier.spawn.args],
-              cwd:
-                cliTier.spawn.cwd && cliTier.spawn.cwd.trim().length > 0
-                  ? nodePath.resolve(cliTier.spawn.cwd.trim())
-                  : cwd,
-              env: externalAgentEnvironment(launch.env),
+              cwd: spawn.cwd,
+              env: spawn.env,
             };
             const cli = yield* makeExternalAgentCliRuntime({
               tier: cliTier.tier,
