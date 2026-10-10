@@ -4303,7 +4303,12 @@ describe("ChatView transcript geometry (full app)", () => {
           answers: {},
         }),
       );
-      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
+      await vi.waitFor(() =>
+        expect(subscribeThread).toHaveBeenCalledWith({
+          threadId: THREAD_ID,
+          messageWindow: { limit: 100 },
+        }),
+      );
       await new Promise((resolve) => setTimeout(resolve, 250));
       await expect.element(page.getByText("Choose option 1?")).not.toBeInTheDocument();
       await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
@@ -11772,8 +11777,14 @@ describe("ChatView transcript geometry (full app)", () => {
       });
 
       try {
-        expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull();
-        expect(document.querySelector('[data-empty-landing-composer-block="true"]')).not.toBeNull();
+        // A shell with no messages is not the authoritative empty detail yet.
+        await expect
+          .poll(() => useStore.getState().threadDetailSyncById?.[THREAD_ID])
+          .toBe("synced");
+        await expect.element(page.getByTestId("empty-landing-heading")).toBeInTheDocument();
+        await expect
+          .poll(() => document.querySelector('[data-empty-landing-composer-block="true"]'))
+          .not.toBeNull();
       } finally {
         await mounted.cleanup();
       }
