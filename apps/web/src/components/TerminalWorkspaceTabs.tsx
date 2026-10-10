@@ -7,6 +7,9 @@
 // Buttons. Tab-shape rendering (rounded-top corners, no bottom border on the
 // active tab, z-index stacking) doesn't fit the Button taxonomy.
 
+import { useRef } from "react";
+
+import { useHorizontalWheelScroll } from "./chat/chatHeaderControls";
 import { IconButton } from "./ui/icon-button";
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -31,12 +34,18 @@ export default function TerminalWorkspaceTabs({
   onSelectTab,
   onClose,
 }: TerminalWorkspaceTabsProps) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  useHorizontalWheelScroll(stripRef);
   const tabClassName =
     "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-ui leading-snug transition-colors";
 
   return (
     <div className="relative border-b border-border/70 bg-muted/10 px-3 sm:px-5">
-      <div className="flex min-w-0 items-end gap-1.5 overflow-x-auto pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div
+        ref={stripRef}
+        data-testid="terminal-workspace-tab-strip"
+        className="flex min-w-0 items-end gap-1.5 overflow-x-auto overflow-y-hidden overscroll-contain pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
         <button
           type="button"
           className={cn(

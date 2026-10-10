@@ -11,6 +11,7 @@ import {
   type ProviderKind,
   type ToolLifecycleItemType,
   type TurnId,
+  type UserInputQuestion,
 } from "@synara/contracts";
 import {
   decodeSubagentAgentStates,
@@ -20,6 +21,7 @@ import {
 } from "@synara/shared/subagents";
 import {
   approvalRequestKindFromRequestType,
+  pendingRequestInstanceKey,
   type ApprovalRequestKind,
 } from "@synara/shared/threadSummary";
 import {
@@ -44,6 +46,11 @@ import {
   mergeWorkLogToolDetails,
   type WorkLogToolDetails,
 } from "./lib/toolCallDetails";
+import {
+  FAST_MODE_STATE_ACTIVITY_KIND,
+  fastModeNoticeFromActivity,
+  type FastModeNotice,
+} from "./lib/fastModeState";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type { ChatMessage, ProposedPlan } from "./types";
@@ -73,6 +80,9 @@ export interface ProviderHandoffInfo {
   contextText: string | null;
   /** Why the target could not start; only set on failure. */
   failureDetail: string | null;
+  /** Set when that side requested fast mode but its session was not serving it. */
+  sourceFastModeNotice?: FastModeNotice | null;
+  targetFastModeNotice?: FastModeNotice | null;
 }
 
 export type ProviderContextLifecycleReason =
@@ -117,7 +127,11 @@ export interface WorkLogComputerSetupRequired {
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
-  /** Server-owned orchestration event sequence for causal ordering. */
+  /**
+   * Activity order key from two unrelated counters: provider rows carry the
+   * provider runtime journal sequence, rows the server writes itself carry the
+   * orchestration event sequence. The timeline compares it only to break ties.
+   */
   sequence?: number;
   turnId?: TurnId | null;
   label: string;
@@ -154,6 +168,10 @@ export interface WorkLogEntry {
   providerHandoff?: ProviderHandoffInfo;
   /** Durable terminal feedback; session readiness never clears a failed turn. */
   turnFailure?: { cause: string; message: string; errorCode?: string };
+  // An answered agent question, paired with the answers the user submitted. It
+  // renders as a question/answer exchange that stays visible outside the
+  // collapsed turn instead of as two bare "User input" log lines.
+  userInputExchange?: ReadonlyArray<WorkLogUserInputExchangeItem>;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
@@ -161,6 +179,14 @@ export interface WorkLogEntry {
   // Provider-native event type carried through the activity payload (e.g.
   // "background_tasks_changed") so the timeline can pick a specific icon.
   nativeEventType?: string;
+}
+
+export interface WorkLogUserInputExchangeItem {
+  id: string;
+  header: string;
+  question: string;
+  options: ReadonlyArray<string>;
+  answer: string | null;
 }
 
 export type WorkLogLiveActivityState =
@@ -401,11 +427,13 @@ export function deriveWorkLogEntries(
       (activity) =>
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
+    .filter((activity) => activity.kind !== FAST_MODE_STATE_ACTIVITY_KIND)
     .filter((activity) => activity.summary !== "Checkpoint captured")
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .map(toDerivedWorkLogEntry);
+  const userInputExchangeEntries = withUserInputExchanges(entries, ordered);
   // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
   // `toolName` and `activityKind` are intentionally kept: they are public
   // WorkLogEntry fields that the timeline relies on to pick the right icon (e.g.
@@ -414,7 +442,7 @@ export function deriveWorkLogEntries(
   // `toolName` here previously made those icon checks dead code, leaving the
   // generic wrench.
   const derived = reconcileSettledLiveActivities(
-    collapseDerivedWorkLogEntries(entries),
+    collapseDerivedWorkLogEntries(userInputExchangeEntries),
     ordered,
     latestTurnId,
     options,
@@ -431,8 +459,53 @@ export function deriveWorkLogEntries(
         ...entry
       }) => entry,
     );
+  const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered);
+  if (handoffFastModeNotices.size > 0) {
+    for (const [index, entry] of derived.entries()) {
+      const notices = handoffFastModeNotices.get(entry.id);
+      if (!entry.providerHandoff || !notices) continue;
+      // Copy rather than mutate: the handoff info is shared with the per-activity cache.
+      derived[index] = { ...entry, providerHandoff: { ...entry.providerHandoff, ...notices } };
+    }
+  }
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
   return [...derived, ...completions, ...deriveTurnFailureEntries(ordered)];
+}
+
+// A handoff row summarizes two sessions. Each side reads the fast-mode state its own
+// session reported: the source up to the handoff, the target from there to the next one.
+function deriveHandoffFastModeNotices(
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyMap<string, Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">> {
+  const notices = new Map<
+    string,
+    Pick<ProviderHandoffInfo, "sourceFastModeNotice" | "targetFastModeNotice">
+  >();
+  let sessionNotice: FastModeNotice | null = null;
+  let openHandoffId: string | null = null;
+  for (const activity of ordered) {
+    if (activity.kind === FAST_MODE_STATE_ACTIVITY_KIND) {
+      sessionNotice = fastModeNoticeFromActivity(activity);
+      if (openHandoffId !== null) {
+        notices.set(openHandoffId, {
+          ...notices.get(openHandoffId),
+          targetFastModeNotice: sessionNotice,
+        });
+      }
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND) {
+      // The target never started, so the source session keeps running.
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      continue;
+    }
+    if (activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND) {
+      if (sessionNotice) notices.set(activity.id, { sourceFastModeNotice: sessionNotice });
+      openHandoffId = activity.id;
+      sessionNotice = null;
+    }
+  }
+  return notices;
 }
 
 function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
@@ -957,6 +1030,149 @@ function extractProviderContextLifecycleInfo(
 // Store activities are immutable. Reuse their pure normalization when a live
 // update replaces the containing array; turn filtering and settlement still run
 // for each derivation with the current thread context.
+export function parseUserInputQuestions(
+  payload: Record<string, unknown> | null,
+): ReadonlyArray<UserInputQuestion> | null {
+  const questions = payload?.questions;
+  if (!Array.isArray(questions)) {
+    return null;
+  }
+  const parsed = questions
+    .map<UserInputQuestion | null>((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const question = entry as Record<string, unknown>;
+      if (
+        typeof question.id !== "string" ||
+        typeof question.header !== "string" ||
+        typeof question.question !== "string" ||
+        !Array.isArray(question.options)
+      ) {
+        return null;
+      }
+      const options = question.options
+        .map<UserInputQuestion["options"][number] | null>((option) => {
+          if (!option || typeof option !== "object") return null;
+          const optionRecord = option as Record<string, unknown>;
+          if (
+            typeof optionRecord.label !== "string" ||
+            typeof optionRecord.description !== "string"
+          ) {
+            return null;
+          }
+          return {
+            label: optionRecord.label,
+            description: optionRecord.description,
+          };
+        })
+        .filter((option): option is UserInputQuestion["options"][number] => option !== null);
+      return {
+        id: question.id,
+        header: question.header,
+        question: question.question,
+        options,
+        ...(question.multiSelect === true ? { multiSelect: true } : {}),
+      };
+    })
+    .filter((question): question is UserInputQuestion => question !== null);
+  return parsed.length > 0 ? parsed : null;
+}
+
+// Answers arrive keyed by question id (Codex, Synara UI) or by question text
+// (Claude's AskUserQuestion), as a string, a list, or `{ answers: [...] }`.
+function formatUserInputAnswer(
+  answers: Record<string, unknown> | null,
+  question: UserInputQuestion,
+): string | null {
+  const value = answers?.[question.id] ?? answers?.[question.question];
+  const parts =
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value
+        : Array.isArray(asRecord(value)?.answers)
+          ? (asRecord(value)!.answers as unknown[])
+          : [];
+  const text = parts
+    .filter((part): part is string => typeof part === "string")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join(", ");
+  return text.length > 0 ? text : null;
+}
+
+const userInputExchangeEntryCache = new WeakMap<
+  DerivedWorkLogEntry,
+  { request: OrchestrationThreadActivity; entry: DerivedWorkLogEntry }
+>();
+
+// Replay requests in order so a reused ID cannot pair an old answer with a newer
+// question. Only the exact requested row represented by an exchange is removed.
+function withUserInputExchanges(
+  entries: DerivedWorkLogEntry[],
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
+): DerivedWorkLogEntry[] {
+  if (!entries.some((entry) => entry.activityKind === "user-input.resolved")) return entries;
+  const openRequests = new Map<
+    string,
+    { request: OrchestrationThreadActivity; questions: ReadonlyArray<UserInputQuestion> }
+  >();
+  const pairsByResolvedId = new Map<
+    string,
+    {
+      request: OrchestrationThreadActivity;
+      questions: ReadonlyArray<UserInputQuestion>;
+      answers: Record<string, unknown> | null;
+    }
+  >();
+  for (const activity of ordered) {
+    if (activity.kind !== "user-input.requested" && activity.kind !== "user-input.resolved") {
+      continue;
+    }
+    const payload = asRecord(activity.payload);
+    const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
+    if (!requestId) continue;
+    const generation =
+      typeof payload?.lifecycleGeneration === "string" && payload.lifecycleGeneration.length > 0
+        ? payload.lifecycleGeneration
+        : undefined;
+    const key = pendingRequestInstanceKey(requestId, generation);
+    if (activity.kind === "user-input.requested") {
+      const questions = parseUserInputQuestions(payload);
+      // An invalid replacement must not leave an earlier question available to pair.
+      openRequests.delete(key);
+      if (questions) openRequests.set(key, { request: activity, questions });
+    } else {
+      const pending = openRequests.get(key);
+      if (pending) {
+        pairsByResolvedId.set(activity.id, { ...pending, answers: asRecord(payload?.answers) });
+        openRequests.delete(key);
+      }
+    }
+  }
+  const answeredActivityIds = new Set<string>();
+  const withExchanges = entries.map((entry) => {
+    if (entry.activityKind !== "user-input.resolved") return entry;
+    const pair = pairsByResolvedId.get(entry.id);
+    if (!pair) return entry;
+    answeredActivityIds.add(pair.request.id);
+    const cached = userInputExchangeEntryCache.get(entry);
+    if (cached?.request === pair.request) return cached.entry;
+    const exchangeEntry: DerivedWorkLogEntry = {
+      ...entry,
+      userInputExchange: pair.questions.map((question) => ({
+        id: question.id,
+        header: question.header,
+        question: question.question,
+        options: question.options.map((option) => option.label),
+        answer: formatUserInputAnswer(pair.answers, question),
+      })),
+    };
+    userInputExchangeEntryCache.set(entry, { request: pair.request, entry: exchangeEntry });
+    return exchangeEntry;
+  });
+  return withExchanges.filter((entry) => !answeredActivityIds.has(entry.id));
+}
+
 const derivedWorkLogEntryCache = new WeakMap<OrchestrationThreadActivity, DerivedWorkLogEntry>();
 
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
@@ -1194,7 +1410,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   const collapseKey =
     deriveProviderRuntimeReconciliationCollapseKey(activity, payload) ??
-    deriveToolLifecycleCollapseKey(entry);
+    deriveToolLifecycleCollapseKey(entry, hasTurnScopedProviderToolCallId(payload));
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
@@ -1953,14 +2169,29 @@ function mergeChangedFiles(
   return [...new Set(merged)];
 }
 
+// ACP providers restart their tool-call ids every turn. The server then scopes
+// the runtime item id per turn and records the raw id as `providerToolCallId`,
+// while the activity data keeps carrying that raw id as `toolCallId`.
+function hasTurnScopedProviderToolCallId(payload: Record<string, unknown> | null): boolean {
+  return typeof asRecord(payload?.data)?.providerToolCallId === "string";
+}
+
 // Keep a stable lifecycle key so providers like Claude can stream many
 // in-progress tool deltas without turning each partial update into its own row.
-function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | undefined {
+// Globally unique ids merge across turns on purpose (a background command can
+// outlive the turn that started it); per-turn ids only identify a call within
+// their turn.
+function deriveToolLifecycleCollapseKey(
+  entry: DerivedWorkLogEntry,
+  turnScopedToolCallId = false,
+): string | undefined {
   if (!isRenderableToolLifecycleActivity(entry.activityKind)) {
     return undefined;
   }
   if (entry.toolCallId) {
-    return `tool:${entry.toolCallId}`;
+    return turnScopedToolCallId && entry.turnId
+      ? `tool:${entry.turnId}\u001f${entry.toolCallId}`
+      : `tool:${entry.toolCallId}`;
   }
   const normalizedLabel = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
   const itemType = entry.itemType ?? "";
@@ -2882,17 +3113,24 @@ function compareActivityLifecycleRank(kind: string): number {
   return 1;
 }
 
+// Time first: messages carry no sequence, and mergeTimelineEntries is only
+// correct when both sides sort by the same key. Sequence-first let one late
+// row with an unrelated low sequence lead the work list, and every message of
+// the block was emitted above all of that block's work.
 function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
   if (
     "sequence" in left &&
     "sequence" in right &&
     left.sequence !== undefined &&
-    right.sequence !== undefined &&
-    left.sequence !== right.sequence
+    right.sequence !== undefined
   ) {
     return left.sequence - right.sequence;
   }
-  return left.createdAt.localeCompare(right.createdAt);
+  return 0;
 }
 
 type TimelineComparator = (left: TimelineEntry, right: TimelineEntry) => number;

@@ -9,6 +9,7 @@ import {
   makeProviderMaintenanceCapabilities,
   resolvePackageManagedProviderMaintenance,
   resolveProviderMaintenanceCapabilitiesEffect,
+  withOpenCodeMaintenanceVersion,
   type PackageManagedProviderMaintenanceDefinition,
 } from "./providerMaintenance";
 
@@ -37,6 +38,23 @@ const OPENCODE_DEFINITION = {
     excludedInstallSources: ["homebrew"],
   },
 } as const satisfies PackageManagedProviderMaintenanceDefinition;
+
+it("keeps OpenCode V2 package updates on the V2 distribution", () => {
+  const definition = withOpenCodeMaintenanceVersion(OPENCODE_DEFINITION, "2.0.25");
+  const brew = resolvePackageManagedProviderMaintenance(definition, {
+    binaryPath: "opencode",
+    realCommandPath: "/opt/homebrew/Cellar/opencode-v2/2.0.25/bin/opencode",
+  });
+  assert.deepStrictEqual(brew.update?.args, ["upgrade", "anomalyco/tap/opencode-v2"]);
+  assert.deepStrictEqual(brew.latestVersionSource, { kind: "npm", name: "@opencode/cli" });
+  const npm = resolvePackageManagedProviderMaintenance(definition, {
+    binaryPath: "opencode",
+    realCommandPath: "/usr/local/lib/node_modules/@opencode/cli/bin/opencode",
+  });
+  assert.deepStrictEqual(npm.update?.args, ["upgrade", "--method", "npm"]);
+  assert.equal(npm.packageName, "@opencode/cli");
+  assert.equal(withOpenCodeMaintenanceVersion(OPENCODE_DEFINITION, "1.18.35"), OPENCODE_DEFINITION);
+});
 
 const CLAUDE_DEFINITION = {
   provider: "claudeAgent",

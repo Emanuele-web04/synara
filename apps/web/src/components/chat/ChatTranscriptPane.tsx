@@ -64,6 +64,7 @@ interface ChatTranscriptPaneProps {
   isWorking: boolean;
   workingLabel?: ComponentProps<typeof MessagesTimeline>["workingLabel"];
   followLiveOutput: boolean;
+  animateTailAnchorSlide?: ComponentProps<typeof MessagesTimeline>["animateTailAnchorSlide"];
   listRef: RefObject<LegendListRef | null>;
   timelineControllerRef?: RefObject<MessagesTimelineController | null>;
   pinnedMessageIds?: ReadonlySet<MessageId>;
@@ -163,6 +164,7 @@ export function ChatTranscriptPane({
   isWorking,
   workingLabel,
   followLiveOutput,
+  animateTailAnchorSlide,
   listRef,
   timelineControllerRef,
   pinnedMessageIds,
@@ -306,7 +308,7 @@ export function ChatTranscriptPane({
   return (
     <div
       data-chat-transcript-pane="true"
-      aria-hidden={terminalWorkspaceTerminalTabActive}
+      inert={terminalWorkspaceTerminalTabActive}
       className={cn(
         "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
         terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
@@ -392,6 +394,7 @@ export function ChatTranscriptPane({
             isRevertingCheckpoint={isRevertingCheckpoint}
             onImageExpand={onExpandTimelineImage}
             followLiveOutput={followLiveOutput}
+            {...(animateTailAnchorSlide !== undefined ? { animateTailAnchorSlide } : {})}
             onIsAtEndChange={onIsAtEndChange}
             {...(onNavigate ? { onNavigate } : {})}
             onTrailHighlightsChange={activeTrailStore.set}

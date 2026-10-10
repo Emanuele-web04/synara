@@ -32,6 +32,14 @@ async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\synara") {
   return renderWithQueryClient(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
 }
 
+async function renderAutoDirectionMarkdown(text: string) {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+
+  return renderWithQueryClient(
+    <ChatMarkdown text={text} cwd={undefined} isStreaming={false} directionMode="auto-blocks" />,
+  );
+}
+
 async function renderUserMarkdown(text: string) {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
@@ -64,6 +72,28 @@ describe("streamingCodeHighlightIntervalMs", () => {
 });
 
 describe("ChatMarkdown", () => {
+  it("lets link-only Arabic and English blocks resolve independently", async () => {
+    const markup = await renderAutoDirectionMarkdown(
+      "[مرحبا بالعالم](https://example.com/rtl)\n\n[English text](https://example.com/ltr)",
+    );
+
+    expect(markup).toContain('<div class="chat-markdown');
+    expect(markup).toContain('data-direction-mode="auto-blocks"');
+    expect(markup).toContain('<p dir="auto"><a href="https://example.com/rtl"');
+    expect(markup).toContain('<p dir="auto"><a href="https://example.com/ltr"');
+    // The anchor must remain direction-neutral so its label participates in
+    // the parent paragraph's first-strong scan. A dir=auto anchor would create
+    // an isolation boundary and make link-only RTL paragraphs resolve LTR.
+    expect(markup).not.toContain('<a dir="auto"');
+  });
+
+  it("isolates technical inline content without hiding prose direction", async () => {
+    const markup = await renderAutoDirectionMarkdown("[مرحبا](https://example.com) ثم `npm test`");
+
+    expect(markup).toContain('<p dir="auto">');
+    expect(markup).toContain('<code dir="ltr">npm test</code>');
+  });
+
   it("renders GitHub alert blockquotes with a title and strips the marker", async () => {
     const markup = await renderMarkdown("> [!NOTE]\n> **Medium Risk**\n> Details");
 
@@ -83,6 +113,81 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("One<br/>\ntwo<br/>\nthree");
     expect(markup).toContain("x<br/>\ny");
     expect(markup).toMatch(/<p>Done\.<\/p><\/div>$/);
+  });
+
+  it("keeps raw HTML escaped unless an authored preview opts in", async () => {
+    const escaped = await renderMarkdown("<details><summary>More</summary>text</details>");
+    expect(escaped).toContain("&lt;details&gt;");
+    expect(await renderUserMarkdown("<details>user HTML</details>")).toContain("&lt;details&gt;");
+
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text="<details><summary>More</summary>text</details>"
+        cwd={undefined}
+        isStreaming={false}
+        parseHtml
+      />,
+    );
+    expect(rendered).toContain("<details>");
+    expect(rendered).toContain("<summary>More</summary>");
+    expect(rendered).not.toContain("&lt;details&gt;");
+  });
+
+  it("sanitizes dangerous HTML in authored previews", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text={
+          '<script>alert("xss")</script><a href="javascript:alert(1)" onclick="alert(2)">safe label</a><img src="data:text/html,evil" onerror="alert(3)"><iframe src="https://example.com"></iframe><form><input name="location"></form>'
+        }
+        cwd={undefined}
+        isStreaming={false}
+        parseHtml
+      />,
+    );
+    expect(rendered).not.toContain("<script");
+    expect(rendered).not.toContain('alert("xss")');
+    expect(rendered).not.toContain("javascript:");
+    expect(rendered).toContain("safe label");
+    expect(rendered).not.toContain("onclick");
+    expect(rendered).not.toContain("onerror");
+    expect(rendered).not.toContain("data:text/html");
+    expect(rendered).not.toContain("<iframe");
+    expect(rendered).not.toContain("<form");
+    expect(rendered).not.toContain('name="location"');
+  });
+
+  it("preserves Markdown features in authored HTML previews", async () => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const text = [
+      "Euler $x^2$.",
+      "$$\n x^2 \n$$",
+      "> [!NOTE]\n> Searchable alert",
+      "[local notes](file:///tmp/notes.md)",
+      "[thread link](thread://thread-abc) and [Synara link](synara://thread/thread-def)",
+      "- [ ] Task",
+    ].join("\n\n");
+    const rendered = renderWithQueryClient(
+      <ChatMarkdown
+        text={text}
+        cwd="/tmp"
+        parseHtml
+        findQuery="Searchable"
+        onOpenThread={() => {}}
+      />,
+    );
+    expect(rendered).toContain('class="katex"');
+    expect(rendered).toContain("katex-display");
+    expect(rendered).toContain('data-github-alert="note"');
+    expect(rendered).toContain('data-chat-find-match="true"');
+    expect(rendered).toContain("/tmp/notes.md");
+    expect(rendered).toContain('title="/tmp/notes.md"');
+    expect(rendered).toContain('href="/tmp/notes.md"');
+    expect(rendered).toContain('type="checkbox"');
+    expect(rendered).not.toContain("thread://");
+    expect(rendered).not.toContain("synara://");
+    expect(rendered).toContain("<button");
   });
 
   it("leaves blockquotes with inline text after the marker as plain quotes", async () => {

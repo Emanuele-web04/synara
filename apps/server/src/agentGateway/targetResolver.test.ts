@@ -699,6 +699,102 @@ describe("agent gateway target resolver", () => {
     }),
   );
 
+  it.effect("validates and discovers an explicit provider instance", () =>
+    Effect.gen(function* () {
+      let discoveredInput: { provider: string; instanceId?: string } | undefined;
+      const instanceDiscovery = {
+        listModels: (input: { provider: string; instanceId?: string }) => {
+          discoveredInput = input;
+          return Effect.succeed({
+            models: [{ slug: "gpt-5.5-work", name: "GPT-5.5 Work" }],
+            source: "test",
+          });
+        },
+      } as unknown as ProviderDiscoveryServiceShape;
+      const target = {
+        provider: "codex" as const,
+        instanceId: "codex_work",
+        model: "gpt-5.5-work",
+      };
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({
+          target,
+          discovery: instanceDiscovery,
+          availability: {
+            enabled: true,
+            available: true,
+            authStatus: "authenticated",
+            instances: [
+              {
+                instanceId: "codex",
+                displayName: "Codex",
+                isDefault: true,
+                enabled: true,
+                available: true,
+                authStatus: "authenticated",
+              },
+              {
+                instanceId: "codex_work",
+                displayName: "Work Codex",
+                isDefault: false,
+                enabled: true,
+                available: true,
+                authStatus: "authenticated",
+              },
+            ],
+          },
+        }),
+        target,
+      );
+      assert.deepEqual(discoveredInput, { provider: "codex", instanceId: "codex_work" });
+    }),
+  );
+
+  it.effect("rejects unknown, cross-driver, and disabled instances before discovery", () =>
+    Effect.gen(function* () {
+      let discoveryCalls = 0;
+      const trackedDiscovery = {
+        listModels: () => {
+          discoveryCalls += 1;
+          return Effect.succeed({ models: [], source: "test" });
+        },
+      } as unknown as ProviderDiscoveryServiceShape;
+      const availability = {
+        enabled: true,
+        instances: [
+          {
+            instanceId: "codex",
+            displayName: "Codex",
+            isDefault: true,
+            enabled: true,
+          },
+          {
+            instanceId: "codex_disabled",
+            displayName: "Disabled Codex",
+            isDefault: false,
+            enabled: false,
+          },
+        ],
+      };
+      for (const [instanceId, expectedMessage] of [
+        ["claude_work", "not configured"],
+        ["codex_disabled", "disabled"],
+      ] as const) {
+        const result = yield* resolveAgentGatewayTarget({
+          target: { provider: "codex", instanceId, model: "gpt-5.5" },
+          discovery: trackedDiscovery,
+          availability,
+        }).pipe(
+          Effect.map(() => ({ code: "unexpected-success", message: "" })),
+          Effect.catch((error) => Effect.succeed(error)),
+        );
+        assert.equal(result.code, "provider_unavailable");
+        assert.include(result.message, expectedMessage);
+      }
+      assert.equal(discoveryCalls, 0);
+    }),
+  );
+
   it.effect("rejects a known unavailable or unauthenticated provider", () =>
     Effect.gen(function* () {
       const result = yield* resolveAgentGatewayTarget({

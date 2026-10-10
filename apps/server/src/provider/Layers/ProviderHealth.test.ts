@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as OS from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,7 @@ import {
   checkDevinProviderStatus,
   checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
+  checkOmpProviderStatus,
   checkPiProviderStatus,
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
@@ -1104,6 +1105,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           Layer.provideMerge(
             ServerSettingsService.layerTest({
               ...allProvidersDisabledSettings,
+              // This race test only exercises refresh serialization. Keep it hermetic so
+              // provider-maintenance advisory lookups cannot consume the test deadline.
+              enableProviderUpdateChecks: false,
               providers: {
                 ...allProvidersDisabledSettings.providers,
                 codex: { enabled: true },
@@ -1386,6 +1390,41 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           checkedAt: "2026-06-04T17:01:00.000Z",
         },
       ]);
+    });
+
+    it("keeps an already usable Pi provider ready after its advisory timeout wording", () => {
+      const previousReadyPi = {
+        provider: "pi",
+        instanceId: "pi",
+        driver: "pi",
+        status: "ready",
+        available: true,
+        authStatus: "unknown",
+        version: "0.84.4",
+        checkedAt: "2026-09-04T01:03:00.000Z",
+        message: "Pi CLI is installed. Configure provider credentials inside Pi as needed.",
+      } satisfies ServerProviderStatus;
+      const piTimeout = {
+        provider: "pi",
+        instanceId: "pi",
+        driver: "pi",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-09-04T01:04:00.000Z",
+        message:
+          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts([previousReadyPi], [piTimeout]),
+        [
+          {
+            ...previousReadyPi,
+            checkedAt: "2026-09-04T01:04:00.000Z",
+          },
+        ],
+      );
     });
 
     it("does not keep a stale Claude auth error after a transient auth timeout", () => {
@@ -2550,6 +2589,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             assert.strictEqual(command, "/custom/bin/agy");
             assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "antigravity-work");
             assert.strictEqual(env?.NO_BROWSER, "true");
+            assert.strictEqual(env?.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "", stderr: "version failed", code: 1 };
             throw new Error(`Unexpected args: ${joined}`);
@@ -2720,6 +2760,44 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     );
   });
 
+  describe("checkOmpProviderStatus", () => {
+    it.effect("probes the selected instance environment instead of ambient OMP", () => {
+      const isolationRoot = mkdtempSync(join(OS.tmpdir(), "synara-omp-health-"));
+      const binaryDir = join(isolationRoot, "bin");
+      mkdirSync(binaryDir, { recursive: true });
+      const binaryPath = join(binaryDir, "omp");
+      writeFileSync(binaryPath, "#!/bin/sh\n");
+      chmodSync(binaryPath, 0o755);
+      return Effect.gen(function* () {
+        try {
+          const status = yield* checkOmpProviderStatus(
+            "/tmp/omp-agent",
+            undefined,
+            { PATH: binaryDir, PROVIDER_TEST_INSTANCE: "omp-work" },
+            "omp_work",
+            { homeDir: OS.homedir(), isolationRootDir: isolationRoot },
+          );
+          assert.strictEqual(status.provider, "omp");
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.available, true);
+        } finally {
+          rmSync(isolationRoot, { recursive: true, force: true });
+        }
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, binaryPath);
+            assertProviderInstanceEnv(env, "PATH", binaryDir);
+            assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "omp-work");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "omp 0.5.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
+  });
+
   describe("checkAntigravityProviderStatus", () => {
     it.effect("rejects versions that predate --new-project support", () =>
       Effect.gen(function* () {
@@ -2754,8 +2832,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.version, "1.1.2");
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args, command) => {
+          mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "agy");
+            assert.strictEqual(env?.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "Antigravity CLI 1.1.2\n", stderr: "", code: 0 };
@@ -2779,8 +2858,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.status, "ready");
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args, command) => {
+          mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "/custom/bin/agy");
+            assert.strictEqual(env?.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
             return args.join(" ") === "--version"
               ? { stdout: "1.1.2\n", stderr: "", code: 0 }
               : { stdout: "GPT-OSS 120B (Medium)\n", stderr: "", code: 0 };
