@@ -1567,6 +1567,9 @@ export default function Sidebar() {
   // Shared with the composer project picker, which opens this same dialog.
   const createProjectDialogOpen = useCreateProjectDialogStore((state) => state.isOpen);
   const setCreateProjectDialogOpen = useCreateProjectDialogStore((state) => state.setOpen);
+  // The open flag lives in a module store now, so it outlives this sidebar: close the
+  // dialog with it, or a remounted sidebar would reopen a stale modal over everything.
+  useEffect(() => () => setCreateProjectDialogOpen(false), [setCreateProjectDialogOpen]);
   const [createProjectSpaceId, setCreateProjectSpaceId] = useState<SpaceId | null | undefined>();
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [automationCreateOpen, setAutomationCreateOpen] = useState(false);

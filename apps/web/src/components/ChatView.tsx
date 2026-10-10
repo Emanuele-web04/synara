@@ -78,6 +78,7 @@ import {
 import { getLocalFolderBrowseRootPath } from "~/lib/localFolderMentions";
 import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
+import { holdQueuedComposerTurnsForStop } from "~/lib/queuedComposerDrain";
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
@@ -3578,12 +3579,19 @@ export default function ChatView({
   const onInterrupt = useCallback(async () => {
     const api = readNativeApi();
     if (!api || !activeThread) return;
-    await api.orchestration.dispatchCommand({
-      type: "thread.turn.interrupt",
-      commandId: newCommandId(),
-      threadId: activeThread.id,
-      createdAt: new Date().toISOString(),
-    });
+    // A user Stop pauses the waiting queue instead of sending it after the turn.
+    const releaseQueueHold = holdQueuedComposerTurnsForStop(activeThread.id);
+    await api.orchestration
+      .dispatchCommand({
+        type: "thread.turn.interrupt",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        createdAt: new Date().toISOString(),
+      })
+      .catch((error: unknown) => {
+        releaseQueueHold();
+        throw error;
+      });
   }, [activeThread]);
 
   // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
@@ -4251,6 +4259,9 @@ export default function ChatView({
     removeQueuedComposerTurn,
     onSteerQueuedComposerTurn,
     onEditQueuedComposerTurn,
+    queuePause,
+    onResumeQueuedComposerTurns,
+    onEditPausedQueuedComposerTurn,
   } = useChatQueuedTurns({
     threadId,
     queuedComposerTurns,
@@ -5845,6 +5856,9 @@ export default function ChatView({
               onSteer={onSteerQueuedComposerTurn}
               onRemove={removeQueuedComposerTurn}
               onEdit={onEditQueuedComposerTurn}
+              pause={queuePause}
+              onResume={onResumeQueuedComposerTurns}
+              onEditPaused={onEditPausedQueuedComposerTurn}
               cwd={threadWorkspaceCwd ?? undefined}
               attachedToPrevious={
                 showComposerLiveChangesHeader ||
