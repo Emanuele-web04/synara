@@ -387,7 +387,6 @@ function makeHarnessLayer(
   threads: ReadonlyArray<OrchestrationThreadShell>,
   automationDefinitions: ReadonlyArray<AutomationDefinition> = [],
   options: {
-    readonly settings?: Parameters<typeof ServerSettingsService.layerTest>[0];
     readonly listModels?: (typeof ProviderDiscoveryService)["Service"]["listModels"];
     readonly threadDetails?: ReadonlyMap<string, OrchestrationThread>;
     readonly hubCoordinator?: boolean;
@@ -397,6 +396,7 @@ function makeHarnessLayer(
     readonly dispatchDelayMs?: number;
     readonly interruptedOperations?: ReadonlyArray<AgentGatewayOperationRecord>;
     readonly providerStatuses?: ReadonlyArray<ServerProviderStatus>;
+    readonly serverSettings?: Parameters<typeof ServerSettingsService.layerTest>[0];
     readonly existingBranches?: ReadonlyArray<string>;
     readonly existingWorktrees?: Readonly<Record<string, string>>;
     readonly verifiedOwnershipTokens?: ReadonlyArray<string>;
@@ -1353,7 +1353,7 @@ function makeHarnessLayer(
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
     Layer.provide(providerHealthLayer),
-    Layer.provide(ServerSettingsService.layerTest(options.settings)),
+    Layer.provide(ServerSettingsService.layerTest(options.serverSettings ?? {})),
     Layer.provide(operationLayer),
     Layer.provide(projectionTurnsLayer),
     Layer.provide(diagnosticsLayer),
@@ -2250,7 +2250,7 @@ describe("AgentGateway", () => {
         : thread,
     );
     const { gatewayLayer, makeHarness } = makeHarnessLayer(threads, [], {
-      settings: {
+      serverSettings: {
         providerInstances: {
           codex_work: { driver: "codex", enabled: true },
           codex_other: { driver: "codex", enabled: true },
@@ -2692,6 +2692,53 @@ describe("AgentGateway", () => {
 
       const serialized = JSON.stringify(payload);
       assert.isBelow(serialized.indexOf('"targetConstruction"'), serialized.indexOf('"providers"'));
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("advertises configured provider instances in capabilities", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      serverSettings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            displayName: "Work Codex",
+            enabled: true,
+            config: {},
+          },
+        },
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_capabilities",
+        args: {},
+      });
+      const payload = toolResultJson(response.result);
+      const providers = payload.providers as Array<{
+        provider: string;
+        instances?: Array<{
+          instanceId: string;
+          displayName: string;
+          isDefault: boolean;
+          enabled: boolean;
+        }>;
+      }>;
+      assert.deepEqual(providers.find((provider) => provider.provider === "codex")?.instances, [
+        {
+          instanceId: "codex",
+          displayName: "Codex",
+          isDefault: true,
+          enabled: true,
+        },
+        {
+          instanceId: "codex_work",
+          displayName: "Work Codex",
+          isDefault: false,
+          enabled: true,
+        },
+      ]);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

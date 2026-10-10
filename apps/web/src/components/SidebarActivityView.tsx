@@ -661,10 +661,18 @@ export function SidebarActivityView({
         threads,
         pinnedThreadIdSet,
         draftThreadIdSet,
+        activeThreadId,
         settledOverrideByThreadId,
         projectFilterIds,
       }),
-    [draftThreadIdSet, pinnedThreadIdSet, projectFilterIds, settledOverrideByThreadId, threads],
+    [
+      activeThreadId,
+      draftThreadIdSet,
+      pinnedThreadIdSet,
+      projectFilterIds,
+      settledOverrideByThreadId,
+      threads,
+    ],
   );
   const scopedPinnedThreads = model.pinned;
   const draftThreads = model.drafts;
