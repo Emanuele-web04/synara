@@ -9,7 +9,18 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
-import { Effect, FileSystem, Layer, Logger, Path, Result, Schema } from "effect";
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Logger,
+  Path,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
 import { ServerConfig } from "./config";
 
 import {
@@ -135,6 +146,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("defaults workspace search outside terminal focus", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "search.files"),
+        { key: "mod+p", command: "search.files", when: "!terminalFocus" },
+      );
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "search.content"),
+        { key: "mod+shift+f", command: "search.content", when: "!terminalFocus" },
+      );
+    }),
+  );
+
   it.effect("encodes resolved plus-key shortcuts", () =>
     Effect.gen(function* () {
       const encoded = yield* Schema.encodeEffect(ResolvedKeybindingFromConfig)({
@@ -217,6 +241,133 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
       assert.deepEqual(persisted, DEFAULT_KEYBINDINGS);
     }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("allows startup to retry and owns one watcher until the service closes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const attached = yield* Deferred.make<void>();
+      let activeWatchers = 0;
+      const watchedFs = {
+        ...fs,
+        watch: (...args: Parameters<typeof fs.watch>) =>
+          Stream.unwrap(
+            Effect.acquireRelease(
+              Effect.gen(function* () {
+                activeWatchers += 1;
+                yield* Deferred.succeed(attached, undefined);
+                return fs.watch(...args);
+              }),
+              () =>
+                Effect.sync(() => {
+                  activeWatchers -= 1;
+                }),
+            ),
+          ),
+      };
+      yield* Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const { keybindingsConfigPath } = yield* ServerConfig;
+        const keybindings = yield* Keybindings;
+        const configDirectory = path.dirname(keybindingsConfigPath);
+
+        yield* fs.remove(configDirectory, { recursive: true });
+        yield* fs.writeFileString(configDirectory, "temporarily blocked");
+        const firstStart = yield* keybindings.start.pipe(Effect.exit);
+        assert.equal(firstStart._tag, "Failure");
+        assert.equal(activeWatchers, 0);
+
+        yield* fs.remove(configDirectory);
+        yield* keybindings.start;
+        yield* keybindings.ready;
+        yield* Deferred.await(attached);
+        yield* keybindings.start;
+        assert.isTrue(yield* fs.exists(keybindingsConfigPath));
+        assert.equal(activeWatchers, 1);
+      }).pipe(
+        Effect.provide(makeKeybindingsLayer()),
+        Effect.provideService(FileSystem.FileSystem, watchedFs),
+      );
+      assert.equal(activeWatchers, 0);
+    }),
+  );
+
+  it.effect("shares a failed startup attempt with concurrent callers", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let reads = 0;
+      const blockedFs = {
+        ...fs,
+        exists: (target: string) =>
+          Effect.gen(function* () {
+            if (!target.endsWith("/keybindings.json")) return yield* fs.exists(target);
+            reads += 1;
+            if (reads === 1) {
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+            }
+            return yield* fs.exists(target);
+          }),
+      };
+      yield* Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const { keybindingsConfigPath } = yield* ServerConfig;
+        const keybindings = yield* Keybindings;
+        const directory = path.dirname(keybindingsConfigPath);
+        yield* fs.remove(directory, { recursive: true });
+        yield* fs.writeFileString(directory, "blocked");
+        const first = yield* keybindings.start.pipe(Effect.exit, Effect.forkScoped);
+        yield* Deferred.await(entered);
+        const second = yield* keybindings.start.pipe(Effect.exit, Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(release, undefined);
+        assert.equal((yield* Fiber.join(first))._tag, "Failure");
+        assert.equal((yield* Fiber.join(second))._tag, "Failure");
+        assert.equal(reads, 1);
+      }).pipe(
+        Effect.provide(makeKeybindingsLayer()),
+        Effect.provideService(FileSystem.FileSystem, blockedFs),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("publishes interrupted startup and allows the next attempt to recover", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const entered = yield* Deferred.make<void>();
+      let reads = 0;
+      const blockedFs = {
+        ...fs,
+        exists: (target: string) =>
+          Effect.gen(function* () {
+            if (!target.endsWith("/keybindings.json")) return yield* fs.exists(target);
+            reads += 1;
+            if (reads === 1) {
+              yield* Deferred.succeed(entered, undefined);
+              return yield* Effect.never;
+            }
+            return yield* fs.exists(target);
+          }),
+      };
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        const first = yield* keybindings.start.pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        const readiness = yield* keybindings.ready.pipe(Effect.exit, Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(first);
+        yield* Effect.yieldNow;
+        assert.isDefined(readiness.pollUnsafe(), "readiness must receive the interrupted attempt");
+        assert.equal((yield* Fiber.join(readiness))._tag, "Failure");
+        yield* keybindings.start;
+        yield* keybindings.ready;
+      }).pipe(
+        Effect.provide(makeKeybindingsLayer()),
+        Effect.provideService(FileSystem.FileSystem, blockedFs),
+      );
+    }).pipe(Effect.scoped),
   );
 
   it.effect("uses defaults in runtime when config is malformed without overriding file", () =>

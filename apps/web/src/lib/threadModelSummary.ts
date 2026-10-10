@@ -6,7 +6,7 @@
 // Why: Reuses the composer's trait resolution so a thread's model reads exactly
 //      the same wherever it is displayed.
 
-import type { ModelSelection, ProviderKind } from "@synara/contracts";
+import type { ModelSelection, ProviderKind, ProviderModelDescriptor } from "@synara/contracts";
 
 import {
   getComposerTraitSelection,
@@ -37,6 +37,7 @@ export function formatThreadModelSummaryLabel(summary: ThreadModelSummary): stri
 
 export function resolveThreadModelSummary(
   modelSelection: ModelSelection | null | undefined,
+  runtimeModel?: ProviderModelDescriptor,
 ): ThreadModelSummary | null {
   if (!modelSelection) {
     return null;
@@ -56,6 +57,7 @@ export function resolveThreadModelSummary(
     modelSelection.model,
     "",
     modelSelection.options as ProviderOptions | undefined,
+    runtimeModel,
   );
   return {
     provider,

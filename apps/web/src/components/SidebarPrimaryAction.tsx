@@ -3,7 +3,7 @@
 //          leading glyph, label, and a trailing badge or hover shortcut.
 // Layer: Sidebar UI primitive (shared by the thread sidebar and the rail layout's panels)
 
-import type { ComponentType } from "react";
+import type { ComponentProps, ComponentType } from "react";
 
 import { cn } from "~/lib/utils";
 import {
@@ -12,6 +12,7 @@ import {
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
 } from "~/sidebarRowStyles";
+import { OneTimeCoachmark } from "./OneTimeCoachmark";
 import type { SidebarActionBadge } from "./Sidebar.logic";
 import { SidebarGlyph } from "./sidebarGlyphs";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -29,12 +30,14 @@ export function SidebarPrimaryAction({
   disabled: disabledProp,
   shortcutLabel,
   badge,
+  coachmark,
 }: {
   // Accepts both Lucide adapters and raw react-icons glyphs (rendered via SidebarGlyph).
   icon: ComponentType<{ className?: string }>;
   /** Optional optical correction for glyphs whose artwork fills more of its view box. */
   iconClassName?: string;
   label: string;
+  coachmark?: Pick<ComponentProps<typeof OneTimeCoachmark>, "storageKey" | "title" | "description">;
   onClick?: () => void;
   onMouseEnter?: () => void;
   onFocus?: () => void;
@@ -48,47 +51,56 @@ export function SidebarPrimaryAction({
   const active = activeProp ?? false;
   const disabled = disabledProp ?? false;
 
+  const button = (
+    <SidebarMenuButton
+      size="sm"
+      data-active={active}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "group/sidebar-primary-action",
+        SIDEBAR_HEADER_ROW_CLASS_NAME,
+        active
+          ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
+          : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+      )}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      onFocus={onFocus}
+    >
+      <SidebarLeadingIcon size="sm" tone="text-inherit">
+        <SidebarGlyph
+          icon={Icon}
+          variant="leading"
+          {...(iconClassName ? { className: iconClassName } : {})}
+        />
+      </SidebarLeadingIcon>
+      <span className="truncate">{label}</span>
+      {badge ? (
+        <span
+          className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-ui-xs font-medium text-muted-foreground"
+          aria-label={badge.accessibleLabel}
+          title={badge.accessibleLabel}
+        >
+          {badge.text}
+        </span>
+      ) : shortcutLabel ? (
+        <span className="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100">
+          <ShortcutKbd shortcutLabel={shortcutLabel} />
+        </span>
+      ) : null}
+    </SidebarMenuButton>
+  );
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton
-        size="sm"
-        data-active={active}
-        aria-current={active ? "page" : undefined}
-        className={cn(
-          "group/sidebar-primary-action",
-          SIDEBAR_HEADER_ROW_CLASS_NAME,
-          active
-            ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
-            : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
-        )}
-        aria-disabled={disabled || undefined}
-        disabled={disabled}
-        onClick={onClick}
-        onMouseEnter={onMouseEnter}
-        onFocus={onFocus}
-      >
-        <SidebarLeadingIcon size="sm" tone="text-inherit">
-          <SidebarGlyph
-            icon={Icon}
-            variant="leading"
-            {...(iconClassName ? { className: iconClassName } : {})}
-          />
-        </SidebarLeadingIcon>
-        <span className="truncate">{label}</span>
-        {badge ? (
-          <span
-            className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-ui-xs font-medium text-muted-foreground"
-            aria-label={badge.accessibleLabel}
-            title={badge.accessibleLabel}
-          >
-            {badge.text}
-          </span>
-        ) : shortcutLabel ? (
-          <span className="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100">
-            <ShortcutKbd shortcutLabel={shortcutLabel} />
-          </span>
-        ) : null}
-      </SidebarMenuButton>
+      {coachmark ? (
+        <OneTimeCoachmark {...coachmark} tooltip={label}>
+          {button}
+        </OneTimeCoachmark>
+      ) : (
+        button
+      )}
     </SidebarMenuItem>
   );
 }

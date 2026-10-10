@@ -97,6 +97,7 @@ import {
   clearThreadDetailResumeCursor,
   resetThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
+import { adoptVerifiedThreadCacheIdentity } from "./threadDetailCacheIdentity";
 import { trackWsTurnSettlement, type WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
@@ -514,7 +515,7 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   // Retry only the overflowing subscription, preserving its applied cursor.
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
-  // A server that does not offer Tasks (Stable) refuses its stream for good;
+  // A server that does not offer Tasks refuses its stream for good;
   // reconnecting the socket would only be refused again.
   TASKS_UNAVAILABLE_ERROR_CODE,
 ]);
@@ -1423,6 +1424,7 @@ export class WsTransport {
       useDeviceStateStore.getState().clear();
       useComputerStateStore.getState().clear();
     }
+    adoptVerifiedThreadCacheIdentity(compatibility.serverInstanceId);
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);
     this.setCompatibilityIssue(null);

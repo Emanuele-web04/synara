@@ -191,9 +191,12 @@ export const createEffectServer = Effect.fn(function* (
   const threadSnoozeReactor = yield* ThreadSnoozeReactor;
   const readiness = yield* makeServerReadiness;
 
-  yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
+  // Start the runtime before serving config snapshots. This both performs the
+  // startup sync and attaches the file watcher; calling only the sync helper
+  // leaves live edits invisible until the next server restart.
+  yield* keybindings.start.pipe(
     Effect.catch((error) =>
-      Effect.logWarning("failed to sync keybindings defaults on startup", {
+      Effect.logWarning("failed to start keybindings runtime on startup", {
         path: error.configPath,
         detail: error.detail,
         cause: error.cause,

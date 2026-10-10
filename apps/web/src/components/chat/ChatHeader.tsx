@@ -575,24 +575,36 @@ export function ChatHeader({
     </Tooltip>
   ) : null;
 
-  const breadcrumbLinks = threadBreadcrumbs.map((breadcrumb, index) => (
-    <React.Fragment key={breadcrumb.threadId}>
-      {index > 0 ? <span className="shrink-0 text-muted-foreground/35">/</span> : null}
-      <button
-        type="button"
-        className="min-w-0 truncate transition-colors hover:text-foreground/80"
-        title={breadcrumb.title}
-        onClick={() => onNavigateToThread(breadcrumb.threadId)}
-      >
-        {breadcrumb.title}
-      </button>
-    </React.Fragment>
-  ));
+  // Beside the tabs, an ancestor that already has its own tab would show twice (once as
+  // "Parent /" and once as the tab), so the inline lineage keeps only the closed ones.
+  const openTabThreadIds = useOpenThreadTabsStore((state) => state.threadIds);
+  const inlineThreadBreadcrumbs = threadBreadcrumbs.filter(
+    (breadcrumb) => !openTabThreadIds.includes(breadcrumb.threadId),
+  );
+  const renderBreadcrumbLinks = (breadcrumbs: typeof threadBreadcrumbs) =>
+    breadcrumbs.map((breadcrumb, index) => (
+      <React.Fragment key={breadcrumb.threadId}>
+        {index > 0 ? <span className="shrink-0 text-muted-foreground/35">/</span> : null}
+        <button
+          type="button"
+          className="min-w-0 truncate transition-colors hover:text-foreground/80"
+          title={breadcrumb.title}
+          onClick={() => onNavigateToThread(breadcrumb.threadId)}
+        >
+          {breadcrumb.title}
+        </button>
+      </React.Fragment>
+    ));
   return (
     <div ref={headerRef} className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
       <div
         className={cn(
-          "flex min-w-0 flex-1 items-center",
+          // Keep the whole leading/header surface draggable when the chat pane
+          // is mounted inside the frameless Electron window. Interactive
+          // descendants are excluded by the shared `.drag-region` rules and
+          // their explicit no-drag controls, while the empty space between
+          // them remains a reliable caption target.
+          "drag-region flex min-w-0 flex-1 items-center",
           editorChatControls ? "h-full overflow-visible" : "overflow-hidden",
           "gap-2 sm:gap-3",
         )}
@@ -606,11 +618,11 @@ export function ChatHeader({
         )}
         {threadTabs ? (
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            {!minimalChrome && threadBreadcrumbs.length > 0 ? (
+            {!minimalChrome && inlineThreadBreadcrumbs.length > 0 ? (
               // Inline lineage for a subagent thread: the tabs own the row, so its
               // parents sit ahead of them instead of stacked above the title.
               <div className="flex min-w-0 max-w-[30%] shrink-0 items-center gap-1 overflow-hidden text-ui-sm text-muted-foreground/55">
-                {breadcrumbLinks}
+                {renderBreadcrumbLinks(inlineThreadBreadcrumbs)}
                 <span className="shrink-0 text-muted-foreground/35">/</span>
               </div>
             ) : null}
@@ -632,7 +644,7 @@ export function ChatHeader({
             >
               {threadBreadcrumbs.length > 0 ? (
                 <div className="flex min-w-0 items-center gap-1 overflow-hidden text-ui-sm text-muted-foreground/55">
-                  {breadcrumbLinks}
+                  {renderBreadcrumbLinks(threadBreadcrumbs)}
                 </div>
               ) : null}
               <div
@@ -662,7 +674,7 @@ export function ChatHeader({
                     </span>
                   )}
                   <h2
-                    className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground"
+                    className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground [-webkit-app-region:no-drag]"
                     title={activeThreadTitle}
                     onDoubleClick={() => onRenameThread()}
                   >

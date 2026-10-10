@@ -28,8 +28,8 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
-import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
-import { StudioOutputReactorLive } from "./StudioOutputReactor.ts";
+import { HubOutputReactor } from "../Services/HubOutputReactor.ts";
+import { HubOutputReactorLive } from "./HubOutputReactor.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -38,14 +38,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) {
-      throw new Error("Timed out waiting for Studio output reactor expectation.");
+      throw new Error("Timed out waiting for Hub output reactor expectation.");
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
-describe("StudioOutputReactor", () => {
-  let runtime: ManagedRuntime.ManagedRuntime<StudioOutputReactor, unknown> | null = null;
+describe("HubOutputReactor", () => {
+  let runtime: ManagedRuntime.ManagedRuntime<HubOutputReactor, unknown> | null = null;
   let scope: Scope.Closeable | null = null;
   const temporaryRoots: string[] = [];
 
@@ -71,7 +71,7 @@ describe("StudioOutputReactor", () => {
     "already-skipped",
     "child-own-failure",
   ] as const)(
-    "uses only a pre-dispatch Studio baseline when preparation is %s",
+    "uses only a pre-dispatch Hub baseline when preparation is %s",
     async (preparation) => {
       const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "synara-studio-reactor-"));
       temporaryRoots.push(workspaceRoot);
@@ -89,7 +89,7 @@ describe("StudioOutputReactor", () => {
         summary: "Turn continued without baselines",
         payload: {
           messageId,
-          detail: "Checkpoint and Studio preparation both exceeded the deadline.",
+          detail: "Checkpoint and Hub preparation both exceeded the deadline.",
         },
         turnId: null,
         createdAt: "2026-07-08T09:59:59.000Z",
@@ -139,7 +139,7 @@ describe("StudioOutputReactor", () => {
         getSpaceShellById: () => Effect.succeed(Option.none()),
       } as unknown as ProjectionSnapshotQueryShape;
 
-      const layer = StudioOutputReactorLive.pipe(
+      const layer = HubOutputReactorLive.pipe(
         Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
         Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
         Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
@@ -149,7 +149,7 @@ describe("StudioOutputReactor", () => {
       );
       const testRuntime = ManagedRuntime.make(layer);
       runtime = testRuntime;
-      const reactor = await runtime.runPromise(Effect.service(StudioOutputReactor));
+      const reactor = await runtime.runPromise(Effect.service(HubOutputReactor));
       if (
         preparation === "already-skipped" ||
         preparation === "child-own-failure" ||
@@ -237,7 +237,7 @@ describe("StudioOutputReactor", () => {
             kind: "checkpoint.baseline.skipped",
             tone: "info",
             turnId,
-            payload: { detail: expect.stringContaining("Studio") },
+            payload: { detail: expect.stringContaining("Hub") },
           },
         });
         return;

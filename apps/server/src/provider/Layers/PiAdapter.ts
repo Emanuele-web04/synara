@@ -1240,7 +1240,7 @@ function toolTitle(toolName: string, args: unknown): string {
   if (query && (toolName === "find" || toolName === "grep")) {
     return `${toolName} ${query}`;
   }
-  return toolName;
+  return toolName.trim() || "Tool";
 }
 
 function toolLifecycleData(input: {
@@ -2499,6 +2499,43 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       );
     };
 
+    // SDK messages end independently of the prompt's retries and tool loop.
+    // Keep prompt settlement as a fallback for failures without message_end.
+    const completeMessageItems = (
+      context: PiSessionContext,
+      failed: boolean,
+      raw: ProviderRuntimeEvent["raw"],
+    ) => {
+      if (context.activeAssistantItemId) {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          itemId: context.activeAssistantItemId,
+          type: "item.completed",
+          payload: {
+            itemType: "assistant_message",
+            status: failed ? "failed" : "completed",
+            title: "Assistant",
+          },
+          raw,
+        } satisfies ProviderRuntimeEvent);
+      }
+      if (context.activeReasoningItemId) {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          itemId: context.activeReasoningItemId,
+          type: "item.completed",
+          payload: {
+            itemType: "reasoning",
+            status: failed ? "failed" : "completed",
+            title: "Reasoning",
+          },
+          raw,
+        } satisfies ProviderRuntimeEvent);
+      }
+      context.activeAssistantItemId = undefined;
+      context.activeReasoningItemId = undefined;
+    };
+
     const completePrompt = (
       context: PiSessionContext,
       turnId: TurnId,
@@ -2519,32 +2556,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       const leafId = context.runtime.session.sessionManager.getLeafId();
       const turn = context.turns.find((candidate) => candidate.id === turnId);
       if (turn) turn.leafId = leafId;
-      if (context.activeAssistantItemId) {
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          itemId: context.activeAssistantItemId,
-          type: "item.completed",
-          payload: {
-            itemType: "assistant_message",
-            status: errorMessage ? "failed" : "completed",
-            title: "Assistant",
-          },
-          raw,
-        } satisfies ProviderRuntimeEvent);
-      }
-      if (context.activeReasoningItemId) {
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          itemId: context.activeReasoningItemId,
-          type: "item.completed",
-          payload: {
-            itemType: "reasoning",
-            status: errorMessage ? "failed" : "completed",
-            title: "Reasoning",
-          },
-          raw,
-        } satisfies ProviderRuntimeEvent);
-      }
+      completeMessageItems(context, Boolean(errorMessage), raw);
       if (usage) {
         offerRuntimeEvent({
           ...makeEventBase(context),
@@ -3035,6 +3047,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             },
             raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
           } satisfies ProviderRuntimeEvent);
+          return;
+        case "message_end":
+          if (event.message.role === "assistant") {
+            completeMessageItems(
+              context,
+              event.message.stopReason === "error" || event.message.stopReason === "aborted",
+              { source: "pi.sdk.event", messageType: event.type, payload: event },
+            );
+          }
           return;
         case "message_update":
           handleMessageUpdate(context, event);
