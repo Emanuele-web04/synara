@@ -13,6 +13,13 @@ export const GUEST_ANNOTATION_MAX_SELECTOR_LENGTH = 1_024;
 export const GUEST_ANNOTATION_MAX_TAG_NAME_LENGTH = 64;
 export const GUEST_ANNOTATION_MAX_TEXT_LENGTH = 280;
 export const GUEST_ANNOTATION_MAX_URL_LENGTH = 2_048;
+export const GUEST_ANNOTATION_MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+export const GUEST_ANNOTATION_IMAGE_MIME_TYPES: readonly string[] = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+];
 const GUEST_ANNOTATION_MAX_MARKERS = 32;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

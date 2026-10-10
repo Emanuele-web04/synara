@@ -396,6 +396,7 @@ export interface ComposerDraftStoreState {
   addBrowserAnnotation: (
     threadId: ThreadId,
     annotation: Omit<BrowserAnnotationDraft, "ordinal"> & { ordinal?: number },
+    image?: ComposerImageAttachment,
   ) => boolean;
   addBrowserAnnotations: (
     threadId: ThreadId,

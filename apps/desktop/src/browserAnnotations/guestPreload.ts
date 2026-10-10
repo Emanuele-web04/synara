@@ -20,7 +20,9 @@ import {
 } from "./elementInspection";
 import { createGuestIdentifier } from "./guestIdentity";
 import {
+  GUEST_ANNOTATION_IMAGE_MIME_TYPES,
   GUEST_ANNOTATION_MAX_COMMENT_LENGTH,
+  GUEST_ANNOTATION_MAX_IMAGE_BYTES,
   GUEST_ANNOTATION_MAX_NAME_LENGTH,
   GUEST_ANNOTATION_MAX_PAGE_TITLE_LENGTH,
   GUEST_ANNOTATION_MAX_ROLE_LENGTH,
@@ -49,6 +51,9 @@ const NOTICE_DURATION_MS = 4_000;
 const UNANCHORABLE_NOTICE = "This element can't be pinned. Try one next to it.";
 const INVISIBLE_TARGET_NOTICE = "This element has no visible box. Try one next to it.";
 const STALE_TARGET_NOTICE = "This element changed. Pick it again — your comment is kept.";
+const IMAGE_UNSUPPORTED_NOTICE = "Attach a PNG, JPEG, WebP or GIF image.";
+const IMAGE_TOO_LARGE_NOTICE = "This image is over 8 MB. Try a smaller one.";
+const IMAGE_UNREADABLE_NOTICE = "This image couldn't be read. Try pasting it again.";
 /** ASCII unit separator: never present in the tag/role parts it joins. */
 const FINGERPRINT_SEPARATOR = String.fromCharCode(31);
 const documentToken = createGuestIdentifier(globalThis.crypto);
@@ -75,6 +80,13 @@ let popoverTag: HTMLElement | null = null;
 let textarea: HTMLTextAreaElement | null = null;
 let badgeLayer: HTMLElement | null = null;
 let submitButton: HTMLButtonElement | null = null;
+let imageChip: HTMLElement | null = null;
+let imageRemoveButton: HTMLButtonElement | null = null;
+/** Image pasted or dropped into the comment box; sent with the next commit. */
+let pendingImage: { readonly mimeType: string; readonly bytes: Uint8Array } | null = null;
+/** Bumped on every attach/clear so a slow read cannot resurrect a removed image. */
+let pendingImageReadId = 0;
+let pendingImageReading = false;
 let cursorBubble: HTMLElement | null = null;
 let notice: HTMLElement | null = null;
 
@@ -823,8 +835,79 @@ function clearSelection(options: { readonly keepComment?: boolean } = {}): void 
   pointerNeedsHitTest = true;
   if (textarea && options.keepComment !== true) {
     textarea.value = "";
+    clearPendingImage();
     autoSizeComment();
   }
+}
+
+// --- Attached image --------------------------------------------------------
+
+function renderImageChip(): void {
+  if (imageChip) imageChip.hidden = pendingImage === null;
+  if (submitButton) submitButton.disabled = pendingImageReading;
+}
+
+function clearPendingImage(): void {
+  pendingImageReadId += 1;
+  pendingImage = null;
+  pendingImageReading = false;
+  renderImageChip();
+}
+
+function imageFileFrom(transfer: DataTransfer | null): File | null {
+  if (!transfer) return null;
+  for (const item of Array.from(transfer.items)) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (file) return file;
+  }
+  return null;
+}
+
+function attachImageFile(file: File): void {
+  if (!GUEST_ANNOTATION_IMAGE_MIME_TYPES.includes(file.type)) {
+    showNotice(IMAGE_UNSUPPORTED_NOTICE);
+    return;
+  }
+  if (file.size === 0 || file.size > GUEST_ANNOTATION_MAX_IMAGE_BYTES) {
+    showNotice(file.size === 0 ? IMAGE_UNREADABLE_NOTICE : IMAGE_TOO_LARGE_NOTICE);
+    return;
+  }
+  const readId = ++pendingImageReadId;
+  pendingImageReading = true;
+  renderImageChip();
+  const mimeType = file.type;
+  void file.arrayBuffer().then(
+    (buffer) => {
+      if (readId !== pendingImageReadId) return;
+      pendingImageReading = false;
+      pendingImage = { mimeType, bytes: new Uint8Array(buffer) };
+      hideNotice();
+      renderImageChip();
+      renderOverlay();
+    },
+    () => {
+      if (readId === pendingImageReadId) {
+        pendingImageReading = false;
+        renderImageChip();
+        showNotice(IMAGE_UNREADABLE_NOTICE);
+      }
+    },
+  );
+}
+
+// Only trusted paste/drop gestures on the open comment box can attach an image.
+// A page script can neither synthesize one nor see the data, because the
+// capture listeners isolate these events before the page receives them.
+function handleImageTransfer(event: ClipboardEvent | DragEvent): boolean {
+  if (!event.isTrusted || !selectedElement || !isOverlayTarget(event.target)) return false;
+  const file = imageFileFrom(
+    event instanceof ClipboardEvent ? event.clipboardData : event.dataTransfer,
+  );
+  if (!file) return false;
+  event.preventDefault();
+  attachImageFile(file);
+  return true;
 }
 
 function releaseSelectionWithNotice(message: string): void {
@@ -892,7 +975,7 @@ function endInteractiveSession(notifyHost: boolean): void {
 function submitAnnotation(): void {
   const session = activeSession;
   const target = selectedElement;
-  if (!session || !target) return;
+  if (!session || !target || pendingImageReading) return;
   if (!target.isConnected) {
     releaseSelectionWithNotice(STALE_TARGET_NOTICE);
     renderOverlay();
@@ -904,6 +987,7 @@ function submitAnnotation(): void {
     return;
   }
   const annotation = describeElement(target, textarea?.value ?? "");
+  const image = pendingImage;
   if (!annotation) {
     // The target stopped being addressable between selection and save. Ending
     // the session here would throw away the comment the user just wrote and
@@ -923,6 +1007,7 @@ function submitAnnotation(): void {
     documentToken,
     sessionId: session.sessionId,
     annotation,
+    ...(image ? { image: { mimeType: image.mimeType, bytes: image.bytes } } : {}),
   });
 }
 
@@ -986,6 +1071,17 @@ function installInteractionListeners(): void {
       if (isolateInteractionEvent(event)) {
         if (
           event.isTrusted &&
+          imageRemoveButton !== null &&
+          (eventHitsElement(event, imageRemoveButton) ||
+            shadow?.activeElement === imageRemoveButton)
+        ) {
+          clearPendingImage();
+          renderOverlay();
+          textarea?.focus({ preventScroll: true });
+          return;
+        }
+        if (
+          event.isTrusted &&
           submitButton !== null &&
           (eventHitsElement(event, submitButton) || shadow?.activeElement === submitButton)
         ) {
@@ -1022,6 +1118,17 @@ function installInteractionListeners(): void {
         return;
       }
       if (!overlayTarget) return;
+      if (
+        imageRemoveButton !== null &&
+        shadow?.activeElement === imageRemoveButton &&
+        (event.key === "Enter" || event.key === " ")
+      ) {
+        event.preventDefault();
+        clearPendingImage();
+        renderOverlay();
+        textarea?.focus({ preventScroll: true });
+        return;
+      }
       const submitsFromComment =
         shadow?.activeElement === textarea && event.key === "Enter" && !event.shiftKey;
       const submitsFromButton =
@@ -1095,7 +1202,19 @@ function installInteractionListeners(): void {
           pointerNeedsHitTest = true;
           scheduleFrame();
         }
-        isolateInteractionEvent(event);
+        const overlayTarget = isolateInteractionEvent(event);
+        if (!overlayTarget || !(event instanceof DragEvent)) return;
+        // Files dropped on the comment box attach instead of navigating away.
+        if (eventType === "dragover" && selectedElement && event.cancelable) {
+          event.preventDefault();
+        } else if (
+          eventType === "drop" &&
+          !handleImageTransfer(event) &&
+          event.dataTransfer?.types.includes("Files")
+        ) {
+          // Any other file must not navigate the page; dropped text still edits.
+          event.preventDefault();
+        }
       },
       true,
     );
@@ -1127,6 +1246,9 @@ function installInteractionListeners(): void {
           event,
           eventType !== "wheel" && !isOverlayTarget(event.target),
         );
+        if (overlayTarget && eventType === "paste" && event instanceof ClipboardEvent) {
+          if (handleImageTransfer(event)) return;
+        }
         // Composed events are retargeted to the host by the closed shadow root,
         // so the focused control identifies the comment field.
         if (overlayTarget && eventType === "input" && shadow?.activeElement === textarea) {
@@ -1252,6 +1374,25 @@ const OVERLAY_STYLE = `
     outline:none;
     cursor:text;
   }
+  .image-chip {
+    flex:none;
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    padding:2px 3px 2px 7px;
+    border-radius:999px;
+    background:color-mix(in srgb,var(--annotation-text) 8%,transparent);
+    color:var(--annotation-text);
+    font:500 11px/1.6 var(--annotation-sans);
+  }
+  .image-chip svg { width:12px; height:12px; }
+  .image-chip .image-remove {
+    width:16px;
+    height:16px;
+    background:transparent;
+    color:var(--annotation-muted-text);
+  }
+  .image-chip .image-remove svg { width:10px; height:10px; }
   textarea::placeholder { color:color-mix(in srgb,var(--annotation-muted-text) 72%,transparent); opacity:1; }
   button {
     flex:none;
@@ -1332,8 +1473,19 @@ const OVERLAY_MARKUP = `
   </div>
   <section class="popover" role="dialog" aria-label="Annotate element" hidden>
     <span class="chip" aria-hidden="true">div</span>
-    <textarea rows="1" maxlength="${GUEST_ANNOTATION_MAX_COMMENT_LENGTH}" placeholder="Add a comment…" aria-label="Annotation comment"></textarea>
-    <button type="button" aria-label="Save annotation" title="Save annotation (Enter)">
+    <span class="image-chip" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-3.1-3.1a2 2 0 0 0-2.8 0L6 21" />
+      </svg>
+      <span>Image</span>
+      <button type="button" class="image-remove" aria-label="Remove image" title="Remove image">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+          <path d="M18 6L6 18" /><path d="M6 6l12 12" />
+        </svg>
+      </button>
+    </span>
+    <textarea rows="1" maxlength="${GUEST_ANNOTATION_MAX_COMMENT_LENGTH}" placeholder="Add a comment or paste an image…" aria-label="Annotation comment"></textarea>
+    <button type="button" class="submit" aria-label="Save annotation" title="Save annotation (Enter)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 19V5" /><path d="M5 12l7-7 7 7" />
       </svg>
@@ -1360,7 +1512,9 @@ function initializeOverlay(): void {
   popoverTag = shadow.querySelector(".popover .chip");
   textarea = shadow.querySelector("textarea");
   badgeLayer = shadow.querySelector(".badges");
-  submitButton = shadow.querySelector("button");
+  submitButton = shadow.querySelector("button.submit");
+  imageChip = shadow.querySelector(".image-chip");
+  imageRemoveButton = shadow.querySelector("button.image-remove");
   cursorBubble = shadow.querySelector(".cursor");
   notice = shadow.querySelector(".notice");
   document.documentElement.append(host);

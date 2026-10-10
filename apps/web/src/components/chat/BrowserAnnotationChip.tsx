@@ -97,6 +97,13 @@ export function BrowserAnnotationChip({
             #{annotation.ordinal} · {label}
           </p>
           <p className="text-ui-sm text-muted-foreground">{pageLabel}</p>
+          {annotation.imageId || annotation.attachedImage ? (
+            <p className="text-ui-sm text-muted-foreground">
+              {annotation.attachedImage
+                ? `Attached image ${annotation.attachedImage}`
+                : "Image attached"}
+            </p>
+          ) : null}
           <p className="break-all font-mono text-ui-xs text-muted-foreground/80">
             {annotation.selector}
           </p>
