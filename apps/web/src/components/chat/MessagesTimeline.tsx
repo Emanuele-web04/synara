@@ -2964,9 +2964,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           )}
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          <span aria-hidden="true" className="flex shrink-0">
-            {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
-          </span>
+          {workingLabel === "Thinking" ? (
+            <SynaraWorkingLoader />
+          ) : (
+            <span aria-hidden="true" className="flex shrink-0">
+              {renderWorkEntryIcon(workingIcon, MESSAGE_ACTION_ICON_CLASS_NAME)}
+            </span>
+          )}
           <span>{workingLabel}</span>
         </div>
       )}
@@ -3472,6 +3476,14 @@ function applySettledTurnCollapseTransitions(params: {
   for (const transition of startedTransitions) {
     scheduleTransitionClose(transition.messageId);
   }
+}
+
+function SynaraWorkingLoader() {
+  return (
+    <span className="synara-working-loader" data-synara-working-loader="true" aria-hidden="true">
+      <span className="synara-working-loader__mark" />
+    </span>
+  );
 }
 
 function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {

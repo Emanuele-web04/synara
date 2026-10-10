@@ -819,6 +819,27 @@ label:has(> select#reasoning-effort) select {
   height: 100%;
 }
 
+/* The working row keeps the shared shimmer-group timeline while using the
+   Synara mark as its status icon. Size it from the row's chat font token. */
+.synara-working-loader {
+  display: inline-flex;
+  inline-size: 1.08em;
+  block-size: 1.08em;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+.synara-working-loader__mark {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  background: currentColor;
+  mask: url("/synara-logo.svg") center / contain no-repeat;
+  -webkit-mask: url("/synara-logo.svg") center / contain no-repeat;
+}
+
 /* Chat markdown rendering */
 .chat-markdown {
   min-width: 0;
