@@ -9,6 +9,7 @@ import {
   BrowserWindow,
   clipboard,
   nativeImage,
+  nativeTheme,
   session as electronSession,
   webContents as electronWebContents,
   WebContentsView,
@@ -466,6 +467,7 @@ export class DesktopBrowserManager {
   // the panel and torn down cleanly without leaking native windows.
   private readonly popupRuntimes = new Map<BrowserWindow, OAuthPopupRuntime>();
   private readonly previewThreadIds = new Set<ThreadId>();
+  private readonly occludedThreadIds = new Set<ThreadId>();
   private readonly sessionPolicy: BrowserSessionPolicy;
   private readonly tabSuspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
@@ -487,7 +489,15 @@ export class DesktopBrowserManager {
     warmInactiveRuntimeCount: 0,
   };
 
+  private readonly updateNativeViewBackgrounds = () => {
+    const color = nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff";
+    for (const runtime of this.runtimes.values()) {
+      if (!runtime.webContents.isDestroyed()) runtime.view?.setBackgroundColor(color);
+    }
+  };
+
   constructor(private readonly options: DesktopBrowserManagerOptions = {}) {
+    nativeTheme.on("updated", this.updateNativeViewBackgrounds);
     this.sessionPolicy = new BrowserSessionPolicy((event) => {
       this.handleSessionDownload(event);
     });
@@ -1240,6 +1250,7 @@ export class DesktopBrowserManager {
   }
 
   dispose(): void {
+    nativeTheme.removeListener("updated", this.updateNativeViewBackgrounds);
     this.disposed = true;
     this.annotations.dispose();
     this.sessionPolicy.dispose();
@@ -1268,6 +1279,7 @@ export class DesktopBrowserManager {
     this.copyLinkListeners.clear();
     this.states.clear();
     this.previewThreadIds.clear();
+    this.occludedThreadIds.clear();
     this.threadVersionById.clear();
     this.snapshotCacheByThreadId.clear();
     this.lastEmittedVersionByThreadId.clear();
@@ -1626,6 +1638,7 @@ export class DesktopBrowserManager {
   }
 
   close(input: BrowserThreadInput): ThreadBrowserState {
+    this.occludedThreadIds.delete(input.threadId);
     this.markHumanControl(input.threadId);
     this.clearSuspendTimer(input.threadId);
     this.resetRuntimePageZoomForThread(input.threadId);
@@ -1657,6 +1670,7 @@ export class DesktopBrowserManager {
   }
 
   hide(input: BrowserThreadInput): void {
+    const wasOccluded = this.occludedThreadIds.delete(input.threadId);
     const state = this.states.get(input.threadId);
     const activeTab = state ? this.getActiveTab(state) : null;
     const keepsAgentRuntimeAlive = Boolean(
@@ -1671,6 +1685,11 @@ export class DesktopBrowserManager {
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
+    } else if (wasOccluded && activeTab) {
+      // Occlusion already detached the visible panel; restore ordinary
+      // background sizing when the user subsequently hides it.
+      const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, activeTab.id));
+      if (runtime) this.setRuntimeViewHidden(runtime, true);
     }
 
     if (!state?.open) {
@@ -1687,6 +1706,8 @@ export class DesktopBrowserManager {
 
   setPanelBounds(input: BrowserSetPanelBoundsInput): void {
     this.perfCounters.setPanelBoundsCalls += 1;
+    if (input.occluded) this.occludedThreadIds.add(input.threadId);
+    else this.occludedThreadIds.delete(input.threadId);
     const previewChanged = this.previewThreadIds.has(input.threadId) !== (input.preview === true);
     if (input.preview) this.previewThreadIds.add(input.threadId);
     else this.previewThreadIds.delete(input.threadId);
@@ -1743,7 +1764,7 @@ export class DesktopBrowserManager {
     if (!state.open || nextBounds === null) {
       this.resetRuntimePageZoomForThread(input.threadId);
       if (this.activeThreadId === input.threadId) {
-        this.detachAttachedRuntime();
+        this.detachAttachedRuntime(input.occluded ? (previousBounds ?? undefined) : undefined);
         this.activeThreadId = null;
         if (state.open && input.occluded === true) {
           // A menu is not a hidden chat. Keep the page's DOM and history alive
@@ -2184,7 +2205,7 @@ export class DesktopBrowserManager {
     const state = this.states.get(input.threadId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
     if (
-      !this.previewThreadIds.has(input.threadId) ||
+      (!this.previewThreadIds.has(input.threadId) && !this.occludedThreadIds.has(input.threadId)) ||
       !state?.open ||
       state.activeTabId !== input.tabId ||
       !runtime ||
@@ -2196,13 +2217,18 @@ export class DesktopBrowserManager {
       .catch(() => null);
     if (
       this.runtimes.get(runtime.key) !== runtime ||
-      !this.previewThreadIds.has(input.threadId) ||
+      (!this.previewThreadIds.has(input.threadId) && !this.occludedThreadIds.has(input.threadId)) ||
       state.activeTabId !== input.tabId ||
       !image ||
       image.isEmpty()
     )
       return null;
-    const thumbnail = image.getSize().width > 640 ? image.resize({ width: 640 }) : image;
+    // Toolbar overlays need a full-size replacement for the obscured page;
+    // floating cards keep their existing bounded thumbnail cost.
+    const thumbnail =
+      this.previewThreadIds.has(input.threadId) && image.getSize().width > 640
+        ? image.resize({ width: 640 })
+        : image;
     return `data:image/jpeg;base64,${thumbnail.toJPEG(70).toString("base64")}`;
   }
 
@@ -2759,16 +2785,13 @@ export class DesktopBrowserManager {
       return;
     }
 
-    try {
-      window.contentView.removeChildView(runtime.view);
-    } catch {
-      // Electron throws when the view is not attached yet; adding it below is the desired state.
-    }
+    // Electron reorders an existing child in place. Removing it first drops
+    // native focus even when the user is already interacting with this page.
     window.contentView.addChildView(runtime.view);
   }
 
-  private detachAttachedRuntime(): void {
-    if (!this.window || !this.attachedRuntimeKey) {
+  private detachAttachedRuntime(occludedBounds?: BrowserPanelBounds): void {
+    if (!this.window || this.window.isDestroyed() || !this.attachedRuntimeKey) {
       this.attachedRuntimeKey = null;
       this.attachedBoundsSignature = null;
       return;
@@ -2776,7 +2799,7 @@ export class DesktopBrowserManager {
 
     const runtime = this.runtimes.get(this.attachedRuntimeKey);
     if (runtime?.view) {
-      this.setRuntimeViewHidden(runtime, true);
+      this.setRuntimeViewHidden(runtime, true, occludedBounds);
       if (!this.automationRuntimeKeys.has(runtime.key)) {
         this.window.contentView.removeChildView(runtime.view);
       }
@@ -2785,13 +2808,19 @@ export class DesktopBrowserManager {
     this.attachedBoundsSignature = null;
   }
 
-  private setRuntimeViewHidden(runtime: LiveTabRuntime, hidden: boolean): void {
-    if (!runtime.view) {
+  private setRuntimeViewHidden(
+    runtime: LiveTabRuntime,
+    hidden: boolean,
+    occludedBounds?: BrowserPanelBounds,
+  ): void {
+    if (!runtime.view || runtime.webContents.isDestroyed()) {
       return;
     }
     const keepRenderingInBackground = hidden && this.automationRuntimeKeys.has(runtime.key);
     if (keepRenderingInBackground) {
-      this.parkHiddenRuntime(runtime, BACKGROUND_AUTOMATION_BOUNDS);
+      // An overlay needs the panel's framing; ordinary background automation
+      // still uses its standard viewport.
+      this.parkHiddenRuntime(runtime, occludedBounds ?? BACKGROUND_AUTOMATION_BOUNDS);
       return;
     }
     const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
@@ -2803,7 +2832,8 @@ export class DesktopBrowserManager {
 
   private parkHiddenRuntime(runtime: LiveTabRuntime, bounds: BrowserPanelBounds): void {
     const window = this.window;
-    if (!window || !runtime.view) return;
+    if (!window || window.isDestroyed() || !runtime.view || runtime.webContents.isDestroyed())
+      return;
     // A hidden in-bounds view can produce its first capture; an off-window view
     // may never paint. Hide before attaching or moving to prevent a visible flash.
     runtime.view.setVisible(false);
@@ -2894,6 +2924,8 @@ export class DesktopBrowserManager {
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
       webPreferences: {
         ...popupOptions?.webPreferences,
+        // Navigation must preserve shell keyboard focus, including hidden previews.
+        focusOnNavigation: false,
         partition: BROWSER_SESSION_PARTITION,
         contextIsolation: true,
         nodeIntegration: false,
@@ -2903,6 +2935,9 @@ export class DesktopBrowserManager {
           : {}),
       },
     });
+    // Suspended tabs reload on activation. Without an opaque backdrop the view
+    // shows black until the page paints, which reads as a broken tab switch.
+    view.setBackgroundColor(nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff");
     const runtime: LiveTabRuntime = {
       key: buildRuntimeKey(threadId, tabId),
       threadId,
@@ -3324,8 +3359,7 @@ export class DesktopBrowserManager {
     // interrupted renderer transition must not be able to leave an untracked
     // WebContentsView over the canonical renderer WebView. Remove it from the
     // window hierarchy defensively before closing its WebContents.
-    if (runtime.view && this.window) {
-      this.setRuntimeViewHidden(runtime, true);
+    if (runtime.view && this.window && !this.window.isDestroyed()) {
       try {
         this.window.contentView.removeChildView(runtime.view);
       } catch {

@@ -57,6 +57,7 @@ export interface TerminalSessionState {
   /** True once at least one hook event (Start/Stop/PermissionRequest) has been observed. */
   managedAgentObserved: boolean;
   runtimeEnv: Record<string, string> | null;
+  providerAuthInstanceId?: string;
   /** Buffered shell input used to detect canonical CLI commands at submit time. */
   pendingInputBuffer: string;
   /** Live terminal-mode mirror used to replay input modes after renderer reattach. */

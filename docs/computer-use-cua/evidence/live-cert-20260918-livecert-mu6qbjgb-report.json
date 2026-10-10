@@ -1,0 +1,63 @@
+{
+  "run": "livecert-mu6qbjgb",
+  "date": "2026-09-18T09:01:30.752Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-ZWwqps/host.sock",
+  "elapsedMs": 5058,
+  "rows": [
+    {
+      "name": "locked-use-reauth",
+      "verdict": "fail",
+      "detail": "grant=true pausedRefused=true reauth=false declineHeld=true pendingSurvived=true resumed=true",
+      "evidence": {
+        "prompts": [
+          "live-cert-lock-a:accept",
+          "live-cert-lock-b:decline",
+          "live-cert-lock-c:accept"
+        ],
+        "aGranted": true,
+        "aCached": true,
+        "aSilent": true,
+        "bDeclined": true,
+        "pausedReply": "{\"ok\":true,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"Computer input is paused because the desktop is locked, asleep or inactive. Return to the desktop, then read fresh state before continuing.\"}],\"structuredContent\":{\"effec",
+        "aReauth": true,
+        "aReprompted": false,
+        "bAfter": false,
+        "bNoReprompt": true,
+        "cGranted": true,
+        "resumedOk": true
+      },
+      "elapsedMs": 2161
+    }
+  ],
+  "speed": [
+    {
+      "tool": "get_window_state",
+      "n": 2,
+      "p50": 104.2,
+      "p95": 175.9,
+      "max": 175.9
+    },
+    {
+      "tool": "list_windows",
+      "n": 4,
+      "p50": 5.1,
+      "p95": 63.2,
+      "max": 63.2
+    },
+    {
+      "tool": "set_value",
+      "n": 2,
+      "p50": 0.6,
+      "p95": 1111.7,
+      "max": 1111.7
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 0,
+    "fail": 1,
+    "skipped": 0,
+    "verdict": "fail"
+  }
+}

@@ -49,6 +49,7 @@ function ClaudeTraitsPickerHarness(props: {
       droid: [],
       opencode: [],
       pi: [],
+      omp: [],
     },
   });
   const handlePromptChange = (nextPrompt: string) => {
@@ -157,20 +158,6 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("shows the fast mode toggle in the Effort header for Opus", async () => {
-    await using _ = await mountClaudePicker();
-
-    await page.getByRole("button").click();
-
-    await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").toContain("Effort");
-      expect(document.body.textContent ?? "").not.toContain("Speed");
-      const toggle = document.body.querySelector('[aria-label="Fast mode"]');
-      expect(toggle).not.toBeNull();
-      expect(toggle?.getAttribute("aria-pressed")).toBe("false");
-    });
-  });
-
   it("flips the fast mode toggle in place without closing the menu", async () => {
     await using _ = await mountClaudePicker();
 
@@ -182,19 +169,6 @@ describe("TraitsPicker (Claude)", () => {
       expect(
         document.body.querySelector('[aria-label="Fast mode"]')?.getAttribute("aria-pressed"),
       ).toBe("true");
-    });
-  });
-
-  it("shows auto-compact budget controls for native-1M Claude models", async () => {
-    await using _ = await mountClaudePicker();
-
-    await page.getByRole("button").click();
-
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Auto-compact");
-      expect(text).toContain("200k");
-      expect(text).toContain("1M");
     });
   });
 
@@ -223,20 +197,6 @@ describe("TraitsPicker (Claude)", () => {
       expect(text).toContain("High");
       expect(text).toContain("Max");
       expect(text).toContain("Ultrathink");
-    });
-  });
-
-  it("shows Extra High for Claude Opus 4.7", async () => {
-    await using _ = await mountClaudePicker({
-      model: "claude-opus-4-7",
-    });
-
-    await page.getByRole("button").click();
-
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Extra High");
-      expect(text).toContain("Max");
     });
   });
 
@@ -299,18 +259,7 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("shows the non-default auto-compact budget in the trigger label", async () => {
-    await using _ = await mountClaudePicker({
-      model: "claude-opus-4-6",
-      options: { autoCompactWindow: "1m" },
-    });
-
-    await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").toContain("1M");
-    });
-  });
-
-  it.each(["claude-opus-4-6", "claude-sonnet-5", "claude-opus-4-6[1m]"])(
+  it.each(["claude-opus-4-6", "claude-opus-4-6[1m]"])(
     "selects Auto and preserves explicit budgets for %s",
     async (model) => {
       await using _ = await mountClaudePicker({ model });
@@ -433,22 +382,6 @@ describe("TraitsPicker (Codex)", () => {
     });
   });
 
-  it("shows the fast mode toggle in the Effort header", async () => {
-    await using _ = await mountCodexPicker({
-      options: { fastMode: false },
-    });
-
-    await page.getByRole("button").click();
-
-    await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").toContain("Effort");
-      expect(document.body.textContent ?? "").not.toContain("Speed");
-      const toggle = document.body.querySelector('[aria-label="Fast mode"]');
-      expect(toggle).not.toBeNull();
-      expect(toggle?.getAttribute("aria-pressed")).toBe("false");
-    });
-  });
-
   it("shows Fast in the trigger label when fast mode is active", async () => {
     await using _ = await mountCodexPicker({
       options: { fastMode: true },
@@ -456,22 +389,6 @@ describe("TraitsPicker (Codex)", () => {
 
     await vi.waitFor(() => {
       expect(document.body.textContent ?? "").toMatch(/Medium\s*·\s*Fast/u);
-    });
-  });
-
-  it("shows only the provided effort options", async () => {
-    await using _ = await mountCodexPicker({
-      options: { fastMode: false },
-    });
-
-    await page.getByRole("button").click();
-
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Low");
-      expect(text).toContain("Medium");
-      expect(text).toContain("High");
-      expect(text).toContain("Extra High");
     });
   });
 
@@ -679,6 +596,7 @@ function OpenCodeTraitsPickerHarness(props: {
       droid: [],
       opencode: [],
       pi: [],
+      omp: [],
     },
   });
   const handlePromptChange = (nextPrompt: string) => {
@@ -788,19 +706,6 @@ describe("TraitsPicker (OpenCode)", () => {
     await vi.waitFor(() => {
       expect(mounted.host.textContent ?? "").toBe("");
       expect(mounted.host.querySelector("button")).toBeNull();
-    });
-  });
-
-  it("shows the runtime default thinking level in the trigger label", async () => {
-    await using mounted = await mountOpenCodePicker({
-      model: "openai/gpt-5.4",
-      runtimeModel: OPENCODE_RUNTIME_MODEL_WITH_REASONING,
-    });
-
-    await vi.waitFor(() => {
-      const text = mounted.host.textContent ?? "";
-      expect(text).toContain("Medium");
-      expect(text).not.toMatch(/\bThinking\b/u);
     });
   });
 

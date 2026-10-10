@@ -9,6 +9,9 @@ function mountFooter(input: {
   phase: SessionPhase;
   connecting: boolean;
   onInterrupt?: () => void;
+  voiceEnabled?: boolean;
+  voiceRecording?: boolean;
+  onVoiceToggle?: () => void;
 }) {
   return render(
     <ChatComposerFooter
@@ -20,14 +23,16 @@ function mountFooter(input: {
       resetInteractionMode={vi.fn()}
       sidebarAction={null}
       voice={{
-        enabled: false,
-        recording: false,
+        enabled: input.voiceEnabled ?? false,
+        recording: input.voiceRecording ?? false,
+        starting: false,
+        waitingForAudio: false,
         transcribing: false,
         durationLabel: "",
         waveformLevels: [],
         onCancel: vi.fn(),
         onSubmit: vi.fn(),
-        onToggle: vi.fn(),
+        onToggle: input.onVoiceToggle ?? vi.fn(),
       }}
       pendingInput={null}
       submission={{
@@ -66,14 +71,38 @@ describe("ChatComposerFooter stop control", () => {
     }
   });
 
-  it("keeps showing Stop while running", async () => {
-    const onInterrupt = vi.fn();
-    const screen = await mountFooter({ phase: "running", connecting: false, onInterrupt });
+  it("keeps the mic next to Stop so a follow-up can be dictated mid-turn", async () => {
+    const onVoiceToggle = vi.fn();
+    const screen = await mountFooter({
+      phase: "running",
+      connecting: false,
+      voiceEnabled: true,
+      onVoiceToggle,
+    });
     try {
-      const stop = page.getByRole("button", { name: "Stop generation" });
-      await expect.element(stop).toBeVisible();
-      await stop.click();
-      expect(onInterrupt).toHaveBeenCalledOnce();
+      await expect.element(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
+      const mic = page.getByRole("button", { name: "Record voice note" });
+      await expect.element(mic).toBeVisible();
+      await mic.click();
+      expect(onVoiceToggle).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("shows only the recorder's stop while dictating mid-turn", async () => {
+    const screen = await mountFooter({
+      phase: "running",
+      connecting: false,
+      voiceEnabled: true,
+      voiceRecording: true,
+    });
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Stop voice recording" }))
+        .toBeVisible();
+      expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
+      expect(document.querySelector('button[aria-label="Record voice note"]')).toBeNull();
     } finally {
       await screen.unmount();
     }

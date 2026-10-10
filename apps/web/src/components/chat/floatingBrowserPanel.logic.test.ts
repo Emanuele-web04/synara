@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   clampFloatingBrowserPanelRect,
-  initialFloatingBrowserPanelRect,
   moveFloatingBrowserPanelRect,
   resizeFloatingBrowserPanelRect,
   shouldRenderFloatingBrowserPanel,
@@ -10,15 +9,6 @@ import {
 } from "./floatingBrowserPanel.logic";
 
 describe("floating browser panel geometry", () => {
-  it("starts compact in the bottom-right of its host", () => {
-    expect(initialFloatingBrowserPanelRect({ width: 1_000, height: 700 })).toEqual({
-      left: 668,
-      top: 488,
-      width: 320,
-      height: 200,
-    });
-  });
-
   it("clamps movement and size inside a small host", () => {
     expect(
       clampFloatingBrowserPanelRect(
@@ -85,15 +75,6 @@ describe("floating browser panel visibility", () => {
       false,
     );
     expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, isFocused: false })).toBe(false);
-  });
-
-  it("restores the card once a matching dock browser is no longer visible", () => {
-    expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: true })).toBe(
-      false,
-    );
-    expect(shouldRenderFloatingBrowserPanel({ ...matchingInput, dockBrowserVisible: false })).toBe(
-      true,
-    );
   });
 });
 

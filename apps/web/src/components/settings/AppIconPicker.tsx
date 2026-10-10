@@ -5,6 +5,8 @@
 import { useState } from "react";
 
 import type { DesktopAppIcon } from "@synara/contracts";
+import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
+import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 import { Spinner } from "~/components/ui/spinner";
 import { cn, isMacPlatform } from "~/lib/utils";
 
@@ -17,12 +19,21 @@ const APP_ICON_OPTIONS = {
   default: { label: "Default icon", src: "/app-icons/default.png" },
   icon: { label: "Icon", src: "/app-icons/icon-group-600-macos.png" },
   dark: { label: "Dark icon", src: "/app-icons/dark.png" },
+  beta: { label: "Beta icon", src: "/app-icons/beta.png" },
 } as const satisfies Record<DesktopAppIcon, AppIconOption>;
 
 const MAC_DESKTOP_APP_ICONS = ["default", "icon", "dark"] as const;
+const MAC_BETA_DESKTOP_APP_ICONS = ["default", "icon", "dark", "beta"] as const;
 const OTHER_DESKTOP_APP_ICONS = ["default", "icon"] as const;
+const OTHER_BETA_DESKTOP_APP_ICONS = ["default", "icon", "beta"] as const;
 
-export function desktopAppIconsForPlatform(platform: string): ReadonlyArray<DesktopAppIcon> {
+export function desktopAppIconsForPlatform(
+  platform: string,
+  flavor: SynaraDesktopFlavor | "unknown" = "unknown",
+): ReadonlyArray<DesktopAppIcon> {
+  if (flavor === "beta") {
+    return isMacPlatform(platform) ? MAC_BETA_DESKTOP_APP_ICONS : OTHER_BETA_DESKTOP_APP_ICONS;
+  }
   return isMacPlatform(platform) ? MAC_DESKTOP_APP_ICONS : OTHER_DESKTOP_APP_ICONS;
 }
 
@@ -40,7 +51,13 @@ export function AppIconPicker({
 
   return (
     <div className="flex items-center gap-1" role="group" aria-label="App icon" aria-busy={busy}>
-      {desktopAppIconsForPlatform(platform).map((icon) => {
+      {desktopAppIconsForPlatform(
+        platform,
+        desktopFlavorFromProtocol(
+          typeof window === "undefined" ? undefined : window.location?.protocol,
+          import.meta.env.DEV,
+        ),
+      ).map((icon) => {
         const option = APP_ICON_OPTIONS[icon];
         const selected = value === icon;
         const applying = pendingIcon === icon;

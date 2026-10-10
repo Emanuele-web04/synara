@@ -5,7 +5,7 @@
 
 import type { TerminalIconKey } from "@synara/shared/terminalThreads";
 
-import { TerminalSquare } from "~/lib/icons";
+import { TerminalIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { AntigravityIcon, ClaudeAI, OpenAI } from "../Icons";
@@ -24,7 +24,7 @@ export default function TerminalIdentityIcon({ iconKey, className }: TerminalIde
         ? ClaudeAI
         : iconKey === "antigravity"
           ? AntigravityIcon
-          : TerminalSquare;
+          : TerminalIcon;
 
   return (
     <span className={cn("inline-flex shrink-0 items-center justify-center", className)}>

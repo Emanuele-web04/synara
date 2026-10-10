@@ -3,9 +3,10 @@
 // Layer: Chat composer state helpers
 // Depends on: composer trait resolution and the starred model storage shape.
 
-import type { ProviderKind } from "@synara/contracts";
+import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@synara/contracts";
+import { resolveSelectableModel } from "@synara/shared/model";
 
-import { type StarredModel, starredModelKey } from "~/lib/starredModels";
+import { type StarredModel, starredModelInstanceId, starredModelKey } from "~/lib/starredModels";
 import {
   formatProviderModelOptionName,
   groupProviderModelOptions,
@@ -19,9 +20,11 @@ import {
 
 type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
 
-/** Tab id of the starred presets list; every other tab id is a provider kind. */
-export const STARRED_TAB = "starred";
-export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderKind;
+/** Tab id of the starred presets list; every other tab id is a provider account
+ *  (instance id; a provider's default account shares the provider id). */
+// The colon keeps it outside the account id alphabet, so no account can claim it.
+export const STARRED_TAB = ":starred";
+export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderInstanceId;
 
 /** Marks the open picker so global mod+digit handlers (thread jump) yield to its rows. */
 export const MODEL_PICKER_POPUP_ATTRIBUTE = "data-model-picker-popup";
@@ -122,7 +125,10 @@ export function starredTraitsMatch(
 export type ComposerModelPickerRow = {
   key: string;
   provider: ProviderKind;
+  /** Non-default account the row runs in; undefined means the default account. */
+  instanceId?: string;
   model: string;
+  selectableModel: ModelSlug | null;
   name: string;
   /** Muted text after the name: the trait summary of a starred preset. */
   detail: string | null;
@@ -130,10 +136,14 @@ export type ComposerModelPickerRow = {
   groupLabel: string | null;
   /** Present on starred rows: the preset to restore and to un-star. */
   preset: StarredModel | null;
+  /** Present on OMP role rows: the model + options the role resolves to. */
+  role?: ProviderModelOption["role"];
 };
 
 export function buildProviderTabRows(input: {
   provider: ProviderKind;
+  /** The tab's selected account; the default account is left implicit. */
+  instanceId?: string;
   options: ReadonlyArray<ProviderModelOption>;
   query: string;
   selectedModel: string | null;
@@ -151,23 +161,34 @@ export function buildProviderTabRows(input: {
       : input.options;
   return groupProviderModelOptions(filteredOptions).flatMap((group) =>
     group.options.map((option) => ({
-      key: `${provider}:${option.slug}`,
+      key: `${input.instanceId ?? provider}:${option.slug}`,
       provider,
+      ...(input.instanceId && input.instanceId !== provider
+        ? { instanceId: input.instanceId }
+        : {}),
       model: option.slug,
+      selectableModel: option.slug,
       name: option.name,
       detail: null,
       selected: option.slug === input.selectedModel,
       groupLabel: group.label,
       preset: null,
+      role: option.role,
     })),
   );
 }
 
 export function buildStarredTabRows(input: {
   starredModels: ReadonlyArray<StarredModel>;
-  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  /** Model catalog of one account (instance id; the default shares the provider id). */
+  modelOptionsFor: (
+    provider: ProviderKind,
+    instanceId: string,
+  ) => ReadonlyArray<ProviderModelOption>;
+  /** Name of the account a preset runs in; undefined while its provider has only one. */
+  accountLabelFor?: (instanceId: string) => string | undefined;
   query: string;
-  current: { provider: ProviderKind; model: string } & Pick<
+  current: { provider: ProviderKind; instanceId: string; model: string } & Pick<
     StarredModel,
     "effort" | "fastMode" | "thinking"
   >;
@@ -177,12 +198,18 @@ export function buildStarredTabRows(input: {
   ) => ComposerTraitSelection["effortLevels"];
 }): ComposerModelPickerRow[] {
   return input.starredModels.flatMap((entry) => {
+    const instanceId = starredModelInstanceId(entry);
+    const options = input.modelOptionsFor(entry.provider, instanceId);
+    const accountLabel = input.accountLabelFor?.(instanceId);
+    const selectableModel = resolveSelectableModel(entry.provider, entry.model, options);
     const name =
-      input.modelOptionsByProvider[entry.provider].find((option) => option.slug === entry.model)
-        ?.name ?? formatProviderModelOptionName({ provider: entry.provider, slug: entry.model });
+      options.find((option) => option.slug === selectableModel)?.name ??
+      formatProviderModelOptionName({ provider: entry.provider, slug: entry.model });
     if (
       input.query.length > 0 &&
-      !`${name} ${entry.model} ${entry.provider}`.toLowerCase().includes(input.query)
+      !`${name} ${entry.model} ${entry.provider} ${accountLabel ?? ""}`
+        .toLowerCase()
+        .includes(input.query)
     ) {
       return [];
     }
@@ -194,12 +221,19 @@ export function buildStarredTabRows(input: {
       {
         key: starredModelKey(entry),
         provider: entry.provider,
+        ...(instanceId !== entry.provider ? { instanceId } : {}),
         model: entry.model,
+        selectableModel,
         name,
-        detail: traitsLabel.length > 0 ? traitsLabel : null,
+        detail:
+          selectableModel === null
+            ? "Unavailable"
+            : [accountLabel, traitsLabel].filter(Boolean).join(" · ") || null,
         selected:
+          selectableModel !== null &&
           entry.provider === input.current.provider &&
-          entry.model === input.current.model &&
+          instanceId === input.current.instanceId &&
+          selectableModel === input.current.model &&
           starredTraitsMatch(entry, input.current),
         groupLabel: null,
         preset: entry,

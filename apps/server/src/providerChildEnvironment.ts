@@ -12,7 +12,8 @@ export type ProviderChildKind =
   | "droid"
   | "grok"
   | "opencode"
-  | "pi";
+  | "pi"
+  | "omp";
 
 const PROVIDER_CREDENTIAL_KEYS = new Set([
   "ANTHROPIC_API_KEY",
@@ -45,6 +46,11 @@ export function isProviderCredentialKey(key: string): boolean {
   return PROVIDER_CREDENTIAL_KEYS.has(key.trim().toUpperCase());
 }
 
+/** Removes ambient provider credentials while retaining ordinary process state. */
+export function withoutProviderCredentialEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !isProviderCredentialKey(key)));
+}
+
 const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<string>> = {
   antigravity: new Set(["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"]),
   claude: new Set([
@@ -65,7 +71,13 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   codex: "all",
   opencode: "all",
   pi: "all",
+  omp: "all",
 };
+
+export function providerCredentialKeysFor(provider: ProviderChildKind): readonly string[] {
+  const grants = PROVIDER_CREDENTIAL_GRANTS[provider];
+  return [...(grants === "all" ? PROVIDER_CREDENTIAL_KEYS : grants)];
+}
 
 const INHERITED_NATIVE_CAPABILITY_KEYS = new Set([
   "BUN_OPTIONS",

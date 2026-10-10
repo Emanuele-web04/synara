@@ -6,6 +6,7 @@
 import {
   type OpenCodeModelOptions,
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ThreadId,
@@ -36,7 +37,7 @@ import {
 } from "./composerTraits";
 import { useComposerTraitCommit } from "./useComposerTraitCommit";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { ShortcutKbd } from "../ui/kbd";
 
 export function defaultAgentForProvider(provider: ProviderKind): string | null {
   if (provider === "opencode") return "build";
@@ -288,6 +289,7 @@ export interface TraitsMenuContentProps {
   // itself and only needs the remaining trait sections (thinking, context, agent).
   excludeEffort?: boolean;
   modelOptions?: ProviderOptions | null | undefined;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   onSelectionComplete?: () => void;
 }
 
@@ -302,6 +304,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   includeFastMode: includeFastModeProp,
   excludeEffort: excludeEffortProp,
   modelOptions,
+  selectedProviderInstanceId,
   onSelectionComplete,
 }: TraitsMenuContentProps) {
   const excludeEffort = excludeEffortProp ?? false;
@@ -343,7 +346,13 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const hasPriorFastModeSection =
     thinkingEnabled !== null || effortLevels.length > 0 || contextWindowOptions.length > 1;
 
-  const commitTraitOptions = useComposerTraitCommit({ threadId, provider, model, modelOptions });
+  const commitTraitOptions = useComposerTraitCommit({
+    threadId,
+    provider,
+    providerInstanceId: selectedProviderInstanceId,
+    model,
+    modelOptions,
+  });
   // Commit a trait change and close the menu. Every section funnels here; the
   // fast-mode header toggle passes `keepMenuOpen` so its state flip stays visible.
   const commitTrait = useCallback(
@@ -422,7 +431,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             }
             note={
               ultrathinkPromptControlled ? (
-                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                <div className="px-2 pb-1.5 text-muted-foreground/80 text-ui leading-snug">
                   Remove Ultrathink from the prompt to change effort.
                 </div>
               ) : undefined
@@ -489,6 +498,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   onPromptChange,
   includeFastMode: includeFastModeProp,
   modelOptions,
+  selectedProviderInstanceId,
   open,
   onOpenChange,
   onSelectionCommitted,
@@ -654,10 +664,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change effort, context, and speed</span>
-                <ShortcutKbd
-                  shortcutLabel={shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
-                />
+                <ShortcutKbd shortcutLabel={shortcutLabel} className="h-4 min-w-4 text-ui-2xs" />
               </span>
             </TooltipPopup>
           ) : null}
@@ -676,6 +683,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           onPromptChange={onPromptChange}
           includeFastMode={includeFastMode}
           modelOptions={modelOptions}
+          selectedProviderInstanceId={selectedProviderInstanceId}
           onSelectionComplete={handleSelectionComplete}
         />
       </ComposerPickerMenuPopup>

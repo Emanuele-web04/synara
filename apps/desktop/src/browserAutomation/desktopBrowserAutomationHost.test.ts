@@ -1,15 +1,11 @@
-import { ThreadId, type BrowserElementRef, type BrowserSnapshotId } from "@synara/contracts";
+import { ThreadId } from "@synara/contracts";
 import type { WebContents } from "electron";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BrowserAutomationVisibleRuntime, DesktopBrowserManager } from "../browserManager";
 import { DesktopBrowserAutomationHost } from "./desktopBrowserAutomationHost";
 import { BrowserAutomationHostError } from "./hostErrors";
-import { configureWorkspaceUploadForTests } from "./workspaceUpload";
 import { runBetterwright } from "./betterwrightRuntime";
 
 vi.mock("./betterwrightRuntime", () => ({ runBetterwright: vi.fn() }));
@@ -23,8 +19,6 @@ const THREAD_ID = ThreadId.makeUnsafe("thread-automation-1");
 const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-automation-2");
 const TAB_ID = "b33b993d-6ac0-4a39-978a-824c12d47e8b";
 const OPENED_TAB_ID = "018f4f7a-4b2a-7c10-8d6e-4c1ac7b92f31";
-const SNAPSHOT_ID = "948eed8d-dd27-41a7-842b-32ed221f434e" as BrowserSnapshotId;
-const ELEMENT_REF = "e1" as BrowserElementRef;
 
 type SendCommand = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 
@@ -40,8 +34,6 @@ const deferred = <T>() => {
 
 const createWebContents = () => {
   let url = "https://example.test/";
-  const history = ["https://example.test/", "https://example.test/next"];
-  let historyIndex = 0;
   const debuggerEvents = new EventEmitter();
   const webContentsEvents = new EventEmitter();
   const emitNavigation = (nextUrl: string) => {
@@ -73,95 +65,13 @@ const createWebContents = () => {
     return { frameId: "main-frame", loaderId };
   };
   const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (
-      method === "Input.dispatchMouseEvent" &&
-      params?.type === "mouseMoved" &&
-      params.buttons === 1
-    ) {
-      queueMicrotask(() =>
-        debuggerEvents.emit("message", {}, "Input.dragIntercepted", {
-          data: { items: [], dragOperationsMask: 1 },
-        }),
-      );
-      return {};
-    }
     if (method === "Page.navigate") {
-      const nextUrl = String(params?.url ?? url);
-      const existingIndex = history.indexOf(nextUrl);
-      if (existingIndex >= 0) historyIndex = existingIndex;
-      else {
-        history.splice(historyIndex + 1, history.length, nextUrl);
-        historyIndex = history.length - 1;
-      }
-      return emitNavigation(nextUrl);
-    }
-    if (method === "Page.getNavigationHistory") {
-      return {
-        currentIndex: historyIndex,
-        entries: history.map((entryUrl, index) => ({ id: index + 1, url: entryUrl })),
-      };
-    }
-    if (method === "Page.navigateToHistoryEntry") {
-      historyIndex = Number(params?.entryId) - 1;
-      return emitNavigation(history[historyIndex] ?? url);
-    }
-    if (method === "Page.reload") {
-      emitNavigation(url);
-      return {};
+      return emitNavigation(String(params?.url ?? url));
     }
     if (method === "Page.getLayoutMetrics") {
       return { cssLayoutViewport: { clientWidth: 1024, clientHeight: 768 } };
     }
     if (method === "Runtime.evaluate") {
-      const expression = String(params?.expression ?? "");
-      if (expression === "globalThis.__synaraWebMcpBridgeV1") {
-        return { result: { objectId: "webmcp-bridge", type: "object" } };
-      }
-      if (expression.includes("performance.getEntriesByType")) return { result: { value: 0 } };
-      if (
-        expression.includes('const key = "__synaraBrowserAutomationV1"') &&
-        expression.includes("elements = []")
-      ) {
-        return {
-          result: {
-            value: {
-              generation: 1,
-              elements: [
-                {
-                  ref: "e1",
-                  role: "button",
-                  name: "Save",
-                  bounds: { x: 10, y: 20, width: 100, height: 40 },
-                  states: [],
-                },
-              ],
-              visibleText: "Ready",
-              semanticTruncated: false,
-              visibleTextTruncated: false,
-            },
-          },
-        };
-      }
-      if (
-        expression.includes("state.currentTarget =") ||
-        expression.includes("const matches = []")
-      ) {
-        return { result: { value: { count: 1, generation: 1 } } };
-      }
-      if (expression.includes("globalThis.__synaraBrowserAutomationV1.currentTarget")) {
-        return { result: { objectId: "target-1", type: "object", subtype: "node" } };
-      }
-      if (expression.includes("document.activeElement || document.body")) {
-        return { result: { objectId: "active-element", type: "object", subtype: "node" } };
-      }
-      if (expression.includes("document.body?.innerText")) return { result: { value: true } };
-      if (expression.trim() === "({answer: 42})") return { result: { value: { answer: 42 } } };
-      if (expression.includes("elementFromPoint")) {
-        return { result: { objectId: "point-target", type: "object", subtype: "node" } };
-      }
-      if (expression.includes("document.documentElement")) {
-        return { result: { objectId: "document-element", type: "object", subtype: "node" } };
-      }
       return {
         result: {
           value: {
@@ -176,99 +86,6 @@ const createWebContents = () => {
     if (method === "Page.getFrameTree") {
       return { frameTree: { frame: { id: "main-frame", url } } };
     }
-    if (method === "Page.createIsolatedWorld") return { executionContextId: 12 };
-    if (method === "Runtime.callFunctionOn") {
-      const declaration = String(params?.functionDeclaration ?? "");
-      if (declaration.includes("return await this.list()")) {
-        return {
-          result: {
-            value: {
-              available: true,
-              implementation: "compatibility",
-              skippedToolCount: 0,
-              tools: [
-                {
-                  index: 0,
-                  signature: "a".repeat(64),
-                  name: "search",
-                  description: "Search this page.",
-                  inputSchema: { type: "object", properties: {} },
-                  origin: "https://example.test",
-                  annotations: { readOnlyHint: true, untrustedContentHint: true },
-                },
-              ],
-            },
-          },
-        };
-      }
-      if (declaration.includes("return await this.invoke")) {
-        return { result: { value: { status: "completed", result: { ok: true } } } };
-      }
-      if (declaration.includes("const timeoutMs =") && declaration.includes("receivesEvents")) {
-        const actionOptions = (
-          params?.arguments as
-            | Array<{
-                value?: { point?: { x: number; y: number } };
-              }>
-            | undefined
-        )?.[0]?.value;
-        const point = actionOptions?.point ?? { x: 60, y: 40 };
-        return {
-          result: {
-            value: {
-              ok: true,
-              target: {
-                point,
-                rect: { x: 10, y: 20, width: 100, height: 40 },
-              },
-            },
-          },
-        };
-      }
-      if (declaration.includes("document.activeElement !== this")) {
-        return { result: { value: true } };
-      }
-      if (declaration.includes("const raw = this.isContentEditable")) {
-        return { result: { value: { kind: "text", length: 5, value: "hello" } } };
-      }
-      if (declaration.includes("this instanceof HTMLSelectElement")) {
-        return { result: { value: { ok: true, selectedValues: ["primary"] } } };
-      }
-      if (declaration.includes("this instanceof HTMLInputElement")) {
-        return { result: { value: { ok: true, enabled: true, multiple: false } } };
-      }
-      if (declaration.includes("const scrollable =")) {
-        const waitForSettle =
-          (params?.arguments as Array<{ value?: boolean }> | undefined)?.[0]?.value === true;
-        return {
-          result: {
-            value: {
-              before: { x: 0, y: waitForSettle ? 100 : 0 },
-              maxX: 0,
-              maxY: 1_000,
-              width: 1_024,
-              height: 768,
-            },
-          },
-        };
-      }
-      if (declaration.includes("getBoundingClientRect")) {
-        return {
-          result: {
-            value: {
-              attached: true,
-              visible: true,
-              enabled: true,
-              editable: true,
-              role: "button",
-              name: "Save",
-              point: { x: 60, y: 40 },
-            },
-          },
-        };
-      }
-      return { result: { type: "undefined" } };
-    }
     return {};
   });
   return {
@@ -276,33 +93,10 @@ const createWebContents = () => {
     removeListener: webContentsEvents.removeListener.bind(webContentsEvents),
     isDestroyed: () => false,
     id: 101,
-    focus: vi.fn(),
     getURL: () => url,
     loadURL: vi.fn(async (nextUrl: string) => {
       url = nextUrl;
     }),
-    insertText: vi.fn(async () => undefined),
-    reload: vi.fn(() => {
-      emitNavigation(url);
-    }),
-    reloadIgnoringCache: vi.fn(() => {
-      emitNavigation(url);
-    }),
-    stop: vi.fn(),
-    capturePage: vi.fn(async () => {
-      const png = Buffer.alloc(24);
-      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png, 0);
-      png.write("IHDR", 12, "ascii");
-      png.writeUInt32BE(1_024, 16);
-      png.writeUInt32BE(768, 20);
-      const image = {
-        toPNG: () => png,
-        getSize: () => ({ width: 1_024, height: 768 }),
-        resize: vi.fn(() => image),
-      };
-      return image;
-    }),
-    sendInputEvent: vi.fn(),
     debugger: {
       isAttached: () => true,
       attach: vi.fn(),

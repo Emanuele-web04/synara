@@ -27,6 +27,7 @@ export interface ProviderLifecycleCoordinator {
   readonly run: <A, E, R>(
     threadId: ThreadId,
     operation: (lease: ProviderLifecycleLease) => Effect.Effect<A, E, R>,
+    prepare?: Effect.Effect<unknown, E, R>,
   ) => Effect.Effect<A, E, R>;
   readonly runCurrent: <A, E, R>(
     threadId: ThreadId,
@@ -116,59 +117,63 @@ export function makeProviderLifecycleCoordinator(): ProviderLifecycleCoordinator
       return attempt.pipe(Effect.ensuring(releaseEntry(threadId, entry)));
     });
 
-  const run: ProviderLifecycleCoordinator["run"] = (threadId, operation) =>
+  const run: ProviderLifecycleCoordinator["run"] = (threadId, operation, prepare) =>
     withThreadLock(
       threadId,
-      Effect.suspend(() => {
-        const generation = randomUUID();
-        const previousGeneration = currentGenerations.get(threadId);
-        currentGenerations.set(threadId, generation);
-        let ownedGeneration: string = generation;
-        // Ownership is opt-in. The eagerly published generation is rewound on
-        // exit unless the run explicitly committed/adopted/retired, so a run
-        // that ends without changing anything — a successful no-op early
-        // return, a failure, an interrupt before the provider was touched —
-        // leaves the still-live session's generation exactly as it found it.
-        // The inverse default is unsafe: an uncommitted generation nobody else
-        // knows about silently invalidates every runtime event and every
-        // generation-checked control call for that thread, forever.
-        let owned = false;
-        const isCurrent = () => currentGenerations.get(threadId) === ownedGeneration;
-        return operation({
-          generation,
-          isCurrent,
-          commit: () => {
-            if (isCurrent()) owned = true;
-          },
-          adopt: (adoptedGeneration) => {
-            if (isCurrent()) {
-              ownedGeneration = adoptedGeneration;
-              currentGenerations.set(threadId, adoptedGeneration);
-              owned = true;
-            }
-          },
-          retire: () => {
-            if (isCurrent()) {
-              currentGenerations.delete(threadId);
-              owned = true;
-            }
-          },
-        }).pipe(
-          Effect.onExit(() =>
-            // `isCurrent` also guards against clobbering a newer owner: only
-            // rewind while this run's generation is still the published one.
-            owned || !isCurrent()
-              ? Effect.void
-              : Effect.sync(() => {
-                  if (previousGeneration === undefined) {
-                    currentGenerations.delete(threadId);
-                  } else {
-                    currentGenerations.set(threadId, previousGeneration);
-                  }
-                }),
-          ),
-        );
-      }),
+      // Reject or retire under the same lock while old events remain current.
+      Effect.andThen(
+        prepare ?? Effect.void,
+        Effect.suspend(() => {
+          const generation = randomUUID();
+          const previousGeneration = currentGenerations.get(threadId);
+          currentGenerations.set(threadId, generation);
+          let ownedGeneration: string = generation;
+          // Ownership is opt-in. The eagerly published generation is rewound on
+          // exit unless the run explicitly committed/adopted/retired, so a run
+          // that ends without changing anything — a successful no-op early
+          // return, a failure, an interrupt before the provider was touched —
+          // leaves the still-live session's generation exactly as it found it.
+          // The inverse default is unsafe: an uncommitted generation nobody else
+          // knows about silently invalidates every runtime event and every
+          // generation-checked control call for that thread, forever.
+          let owned = false;
+          const isCurrent = () => currentGenerations.get(threadId) === ownedGeneration;
+          return operation({
+            generation,
+            isCurrent,
+            commit: () => {
+              if (isCurrent()) owned = true;
+            },
+            adopt: (adoptedGeneration) => {
+              if (isCurrent()) {
+                ownedGeneration = adoptedGeneration;
+                currentGenerations.set(threadId, adoptedGeneration);
+                owned = true;
+              }
+            },
+            retire: () => {
+              if (isCurrent()) {
+                currentGenerations.delete(threadId);
+                owned = true;
+              }
+            },
+          }).pipe(
+            Effect.onExit(() =>
+              // `isCurrent` also guards against clobbering a newer owner: only
+              // rewind while this run's generation is still the published one.
+              owned || !isCurrent()
+                ? Effect.void
+                : Effect.sync(() => {
+                    if (previousGeneration === undefined) {
+                      currentGenerations.delete(threadId);
+                    } else {
+                      currentGenerations.set(threadId, previousGeneration);
+                    }
+                  }),
+            ),
+          );
+        }),
+      ),
     );
 
   return {

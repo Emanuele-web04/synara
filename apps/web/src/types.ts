@@ -17,6 +17,7 @@ import type {
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ThreadHandoff,
+  ThreadSidechatContext,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
@@ -26,6 +27,7 @@ import type {
   MessageId,
   ProviderMentionReference,
   ProviderSkillReference,
+  ProviderInstanceId,
   ProviderKind,
   CheckpointRef,
   ProviderInteractionMode,
@@ -34,45 +36,18 @@ import type {
   ThreadCreationSource,
   ThreadEnvironmentMode,
 } from "@synara/contracts";
+import type { ProjectAppearance } from "./lib/projectAppearance";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
-export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
 export const DEFAULT_THREAD_TERMINAL_ID = "default";
-export const MAX_TERMINALS_PER_GROUP = 6;
 export type ThreadTerminalPresentationMode = "drawer" | "workspace";
 export type ThreadTerminalWorkspaceTab = "terminal" | "chat";
 export type ThreadTerminalWorkspaceLayout = "both" | "terminal-only";
 export type ThreadPrimarySurface = "chat" | "terminal";
 export type ProjectScript = ContractProjectScript;
-
-export type ThreadTerminalSplitDirection = "horizontal" | "vertical";
-export type ThreadTerminalSplitPosition = "top" | "right" | "bottom" | "left";
-
-export interface ThreadTerminalLeafNode {
-  type: "terminal";
-  paneId: string;
-  terminalIds: string[];
-  activeTerminalId: string;
-}
-
-export interface ThreadTerminalSplitNode {
-  type: "split";
-  id: string;
-  direction: ThreadTerminalSplitDirection;
-  children: ThreadTerminalLayoutNode[];
-  weights: number[];
-}
-
-export type ThreadTerminalLayoutNode = ThreadTerminalLeafNode | ThreadTerminalSplitNode;
-
-export interface ThreadTerminalGroup {
-  id: string;
-  activeTerminalId: string;
-  layout: ThreadTerminalLayoutNode;
-}
 
 export interface ChatImageAttachment {
   type: "image";
@@ -121,6 +96,7 @@ export interface ChatMessage {
   startsNewTurn?: boolean;
   turnId?: TurnId | null;
   createdAt: string;
+  updatedAt?: string;
   completedAt?: string | undefined;
   streaming: boolean;
   source?: OrchestrationMessageSource;
@@ -189,6 +165,8 @@ export interface Project {
   remoteName: string;
   folderName: string;
   localName: string | null;
+  /** Local look in the sidebar and rail; missing or null is the default folder. */
+  appearance?: ProjectAppearance | null;
   cwd: string;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
@@ -198,6 +176,8 @@ export interface Project {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+  /** Extra source folders of a multi-folder project; `cwd` is the primary one. */
+  additionalFolders?: ReadonlyArray<string>;
 }
 
 export interface Space {
@@ -232,6 +212,7 @@ export interface ThreadWorkspacePatch {
 }
 
 export interface Thread extends ThreadWorkspaceState {
+  isProjectImport?: boolean;
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
@@ -246,6 +227,8 @@ export interface Thread extends ThreadWorkspaceState {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   pinnedMessages?: PinnedMessage[];
@@ -265,14 +248,18 @@ export interface Thread extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   claudeCacheReview?: PendingClaudeCacheReview | null;
   /** Client projection cursor shared by shell and detail cache-review updates. */
   claudeCacheReviewSequence?: number;
+  /** Last snapshot/event sequence carrying snooze metadata. */
+  snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
@@ -282,6 +269,7 @@ export interface Thread extends ThreadWorkspaceState {
 }
 
 export interface ThreadShell extends ThreadWorkspaceState {
+  isProjectImport?: boolean;
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
@@ -293,6 +281,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   // Per-thread workspace annotations carried through the normalized projection so
@@ -313,13 +303,17 @@ export interface ThreadShell extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   claudeCacheReview?: PendingClaudeCacheReview | null;
   claudeCacheReviewSequence?: number;
+  /** Last snapshot/event sequence carrying snooze metadata. */
+  snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
@@ -349,6 +343,8 @@ export interface SidebarThreadSummary {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   latestTurn: OrchestrationLatestTurn | null;
@@ -359,12 +355,15 @@ export interface SidebarThreadSummary {
   subagentNickname?: string | null;
   subagentRole?: string | null;
   latestUserMessageAt: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
   hasLiveTailWork: boolean;
+  pendingBackgroundWorkCount: number;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
@@ -385,6 +384,7 @@ export interface ComposerThreadMentionSource {
 
 export interface ThreadSession {
   provider: ProviderKind;
+  providerInstanceId?: ProviderInstanceId;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;
   createdAt: string;

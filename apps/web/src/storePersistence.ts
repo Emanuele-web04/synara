@@ -4,6 +4,7 @@
 
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 
+import { parseProjectAppearance, type ProjectAppearance } from "./lib/projectAppearance";
 import type { AppState } from "./storeState";
 import type { Project } from "./types";
 
@@ -11,6 +12,7 @@ export const PERSISTED_STATE_KEY = "synara:renderer-state:v8";
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderByCwd = new Map<string, number>();
 const persistedProjectNamesByCwd = new Map<string, string>();
+const persistedProjectAppearanceByCwd = new Map<string, ProjectAppearance>();
 let persistedExpandedProjectCwdsDefined = false;
 
 export interface RememberedProjectUiState {
@@ -20,6 +22,7 @@ export interface RememberedProjectUiState {
   projectOrderCount: number;
   projectOrderIndexForCwd: (cwdKey: string) => number | undefined;
   projectNameForCwd: (cwdKey: string) => string | undefined;
+  projectAppearanceForCwd: (cwdKey: string) => ProjectAppearance | undefined;
 }
 
 const rememberedProjectUiState: RememberedProjectUiState = {
@@ -35,6 +38,7 @@ const rememberedProjectUiState: RememberedProjectUiState = {
   },
   projectOrderIndexForCwd: (cwdKey) => persistedProjectOrderByCwd.get(cwdKey),
   projectNameForCwd: (cwdKey) => persistedProjectNamesByCwd.get(cwdKey),
+  projectAppearanceForCwd: (cwdKey) => persistedProjectAppearanceByCwd.get(cwdKey),
 };
 
 export function projectCwdKey(cwd: string): string {
@@ -49,6 +53,7 @@ function resetRememberedProjectState(): void {
   persistedExpandedProjectCwds.clear();
   persistedProjectOrderByCwd.clear();
   persistedProjectNamesByCwd.clear();
+  persistedProjectAppearanceByCwd.clear();
   persistedExpandedProjectCwdsDefined = false;
 }
 
@@ -65,6 +70,7 @@ export function resetStaleRememberedProjectState(incomingCwdKeys: ReadonlySet<st
     ...persistedProjectOrderByCwd.keys(),
     ...persistedExpandedProjectCwds,
     ...persistedProjectNamesByCwd.keys(),
+    ...persistedProjectAppearanceByCwd.keys(),
   ]);
   // An all-collapsed legacy payload has no identities to compare. Preserve it
   // for the first non-empty snapshot; remembering that snapshot upgrades it to
@@ -92,7 +98,7 @@ export function resetStaleRememberedProjectState(incomingCwdKeys: ReadonlySet<st
 }
 
 export function rememberProjectState(
-  projects: ReadonlyArray<Pick<Project, "cwd" | "expanded" | "localName">>,
+  projects: ReadonlyArray<Pick<Project, "cwd" | "expanded" | "localName" | "appearance">>,
 ): void {
   for (const [index, project] of projects.entries()) {
     const cwdKey = projectCwdKey(project.cwd);
@@ -111,6 +117,11 @@ export function rememberProjectState(
     } else {
       persistedProjectNamesByCwd.delete(cwdKey);
     }
+    if (project.appearance) {
+      persistedProjectAppearanceByCwd.set(cwdKey, project.appearance);
+    } else {
+      persistedProjectAppearanceByCwd.delete(cwdKey);
+    }
   }
   if (persistedProjectOrderByCwd.size > 0) {
     persistedExpandedProjectCwdsDefined = false;
@@ -122,6 +133,7 @@ export function forgetProjectState(cwd: string): void {
   persistedExpandedProjectCwds.delete(cwdKey);
   persistedProjectOrderByCwd.delete(cwdKey);
   persistedProjectNamesByCwd.delete(cwdKey);
+  persistedProjectAppearanceByCwd.delete(cwdKey);
 }
 
 export function readPersistedState(initialState: AppState): AppState {
@@ -138,6 +150,7 @@ export function readPersistedState(initialState: AppState): AppState {
       expandedProjectCwds?: string[];
       projectOrderCwds?: string[];
       projectNamesByCwd?: Record<string, string>;
+      projectAppearanceByCwd?: Record<string, unknown>;
     };
     resetRememberedProjectState();
     persistedExpandedProjectCwdsDefined =
@@ -165,6 +178,17 @@ export function readPersistedState(initialState: AppState): AppState {
       if (trimmedName.length === 0) continue;
       persistedProjectNamesByCwd.set(projectCwdKey(cwd), trimmedName);
     }
+    const projectAppearanceByCwd =
+      typeof parsed.projectAppearanceByCwd === "object" &&
+      parsed.projectAppearanceByCwd !== null &&
+      !Array.isArray(parsed.projectAppearanceByCwd)
+        ? parsed.projectAppearanceByCwd
+        : {};
+    for (const [cwd, value] of Object.entries(projectAppearanceByCwd)) {
+      const appearance = parseProjectAppearance(value);
+      if (cwd.length === 0 || !appearance) continue;
+      persistedProjectAppearanceByCwd.set(projectCwdKey(cwd), appearance);
+    }
     return { ...initialState };
   } catch {
     resetRememberedProjectState();
@@ -176,10 +200,14 @@ export function persistState(state: AppState): void {
   if (typeof window === "undefined" || !state.threadsHydrated) return;
   try {
     const projectNamesByCwd: Record<string, string> = {};
+    const projectAppearanceByCwd: Record<string, ProjectAppearance> = {};
     for (const project of state.projects) {
       const localName = project.localName?.trim();
       if (localName && localName.length > 0) {
         projectNamesByCwd[projectCwdKey(project.cwd)] = localName;
+      }
+      if (project.appearance) {
+        projectAppearanceByCwd[projectCwdKey(project.cwd)] = project.appearance;
       }
     }
     window.localStorage.setItem(
@@ -190,6 +218,7 @@ export function persistState(state: AppState): void {
           .map((project) => projectCwdKey(project.cwd)),
         projectOrderCwds: state.projects.map((project) => projectCwdKey(project.cwd)),
         projectNamesByCwd,
+        projectAppearanceByCwd,
       }),
     );
   } catch (error) {

@@ -2,6 +2,7 @@ import { ThreadId } from "@synara/contracts";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { collapseExpandedComposerCursor, detectComposerTrigger } from "../../composer-logic";
+import { resolveComputerControlMode } from "../../computerControlMode";
 import { type QueuedComposerTurn } from "../../composerDraftStore";
 import { cloneComposerImageAttachment } from "../../lib/composerSend";
 import {
@@ -78,6 +79,12 @@ interface ChatQueuedTurnsInput {
   setComposerDraftInteractionMode: ReturnType<
     typeof useChatComposerDraft
   >["setComposerDraftInteractionMode"];
+  setComposerDraftComputerControlMode: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControlMode"];
+  setComposerDraftComputerControl: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControl"];
   setComposerCursor: ReturnType<typeof useChatComposerDraft>["setComposerCursor"];
   setComposerTrigger: ReturnType<typeof useChatComposerDraft>["setComposerTrigger"];
   scheduleComposerFocus: () => void;
@@ -121,6 +128,8 @@ export function useChatQueuedTurns({
   setComposerDraftModelSelection,
   setComposerDraftRuntimeMode,
   setComposerDraftInteractionMode,
+  setComposerDraftComputerControlMode,
+  setComposerDraftComputerControl,
   setComposerCursor,
   setComposerTrigger,
   scheduleComposerFocus,
@@ -238,6 +247,14 @@ export function useChatQueuedTurns({
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
+      // Restore the frozen switch plus its revocation generation.
+      const restoredComputerMode = resolveComputerControlMode(
+        queuedTurn.computerControlMode,
+        queuedTurn.enableComputerControl,
+      );
+      setComposerDraftComputerControlMode(activeThread.id, restoredComputerMode, {
+        generation: queuedTurn.computerControlGeneration ?? 0,
+      });
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
       scheduleComposerFocus();
@@ -260,6 +277,7 @@ export function useChatQueuedTurns({
       setDraftThreadContext,
       setRestoredQueuedSourceProposedPlan,
       setComposerDraftInteractionMode,
+      setComposerDraftComputerControlMode,
       setComposerDraftModelSelection,
       setComposerDraftPrompt,
       setComposerDraftRuntimeMode,
@@ -391,6 +409,16 @@ export function useChatQueuedTurns({
     threadId,
   ]);
 
+  // A server thread that has never run (a side chat created with its first question queued) has
+  // no session yet, which reads as "disconnected"; its first send is the normal start, not a
+  // reconnect to wait for, so it drains like a draft does.
+  const isUnstartedThread =
+    !isLocalDraftThread &&
+    activeThread != null &&
+    activeThread.session == null &&
+    activeThread.messages.length === 0 &&
+    activeLatestTurn == null;
+
   useEffect(() => {
     if (hasPendingCacheReview) {
       clearQueuedComposerAutoDispatchRetry(threadId);
@@ -401,7 +429,7 @@ export function useChatQueuedTurns({
       resolveQueuedComposerAutoDispatchHold({
         localDispatch,
         // A mini-composer submission queues the first turn before the draft has a session.
-        phase: isLocalDraftThread ? "ready" : phase,
+        phase: isLocalDraftThread || isUnstartedThread ? "ready" : phase,
         latestTurn: activeLatestTurn,
         session: activeThread?.session ?? null,
         messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -483,6 +511,7 @@ export function useChatQueuedTurns({
     hasPendingCacheReview,
     isConnecting,
     isLocalDraftThread,
+    isUnstartedThread,
     localDispatch,
     pendingUserInputs.length,
     phase,

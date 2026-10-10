@@ -1,5 +1,39 @@
 export const DEFAULT_TOAST_TIMEOUT_MS = 10_000;
 
+// A named text the user can copy from a toast action (e.g. a path left on
+// disk). Each item renders its own button so every path is copyable.
+export type ToastCopyItem = {
+  readonly label: string;
+  readonly text: string;
+};
+
+// Compact toasts have no description or actions row.
+export function shouldUseCompactToast(toast: {
+  readonly description?: unknown;
+  readonly actionProps?: unknown;
+  readonly data?:
+    | {
+        readonly compactContextual?: boolean;
+        readonly copyItems?: ReadonlyArray<unknown>;
+        readonly copyText?: string;
+        readonly diagnosticId?: string;
+        readonly secondaryActionProps?: unknown;
+      }
+    | undefined;
+}): boolean {
+  if (toast.data?.compactContextual) {
+    return true;
+  }
+  return (
+    !toast.description &&
+    !toast.data?.copyText &&
+    !toast.data?.diagnosticId &&
+    !toast.data?.copyItems?.length &&
+    !toast.actionProps &&
+    !toast.data?.secondaryActionProps
+  );
+}
+
 export function shouldHideCollapsedToastContent(
   visibleToastIndex: number,
   visibleToastCount: number,

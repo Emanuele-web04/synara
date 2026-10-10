@@ -6,6 +6,7 @@
 
 import {
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ThreadId,
@@ -72,6 +73,7 @@ function TraitRow(props: {
 
 export function ComposerModelPickerTraitRows(props: {
   provider: ProviderKind;
+  providerInstanceId?: ProviderInstanceId | null | undefined;
   threadId: ThreadId;
   model: string;
   runtimeModel: ProviderModelDescriptor | undefined;
@@ -79,7 +81,6 @@ export function ComposerModelPickerTraitRows(props: {
   modelOptions: ProviderOptions | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  modelLabel: string;
   // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns
   // both. Models without an effort ladder always keep the rows.
   effortControl: ComposerEffortControl;
@@ -92,7 +93,13 @@ export function ComposerModelPickerTraitRows(props: {
     modelOptions,
     props.runtimeModel,
   );
-  const commitTrait = useComposerTraitCommit({ threadId, provider, model, modelOptions });
+  const commitTrait = useComposerTraitCommit({
+    threadId,
+    provider,
+    providerInstanceId: props.providerInstanceId,
+    model,
+    modelOptions,
+  });
   const agentOptions = getAgentOptions(provider, props.runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions) ?? defaultAgent ?? "";
@@ -205,9 +212,9 @@ export function ComposerModelPickerTraitRows(props: {
       {usesEffortSlider ? (
         <ComposerEffortSliderCard
           provider={provider}
+          providerInstanceId={props.providerInstanceId}
           threadId={threadId}
           model={model}
-          modelLabel={props.modelLabel}
           runtimeModel={props.runtimeModel}
           modelOptions={modelOptions}
           prompt={prompt}

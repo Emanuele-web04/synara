@@ -64,7 +64,7 @@ export function ComposerImageAttachmentChip({
               className="max-h-full max-w-full rounded-md object-contain"
             />
           ) : (
-            <span className="flex size-full items-center justify-center text-[10px] font-medium text-muted-foreground/70">
+            <span className="flex size-full items-center justify-center text-ui-xs font-medium text-muted-foreground/70">
               IMG
             </span>
           )}
@@ -82,7 +82,7 @@ export function ComposerImageAttachmentChip({
               </span>
             )}
             <span
-              className="min-w-0 flex-1 truncate pb-px text-[11px] font-medium text-white [text-shadow:0_1px_2px_rgb(0_0_0/0.8)]"
+              className="min-w-0 flex-1 truncate pb-px text-ui-sm font-medium text-white [text-shadow:0_1px_2px_rgb(0_0_0/0.8)]"
               title={provenance}
             >
               {provenance}
@@ -125,7 +125,7 @@ export function ComposerImageAttachmentChip({
         {image.previewUrl ? (
           <img src={image.previewUrl} alt={image.name} className="size-full object-cover" />
         ) : (
-          <span className="flex size-full items-center justify-center text-[10px] font-medium text-muted-foreground/70">
+          <span className="flex size-full items-center justify-center text-ui-xs font-medium text-muted-foreground/70">
             IMG
           </span>
         )}

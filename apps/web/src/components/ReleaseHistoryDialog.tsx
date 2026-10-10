@@ -52,7 +52,7 @@ export default function ReleaseHistoryDialog({
       <DialogPopup className="max-w-lg gap-0 p-0">
         <DialogHeader className="gap-1 p-4 pr-12">
           <DialogTitle className="text-base">Release history</DialogTitle>
-          <DialogDescription className="text-xs">
+          <DialogDescription className="text-ui leading-snug">
             Every curated release, newest first.
           </DialogDescription>
         </DialogHeader>

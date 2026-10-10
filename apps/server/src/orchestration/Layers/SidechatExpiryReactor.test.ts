@@ -8,6 +8,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type SidechatExpiry,
 } from "@synara/contracts";
 import { SIDECHAT_INACTIVITY_EXPIRY_MS } from "@synara/shared/sidechatExpiry";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
@@ -22,6 +23,7 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 import { SidechatExpiryReactor } from "../Services/SidechatExpiryReactor.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeSidechatExpiryReactor } from "./SidechatExpiryReactor.ts";
 
 interface ScheduledTimer {
@@ -62,6 +64,7 @@ function makeClock(startAtMs: number) {
       backgroundEffects.push(Effect.runPromise(effect));
     },
     advanceTo,
+    pendingCount: () => timers.size,
     flushBackgroundEffects: async () => {
       await Promise.all(backgroundEffects.splice(0));
     },
@@ -166,6 +169,7 @@ describe("SidechatExpiryReactor", () => {
     readonly nowMs: number;
     readonly lastActivityAtMs: number;
     readonly archivedAt?: string | null;
+    readonly sidechatExpiry?: SidechatExpiry;
   }) {
     const threadId = ThreadId.makeUnsafe("sidechat-expiry-reactor-thread");
     const sourceThreadId = ThreadId.makeUnsafe("sidechat-expiry-reactor-source");
@@ -196,6 +200,11 @@ describe("SidechatExpiryReactor", () => {
     const layer = Layer.effect(SidechatExpiryReactor, makeSidechatExpiryReactor(clock)).pipe(
       Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest(
+          input.sidechatExpiry ? { sidechatExpiry: input.sidechatExpiry } : {},
+        ),
+      ),
     );
     const runtime = ManagedRuntime.make(layer);
     const reactor = await runtime.runPromise(Effect.service(SidechatExpiryReactor));
@@ -210,6 +219,12 @@ describe("SidechatExpiryReactor", () => {
       commands,
       domainEvents,
       reactor,
+      setSidechatExpiry: (sidechatExpiry: SidechatExpiry) =>
+        runtime.runPromise(
+          Effect.flatMap(Effect.service(ServerSettingsService), (settings) =>
+            settings.updateSettings({ sidechatExpiry }),
+          ),
+        ),
       updateThread: (patch: Partial<OrchestrationThread>) => {
         thread = { ...thread, ...patch };
       },
@@ -233,6 +248,29 @@ describe("SidechatExpiryReactor", () => {
         threadId: harness.threadId,
         expectedLastActivityAt: new Date(0).toISOString(),
       }),
+    );
+  });
+
+  it("never expires idle side chats when expiry is disabled, and applies a re-enabled window live", async () => {
+    const harness = await createHarness({
+      nowMs: SIDECHAT_INACTIVITY_EXPIRY_MS + 1,
+      lastActivityAtMs: 0,
+      sidechatExpiry: "never",
+    });
+
+    harness.clock.advanceTo(harness.clock.now() + 48 * SIDECHAT_INACTIVITY_EXPIRY_MS);
+    await harness.clock.flushBackgroundEffects();
+    expect(harness.commands.some((command) => command.type === "thread.sidechat.expire")).toBe(
+      false,
+    );
+
+    // A setting published once immediately after start must not be lost.
+    await harness.setSidechatExpiry("24h");
+    await waitFor(() => harness.clock.pendingCount() > 0);
+    harness.clock.advanceTo(harness.clock.now());
+    await harness.clock.flushBackgroundEffects();
+    expect(harness.commands).toContainEqual(
+      expect.objectContaining({ type: "thread.sidechat.expire", threadId: harness.threadId }),
     );
   });
 

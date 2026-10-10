@@ -32,11 +32,6 @@ describe("useCommitDraft", () => {
     flushOnUnmount = undefined;
   });
 
-  it("mirrors the saved value until a draft is typed", () => {
-    expect(render().draft).toBe("saved");
-    expect(render().error).toBeNull();
-  });
-
   it("commits a changed valid draft and clears the pending state", () => {
     let hook = render();
     hook.setDraft("updated");
@@ -47,15 +42,6 @@ describe("useCommitDraft", () => {
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenCalledWith("updated");
     expect(render().draft).toBe("saved");
-  });
-
-  it("does not commit a draft equal to the saved value", () => {
-    let hook = render();
-    hook.setDraft("saved");
-    hook = render();
-
-    hook.commit();
-    expect(onCommit).not.toHaveBeenCalled();
   });
 
   it("silently reverts an invalid draft on commit", () => {

@@ -29,8 +29,8 @@ import {
   type ProjectionThreadMessageTextSegment,
 } from "../Services/ProjectionThreadMessages.ts";
 
-const LatestUserMessageAtRowSchema = Schema.Struct({
-  latestUserMessageAt: Schema.String,
+const MessageTimestampRowSchema = Schema.Struct({
+  messageAt: Schema.String,
 });
 
 const makeProjectionThreadMessageRepository = Effect.gen(function* () {
@@ -161,11 +161,11 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
 
   const getLatestProjectionThreadUserMessageAtRow = SqlSchema.findOneOption({
     Request: ListProjectionThreadMessagesInput,
-    Result: LatestUserMessageAtRowSchema,
+    Result: MessageTimestampRowSchema,
     execute: ({ threadId }) =>
       sql`
         SELECT
-          created_at AS "latestUserMessageAt"
+          created_at AS "messageAt"
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
           AND role = 'user'
@@ -176,6 +176,20 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           message_id DESC
         LIMIT 1
       `,
+  });
+
+  const getLatestHumanMessageAtRow = SqlSchema.findOneOption({
+    Request: ListProjectionThreadMessagesInput,
+    Result: MessageTimestampRowSchema,
+    execute: ({ threadId }) => sql`
+      SELECT MAX(created_at, updated_at) AS "messageAt"
+      FROM projection_thread_messages
+      WHERE thread_id = ${threadId}
+        AND role = 'user'
+        AND (dispatch_origin IS NULL OR dispatch_origin = 'user')
+      ORDER BY "messageAt" DESC
+      LIMIT 1
+    `,
   });
 
   const getProjectionThreadMessageRow = SqlSchema.findOneOption({
@@ -373,8 +387,17 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadMessageRepository.getLatestUserMessageAt:query"),
       ),
-      Effect.map(Option.match({ onNone: () => null, onSome: (row) => row.latestUserMessageAt })),
+      Effect.map(Option.match({ onNone: () => null, onSome: (row) => row.messageAt })),
     );
+
+  const getLatestHumanMessageAt: ProjectionThreadMessageRepositoryShape["getLatestHumanMessageAt"] =
+    (input) =>
+      getLatestHumanMessageAtRow(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionThreadMessageRepository.getLatestHumanMessageAt:query"),
+        ),
+        Effect.map(Option.match({ onNone: () => null, onSome: (row) => row.messageAt })),
+      );
 
   const deleteByThreadId: ProjectionThreadMessageRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadMessageRows(input).pipe(
@@ -389,6 +412,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     getByThreadAndMessageId,
     listByThreadId,
     getLatestUserMessageAt,
+    getLatestHumanMessageAt,
     deleteByThreadId,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });

@@ -1,19 +1,22 @@
 // FILE: DesktopSettingsPanels.tsx
 // Purpose: Own settings panels whose behavior depends on browser or desktop-native lifecycles.
 // Layer: Settings UI components
-// Exports: NotificationsSettingsPanel, AppSnapSettingsPanel
+// Exports: NotificationsSettingsPanel, AppSnapSettingsPanel, BetaChannelSettingsPanel
 
 import {
-  type DesktopAppSnapPermission,
+  type DesktopAppSnapSettingsPane,
   type DesktopAppSnapState,
+  type DesktopBetaActionResult,
+  type DesktopBetaChannelState,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
 import { appSnapShortcutLabels } from "@synara/shared/appSnapShortcut";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
+import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import { playAppSnapCaptureSound } from "~/lib/appSnapSound";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
@@ -27,13 +30,30 @@ import {
   SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_TITLE_CLASS_NAME,
 } from "~/settingsPanelStyles";
-import { Button } from "~/components/ui/button";
-import { Switch } from "~/components/ui/switch";
-import { toastManager } from "~/components/ui/toast";
-import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import {
+  APP_SNAP_PERMISSION_PANES,
+  AppSnapPermissionSection,
+  useAppSnapPermissionGuideBridge,
+} from "./AppSnapPermissionSection";
 import { AppSnapShortcutControl } from "./AppSnapShortcutControl";
 import { SettingResetButton } from "./SettingControls";
 import { SettingsCard, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
+import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
+import { Switch } from "~/components/ui/switch";
+import { toastManager } from "~/components/ui/toast";
+import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 
 function appSnapStatusText(state: DesktopAppSnapState | null): string {
   if (!state) return "Available in the Synara desktop app";
@@ -49,33 +69,6 @@ function appSnapStatusText(state: DesktopAppSnapState | null): string {
 }
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-
-const APPSNAP_PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
-  granted: "Granted",
-  denied: "Denied",
-  "not-determined": "Not requested yet",
-  restricted: "Restricted",
-  unknown: "Unknown",
-};
-
-function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-      <span
-        aria-hidden
-        className={cn(
-          "size-1.5 rounded-full",
-          permission === "granted"
-            ? "bg-emerald-500"
-            : permission === "denied" || permission === "restricted"
-              ? "bg-red-500"
-              : "bg-[color:var(--color-border)]",
-        )}
-      />
-      {APPSNAP_PERMISSION_LABELS[permission]}
-    </span>
-  );
-}
 
 export function NotificationsSettingsPanel({
   settings,
@@ -223,6 +216,32 @@ export function NotificationsSettingsPanel({
             </div>
           }
         />
+
+        <SettingsRow
+          title="Wait for subagents"
+          description="Alert once the agent and all of its background subagents have finished. Turn this off to be alerted each time the agent or one of its subagents stops."
+          resetAction={
+            settings.notifyAfterSubagentsFinish !== defaults.notifyAfterSubagentsFinish ? (
+              <SettingResetButton
+                label="wait for subagents"
+                onClick={() =>
+                  updateSettings({
+                    notifyAfterSubagentsFinish: defaults.notifyAfterSubagentsFinish,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.notifyAfterSubagentsFinish}
+              onCheckedChange={(checked) =>
+                updateSettings({ notifyAfterSubagentsFinish: Boolean(checked) })
+              }
+              aria-label="Wait for subagents before alerting"
+            />
+          }
+        />
       </SettingsSection>
     </div>
   );
@@ -235,9 +254,22 @@ export function AppSnapSettingsPanel({
   active,
 }: AppSettingsBinding & { readonly active: boolean }) {
   const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
+  const [openGuidePane, setOpenGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
   const appSnapRequestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: active });
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
+
+  // getState publishes through onState below. A passive refresh must not
+  // invalidate an enable request that is waiting for the macOS permission dialog.
+  useRefreshOnWindowReturn(() => window.desktopBridge?.appSnap?.getState(), active);
+
+  // Panel-level on purpose: hooks above the `!active` return stay mounted while
+  // the surface is hidden, so a dismissed coach still clears the remembered
+  // pane instead of resurrecting the guide on return.
+  useAppSnapPermissionGuideBridge({
+    onStateChange: setAppSnapState,
+    onGuidePaneChange: setOpenGuidePane,
+  });
 
   useEffect(() => {
     const bridge = window.desktopBridge?.appSnap;
@@ -282,7 +314,13 @@ export function AppSnapSettingsPanel({
       const state = await bridge.setEnabled(nextEnabled);
       if (!requestGuard.isCurrent(requestId)) return;
       setAppSnapState(state);
-      if (nextEnabled && (state.status === "permission-required" || state.status === "error")) {
+      if (nextEnabled && state.status === "permission-required") {
+        if (state.inputMonitoringPermission !== "granted") {
+          setOpenGuidePane("input-monitoring");
+        } else if (state.screenRecordingPermission !== "granted") {
+          setOpenGuidePane("screen-recording");
+        }
+      } else if (nextEnabled && state.status === "error") {
         toastManager.add({
           type: "warning",
           title: "Finish AppSnap setup",
@@ -296,26 +334,6 @@ export function AppSnapSettingsPanel({
         type: "error",
         title: "AppSnap setup failed",
         description: error instanceof Error ? error.message : "Could not configure AppSnap.",
-      });
-    }
-  }
-
-  async function recheckAppSnapPermissions() {
-    const bridge = window.desktopBridge?.appSnap;
-    if (!bridge) return;
-    const requestGuard = appSnapRequestGuardRef.current;
-    const requestId = requestGuard.begin();
-    try {
-      await bridge.requestPermissions();
-      const state = await bridge.setEnabled(settings.enableAppSnap);
-      if (!requestGuard.isCurrent(requestId)) return;
-      setAppSnapState(state);
-    } catch (error) {
-      if (!requestGuard.isCurrent(requestId)) return;
-      toastManager.add({
-        type: "error",
-        title: "Could not check AppSnap permissions",
-        description: error instanceof Error ? error.message : "Permission check failed.",
       });
     }
   }
@@ -398,7 +416,11 @@ export function AppSnapSettingsPanel({
         <SettingsRow
           title="Destination"
           description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
-          control={<span className="text-xs font-medium text-muted-foreground">Automatic</span>}
+          control={
+            <span className="text-ui leading-snug font-medium text-muted-foreground">
+              Automatic
+            </span>
+          }
         />
 
         <SettingsRow
@@ -429,34 +451,426 @@ export function AppSnapSettingsPanel({
         />
       </SettingsSection>
 
-      {supported ? (
-        <SettingsSection title="macOS permissions">
-          <SettingsRow
-            title="Input Monitoring"
-            description="Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded."
-            control={<AppSnapPermissionBadge permission={appSnapState.inputMonitoringPermission} />}
-          />
-          <SettingsRow
-            title="Screen Recording"
-            description="Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord."
-            control={<AppSnapPermissionBadge permission={appSnapState.screenRecordingPermission} />}
-          />
-          <SettingsRow
-            title="Permission status"
-            description="Grant both permissions to Synara under System Settings → Privacy & Security, then recheck here. macOS may require relaunching the app after a change."
-            control={
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                onClick={() => void recheckAppSnapPermissions()}
-              >
-                Recheck permissions
-              </Button>
-            }
-          />
-        </SettingsSection>
+      {supported && appSnapState ? (
+        <AppSnapPermissionSection
+          panes={APP_SNAP_PERMISSION_PANES}
+          feature="AppSnap"
+          state={appSnapState}
+          onStateChange={setAppSnapState}
+          guidePane={openGuidePane}
+          onGuidePaneChange={setOpenGuidePane}
+        />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Beta → stable: opens stable Synara and quits beta. Beta data is never copied
+ * back because beta can hold data for features stable does not have yet.
+ */
+function LeaveBetaDialog({
+  open,
+  canMoveToTrash,
+  onOpenChange,
+  onLeave,
+}: {
+  readonly open: boolean;
+  readonly canMoveToTrash: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onLeave: (moveToTrash: boolean) => Promise<DesktopBetaActionResult>;
+}) {
+  const [moveToTrash, setMoveToTrash] = useState(true);
+  const [pending, setPending] = useState(false);
+  const trashCheckboxId = useId();
+
+  async function leave() {
+    setPending(true);
+    try {
+      const result = await onLeave(canMoveToTrash && moveToTrash).catch(
+        (error: unknown): DesktopBetaActionResult => ({
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      if (!result.ok) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not switch back to Synara",
+          description: result.message ?? "Open Synara from your Applications folder.",
+        });
+        onOpenChange(false);
+      }
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
+      <AlertDialogPopup>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Switch back to Synara?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Synara opens with the chats and settings it had before you tried Beta. Beta closes, and
+            any chats still running in Beta stop.
+          </AlertDialogDescription>
+          <AlertDialogDescription>
+            Anything you did in Beta stays in Beta. It can't be moved into Synara, because Beta can
+            include features Synara doesn't have yet.
+          </AlertDialogDescription>
+          {canMoveToTrash ? (
+            <label
+              htmlFor={trashCheckboxId}
+              className="flex cursor-pointer select-none items-start gap-2 pt-2 text-ui text-foreground"
+            >
+              <Checkbox
+                id={trashCheckboxId}
+                className="mt-0.5"
+                checked={moveToTrash}
+                disabled={pending}
+                onCheckedChange={(checked) => setMoveToTrash(checked === true)}
+              />
+              <span className="space-y-0.5">
+                <span className="block">Move Synara Beta to the Trash</span>
+                <span className="block text-ui-sm text-muted-foreground">
+                  Your Beta data is kept, so you can pick up where you left off if you come back.
+                </span>
+              </span>
+            </label>
+          ) : null}
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogClose disabled={pending} render={<Button variant="outline" size="sm" />}>
+            Stay on Beta
+          </AlertDialogClose>
+          <Button size="sm" disabled={pending} onClick={() => void leave()}>
+            {pending ? "Switching…" : "Switch to Synara"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogPopup>
+    </AlertDialog>
+  );
+}
+
+function BetaChannelMark() {
+  return (
+    <img
+      src="/app-icons/beta.png"
+      alt="Synara Beta"
+      className="mt-0.5 size-9 shrink-0 rounded-xl"
+    />
+  );
+}
+
+/**
+ * Stable → Synara Beta handoff. Rendered inside General settings; visible only
+ * on desktop builds, with the full action card on production and a status card
+ * (plus diagnostics disclosure) on beta.
+ */
+export function BetaChannelSettingsPanel({ active }: { readonly active: boolean }) {
+  const betaBridge = isElectron ? window.desktopBridge?.beta : undefined;
+  const betaStateQuery = useQuery({
+    queryKey: ["desktop-beta-channel-state"],
+    queryFn: () => betaBridge!.getState(),
+    enabled: active && betaBridge !== undefined,
+    // Poll fast while a download/install is in flight so the progress row moves.
+    refetchInterval: (query) =>
+      query.state.data?.install && query.state.data.install.phase !== "error" ? 500 : 30_000,
+  });
+  const [actionPending, setActionPending] = useState<"copy" | "open" | "install" | null>(null);
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
+  const [sharesDisclosureOpen, setSharesDisclosureOpen] = useState(false);
+  const state: DesktopBetaChannelState | null = betaStateQuery.data ?? null;
+
+  if (!active || !betaBridge || !state?.supported) return null;
+
+  const refresh = () => void betaStateQuery.refetch();
+
+  async function copyDataAndLaunch() {
+    setActionPending("copy");
+    try {
+      const result = await betaBridge!.importAndLaunch();
+      if (!result.ok) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not start the beta handoff",
+          description: result.message ?? "Try again from Settings → General.",
+        });
+        return;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Opening Synara Beta",
+        description:
+          "Beta is copying your projects, settings, and provider sign-ins from stable on first launch.",
+      });
+      refresh();
+    } finally {
+      setActionPending(null);
+    }
+  }
+
+  async function launchBeta() {
+    setActionPending("open");
+    try {
+      const result = await betaBridge!.launch();
+      if (!result.ok) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not open Synara Beta",
+          description: result.message ?? "The beta install was not found.",
+        });
+      }
+      refresh();
+    } finally {
+      setActionPending(null);
+    }
+  }
+
+  async function installBeta() {
+    setActionPending("install");
+    try {
+      const result = await betaBridge!.install();
+      if (!result.ok) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not install Synara Beta",
+          description: result.message ?? "Try again from Settings → General.",
+        });
+      }
+      refresh();
+    } finally {
+      setActionPending(null);
+    }
+  }
+
+  async function openStableDownloadPage() {
+    if (state?.stableDownloadUrl && window.desktopBridge?.openExternal) {
+      await window.desktopBridge.openExternal(state.stableDownloadUrl);
+    }
+  }
+
+  async function openDownloadPage() {
+    if (state?.downloadUrl && window.desktopBridge?.openExternal) {
+      await window.desktopBridge.openExternal(state.downloadUrl);
+    }
+  }
+
+  if (state.flavor === "beta") {
+    return (
+      <SettingsCard divided={false} className="flex items-start gap-3 px-4 py-3.5">
+        <BetaChannelMark />
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
+          <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+            To help us fix problems, Beta shares crash reports, app errors, and anonymous usage
+            counts. Crash reports may include private information.
+          </p>
+          <button
+            type="button"
+            className="flex cursor-pointer items-center gap-1.5 pt-1 text-ui-sm text-muted-foreground transition-colors hover:text-foreground"
+            aria-expanded={sharesDisclosureOpen}
+            onClick={() => setSharesDisclosureOpen((open) => !open)}
+          >
+            <DisclosureChevron open={sharesDisclosureOpen} />
+            What Beta shares
+          </button>
+          <DisclosureRegion open={sharesDisclosureOpen}>
+            <div className="space-y-2 pt-1.5">
+              <div>
+                <p className="m-0 text-ui-sm font-medium text-foreground">Shared</p>
+                <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
+                  <li>A random ID for this install, not linked to you</li>
+                  <li>When Beta opens, closes, installs, or is removed</li>
+                  <li>Crashes and errors; error details are filtered</li>
+                  <li>App version, OS version, and language</li>
+                  <li>
+                    Which providers you use, and how many projects, chats, and turns (just counts)
+                  </li>
+                  <li>Whether updates install correctly</li>
+                </ul>
+              </div>
+              <div>
+                <p className="m-0 text-ui-sm font-medium text-foreground">
+                  Not included in usage counts
+                </p>
+                <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
+                  <li>Your chats, prompts, or agent replies</li>
+                  <li>Your code, files, or project names</li>
+                  <li>Keys, passwords, or account details</li>
+                </ul>
+              </div>
+              <p className="m-0 text-ui-xs text-muted-foreground">
+                Error details are filtered, but may still include private information. Crash dumps
+                include app memory that can't be filtered. Reports and dumps are kept with no expiry
+                date.
+              </p>
+            </div>
+          </DisclosureRegion>
+          <div className="flex flex-wrap items-center gap-2 pt-1.5">
+            {state.stableInstalled ? (
+              <Button size="xs" variant="outline" onClick={() => setLeaveDialogOpen(true)}>
+                Switch back to Synara
+              </Button>
+            ) : (
+              <Button size="xs" variant="outline" onClick={() => void openStableDownloadPage()}>
+                Get Synara
+              </Button>
+            )}
+          </div>
+        </div>
+        <LeaveBetaDialog
+          open={leaveDialogOpen}
+          canMoveToTrash={state.canMoveBetaToTrash}
+          onOpenChange={setLeaveDialogOpen}
+          onLeave={(moveToTrash) => betaBridge!.leave({ moveToTrash })}
+        />
+      </SettingsCard>
+    );
+  }
+
+  if (state.flavor !== "production") return null;
+
+  return (
+    <SettingsCard divided={false} className="px-4 py-3.5">
+      <div className="flex items-start gap-3">
+        <BetaChannelMark />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex items-center gap-2">
+            <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Synara Beta</p>
+            <span className="inline-flex items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold leading-none text-[var(--beta-pill-ink)]">
+              Beta
+            </span>
+            {state.installed && state.version ? (
+              <span className="text-ui-xs text-muted-foreground">v{state.version} installed</span>
+            ) : state.installed ? (
+              <span className="text-ui-xs text-muted-foreground">Installed</span>
+            ) : null}
+          </div>
+          <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+            {state.installed
+              ? "Beta runs next to Synara with its own data, so nothing here changes. Copy your data to bring over projects, settings, and provider sign-ins. Beta shares crash reports and anonymous usage stats."
+              : "Try new features before everyone else. Synara Beta is a separate app with its own data, and this app stays exactly as it is. Beta shares crash reports and anonymous usage stats to help us improve it."}
+          </p>
+          {state.lastImportAt ? (
+            <p className="text-ui-xs text-muted-foreground">
+              Last copied your data {new Date(state.lastImportAt).toLocaleString()}.
+            </p>
+          ) : null}
+          {state.lastImportError ? (
+            <p className="text-ui-xs text-destructive">
+              Last import failed: {state.lastImportError}
+            </p>
+          ) : null}
+          {state.install?.phase === "error" ? (
+            <p className="text-ui-xs text-destructive">
+              Install failed: {state.install.message ?? "unknown error"}
+            </p>
+          ) : state.install ? (
+            <p className="text-ui-xs text-muted-foreground">
+              {state.install.phase === "downloading"
+                ? `Downloading Synara Beta${state.install.percent !== null ? ` — ${state.install.percent}%` : "…"}`
+                : state.install.phase === "verifying"
+                  ? "Verifying the download…"
+                  : state.install.phase === "installing"
+                    ? "Installing Synara Beta…"
+                    : "Opening Synara Beta…"}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2 pt-1.5">
+            {!state.installed ? (
+              state.canInstall ? (
+                <>
+                  <Button
+                    size="xs"
+                    disabled={actionPending !== null}
+                    onClick={() => void installBeta()}
+                  >
+                    {actionPending === "install" ? "Installing…" : "Install Synara Beta"}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={actionPending !== null}
+                    onClick={() => setCopyDialogOpen(true)}
+                  >
+                    {actionPending === "copy" ? "Installing…" : "Copy my data and open"}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={actionPending !== null}
+                    onClick={() => void openDownloadPage()}
+                  >
+                    Download page
+                  </Button>
+                </>
+              ) : (
+                <Button size="xs" onClick={() => void openDownloadPage()}>
+                  Get Synara Beta
+                </Button>
+              )
+            ) : (
+              <>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={actionPending !== null || state.running}
+                  title={
+                    state.running
+                      ? "Quit Synara Beta first so it can pick up the import on its next launch."
+                      : undefined
+                  }
+                  onClick={() => setCopyDialogOpen(true)}
+                >
+                  {actionPending === "copy"
+                    ? "Copying…"
+                    : state.lastImportAt
+                      ? "Re-copy my data and open"
+                      : "Copy my data and open"}
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={actionPending !== null}
+                  onClick={() => void launchBeta()}
+                >
+                  {actionPending === "open" ? "Opening…" : "Open Beta"}
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+      <AlertDialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace Synara Beta data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Copying from Synara replaces Beta chats and projects. Chats and projects created only
+              in Beta will be lost. Matching settings and provider sign-ins are overwritten, but
+              Beta-only sign-ins may remain. Your data in Synara will not change.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              Keep Beta data
+            </AlertDialogClose>
+            <Button
+              size="sm"
+              disabled={actionPending !== null}
+              onClick={() => {
+                setCopyDialogOpen(false);
+                void copyDataAndLaunch();
+              }}
+            >
+              Replace Beta data and open
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </SettingsCard>
   );
 }
