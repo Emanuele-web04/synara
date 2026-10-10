@@ -190,6 +190,23 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
       "Gemini 4 Pro (Low)",
     );
   });
+
+  it.each([
+    { model: "Gemini 3.7 Flash", effort: "low", label: "Low" },
+    { model: "Gemini 3.5 Flash", effort: "high", label: "High" },
+  ])(
+    "uses an available effort when the usual default is missing for $model",
+    ({ model, effort, label }) => {
+      const discovered = parseAntigravityModelLines(`${model} (${label})`)[0];
+      expect(discovered).toMatchObject({
+        supportedReasoningEfforts: [{ value: effort, label }],
+        defaultReasoningEffort: effort,
+      });
+      expect(
+        resolveAntigravityCliModelLabel(model, undefined, discovered?.defaultReasoningEffort),
+      ).toBe(`${model} (${label})`);
+    },
+  );
 });
 
 describe("Antigravity CLI integration helpers", () => {
