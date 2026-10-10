@@ -2815,6 +2815,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       prewarmVoice,
       transcribeVoice,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
+      // App-server notifications get a fresh local UUID; this queue has no replay.
+      runtimeEventDelivery: "fresh-ids-once",
     } satisfies CodexAdapterShape;
   });
 

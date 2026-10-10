@@ -8823,6 +8823,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       listModels,
       listAgents,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
+      // makeEventStamp mints a fresh local UUID; this queue has no replay.
+      runtimeEventDelivery: "fresh-ids-once",
     } satisfies ClaudeAdapterShape;
   });
 }
