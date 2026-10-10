@@ -1169,6 +1169,7 @@ function mapCodexHookEvent(
 
 // Configuration/lifecycle bookkeeping belongs in native diagnostics, not the transcript.
 const DIAGNOSTIC_ONLY_CODEX_METHODS = new Set([
+  "item/autoApprovalReview/started",
   "remoteControl/status/changed",
   "skills/changed",
   "session/threadOpenRequested",
