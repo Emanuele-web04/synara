@@ -169,6 +169,17 @@ describe("ChatTranscriptPane", () => {
   });
 
   it("expands collapsed user messages from the Show more control", async () => {
+    const scrollHeightGetter = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollHeight",
+    )!.get!;
+    let overflowLayoutReads = 0;
+    const heightSpy = vi
+      .spyOn(Element.prototype, "scrollHeight", "get")
+      .mockImplementation(function (this: Element) {
+        if (this.hasAttribute("data-user-message-clamp")) overflowLayoutReads++;
+        return scrollHeightGetter.call(this);
+      });
     const hiddenTail = "TAIL_SHOULD_APPEAR_AFTER_EXPAND";
     // Well past the visual line clamp so the collapsed message measures as
     // overflowing regardless of viewport width.
@@ -177,12 +188,12 @@ describe("ChatTranscriptPane", () => {
     host.style.cssText = "display:flex;width:600px;height:520px;overflow:hidden;";
     document.body.append(host);
 
-    const screen = await render(
+    const transcript = (text: string, chatFontSizePx = 15) => (
       <ChatTranscriptPane
         activeThreadId="thread-user-message-expand"
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        chatFontSizePx={15}
+        chatFontSizePx={chatFontSizePx}
         emptyStateProjectName={undefined}
         hasMessages
         isRevertingCheckpoint={false}
@@ -219,7 +230,7 @@ describe("ChatTranscriptPane", () => {
             message: {
               id: MessageId.makeUnsafe("user-message-expand"),
               role: "user",
-              text: longUserText,
+              text,
               createdAt: "2026-03-17T19:12:28.000Z",
               streaming: false,
             },
@@ -228,10 +239,13 @@ describe("ChatTranscriptPane", () => {
         timestampFormat="locale"
         turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
         workspaceRoot={undefined}
-      />,
-      { container: host },
+      />
     );
+    const screen = await render(transcript(longUserText), { container: host });
     try {
+      await settleLayout();
+      expect(overflowLayoutReads).toBe(0);
+      heightSpy.mockRestore();
       // Collapsing is a visual clamp: the tail stays in the DOM but the clamp
       // wrapper is overflowing (cut off) until the message is expanded.
       await vi.waitFor(() => {
@@ -265,7 +279,31 @@ describe("ChatTranscriptPane", () => {
         "Show less",
       );
       await settleLayout();
+      await page.getByText("Show less").click();
+      await expect
+        .poll(() => screen.container.querySelector('[data-user-message-clamp="true"]') !== null)
+        .toBe(true);
+
+      // Below the first-paint character hint, but enough words to overflow a
+      // narrow pane. Clear a stale fade on widening and remeasure font changes.
+      const wrappingText = "word ".repeat(90);
+      await screen.rerender(transcript(wrappingText));
+      const overflowToggle = () =>
+        screen.container.querySelector(`button[aria-controls="${clamp.id}"]`);
+      await expect.poll(() => overflowToggle() === null).toBe(true);
+      host.style.width = "200px";
+      await expect
+        .poll(() => screen.container.querySelector('[data-user-message-clamp="true"]') !== null)
+        .toBe(true);
+      host.style.width = "600px";
+      await screen.rerender(transcript(wrappingText, 30));
+      await expect
+        .poll(() => screen.container.querySelector('[data-user-message-clamp="true"]') !== null)
+        .toBe(true);
+      await screen.rerender(transcript(wrappingText, 15));
+      await expect.poll(() => overflowToggle() === null).toBe(true);
     } finally {
+      heightSpy.mockRestore();
       await screen.unmount();
       host.remove();
       await settleLayout();

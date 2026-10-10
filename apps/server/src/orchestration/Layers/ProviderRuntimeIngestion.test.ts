@@ -5854,6 +5854,77 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("finalizes buffered assistant text when a stop cleared the active turn before session exit", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-stopped-session-exit"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-stopped-session-exit"),
+    });
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-stopped-session-exit",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-stopped-session-exit"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-stopped-session-exit"),
+      itemId: asItemId("item-stopped-session-exit"),
+      payload: { streamKind: "assistant_text", delta: "keep me after stop" },
+    });
+    await harness.drain();
+
+    // The session-stop reactor settles the session (activeTurnId: null) and the
+    // runtime's exit event, like several adapters' exits, names no turn.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-stopped-before-exit"),
+        threadId: asThreadId("thread-1"),
+        session: {
+          threadId: asThreadId("thread-1"),
+          status: "stopped",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          updatedAt: now,
+          lastError: null,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-session-exited-stopped-session-exit"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-stopped-session-exit" && message.streaming === false,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-stopped-session-exit",
+    );
+    expect(message?.text).toBe("keep me after stop");
+    expect(message?.streaming).toBe(false);
+  });
+
   it("flushes buffered assistant text before runtime.error marks the session errored", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
