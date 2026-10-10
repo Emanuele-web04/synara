@@ -228,7 +228,6 @@ import { useStableValue } from "~/hooks/useStableValue";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import {
   applyAutomationEvent,
-  automationAttentionCount,
   automationQueryKey,
   formatCadence,
   groupAutomationsByContinuedThread,
@@ -407,6 +406,7 @@ import {
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
+  resolveAutomationCountBadge,
   resolvePullRequestReviewBadge,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
@@ -1359,7 +1359,7 @@ export default function Sidebar() {
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
   const isOnInbox = pathname.startsWith("/inbox");
-  // Lightweight read of automations to drive the sidebar attention badge. Shares the
+  // Lightweight read of automations to drive the sidebar count badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
     queryKey: automationQueryKey,
@@ -1373,17 +1373,10 @@ export default function Sidebar() {
       );
     });
   }, [queryClient]);
-  const automationAttentionBadge = useMemo(() => {
-    const data = automationListQuery.data;
-    if (!data) return null;
-    const count = automationAttentionCount(data.runs);
-    return count > 0
-      ? {
-          text: String(count),
-          accessibleLabel: `${count} ${pluralize(count, "automation needs", "automations need")} attention`,
-        }
-      : null;
-  }, [automationListQuery.data]);
+  const automationCountBadge = useMemo(
+    () => resolveAutomationCountBadge(automationListQuery.data?.definitions.length),
+    [automationListQuery.data],
+  );
   // Subscribe to Tasks unless the connected server has refused it.
   const tasksSurfaceEnabled = useTasksSurfaceEnabled();
   useTodoEventSubscription(tasksSurfaceEnabled);
@@ -4325,14 +4318,14 @@ export default function Sidebar() {
         icon: ClockIcon,
         label: "Automations",
         active: isOnAutomations,
-        badge: automationAttentionBadge,
+        badge: automationCountBadge,
         onClick: () => {
           void navigate({ to: "/automations" });
         },
       },
     }),
     [
-      automationAttentionBadge,
+      automationCountBadge,
       handlePrimaryNewThread,
       inboxBadge,
       isOnAutomations,
