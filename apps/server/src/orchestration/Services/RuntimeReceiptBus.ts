@@ -1,4 +1,4 @@
-import { CheckpointRef, IsoDateTime, NonNegativeInt, ThreadId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, IsoDateTime, NonNegativeInt, ThreadId, TurnId } from "@synara/contracts";
 import { Schema, ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -46,4 +46,4 @@ export interface RuntimeReceiptBusShape {
 export class RuntimeReceiptBus extends ServiceMap.Service<
   RuntimeReceiptBus,
   RuntimeReceiptBusShape
->()("t3/orchestration/Services/RuntimeReceiptBus") {}
+>()("synara/orchestration/Services/RuntimeReceiptBus") {}

@@ -6,11 +6,12 @@
 import type {
   ProviderKind,
   ProviderUsageStatus,
+  ServerCodexResetCredits,
   ServerProviderUsageLimit,
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
-} from "@t3tools/contracts";
-import { providerUsageNeedsAuthDetail } from "@t3tools/shared/providerUsage";
+} from "@synara/contracts";
+import { providerUsageNeedsAuthDetail } from "@synara/shared/providerUsage";
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -88,36 +89,11 @@ export function titleCase(value: string): string {
 }
 
 export function formatUsd(amount: number): string {
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 2,
   }).format(amount);
-}
-
-/** Recursively collect every nested object that owns a finite `key` (used for Gemini quota trees). */
-export function collectRecordsWithKey(value: unknown, key: string): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
-  const visit = (node: unknown): void => {
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        visit(item);
-      }
-      return;
-    }
-    const record = asRecord(node);
-    if (!record) {
-      return;
-    }
-    if (asFiniteNumber(record[key]) !== undefined) {
-      out.push(record);
-    }
-    for (const child of Object.values(record)) {
-      visit(child);
-    }
-  };
-  visit(value);
-  return out;
 }
 
 export interface SnapshotInput {
@@ -129,6 +105,7 @@ export interface SnapshotInput {
   usageLines?: ReadonlyArray<ServerProviderUsageLine>;
   planName?: string;
   detail?: string;
+  resetCredits?: ServerCodexResetCredits;
 }
 
 export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot {
@@ -141,6 +118,7 @@ export function buildSnapshot(input: SnapshotInput): ServerProviderUsageSnapshot
     status: input.status,
     ...(input.planName ? { planName: input.planName } : {}),
     ...(input.detail ? { detail: input.detail } : {}),
+    ...(input.resetCredits ? { resetCredits: input.resetCredits } : {}),
   };
 }
 

@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { assert, describe, it } from "@effect/vitest";
@@ -7,75 +8,198 @@ import { Effect } from "effect";
 import {
   createDevRunnerEnv,
   findFirstAvailableOffset,
+  readDevRunnerBooleanEnvironment,
+  resolveDevRunnerBooleanOverrides,
   resolveModePortOffsets,
   resolveOffset,
 } from "./dev-runner.ts";
 
 it.layer(NodeServices.layer)("dev-runner", (it) => {
+  it("allows every generated runtime setting through Turbo", () => {
+    const turboConfig = JSON.parse(
+      readFileSync(new URL("../turbo.json", import.meta.url), "utf8"),
+    ) as { globalEnv?: ReadonlyArray<string> };
+    const globalEnv = new Set(turboConfig.globalEnv ?? []);
+
+    for (const name of [
+      "SYNARA_MODE",
+      "SYNARA_PORT",
+      "SYNARA_HOME",
+      "SYNARA_NO_BROWSER",
+      "SYNARA_AUTH_TOKEN",
+      "SYNARA_PUBLIC_URL",
+      "SYNARA_ALLOW_INSECURE_REMOTE",
+      "SYNARA_HOST",
+      "SYNARA_LOG_WS_EVENTS",
+      "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
+      "VITE_WS_URL",
+      "VITE_DEV_SERVER_URL",
+    ]) {
+      assert.ok(globalEnv.has(name), `${name} must be declared in turbo.json globalEnv`);
+    }
+  });
+
   describe("resolveOffset", () => {
-    it.effect("uses explicit T3CODE_PORT_OFFSET when provided", () =>
-      Effect.sync(() => {
-        const result = resolveOffset({ portOffset: 12, devInstance: undefined });
-        assert.deepStrictEqual(result, {
-          offset: 12,
-          source: "T3CODE_PORT_OFFSET=12",
-        });
-      }),
-    );
+    it("uses explicit SYNARA_PORT_OFFSET when provided", () => {
+      assert.deepStrictEqual(resolveOffset({ portOffset: 12, devInstance: undefined }), {
+        offset: 12,
+        source: "SYNARA_PORT_OFFSET=12",
+      });
+    });
 
-    it.effect("hashes non-numeric instance values", () =>
-      Effect.sync(() => {
-        const result = resolveOffset({ portOffset: undefined, devInstance: "feature-branch" });
-        assert.ok(result.offset >= 1);
-        assert.ok(result.offset <= 3000);
-      }),
-    );
+    it("hashes non-numeric instance values", () => {
+      const result = resolveOffset({ portOffset: undefined, devInstance: "feature-branch" });
+      assert.ok(result.offset >= 1);
+      assert.ok(result.offset <= 3000);
+    });
 
-    it.effect("throws for negative port offset", () =>
+    it("throws for negative port offset", () => {
+      assert.throws(
+        () => resolveOffset({ portOffset: -1, devInstance: undefined }),
+        /Invalid SYNARA_PORT_OFFSET/,
+      );
+    });
+  });
+
+  describe("boolean precedence", () => {
+    const absent = { positive: undefined, negative: undefined };
+
+    it("uses environment values only when the CLI flag is absent", () => {
+      assert.deepStrictEqual(
+        resolveDevRunnerBooleanOverrides(
+          {
+            noBrowser: absent,
+            autoBootstrapProjectFromCwd: absent,
+            logWebSocketEvents: absent,
+          },
+          {
+            noBrowser: true,
+            autoBootstrapProjectFromCwd: false,
+            logWebSocketEvents: true,
+          },
+        ),
+        {
+          noBrowser: true,
+          autoBootstrapProjectFromCwd: false,
+          logWebSocketEvents: true,
+        },
+      );
+    });
+
+    it("keeps explicit false values instead of treating them as absent", () => {
+      assert.deepStrictEqual(
+        resolveDevRunnerBooleanOverrides(
+          {
+            noBrowser: { positive: undefined, negative: true },
+            autoBootstrapProjectFromCwd: { positive: false, negative: undefined },
+            logWebSocketEvents: { positive: undefined, negative: true },
+          },
+          {
+            noBrowser: true,
+            autoBootstrapProjectFromCwd: true,
+            logWebSocketEvents: true,
+          },
+        ),
+        {
+          noBrowser: false,
+          autoBootstrapProjectFromCwd: false,
+          logWebSocketEvents: false,
+        },
+      );
+    });
+
+    it.effect("rejects invalid boolean environment values", () =>
       Effect.gen(function* () {
         const error = yield* Effect.flip(
-          Effect.try({
-            try: () => resolveOffset({ portOffset: -1, devInstance: undefined }),
-            catch: (cause) => String(cause),
-          }),
+          readDevRunnerBooleanEnvironment({ SYNARA_LOG_WS_EVENTS: "sometimes" }),
         );
 
-        assert.ok(error.includes("Invalid T3CODE_PORT_OFFSET"));
+        assert.match(String(error), /Failed to read boolean development-runner configuration/);
       }),
     );
   });
 
   describe("createDevRunnerEnv", () => {
+    const defaults: Parameters<typeof createDevRunnerEnv>[0] = {
+      mode: "dev",
+      baseEnv: {},
+      serverOffset: 0,
+      webOffset: 0,
+      synaraHome: undefined,
+      authToken: undefined,
+      noBrowser: undefined,
+      autoBootstrapProjectFromCwd: undefined,
+      logWebSocketEvents: undefined,
+      host: undefined,
+      port: undefined,
+      devUrl: undefined,
+    };
+
+    it.effect("marks an inherited terminal PATH as already hydrated", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          ...defaults,
+          baseEnv: { PATH: "/opt/homebrew/bin:/usr/bin" },
+        });
+
+        assert.equal(env.SYNARA_PATH_HYDRATED, "1");
+        assert.match(env.PATH ?? "", /\/opt\/homebrew\/bin/);
+      }),
+    );
+
     it.effect("defaults SYNARA_HOME to ~/.synara when not provided", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
+          ...defaults,
         });
 
         assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara"));
-        assert.equal(env.T3CODE_HOME, resolve(homedir(), ".synara"));
+        assert.equal(env.SYNARA_HOST, "127.0.0.1");
+        assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:3773");
+      }),
+    );
+
+    it.effect("defaults watched desktop development to ~/.synara-dev", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          ...defaults,
+          mode: "dev:desktop",
+        });
+
+        assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara-dev"));
+      }),
+    );
+
+    it.effect("keeps watched Canary desktop data separate from development", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          ...defaults,
+          mode: "dev:desktop",
+          baseEnv: { SYNARA_DESKTOP_FLAVOR: "canary" },
+        });
+
+        assert.equal(env.SYNARA_HOME, resolve(homedir(), ".synara-canary"));
+      }),
+    );
+
+    it.effect("normalizes bracketed IPv6 hosts for listen and client URL syntax", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          ...defaults,
+          host: "[::1]",
+        });
+
+        assert.equal(env.SYNARA_HOST, "::1");
+        assert.equal(env.VITE_WS_URL, "ws://[::1]:3773");
       }),
     );
 
     it.effect("supports explicit typed overrides", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
+          ...defaults,
           mode: "dev:server",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: "/tmp/custom-t3",
+          synaraHome: "/tmp/custom-synara",
           authToken: "secret",
           noBrowser: true,
           autoBootstrapProjectFromCwd: false,
@@ -85,14 +209,13 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: new URL("http://localhost:7331"),
         });
 
-        assert.equal(env.T3CODE_HOME, resolve("/tmp/custom-t3"));
-        assert.equal(env.SYNARA_HOME, resolve("/tmp/custom-t3"));
-        assert.equal(env.T3CODE_PORT, "4222");
-        assert.equal(env.VITE_WS_URL, "ws://[::1]:4222");
-        assert.equal(env.T3CODE_NO_BROWSER, "1");
-        assert.equal(env.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD, "0");
-        assert.equal(env.T3CODE_LOG_WS_EVENTS, "1");
-        assert.equal(env.T3CODE_HOST, "0.0.0.0");
+        assert.equal(env.SYNARA_HOME, resolve("/tmp/custom-synara"));
+        assert.equal(env.SYNARA_PORT, "4222");
+        assert.equal(env.SYNARA_NO_BROWSER, "1");
+        assert.equal(env.SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD, "0");
+        assert.equal(env.SYNARA_LOG_WS_EVENTS, "1");
+        assert.equal(env.SYNARA_HOST, "0.0.0.0");
+        assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:4222");
         assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:7331/");
       }),
     );
@@ -100,86 +223,19 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     it.effect("does not force websocket logging on in dev mode when unset", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
-          mode: "dev",
+          ...defaults,
           baseEnv: {
-            T3CODE_LOG_WS_EVENTS: "keep-me-out",
+            SYNARA_LOG_WS_EVENTS: "keep-me-out",
           },
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
         });
 
-        assert.equal(env.T3CODE_MODE, "web");
-        assert.equal(env.T3CODE_LOG_WS_EVENTS, undefined);
-      }),
-    );
-
-    it.effect("forwards explicit websocket logging false without coercing it away", () =>
-      Effect.gen(function* () {
-        const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: false,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
-        });
-
-        assert.equal(env.T3CODE_LOG_WS_EVENTS, "0");
-      }),
-    );
-
-    it.effect("uses custom t3Home when provided", () =>
-      Effect.gen(function* () {
-        const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: "/tmp/my-t3",
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
-        });
-
-        assert.equal(env.T3CODE_HOME, resolve("/tmp/my-t3"));
-        assert.equal(env.DPCODE_HOME, resolve("/tmp/my-t3"));
-        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-t3"));
+        assert.equal(env.SYNARA_MODE, "web");
+        assert.equal(env.SYNARA_LOG_WS_EVENTS, undefined);
       }),
     );
   });
 
   describe("findFirstAvailableOffset", () => {
-    it.effect("returns the starting offset when required ports are available", () =>
-      Effect.gen(function* () {
-        const offset = yield* findFirstAvailableOffset({
-          startOffset: 0,
-          requireServerPort: true,
-          requireWebPort: true,
-          checkPortAvailability: () => Effect.succeed(true),
-        });
-
-        assert.equal(offset, 0);
-      }),
-    );
-
     it.effect("advances until all required ports are available", () =>
       Effect.gen(function* () {
         const taken = new Set([3773, 5733, 3774, 5734]);

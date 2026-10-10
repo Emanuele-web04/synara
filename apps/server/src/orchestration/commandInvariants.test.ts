@@ -5,20 +5,18 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import {
-  findThreadById,
-  listThreadsByProjectId,
-  requireNonNegativeInteger,
   requireProjectHasNoThreads,
   requireThread,
-  requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
+  threadHasInFlightTurn,
 } from "./commandInvariants.ts";
 
 const now = new Date().toISOString();
@@ -26,6 +24,7 @@ const now = new Date().toISOString();
 const readModel: OrchestrationReadModel = {
   snapshotSequence: 2,
   updatedAt: now,
+  spaces: [],
   projects: [
     {
       id: ProjectId.makeUnsafe("project-a"),
@@ -125,6 +124,29 @@ const readModel: OrchestrationReadModel = {
       checkpoints: [],
       deletedAt: null,
     },
+    {
+      id: ThreadId.makeUnsafe("thread-deleted"),
+      projectId: ProjectId.makeUnsafe("project-a"),
+      title: "Deleted Thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "full-access",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+      updatedAt: now,
+      latestTurn: null,
+      handoff: null,
+      messages: [],
+      session: null,
+      activities: [],
+      proposedPlans: [],
+      checkpoints: [],
+      deletedAt: now,
+    },
   ],
 };
 
@@ -144,16 +166,6 @@ const messageSendCommand: OrchestrationCommand = {
 };
 
 describe("commandInvariants", () => {
-  it("finds threads by id and project", () => {
-    expect(findThreadById(readModel, ThreadId.makeUnsafe("thread-1"))?.projectId).toBe("project-a");
-    expect(findThreadById(readModel, ThreadId.makeUnsafe("missing"))).toBeUndefined();
-    expect(
-      listThreadsByProjectId(readModel, ProjectId.makeUnsafe("project-b")).map(
-        (thread) => thread.id,
-      ),
-    ).toEqual([ThreadId.makeUnsafe("thread-2")]);
-  });
-
   it("requires existing thread", async () => {
     const thread = await Effect.runPromise(
       requireThread({
@@ -173,76 +185,16 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("does not exist");
-  });
-
-  it("requires missing thread for create flows", async () => {
-    await Effect.runPromise(
-      requireThreadAbsent({
-        readModel,
-        command: {
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("cmd-2"),
-          threadId: ThreadId.makeUnsafe("thread-3"),
-          projectId: ProjectId.makeUnsafe("project-a"),
-          title: "new",
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        },
-        threadId: ThreadId.makeUnsafe("thread-3"),
-      }),
-    );
 
     await expect(
       Effect.runPromise(
-        requireThreadAbsent({
+        requireThread({
           readModel,
-          command: {
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe("cmd-3"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            projectId: ProjectId.makeUnsafe("project-a"),
-            title: "dup",
-            modelSelection: {
-              provider: "codex",
-              model: "gpt-5-codex",
-            },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "full-access",
-            branch: null,
-            worktreePath: null,
-            createdAt: now,
-          },
-          threadId: ThreadId.makeUnsafe("thread-1"),
+          command: messageSendCommand,
+          threadId: ThreadId.makeUnsafe("thread-deleted"),
         }),
       ),
-    ).rejects.toThrow("already exists");
-  });
-
-  it("requires non-negative integers", async () => {
-    await Effect.runPromise(
-      requireNonNegativeInteger({
-        commandType: "thread.checkpoint.revert",
-        field: "turnCount",
-        value: 0,
-      }),
-    );
-
-    await expect(
-      Effect.runPromise(
-        requireNonNegativeInteger({
-          commandType: "thread.checkpoint.revert",
-          field: "turnCount",
-          value: -1,
-        }),
-      ),
-    ).rejects.toThrow("greater than or equal to 0");
+    ).rejects.toThrow("was deleted");
   });
 
   it("requires thread to be archived for unarchive command", async () => {
@@ -329,5 +281,20 @@ describe("commandInvariants", () => {
         }),
       ),
     ).resolves.toBeUndefined();
+  });
+
+  it("threadHasInFlightTurn includes starting/running sessions that active-turn misses", () => {
+    const runningSession = {
+      status: "running" as const,
+      activeTurnId: TurnId.makeUnsafe("turn-x"),
+    };
+    expect(
+      threadHasInFlightTurn({ session: runningSession, latestTurn: { state: "completed" } }),
+    ).toBe(true);
+    expect(threadHasInFlightTurn({ session: null, latestTurn: { state: "completed" } })).toBe(
+      false,
+    );
+    const errored = { status: "error" as const, activeTurnId: TurnId.makeUnsafe("turn-x") };
+    expect(threadHasInFlightTurn({ session: errored, latestTurn: null })).toBe(false);
   });
 });

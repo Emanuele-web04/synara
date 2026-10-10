@@ -9,23 +9,31 @@
  * @module ProviderHealthLive
  */
 import * as OS from "node:os";
-import * as nodePath from "node:path";
+import nodePath from "node:path";
 import type {
-  ProviderKind,
+  ProviderInstanceId,
   ServerSettings,
   ServerProviderAuthStatus,
   ServerProviderStatus,
   ServerProviderStatusState,
   ServerProviderUpdateState,
-} from "@t3tools/contracts";
-import { ServerProviderUpdateError } from "@t3tools/contracts";
-import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
-import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+} from "@synara/contracts";
+import { ProviderKind, ServerProviderUpdateError } from "@synara/contracts";
+import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
+import { envPathKeyFor } from "@synara/shared/executable";
+import { isPathName, mergePathEntries } from "@synara/shared/shell";
+import {
+  deriveProviderInstances,
+  deriveUnsupportedProviderInstances,
+  providerStartOptionsFromInstance,
+  type ResolvedProviderInstance,
+  type UnsupportedProviderInstance,
+} from "@synara/shared/providerInstances";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
+import { expandHomePath } from "@synara/shared/synaraHome";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
-  Cache,
   DateTime,
   Duration,
   Effect,
@@ -42,19 +50,58 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 
 import {
+  CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
+  compareCodexCliVersions,
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
+  MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
   parseCodexCliVersion,
 } from "../codexCliVersion";
+import { buildClaudeInstanceProcessEnv } from "../claudeEnvironment";
 import { ServerConfig } from "../../config";
+import {
+  buildProviderChildEnvironment,
+  type ProviderChildKind,
+} from "../../providerChildEnvironment.ts";
+import { buildOpenCodeServerProcessEnv } from "../providerBinaryResolution.ts";
 import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
-import { normalizeGeminiCapabilityProbeResult, probeGeminiCapabilities } from "../geminiAcpProbe";
-import { DEFAULT_CURSOR_AGENT_BINARY, resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand";
+import {
+  buildCursorAgentCommand,
+  buildCursorAgentHeadlessEnv,
+  DEFAULT_CURSOR_AGENT_BINARY,
+  resolveCursorAgentBinaryPath,
+} from "../acp/CursorAcpCommand";
+import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
+import { resolveOmpCliBinaryPath } from "../acp/OmpAcpSupport";
+import {
+  hasDevinApiKeyEnv,
+  readDevinStoredCredentials,
+  resolveDevinBinaryPath,
+} from "../acp/DevinAcpSupport";
+import {
+  claudeAuthMetadata,
+  isStructuredClaudeAuthFalseNegativeCandidate,
+  parseClaudeAuthStatusFromOutput,
+} from "../claudeAuthStatus";
+import { acquireClaudeAuthStatusLock } from "../claudeAuthStatusLock";
+import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
+import { buildClaudeProcessEnv, readClaudeCliCredentialsSummary } from "../claudeProcessEnv";
+import {
+  detailFromResult,
+  extractAuthBoolean,
+  extractAuthMethod,
+  nonEmptyTrimmed,
+  PROVIDER_COMMAND_TIMEOUT_DETAIL,
+  toTitleCaseWords,
+  type CommandResult,
+} from "../providerCliOutput";
+import { probeProviderCliVersion } from "../providerCliVersionProbe";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 import {
   orderProviderStatuses,
@@ -65,43 +112,136 @@ import {
 import { makeProviderMaintenanceCommandCoordinator } from "../providerMaintenanceCommandCoordinator";
 import {
   enrichProviderStatusWithVersionAdvisory,
+  compareSemverVersions,
   makeProviderMaintenanceCapabilities,
   normalizeCommandPath,
   parseGenericCliVersion,
   resolveProviderMaintenanceCapabilitiesEffect,
+  withOpenCodeMaintenanceVersion,
   type PackageManagedProviderMaintenanceDefinition,
-  type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance";
+import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
+import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
+
+export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
+export type { CommandResult } from "../providerCliOutput";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
-const PROVIDER_COMMAND_TIMEOUT_DETAIL = "Timed out while running command.";
+const CODEX_AUTH_STATUS_ARGS = ["-c", "mcp_servers={}", "login", "status"] as const;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
-const GEMINI_PROVIDER = "gemini" as const;
+const ANTIGRAVITY_PROVIDER = "antigravity" as const;
 const GROK_PROVIDER = "grok" as const;
-const KILO_PROVIDER = "kilo" as const;
+const DROID_PROVIDER = "droid" as const;
+const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
+const OMP_PROVIDER = "omp" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
+const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
+const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
 
 const PROVIDERS = [
   CODEX_PROVIDER,
   CLAUDE_AGENT_PROVIDER,
   CURSOR_PROVIDER,
-  GEMINI_PROVIDER,
+  ANTIGRAVITY_PROVIDER,
   GROK_PROVIDER,
-  KILO_PROVIDER,
+  DROID_PROVIDER,
+  DEVIN_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
+  OMP_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
+const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
+  provider === CLAUDE_AGENT_PROVIDER ? "claude" : provider;
+
+const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
+  provider === OPENCODE_PROVIDER
+    ? buildOpenCodeServerProcessEnv({})
+    : buildProviderChildEnvironment({ provider: providerChildKind(provider) });
+
+// Windows spreads the inherited environment under its native "Path" key. Writing a
+// literal `PATH` next to it makes Node's spawn keep only one casing, `PATH`, so the
+// child sees just the prepended entry and CLIs such as opencode cannot find their
+// package manager. Keep a single path key that carries the prepended entry followed
+// by the inherited value.
+export const prependPathEntry = (
+  env: NodeJS.ProcessEnv,
+  entry: string,
+  platform: NodeJS.Platform = OS.platform(),
+): NodeJS.ProcessEnv => {
+  // Read own keys: `in` on Windows' process.env reports every casing as present.
+  const pathKeys = Object.keys(env).filter((key) =>
+    platform === "win32" ? isPathName(key) : key === "PATH",
+  );
+  const envPathKey = envPathKeyFor(Object.fromEntries(pathKeys.map((key) => [key, ""])), platform);
+  const orderedKeys = [envPathKey, ...pathKeys.filter((key) => key !== envPathKey)];
+  const inheritedPath = orderedKeys.reduce<string | undefined>(
+    (merged, key) => mergePathEntries(merged, env[key], platform),
+    undefined,
+  );
+  const nextEnv: NodeJS.ProcessEnv = { ...env };
+  for (const key of pathKeys) delete nextEnv[key];
+  nextEnv[envPathKey] = mergePathEntries(entry, inheritedPath, platform) ?? entry;
+  return nextEnv;
+};
+
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
-const UPDATE_TIMEOUT_MS = 5 * 60_000;
+export const PROVIDER_HEALTH_PROBE_CONCURRENCY = 4;
+const MAX_REFRESH_REVISION_RETRIES = 1;
+const REFRESH_REVISION_RESCHEDULE_DELAY_MS = 100;
+const PROVIDER_UPDATE_ENABLEMENT_POLL_MS = 100;
+export const PROVIDER_UPDATE_TIMEOUT_MS = 2 * 60_000;
+
+export function runProviderHealthProbes<A, E, R>(
+  probes: ReadonlyArray<Effect.Effect<A, E, R>>,
+): Effect.Effect<ReadonlyArray<A>, E, R> {
+  return Effect.all(probes, { concurrency: PROVIDER_HEALTH_PROBE_CONCURRENCY });
+}
+
+function formatProviderUpdateTimeout(timeoutMs: number): string {
+  if (timeoutMs < 1_000) {
+    return `${timeoutMs} ${timeoutMs === 1 ? "millisecond" : "milliseconds"}`;
+  }
+  if (timeoutMs % 60_000 === 0) {
+    const minutes = timeoutMs / 60_000;
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  const seconds = timeoutMs / 1_000;
+  return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+function providerStatusInstanceKey(status: ServerProviderStatus): ProviderInstanceId {
+  return status.instanceId ?? status.provider;
+}
+
+// Instance ids are editable settings keys, so driver identity must travel with
+// them to prevent a reused id from inheriting another provider's auth/status.
+function providerStatusIdentityKey(status: ServerProviderStatus): string {
+  return `${status.driver ?? status.provider}\u0000${providerStatusInstanceKey(status)}`;
+}
+
+function providerStatusKey(input: {
+  readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | undefined;
+}): ProviderInstanceId {
+  return input.instanceId ?? input.provider;
+}
+
+function providerTargetIdentityKey(input: {
+  readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | undefined;
+}): string {
+  return `${input.provider}\u0000${providerStatusKey(input)}`;
+}
 
 function isClaudeNativeCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
@@ -112,6 +252,10 @@ function isClaudeNativeCommandPath(commandPath: string): boolean {
   );
 }
 
+function isClaudeLatestHomebrewCommandPath(commandPath: string): boolean {
+  return normalizeCommandPath(commandPath).includes("/caskroom/claude-code@latest/");
+}
+
 function isOpenCodeNativeCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
   return (
@@ -120,7 +264,7 @@ function isOpenCodeNativeCommandPath(commandPath: string): boolean {
   );
 }
 
-const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
+export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
   Record<ProviderKind, PackageManagedProviderMaintenanceDefinition>
 > = {
   codex: {
@@ -134,31 +278,51 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
     provider: CLAUDE_AGENT_PROVIDER,
     binaryName: "claude",
     npmPackageName: "@anthropic-ai/claude-code",
-    homebrew: { name: "claude-code", kind: "cask" },
+    homebrew: {
+      name: "claude-code",
+      kind: "cask",
+      variants: [
+        {
+          name: "claude-code@latest",
+          kind: "cask",
+          isCommandPath: isClaudeLatestHomebrewCommandPath,
+        },
+      ],
+    },
     nativeUpdate: {
       executable: "claude",
       args: () => ["update"],
       lockKey: "claude-native",
       strategy: "matching-path",
+      // Native Claude owns stable/latest channel selection. npm's latest tag cannot
+      // tell whether the installed CLI is current for the user's configured channel.
+      latestVersionSource: null,
       isCommandPath: isClaudeNativeCommandPath,
     },
   },
-  gemini: {
-    provider: GEMINI_PROVIDER,
-    binaryName: "gemini",
-    npmPackageName: "@google/gemini-cli",
-    homebrew: { name: "gemini-cli", kind: "formula" },
-    nativeUpdate: null,
+  antigravity: {
+    provider: ANTIGRAVITY_PROVIDER,
+    binaryName: "agy",
+    // Antigravity is distributed as a native binary and owns its update channel.
+    npmPackageName: null,
+    homebrew: null,
+    latestVersionSource: null,
+    nativeUpdate: {
+      executable: "agy",
+      args: () => ["update"],
+      lockKey: "antigravity-native",
+      strategy: "always",
+    },
   },
-  kilo: {
-    provider: KILO_PROVIDER,
-    binaryName: "kilo",
-    npmPackageName: "@kilocode/cli",
+  droid: {
+    provider: DROID_PROVIDER,
+    binaryName: "droid",
+    npmPackageName: "@factory/cli",
     homebrew: null,
     nativeUpdate: {
-      executable: "kilo",
-      args: () => ["upgrade"],
-      lockKey: "kilo-native",
+      executable: "droid",
+      args: () => ["update"],
+      lockKey: "droid-native",
       strategy: "always",
     },
   },
@@ -192,90 +356,19 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
       strategy: "always",
     },
   },
+  omp: {
+    provider: OMP_PROVIDER,
+    binaryName: "omp",
+    npmPackageName: null,
+    homebrew: null,
+    nativeUpdate: null,
+  },
 };
 
 // ── Pure helpers ────────────────────────────────────────────────────
-
-export interface CommandResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly code: number;
-}
-
-function nonEmptyTrimmed(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isCommandMissingCause(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const lower = error.message.toLowerCase();
-  return lower.includes("enoent") || lower.includes("notfound");
-}
-
-function detailFromResult(
-  result: CommandResult & { readonly timedOut?: boolean },
-): string | undefined {
-  if (result.timedOut) return PROVIDER_COMMAND_TIMEOUT_DETAIL;
-  const stderr = nonEmptyTrimmed(result.stderr);
-  if (stderr) return stderr;
-  const stdout = nonEmptyTrimmed(result.stdout);
-  if (stdout) return stdout;
-  if (result.code !== 0) {
-    return `Command exited with code ${result.code}.`;
-  }
-  return undefined;
-}
-
-function extractAuthBoolean(value: unknown): boolean | undefined {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const nested = extractAuthBoolean(entry);
-      if (nested !== undefined) return nested;
-    }
-    return undefined;
-  }
-
-  if (!value || typeof value !== "object") return undefined;
-
-  const record = value as Record<string, unknown>;
-  for (const key of ["authenticated", "isAuthenticated", "loggedIn", "isLoggedIn"] as const) {
-    if (typeof record[key] === "boolean") return record[key];
-  }
-  for (const key of ["auth", "status", "session", "account"] as const) {
-    const nested = extractAuthBoolean(record[key]);
-    if (nested !== undefined) return nested;
-  }
-  return undefined;
-}
-
-function extractAuthMethod(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const nested = extractAuthMethod(entry);
-      if (nested !== undefined) return nested;
-    }
-    return undefined;
-  }
-
-  if (!value || typeof value !== "object") return undefined;
-
-  const record = value as Record<string, unknown>;
-  for (const key of ["authMethod", "auth_type", "authType"] as const) {
-    if (typeof record[key] === "string") {
-      const trimmed = record[key].trim();
-      if (trimmed.length > 0) {
-        return trimmed;
-      }
-    }
-  }
-  for (const key of ["auth", "status", "session", "account"] as const) {
-    const nested = extractAuthMethod(record[key]);
-    if (nested !== undefined) return nested;
-  }
-  return undefined;
-}
+//
+// Generic CLI-output parsing lives in ../providerCliOutput; Claude auth-status
+// interpretation lives in ../claudeAuthStatus.
 
 function resolveVoiceTranscriptionAvailability(
   authMethod: string | undefined,
@@ -365,60 +458,6 @@ function extractClaudeAuthMethodFromOutput(result: CommandResult): string | unde
   return Option.getOrUndefined(findAuthMethodDeep(parsed.success));
 }
 
-function toTitleCaseWords(value: string): string {
-  return value
-    .split(/[\s_-]+/g)
-    .filter(Boolean)
-    .map((part) => part[0]!.toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function claudeSubscriptionLabel(subscriptionType: string | undefined): string | undefined {
-  const normalized = subscriptionType?.toLowerCase().replace(/[\s_-]+/g, "");
-  if (!normalized) return undefined;
-  switch (normalized) {
-    case "max":
-    case "maxplan":
-    case "max5":
-    case "max20":
-      return "Max";
-    case "enterprise":
-      return "Enterprise";
-    case "team":
-      return "Team";
-    case "pro":
-      return "Pro";
-    case "free":
-      return "Free";
-    default:
-      return toTitleCaseWords(subscriptionType!);
-  }
-}
-
-function normalizeClaudeAuthMethod(authMethod: string | undefined): string | undefined {
-  const normalized = authMethod?.toLowerCase().replace(/[\s_-]+/g, "");
-  if (!normalized) return undefined;
-  if (normalized === "apikey") return "apiKey";
-  return undefined;
-}
-
-function claudeAuthMetadata(input: {
-  readonly subscriptionType: string | undefined;
-  readonly authMethod: string | undefined;
-}): { readonly type: string; readonly label: string } | undefined {
-  if (normalizeClaudeAuthMethod(input.authMethod) === "apiKey") {
-    return { type: "apiKey", label: "Claude API Key" };
-  }
-  if (input.subscriptionType) {
-    const subscriptionLabel = claudeSubscriptionLabel(input.subscriptionType);
-    return {
-      type: input.subscriptionType,
-      label: `Claude ${subscriptionLabel ?? toTitleCaseWords(input.subscriptionType)} Subscription`,
-    };
-  }
-  return undefined;
-}
-
 // ── Codex subscription label ────────────────────────────────────────
 
 type CodexPlanTypeLiteral =
@@ -502,6 +541,16 @@ function extractCodexAccountTypeFromOutput(result: CommandResult): string | unde
 // doesn't include subscription info.
 
 const CAPABILITIES_PROBE_TIMEOUT_MS = 8_000;
+const CLAUDE_SUBSCRIPTION_CACHE_TTL_MS = 5 * 60 * 1_000;
+
+interface ClaudeSubscriptionProbeInput {
+  readonly instanceId?: ProviderInstanceId;
+  readonly binaryPath?: string | undefined;
+  readonly homePath?: string | undefined;
+  readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly homeDir?: string | undefined;
+  readonly isolationRootDir?: string;
+}
 
 function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
@@ -510,9 +559,51 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   });
 }
 
-const probeClaudeSubscription = () => {
+function hashCacheComponent(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function environmentFingerprint(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | null {
+  if (!environment || Object.keys(environment).length === 0) {
+    return null;
+  }
+  return Object.fromEntries(
+    Object.entries(environment)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [name, hashCacheComponent(value)]),
+  );
+}
+
+function claudeSubscriptionProbeKey(input: ClaudeSubscriptionProbeInput): string {
+  return JSON.stringify({
+    instanceId: input.instanceId?.trim() || null,
+    binaryPath: input.binaryPath?.trim() || null,
+    homeDir: input.homeDir?.trim() || null,
+    homePath: input.homePath?.trim() || null,
+    isolationRootDir: input.isolationRootDir?.trim() || null,
+    environment: environmentFingerprint(input.environment),
+  });
+}
+
+const probeClaudeSubscription = (input: ClaudeSubscriptionProbeInput) => {
   const abort = new AbortController();
+  const executable = nonEmptyTrimmed(input.binaryPath) ?? "claude";
+  const env = makeClaudeProbeEnv(
+    input.homePath,
+    input.environment,
+    input.homeDir,
+    input.instanceId,
+    input.isolationRootDir,
+  );
   return Effect.tryPromise(async () => {
+    const { query: claudeQuery } = await loadClaudeAgentSdk();
     const q = claudeQuery({
       // oxlint-disable-next-line require-yield
       prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
@@ -521,8 +612,10 @@ const probeClaudeSubscription = () => {
       options: {
         persistSession: false,
         abortController: abort,
+        pathToClaudeCodeExecutable: executable,
         settingSources: ["user", "project", "local"],
         allowedTools: [],
+        env,
         stderr: () => {},
       },
     });
@@ -628,7 +721,19 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     };
   }
   if (result.code === 0) {
-    return { status: "ready", authStatus: "authenticated" };
+    // Current Codex CLI prints login status as plain text (on stderr), not JSON.
+    // Only explicit login methods establish voice capability; unknown successful
+    // output remains authenticated without advertising ChatGPT-only dictation.
+    const voiceTranscriptionAvailable = /^logged in using chatgpt\s*$/m.test(lowerOutput)
+      ? true
+      : /^logged in using an api key\b/m.test(lowerOutput)
+        ? false
+        : undefined;
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+      ...(voiceTranscriptionAvailable !== undefined ? { voiceTranscriptionAvailable } : {}),
+    };
   }
 
   const detail = detailFromResult(result);
@@ -652,43 +757,6 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
  */
 const OPENAI_AUTH_PROVIDERS = new Set(["openai"]);
 
-/**
- * Read the `model_provider` value from the Codex CLI config file.
- *
- * Looks for the file at `$CODEX_HOME/config.toml` (falls back to
- * `~/.codex/config.toml`). Uses a simple line-by-line scan rather than
- * a full TOML parser to avoid adding a dependency for a single key.
- *
- * Returns `undefined` when the file does not exist or does not set
- * `model_provider`.
- */
-export const readCodexConfigModelProvider = Effect.gen(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const codexHome = process.env.CODEX_HOME || path.join(OS.homedir(), ".codex");
-  const configPath = path.join(codexHome, "config.toml");
-
-  const content = yield* fileSystem
-    .readFileString(configPath)
-    .pipe(Effect.orElseSucceed(() => undefined));
-  if (content === undefined) {
-    return undefined;
-  }
-
-  return parseCodexConfigModelProvider(content);
-});
-
-/**
- * Returns `true` when the Codex CLI is configured with a custom
- * (non-OpenAI) model provider, meaning `codex login` auth is not
- * required because authentication is handled through provider-specific
- * environment variables.
- */
-export const hasCustomModelProvider = Effect.map(
-  readCodexConfigModelProvider,
-  (provider) => provider !== undefined && !OPENAI_AUTH_PROVIDERS.has(provider),
-);
-
 // ── Effect-native command execution ─────────────────────────────────
 
 const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -701,13 +769,15 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 const runProviderCommand = (
   executable: string,
   args: ReadonlyArray<string>,
-  env: NodeJS.ProcessEnv = process.env,
+  options: { readonly env: NodeJS.ProcessEnv; readonly cwd?: string | undefined },
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make(executable, [...args], {
-      shell: process.platform === "win32",
-      env,
+    const command = makeEffectProcessCommand(executable, args, {
+      ...options,
+      // Health probes are non-interactive. Leaving stdin as a pipe can keep CLIs
+      // such as Antigravity waiting even after a read-only subcommand has finished.
+      stdin: "ignore",
     });
 
     const child = yield* spawner.spawn(command);
@@ -727,9 +797,10 @@ const runProviderCommand = (
 const runCodexCommand = (
   args: ReadonlyArray<string>,
   executable = "codex",
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = providerCommandEnv(CODEX_PROVIDER),
 ) =>
-  runProviderCommand(executable, args, env).pipe(
+  // Account health must not merge project config from the desktop's working directory.
+  runProviderCommand(executable, args, { env, cwd: env.CODEX_HOME }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -737,8 +808,12 @@ const runCodexCommand = (
     ),
   );
 
-const runClaudeCommand = (args: ReadonlyArray<string>, executable = "claude") =>
-  runProviderCommand(executable, args).pipe(
+const runClaudeCommand = (
+  args: ReadonlyArray<string>,
+  executable = "claude",
+  env: NodeJS.ProcessEnv = buildClaudeProcessEnv(),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -746,8 +821,103 @@ const runClaudeCommand = (args: ReadonlyArray<string>, executable = "claude") =>
     ),
   );
 
-const runGeminiCommand = (args: ReadonlyArray<string>, executable = "gemini") =>
-  runProviderCommand(executable, args).pipe(
+const makeProviderProbeEnv = (
+  provider: ProviderChildKind,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+): NodeJS.ProcessEnv =>
+  buildProviderChildEnvironment({
+    provider,
+    baseEnv: isAccountIsolatedProviderDriver(provider)
+      ? buildProviderProcessEnv({
+          driver: provider,
+          ...(environment !== undefined ? { environment } : {}),
+          ...(instanceId !== undefined ? { instanceId } : {}),
+          ...(paths?.homeDir !== undefined ? { homeDir: paths.homeDir } : {}),
+          ...(paths?.isolationRootDir !== undefined
+            ? { isolationRootDir: paths.isolationRootDir }
+            : {}),
+        })
+      : environment !== undefined
+        ? { ...process.env, ...environment }
+        : process.env,
+  });
+
+const tryMakeProviderProbeEnv = (
+  provider: Extract<ProviderProcessEnvDriver, ProviderChildKind>,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+):
+  | { readonly ok: true; readonly env: NodeJS.ProcessEnv }
+  | { readonly ok: false; readonly cause: unknown } => {
+  try {
+    return { ok: true, env: makeProviderProbeEnv(provider, environment, instanceId, paths) };
+  } catch (cause) {
+    return { ok: false, cause };
+  }
+};
+
+function providerHomePreparationFailure(
+  provider: Extract<ProviderProcessEnvDriver, ProviderChildKind>,
+  checkedAt: string,
+  cause: unknown,
+): ServerProviderStatus {
+  return {
+    provider,
+    instanceId: provider,
+    driver: provider,
+    status: "error",
+    available: false,
+    authStatus: "unknown",
+    checkedAt,
+    message: `Failed to prepare the private provider account home. ${cause instanceof Error ? cause.message : String(cause)}`,
+  };
+}
+
+function isAccountIsolatedProviderDriver(
+  provider: ProviderChildKind,
+): provider is Extract<ProviderProcessEnvDriver, ProviderChildKind> {
+  return (
+    provider === "cursor" ||
+    provider === "grok" ||
+    provider === "opencode" ||
+    provider === "pi" ||
+    provider === "omp"
+  );
+}
+
+export const makeProviderUpdateEnv = (
+  instance: ResolvedProviderInstance,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+): NodeJS.ProcessEnv => {
+  const environment =
+    instance.raw.environment !== undefined || Object.keys(instance.environment).length > 0
+      ? instance.environment
+      : undefined;
+  switch (instance.driver) {
+    case "claudeAgent":
+      return makeProviderProbeEnv("claude", environment);
+    case "codex":
+    case "cursor":
+    case "devin":
+    case "antigravity":
+    case "grok":
+    case "droid":
+    case "opencode":
+    case "pi":
+    case "omp":
+      return makeProviderProbeEnv(instance.driver, environment, instance.instanceId, paths);
+  }
+};
+
+const runGrokCommand = (
+  args: ReadonlyArray<string>,
+  executable = "grok",
+  env: NodeJS.ProcessEnv = providerCommandEnv(GROK_PROVIDER),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -755,8 +925,12 @@ const runGeminiCommand = (args: ReadonlyArray<string>, executable = "gemini") =>
     ),
   );
 
-const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
-  runProviderCommand(executable, args).pipe(
+const runOpenCodeCommand = (
+  args: ReadonlyArray<string>,
+  executable = "opencode",
+  env: NodeJS.ProcessEnv = providerCommandEnv(OPENCODE_PROVIDER),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -764,8 +938,99 @@ const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
     ),
   );
 
-const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode") =>
-  runProviderCommand(executable, args).pipe(
+const runCursorCommand = (
+  args: ReadonlyArray<string>,
+  executable = DEFAULT_CURSOR_AGENT_BINARY,
+  env: NodeJS.ProcessEnv = buildCursorAgentHeadlessEnv(),
+) => {
+  const command = buildCursorAgentCommand(executable, args);
+  return runProviderCommand(command.command, command.args, { env }).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${command.command} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+};
+
+function parseCursorAuthStatusFromOutput(result: CommandResult): {
+  readonly status: ServerProviderStatusState;
+  readonly authStatus: ServerProviderAuthStatus;
+  readonly message?: string;
+} {
+  const output = `${result.stdout}\n${result.stderr}`;
+  const lowerOutput = output.toLowerCase();
+
+  if (
+    lowerOutput.includes("unknown command") ||
+    lowerOutput.includes("unrecognized command") ||
+    lowerOutput.includes("unexpected argument")
+  ) {
+    return {
+      status: "warning",
+      authStatus: "unknown",
+      message:
+        "Cursor Agent authentication status command is unavailable in this Cursor Agent version.",
+    };
+  }
+
+  if (
+    lowerOutput.includes("authentication required") ||
+    lowerOutput.includes("not logged in") ||
+    lowerOutput.includes("not authenticated") ||
+    lowerOutput.includes("unauthenticated") ||
+    lowerOutput.includes("login required") ||
+    lowerOutput.includes("run 'agent login'") ||
+    lowerOutput.includes("run `agent login`") ||
+    lowerOutput.includes("run cursor-agent login")
+  ) {
+    return {
+      status: "error",
+      authStatus: "unauthenticated",
+      message: "Cursor Agent is not authenticated. Run `cursor-agent login` and try again.",
+    };
+  }
+
+  if (
+    lowerOutput.includes("logged in") ||
+    lowerOutput.includes("login successful") ||
+    lowerOutput.includes("authenticated")
+  ) {
+    return { status: "ready", authStatus: "authenticated" };
+  }
+
+  if (result.code === 0) {
+    return {
+      status: "warning",
+      authStatus: "unknown",
+      message: "Cursor Agent is installed, but Synara could not verify authentication status.",
+    };
+  }
+
+  const detail = detailFromResult(result);
+  return {
+    status: "warning",
+    authStatus: "unknown",
+    message: detail
+      ? `Could not verify Cursor Agent authentication status. ${detail}`
+      : "Could not verify Cursor Agent authentication status.",
+  };
+}
+
+function cursorModelsOutputHasModels(output: string): boolean {
+  return output.split(/\r?\n/u).some((line) => line.trim().length > 0 && line.includes(" - "));
+}
+
+function cursorModelsOutputHasNoModels(output: string): boolean {
+  return output.toLowerCase().includes("no models available");
+}
+
+const runPiCommand = (
+  args: ReadonlyArray<string>,
+  executable = "pi",
+  env: NodeJS.ProcessEnv = providerCommandEnv(PI_PROVIDER),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -773,8 +1038,12 @@ const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode"
     ),
   );
 
-const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
-  runProviderCommand(executable, args).pipe(
+const runOmpCommand = (
+  args: ReadonlyArray<string>,
+  executable = "omp",
+  env: NodeJS.ProcessEnv = providerCommandEnv(OMP_PROVIDER),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -782,17 +1051,12 @@ const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
     ),
   );
 
-const runCursorCommand = (args: ReadonlyArray<string>, executable = DEFAULT_CURSOR_AGENT_BINARY) =>
-  runProviderCommand(executable, args).pipe(
-    Effect.flatMap((result) =>
-      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
-        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
-        : Effect.succeed(result),
-    ),
-  );
-
-const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
-  runProviderCommand(executable, args).pipe(
+const runAntigravityCommand = (
+  args: ReadonlyArray<string>,
+  executable = "agy",
+  env: NodeJS.ProcessEnv = providerCommandEnv(ANTIGRAVITY_PROVIDER),
+) =>
+  runProviderCommand(executable, args, { env }).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -802,14 +1066,46 @@ const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
 
 // ── Health check ────────────────────────────────────────────────────
 
-function makeCodexProbeEnv(homePath?: string): NodeJS.ProcessEnv {
+async function makeCodexProbeEnv(
+  homePath?: string,
+  shadowHomePath?: string,
+  accountId?: string,
+  environment?: Readonly<Record<string, string>>,
+): Promise<NodeJS.ProcessEnv> {
   const normalizedHomePath = nonEmptyTrimmed(homePath);
+  const normalizedShadowHomePath = nonEmptyTrimmed(shadowHomePath);
+  const normalizedAccountId = nonEmptyTrimmed(accountId);
   return buildCodexProcessEnv({
+    ...(environment ? { env: { ...process.env, ...environment } } : {}),
     ...(normalizedHomePath ? { homePath: normalizedHomePath } : {}),
+    ...(normalizedShadowHomePath ? { shadowHomePath: normalizedShadowHomePath } : {}),
+    ...(normalizedAccountId ? { accountId: normalizedAccountId } : {}),
   });
 }
 
-const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+export function makeClaudeProbeEnv(
+  homePath?: string,
+  environment?: Readonly<Record<string, string>>,
+  homeDir?: string,
+  providerInstanceId?: ProviderInstanceId,
+  isolationRootDir?: string,
+): NodeJS.ProcessEnv {
+  const normalizedHomePath = nonEmptyTrimmed(homePath);
+  const baseHomeDir = nonEmptyTrimmed(homeDir) ?? OS.homedir();
+  const resolvedHomePath =
+    normalizedHomePath === "~"
+      ? baseHomeDir
+      : normalizedHomePath?.startsWith("~/")
+        ? nodePath.join(baseHomeDir, normalizedHomePath.slice(2))
+        : normalizedHomePath;
+  return buildClaudeInstanceProcessEnv(resolvedHomePath, environment, {
+    homeDir: baseHomeDir,
+    ...(providerInstanceId ? { providerInstanceId } : {}),
+    ...(isolationRootDir ? { isolationRootDir } : {}),
+  });
+}
+
+export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -835,39 +1131,67 @@ const hasCustomModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
 export const makeCheckCodexProviderStatus = (
   binaryPath?: string,
   homePath?: string,
+  shadowHomePath?: string,
+  accountId?: string,
+  environment?: Readonly<Record<string, string>>,
 ): Effect.Effect<
   ServerProviderStatus,
   never,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> =>
-  Effect.gen(function* () {
+> => {
+  const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
+  return Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
-    const probeEnv = makeCodexProbeEnv(homePath);
-
-    // Probe 1: `codex --version` — is the CLI reachable?
-    const versionProbe = yield* runCodexCommand(["--version"], executable, probeEnv).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
-    );
-
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
+    // Overlay materialization can reject misconfigured account homes (e.g. a
+    // symlinked shadow auth.json); report that as this instance's status instead
+    // of letting a defect take down the whole provider refresh.
+    const probeEnvResult = yield* Effect.tryPromise({
+      try: () => makeCodexProbeEnv(homePath, shadowHomePath, accountId, environment),
+      catch: (cause) => cause,
+    }).pipe(Effect.result);
+    if (Result.isFailure(probeEnvResult)) {
+      const error = probeEnvResult.failure;
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Codex CLI (`codex`) is not installed or not on PATH."
-          : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message: error instanceof Error ? error.message : String(error),
+      } satisfies ServerProviderStatus;
+    }
+    const probeEnv = probeEnvResult.success;
+
+    // Probe 1: `codex --version` — is the CLI reachable?
+    const versionProbe = yield* probeProviderCliVersion(
+      runCodexCommand(["--version"], executable, probeEnv),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Codex CLI (`codex`) is not installed or not on PATH."
+            : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       };
     }
 
-    if (Option.isNone(versionProbe.success)) {
+    if (versionProbe.outcome === "timeout") {
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -876,11 +1200,13 @@ export const makeCheckCodexProviderStatus = (
       };
     }
 
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
       const detail = detailFromResult(version);
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -890,11 +1216,26 @@ export const makeCheckCodexProviderStatus = (
           : "Codex CLI is installed but failed to run.",
       };
     }
+    const version = versionProbe.result;
 
     const parsedVersion = parseCodexCliVersion(`${version.stdout}\n${version.stderr}`);
-    if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
+    if (!parsedVersion) {
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
+      } satisfies ServerProviderStatus;
+    }
+    if (!isCodexCliVersionSupported(parsedVersion)) {
+      return {
+        provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -902,6 +1243,9 @@ export const makeCheckCodexProviderStatus = (
         message: formatCodexCliUpgradeMessage(parsedVersion),
       };
     }
+    const supportsAutoRuntimeMode =
+      parsedVersion !== null &&
+      compareCodexCliVersions(parsedVersion, MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION) >= 0;
 
     // Probe 2: `codex login status` — is the user authenticated?
     //
@@ -912,16 +1256,19 @@ export const makeCheckCodexProviderStatus = (
     if (yield* hasCustomModelProviderForEnv(probeEnv)) {
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "ready" as const,
         available: true,
         authStatus: "unknown" as const,
         version: parsedVersion,
+        supportsAutoRuntimeMode,
         checkedAt,
         message: "Using a custom Codex model provider; OpenAI login check skipped.",
       } satisfies ServerProviderStatus;
     }
 
-    const authProbe = yield* runCodexCommand(["login", "status"], executable, probeEnv).pipe(
+    const authProbe = yield* runCodexCommand(CODEX_AUTH_STATUS_ARGS, executable, probeEnv).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );
@@ -930,10 +1277,13 @@ export const makeCheckCodexProviderStatus = (
       const error = authProbe.failure;
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
         version: parsedVersion,
+        supportsAutoRuntimeMode,
         checkedAt,
         message:
           error instanceof Error
@@ -945,10 +1295,13 @@ export const makeCheckCodexProviderStatus = (
     if (Option.isNone(authProbe.success)) {
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
         version: parsedVersion,
+        supportsAutoRuntimeMode,
         checkedAt,
         message: "Could not verify Codex authentication status. Timed out while running command.",
       };
@@ -971,10 +1324,13 @@ export const makeCheckCodexProviderStatus = (
 
     return {
       provider: CODEX_PROVIDER,
+      instanceId: CODEX_PROVIDER,
+      driver: CODEX_PROVIDER,
       status: parsed.status,
       available: true,
       authStatus: parsed.authStatus,
       version: parsedVersion,
+      supportsAutoRuntimeMode,
       ...(codexAuthType ? { authType: codexAuthType } : {}),
       ...(codexLabel ? { authLabel: codexLabel } : {}),
       ...(parsed.voiceTranscriptionAvailable !== undefined
@@ -983,125 +1339,71 @@ export const makeCheckCodexProviderStatus = (
       checkedAt,
       ...(parsed.message ? { message: parsed.message } : {}),
     } satisfies ServerProviderStatus;
-  });
+  }).pipe(
+    Effect.map((status) => ({
+      ...status,
+      autoRuntimeModeBinaryPath: executable,
+    })),
+  );
+};
 
 export const checkCodexProviderStatus = makeCheckCodexProviderStatus();
 
 // ── Claude Agent health check ───────────────────────────────────────
 
-export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
-  readonly status: ServerProviderStatusState;
-  readonly authStatus: ServerProviderAuthStatus;
-  readonly message?: string;
-} {
-  const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
-
-  if (
-    lowerOutput.includes("unknown command") ||
-    lowerOutput.includes("unrecognized command") ||
-    lowerOutput.includes("unexpected argument")
-  ) {
-    return {
-      status: "warning",
-      authStatus: "unknown",
-      message:
-        "Claude Agent authentication status command is unavailable in this version of Claude.",
-    };
-  }
-
-  if (
-    lowerOutput.includes("not logged in") ||
-    lowerOutput.includes("login required") ||
-    lowerOutput.includes("authentication required") ||
-    lowerOutput.includes("run `claude login`") ||
-    lowerOutput.includes("run claude login")
-  ) {
-    return {
-      status: "error",
-      authStatus: "unauthenticated",
-      message: "Claude is not authenticated. Run `claude auth login` and try again.",
-    };
-  }
-
-  // `claude auth status` returns JSON with a `loggedIn` boolean.
-  const parsedAuth = (() => {
-    const trimmed = result.stdout.trim();
-    if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
-    }
-    try {
-      return {
-        attemptedJsonParse: true as const,
-        auth: extractAuthBoolean(JSON.parse(trimmed)),
-      };
-    } catch {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
-    }
-  })();
-
-  if (parsedAuth.auth === true) {
-    return { status: "ready", authStatus: "authenticated" };
-  }
-  if (parsedAuth.auth === false) {
-    return {
-      status: "error",
-      authStatus: "unauthenticated",
-      message: "Claude is not authenticated. Run `claude auth login` and try again.",
-    };
-  }
-  if (parsedAuth.attemptedJsonParse) {
-    return {
-      status: "warning",
-      authStatus: "unknown",
-      message:
-        "Could not verify Claude authentication status from JSON output (missing auth marker).",
-    };
-  }
-  if (result.code === 0) {
-    return { status: "ready", authStatus: "authenticated" };
-  }
-
-  const detail = detailFromResult(result);
-  return {
-    status: "warning",
-    authStatus: "unknown",
-    message: detail
-      ? `Could not verify Claude authentication status. ${detail}`
-      : "Could not verify Claude authentication status.",
-  };
-}
+const CLAUDE_AUTH_FALSE_NEGATIVE_RETRY_DELAY_MS = 1_000;
 
 export const makeCheckClaudeProviderStatus = (
   resolveSubscriptionType?: Effect.Effect<string | undefined>,
   binaryPath?: string,
-): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
+  homeDir?: string,
+  options?: {
+    readonly falseNegativeRetryDelayMs?: number;
+    readonly providerInstanceId?: ProviderInstanceId;
+    readonly isolationRootDir?: string;
+    readonly fallbackHomeDir?: string;
+  },
+  environment?: Readonly<Record<string, string>>,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> => {
+  const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
+  return Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
-
-    // Probe 1: `claude --version` — is the CLI reachable?
-    const versionProbe = yield* runClaudeCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
-      Effect.result,
+    const claudeEnv = makeClaudeProbeEnv(
+      homeDir,
+      environment,
+      options?.fallbackHomeDir,
+      options?.providerInstanceId,
+      options?.isolationRootDir,
     );
 
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
+    // Probe 1: `claude --version` — is the CLI reachable?
+    const versionProbe = yield* probeProviderCliVersion(
+      runClaudeCommand(["--version"], executable, claudeEnv),
+      CLAUDE_HEALTH_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Claude Agent CLI (`claude`) is not installed or not on PATH."
-          : `Failed to execute Claude Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Claude Agent CLI (`claude`) is not installed or not on PATH."
+            : `Failed to execute Claude Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       };
     }
 
-    if (Option.isNone(versionProbe.success)) {
+    if (versionProbe.outcome === "timeout") {
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1111,11 +1413,13 @@ export const makeCheckClaudeProviderStatus = (
       };
     }
 
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
       const detail = detailFromResult(version);
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1125,22 +1429,36 @@ export const makeCheckClaudeProviderStatus = (
           : "Claude Agent CLI is installed but failed to run.",
       };
     }
+    const version = versionProbe.result;
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const supportsAutoRuntimeMode = isClaudeAutoModeCliVersionSupported(parsedVersion);
 
-    // Probe 2: `claude auth status` — is the user authenticated?
-    const authProbe = yield* runClaudeCommand(["auth", "status"], executable).pipe(
-      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
-      Effect.result,
-    );
+    // Probe 2: `claude auth status` — is the user authenticated? The command can
+    // redeem a single-use rotating OAuth refresh token, so it is serialized with
+    // every other `claude auth status` invocation in this process (credential
+    // keepalive, concurrent health probes) via the shared lock.
+    const runAuthStatusProbe = Effect.acquireUseRelease(
+      Effect.promise(() => acquireClaudeAuthStatusLock()),
+      () =>
+        runClaudeCommand(["auth", "status"], executable, claudeEnv).pipe(
+          Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
+        ),
+      (release) => Effect.sync(release),
+    ).pipe(Effect.result);
+
+    const authProbe = yield* runAuthStatusProbe;
 
     if (Result.isFailure(authProbe)) {
       const error = authProbe.failure;
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
         version: parsedVersion,
+        supportsAutoRuntimeMode,
         checkedAt,
         message:
           error instanceof Error
@@ -1152,163 +1470,149 @@ export const makeCheckClaudeProviderStatus = (
     if (Option.isNone(authProbe.success)) {
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
         version: parsedVersion,
+        supportsAutoRuntimeMode,
         checkedAt,
         message: "Could not verify Claude authentication status. Timed out while running command.",
       };
     }
 
-    const authOutput = authProbe.success.value;
-    const parsed = parseClaudeAuthStatusFromOutput(authOutput);
+    let authOutput = authProbe.success.value;
+    let parsed = parseClaudeAuthStatusFromOutput(authOutput);
+    const credentialsHome = nonEmptyTrimmed(claudeEnv.HOME) ?? homeDir;
+    const credentialSummary = readClaudeCliCredentialsSummary(
+      credentialsHome ? { env: claudeEnv, homeDir: credentialsHome } : { env: claudeEnv },
+    );
+    // A structured `loggedIn:false` with a clean exit and no local credential
+    // record to rescue it (macOS keeps OAuth in the Keychain, not on disk) is
+    // the signature of a lost refresh-token rotation race with a concurrent
+    // `claude auth status` invocation. Re-probe once after the rotation settles.
+    if (
+      !credentialSummary.usable &&
+      isStructuredClaudeAuthFalseNegativeCandidate(authOutput, parsed)
+    ) {
+      const retryDelayMs =
+        options?.falseNegativeRetryDelayMs ?? CLAUDE_AUTH_FALSE_NEGATIVE_RETRY_DELAY_MS;
+      if (retryDelayMs > 0) {
+        yield* Effect.sleep(retryDelayMs);
+      }
+      const retryProbe = yield* runAuthStatusProbe;
+      if (Result.isSuccess(retryProbe) && Option.isSome(retryProbe.success)) {
+        authOutput = retryProbe.success.value;
+        parsed = parseClaudeAuthStatusFromOutput(authOutput);
+      }
+    }
+    const structuredFalseNegative = isStructuredClaudeAuthFalseNegativeCandidate(
+      authOutput,
+      parsed,
+    );
+    const credentialProbeSubscriptionType =
+      credentialSummary.usable && structuredFalseNegative && resolveSubscriptionType
+        ? yield* resolveSubscriptionType
+        : undefined;
+    // Claude 2.1.x can report `loggedIn:false` from `auth status` while a live
+    // SDK init still reads account metadata. Token strings alone are not enough:
+    // require the SDK probe before treating the credential file as authenticated.
+    const effectiveParsed: ReturnType<typeof parseClaudeAuthStatusFromOutput> =
+      credentialProbeSubscriptionType !== undefined
+        ? { status: "ready", authStatus: "authenticated" }
+        : parsed;
+    const useCredentialMetadata = credentialProbeSubscriptionType !== undefined;
 
     // Determine subscription type from multiple sources (cheapest first):
     // 1. JSON output of `claude auth status` (may or may not contain it)
     // 2. Cached SDK probe (spawns a Claude process on miss, reads
     //    `initializationResult()` for account metadata, then aborts
     //    immediately — no API tokens are consumed)
-    let subscriptionType = extractSubscriptionTypeFromOutput(authOutput);
-    const authMethod = extractClaudeAuthMethodFromOutput(authOutput);
-    if (!subscriptionType && resolveSubscriptionType && parsed.authStatus === "authenticated") {
+    let subscriptionType =
+      extractSubscriptionTypeFromOutput(authOutput) ??
+      credentialProbeSubscriptionType ??
+      (useCredentialMetadata ? credentialSummary.subscriptionType : undefined);
+    const authMethod =
+      extractClaudeAuthMethodFromOutput(authOutput) ??
+      (useCredentialMetadata ? "claude.ai" : undefined);
+    if (
+      !subscriptionType &&
+      resolveSubscriptionType &&
+      effectiveParsed.authStatus === "authenticated"
+    ) {
       subscriptionType = yield* resolveSubscriptionType;
     }
     const authMetadata = claudeAuthMetadata({ subscriptionType, authMethod });
 
     return {
       provider: CLAUDE_AGENT_PROVIDER,
-      status: parsed.status,
+      instanceId: CLAUDE_AGENT_PROVIDER,
+      driver: CLAUDE_AGENT_PROVIDER,
+      status: effectiveParsed.status,
       available: true,
-      authStatus: parsed.authStatus,
+      authStatus: effectiveParsed.authStatus,
       version: parsedVersion,
+      supportsAutoRuntimeMode,
       ...(authMetadata ? { authType: authMetadata.type, authLabel: authMetadata.label } : {}),
       checkedAt,
-      ...(parsed.message ? { message: parsed.message } : {}),
+      ...(effectiveParsed.message ? { message: effectiveParsed.message } : {}),
     } satisfies ServerProviderStatus;
-  });
+  }).pipe(
+    Effect.map((status) => ({
+      ...status,
+      autoRuntimeModeBinaryPath: executable,
+    })),
+  );
+};
 
 export const checkClaudeProviderStatus = makeCheckClaudeProviderStatus();
-
-export const makeCheckGeminiProviderStatus = (
-  binaryPath?: string,
-): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
-    const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "gemini";
-
-    const versionProbe = yield* runGeminiCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
-    );
-
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
-      return {
-        provider: GEMINI_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Gemini CLI (`gemini`) is not installed or not on PATH."
-          : `Failed to execute Gemini CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      };
-    }
-
-    if (Option.isNone(versionProbe.success)) {
-      return {
-        provider: GEMINI_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: "Gemini CLI is installed but failed to run. Timed out while running command.",
-      };
-    }
-
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
-      const detail = detailFromResult(version);
-      return {
-        provider: GEMINI_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: detail
-          ? `Gemini CLI is installed but failed to run. ${detail}`
-          : "Gemini CLI is installed but failed to run.",
-      };
-    }
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-
-    const capabilityProbe = yield* probeGeminiCapabilities({
-      binaryPath: executable,
-      cwd: OS.homedir(),
-    }).pipe(Effect.result);
-
-    if (Result.isFailure(capabilityProbe)) {
-      const error = capabilityProbe.failure;
-      return {
-        provider: GEMINI_PROVIDER,
-        status: "warning" as const,
-        available: true,
-        authStatus: "unknown" as const,
-        version: parsedVersion,
-        checkedAt,
-        message:
-          error instanceof Error
-            ? `Could not verify Gemini authentication status: ${error.message}.`
-            : "Could not verify Gemini authentication status.",
-      };
-    }
-
-    const parsed = normalizeGeminiCapabilityProbeResult(capabilityProbe.success);
-    return {
-      provider: GEMINI_PROVIDER,
-      status: parsed.status,
-      available: true,
-      authStatus: parsed.auth.status,
-      version: parsedVersion,
-      checkedAt,
-      ...(parsed.message ? { message: parsed.message } : {}),
-    } satisfies ServerProviderStatus;
-  });
-
-export const checkGeminiProviderStatus = makeCheckGeminiProviderStatus();
 
 // ── Grok health check ───────────────────────────────────────────────
 
 export const makeCheckGrokProviderStatus = (
   binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+  readCachedLogin: typeof readGrokCachedLogin = readGrokCachedLogin,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "grok";
+    const probeEnvResult = tryMakeProviderProbeEnv(GROK_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(GROK_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
 
-    const versionProbe = yield* runGrokCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
+    const versionProbe = yield* probeProviderCliVersion(
+      runGrokCommand(["--version"], executable, probeEnv),
+      DEFAULT_TIMEOUT_MS,
     );
 
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
       return {
         provider: GROK_PROVIDER,
+        instanceId: GROK_PROVIDER,
+        driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Grok CLI (`grok`) is not installed or not on PATH."
-          : `Failed to execute Grok CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Grok CLI (`grok`) is not installed or not on PATH."
+            : `Failed to execute Grok CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
-    if (Option.isNone(versionProbe.success)) {
+    if (versionProbe.outcome === "timeout") {
       return {
         provider: GROK_PROVIDER,
+        instanceId: GROK_PROVIDER,
+        driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1317,11 +1621,13 @@ export const makeCheckGrokProviderStatus = (
       } satisfies ServerProviderStatus;
     }
 
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
       const detail = detailFromResult(version);
       return {
         provider: GROK_PROVIDER,
+        instanceId: GROK_PROVIDER,
+        driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1331,58 +1637,226 @@ export const makeCheckGrokProviderStatus = (
           : "Grok CLI is installed but failed to run.",
       } satisfies ServerProviderStatus;
     }
+    const version = versionProbe.result;
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-    const hasApiKey = hasGrokApiKeyEnv();
+    const hasApiKey = hasGrokApiKeyEnv(probeEnv);
+    // Sessions authenticate with the API key when one is set, otherwise with the
+    // cached `grok login` session (ACP `cached_token`), so report the same source.
+    const hasCachedLogin =
+      !hasApiKey &&
+      (yield* Effect.promise(() => readCachedLogin(probeEnv, paths?.homeDir))) !== null;
 
     return {
       provider: GROK_PROVIDER,
+      instanceId: GROK_PROVIDER,
+      driver: GROK_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: hasApiKey || hasCachedLogin ? ("authenticated" as const) : ("unknown" as const),
+      version: parsedVersion,
+      checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey", authLabel: "xAI API Key" }
+        : hasCachedLogin
+          ? { authType: "grokLogin", authLabel: "Grok Account" }
+          : {
+              message:
+                "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
+            }),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
+
+// ── Droid health check ─────────────────────────────────────────────
+
+const runDroidCommand = (
+  args: ReadonlyArray<string>,
+  executable = "droid",
+  env: NodeJS.ProcessEnv = providerCommandEnv(DROID_PROVIDER),
+) => runProviderCommand(executable, args, { env });
+
+export const makeCheckDroidProviderStatus = (
+  binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveDroidCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined);
+    const probeEnv = makeProviderProbeEnv(DROID_PROVIDER, environment);
+
+    const versionProbe = yield* probeProviderCliVersion(
+      runDroidCommand(["--version"], executable, probeEnv),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: DROID_PROVIDER,
+        instanceId: DROID_PROVIDER,
+        driver: DROID_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Droid CLI (`droid`) is not installed or not on PATH."
+            : `Failed to execute Droid CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: DROID_PROVIDER,
+        instanceId: DROID_PROVIDER,
+        driver: DROID_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Droid CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
+      const detail = detailFromResult(version);
+      return {
+        provider: DROID_PROVIDER,
+        instanceId: DROID_PROVIDER,
+        driver: DROID_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Droid CLI is installed but failed to run. ${detail}`
+          : "Droid CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const version = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const hasApiKey = hasDroidApiKeyEnv(probeEnv);
+
+    return {
+      provider: DROID_PROVIDER,
+      instanceId: DROID_PROVIDER,
+      driver: DROID_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
       version: parsedVersion,
       checkedAt,
       ...(hasApiKey
-        ? { authType: "apiKey", authLabel: "xAI API Key" }
+        ? { authType: "apiKey", authLabel: "Factory API Key" }
         : {
             message:
-              "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
+              "Droid CLI is installed. Synara can use the CLI's cached device-pairing login; run `droid` to authenticate locally if needed, or set FACTORY_API_KEY.",
           }),
     } satisfies ServerProviderStatus;
   });
 
-export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
-
 // ── OpenCode health check ───────────────────────────────────────────
+
+function openCodeExternalServerStatus(input: {
+  readonly checkedAt: string;
+  readonly serverUrl: string;
+  readonly hasServerPassword: boolean;
+  readonly experimentalWebSockets?: boolean | undefined;
+}): ServerProviderStatus {
+  try {
+    new URL(input.serverUrl);
+  } catch {
+    return {
+      provider: OPENCODE_PROVIDER,
+      instanceId: OPENCODE_PROVIDER,
+      driver: OPENCODE_PROVIDER,
+      status: "error",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: input.checkedAt,
+      message: "Configured OpenCode server URL is invalid.",
+    } satisfies ServerProviderStatus;
+  }
+
+  return {
+    provider: OPENCODE_PROVIDER,
+    instanceId: OPENCODE_PROVIDER,
+    driver: OPENCODE_PROVIDER,
+    status: "ready",
+    available: true,
+    authStatus: "unknown",
+    checkedAt: input.checkedAt,
+    ...(input.hasServerPassword
+      ? { authType: "serverPassword", authLabel: "Configured server password" }
+      : {}),
+    message: `OpenCode will use the configured server at ${input.serverUrl}${input.experimentalWebSockets ? " with experimental WebSockets enabled" : ""}.`,
+  } satisfies ServerProviderStatus;
+}
 
 export const makeCheckOpenCodeProviderStatus = (
   binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  connection?: {
+    readonly serverUrl?: string | undefined;
+    readonly serverPassword?: string | undefined;
+    readonly experimentalWebSockets?: boolean | undefined;
+  },
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
+    const configuredServerUrl = nonEmptyTrimmed(connection?.serverUrl);
+    if (configuredServerUrl) {
+      return openCodeExternalServerStatus({
+        checkedAt,
+        serverUrl: configuredServerUrl,
+        hasServerPassword: nonEmptyTrimmed(connection?.serverPassword) !== undefined,
+        experimentalWebSockets: connection?.experimentalWebSockets,
+      });
+    }
+    const executable = expandHomePath(nonEmptyTrimmed(binaryPath) ?? "opencode");
+    const probeEnvResult = tryMakeProviderProbeEnv(
+      OPENCODE_PROVIDER,
+      environment,
+      instanceId,
+      paths,
+    );
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(OPENCODE_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
 
-    const versionProbe = yield* runOpenCodeCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(OPENCODE_HEALTH_TIMEOUT_MS),
-      Effect.result,
+    const versionProbe = yield* probeProviderCliVersion(
+      runOpenCodeCommand(["--version"], executable, probeEnv),
+      OPENCODE_HEALTH_TIMEOUT_MS,
     );
 
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
       return {
         provider: OPENCODE_PROVIDER,
+        instanceId: OPENCODE_PROVIDER,
+        driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: isCommandMissingCause(error)
-          ? "OpenCode CLI (`opencode`) is not installed or not on PATH."
-          : `Failed to execute OpenCode CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "OpenCode CLI (`opencode`) is not installed or not on PATH."
+            : `Failed to execute OpenCode CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
-    if (Option.isNone(versionProbe.success)) {
+    if (versionProbe.outcome === "timeout") {
       return {
         provider: OPENCODE_PROVIDER,
+        instanceId: OPENCODE_PROVIDER,
+        driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1391,11 +1865,13 @@ export const makeCheckOpenCodeProviderStatus = (
       } satisfies ServerProviderStatus;
     }
 
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
       const detail = detailFromResult(version);
       return {
         provider: OPENCODE_PROVIDER,
+        instanceId: OPENCODE_PROVIDER,
+        driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1405,10 +1881,13 @@ export const makeCheckOpenCodeProviderStatus = (
           : "OpenCode CLI is installed but failed to run.",
       } satisfies ServerProviderStatus;
     }
+    const version = versionProbe.result;
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
     return {
       provider: OPENCODE_PROVIDER,
+      instanceId: OPENCODE_PROVIDER,
+      driver: OPENCODE_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
@@ -1421,164 +1900,342 @@ export const makeCheckOpenCodeProviderStatus = (
 
 export const checkOpenCodeProviderStatus = makeCheckOpenCodeProviderStatus();
 
-// ── Kilo health check ───────────────────────────────────────────────
-
-export const makeCheckKiloProviderStatus = (
-  binaryPath?: string,
-): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function* () {
-    const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "kilo";
-
-    const versionProbe = yield* runKiloCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
-    );
-
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Kilo CLI (`kilo`) is not installed or not on PATH."
-          : `Failed to execute Kilo CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      } satisfies ServerProviderStatus;
-    }
-
-    if (Option.isNone(versionProbe.success)) {
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: "Kilo CLI is installed but failed to run. Timed out while running command.",
-      } satisfies ServerProviderStatus;
-    }
-
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
-      const detail = detailFromResult(version);
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: detail
-          ? `Kilo CLI is installed but failed to run. ${detail}`
-          : "Kilo CLI is installed but failed to run.",
-      } satisfies ServerProviderStatus;
-    }
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-
-    return {
-      provider: KILO_PROVIDER,
-      status: "ready" as const,
-      available: true,
-      authStatus: "unknown" as const,
-      version: parsedVersion,
-      checkedAt,
-      message: "Kilo CLI is installed. Configure provider credentials inside Kilo as needed.",
-    } satisfies ServerProviderStatus;
-  });
-
-export const checkKiloProviderStatus = makeCheckKiloProviderStatus();
-
 // ── Pi health check ─────────────────────────────────────────────
 
 export const checkPiProviderStatus = (
   agentDir?: string,
   binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "pi";
-    const versionProbe = yield* runPiCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
-    );
-    const version =
-      Result.isSuccess(versionProbe) && Option.isSome(versionProbe.success)
-        ? versionProbe.success.value
-        : null;
-    const parsedVersion =
-      version && version.code === 0
-        ? parseGenericCliVersion(`${version.stdout}\n${version.stderr}`)
-        : null;
+    const probeEnvResult = tryMakeProviderProbeEnv(PI_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(PI_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
 
-    try {
-      const trimmedAgentDir = nonEmptyTrimmed(agentDir);
-      const authStorage = trimmedAgentDir
-        ? AuthStorage.create(nodePath.join(trimmedAgentDir, "auth.json"))
-        : AuthStorage.create();
-      const registry = trimmedAgentDir
-        ? ModelRegistry.create(authStorage, nodePath.join(trimmedAgentDir, "models.json"))
-        : ModelRegistry.create(authStorage);
-      registry.refresh();
-      const modelCount = registry.getAvailable().length;
-      const authPath = trimmedAgentDir
-        ? nodePath.join(trimmedAgentDir, "auth.json")
-        : "~/.pi/agent/auth.json";
+    const versionProbe = yield* probeProviderCliVersion(
+      runPiCommand(["--version"], executable, probeEnv),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    // Pi itself is SDK-backed in Synara. Keep this CLI probe advisory so health
+    // refreshes do not import the SDK and initialize its native clipboard module.
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
       return {
         provider: PI_PROVIDER,
-        status: modelCount > 0 ? "ready" : "warning",
-        available: modelCount > 0,
-        authStatus: modelCount > 0 ? "authenticated" : "unknown",
-        version: parsedVersion,
+        instanceId: PI_PROVIDER,
+        driver: PI_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
         checkedAt,
         message:
-          modelCount > 0
-            ? `Pi SDK is available with ${modelCount} authenticated model${modelCount === 1 ? "" : "s"}.`
-            : `Pi SDK is available, but no authenticated models were found in ${authPath}.`,
+          versionProbe.outcome === "missing"
+            ? "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
+            : `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
-    } catch (cause) {
+    }
+
+    if (versionProbe.outcome === "timeout") {
       return {
         provider: PI_PROVIDER,
+        instanceId: PI_PROVIDER,
+        driver: PI_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
+      const detail = detailFromResult(version);
+      return {
+        provider: PI_PROVIDER,
+        instanceId: PI_PROVIDER,
+        driver: PI_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Pi SDK is bundled, but the CLI health check failed. ${detail}`
+          : "Pi SDK is bundled, but the CLI health check failed.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const configuredAgentDir = nonEmptyTrimmed(agentDir);
+    return {
+      provider: PI_PROVIDER,
+      instanceId: PI_PROVIDER,
+      driver: PI_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version: parsedVersion,
+      checkedAt,
+      message: configuredAgentDir
+        ? `Pi CLI is installed. Synara will use Pi agent dir ${configuredAgentDir}.`
+        : "Pi CLI is installed. Configure provider credentials inside Pi as needed.",
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkOmpProviderStatus = (
+  agentDir?: string,
+  binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const probeEnvResult = tryMakeProviderProbeEnv(OMP_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(OMP_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = probeEnvResult.env;
+    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined, {
+      env: probeEnv,
+      ...(probeEnv.HOME ? { homeDir: probeEnv.HOME } : {}),
+    });
+
+    const versionProbe = yield* probeProviderCliVersion(
+      runOmpCommand(["--version"], executable, probeEnv),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: OMP_PROVIDER,
+        instanceId: OMP_PROVIDER,
+        driver: OMP_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: `Failed to read Pi auth/model registry: ${cause instanceof Error ? cause.message : String(cause)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "OMP CLI (`omp`) is not on PATH. Install it to use the OMP provider."
+            : `OMP CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
+
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: OMP_PROVIDER,
+        instanceId: OMP_PROVIDER,
+        driver: OMP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "OMP CLI health check timed out before Synara could verify the installed version.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
+      const detail = detailFromResult(version);
+      return {
+        provider: OMP_PROVIDER,
+        instanceId: OMP_PROVIDER,
+        driver: OMP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail ? `OMP CLI health check failed. ${detail}` : "OMP CLI health check failed.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const configuredAgentDir = nonEmptyTrimmed(agentDir);
+    return {
+      provider: OMP_PROVIDER,
+      instanceId: OMP_PROVIDER,
+      driver: OMP_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version: parsedVersion,
+      checkedAt,
+      message: configuredAgentDir
+        ? `OMP CLI is installed. Synara will use the OMP agent dir ${configuredAgentDir}.`
+        : "OMP CLI is installed. Configure provider credentials inside the OMP app as needed.",
+    } satisfies ServerProviderStatus;
+  });
+
+// ── Antigravity CLI health check ──────────────────────────────────
+
+export const checkAntigravityProviderStatus = (
+  binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "agy";
+    const probeEnv = {
+      ...makeProviderProbeEnv(ANTIGRAVITY_PROVIDER, environment),
+      NO_BROWSER: "true",
+      // Health probes are read-only. Prevent Antigravity from starting its
+      // detached updater, which can flash a console on Windows when Synara
+      // refreshes provider status (#1029).
+      AGY_CLI_DISABLE_AUTO_UPDATE: "true",
+    };
+    const versionProbe = yield* probeProviderCliVersion(
+      runAntigravityCommand(["--version"], executable, probeEnv),
+      DEFAULT_TIMEOUT_MS,
+    );
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        instanceId: ANTIGRAVITY_PROVIDER,
+        driver: ANTIGRAVITY_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Antigravity CLI (`agy`) is not installed or is not on PATH."
+            : `Antigravity CLI health check failed: ${String(versionProbe.cause)}`,
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        instanceId: ANTIGRAVITY_PROVIDER,
+        driver: ANTIGRAVITY_PROVIDER,
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt,
+        message: "Antigravity CLI version check timed out.",
+      } satisfies ServerProviderStatus;
+    }
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        instanceId: ANTIGRAVITY_PROVIDER,
+        driver: ANTIGRAVITY_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        checkedAt,
+        message: detailFromResult(version) ?? "Antigravity CLI version check failed.",
+      } satisfies ServerProviderStatus;
+    }
+    const version = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    if (
+      parsedVersion !== null &&
+      compareSemverVersions(parsedVersion, MINIMUM_ANTIGRAVITY_CLI_VERSION) < 0
+    ) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        instanceId: ANTIGRAVITY_PROVIDER,
+        driver: ANTIGRAVITY_PROVIDER,
+        status: "error",
+        available: false,
+        authStatus: "unknown",
+        version: parsedVersion,
+        checkedAt,
+        message: `Antigravity CLI ${parsedVersion} is too old for Synara. Upgrade to ${MINIMUM_ANTIGRAVITY_CLI_VERSION} or newer.`,
+      } satisfies ServerProviderStatus;
+    }
+    const models = yield* runAntigravityCommand(["models"], executable, probeEnv).pipe(
+      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
+      Effect.result,
+    );
+    if (
+      Result.isSuccess(models) &&
+      Option.isSome(models.success) &&
+      models.success.value.code === 0 &&
+      models.success.value.stdout.trim().length > 0
+    ) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        instanceId: ANTIGRAVITY_PROVIDER,
+        driver: ANTIGRAVITY_PROVIDER,
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        version: parsedVersion,
+        checkedAt,
+        message: "Antigravity CLI is installed, authenticated, and returned available models.",
+      } satisfies ServerProviderStatus;
+    }
+    return {
+      provider: ANTIGRAVITY_PROVIDER,
+      instanceId: ANTIGRAVITY_PROVIDER,
+      driver: ANTIGRAVITY_PROVIDER,
+      status: "warning",
+      available: true,
+      authStatus: "unknown",
+      version: parsedVersion,
+      checkedAt,
+      message: "Antigravity CLI is installed, but Synara could not verify login by listing models.",
+    } satisfies ServerProviderStatus;
   });
 
 // ── Cursor health check ─────────────────────────────────────────────
 
 export const makeCheckCursorProviderStatus = (
   binaryPath?: string,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly homeDir: string; readonly isolationRootDir: string },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = resolveCursorAgentBinaryPath(nonEmptyTrimmed(binaryPath));
+    const probeEnvResult = tryMakeProviderProbeEnv(CURSOR_PROVIDER, environment, instanceId, paths);
+    if (!probeEnvResult.ok) {
+      return providerHomePreparationFailure(CURSOR_PROVIDER, checkedAt, probeEnvResult.cause);
+    }
+    const probeEnv = buildCursorAgentHeadlessEnv(probeEnvResult.env);
 
-    const versionProbe = yield* runCursorCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
+    const versionProbe = yield* probeProviderCliVersion(
+      runCursorCommand(["--version"], executable, probeEnv),
+      DEFAULT_TIMEOUT_MS,
     );
 
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
       return {
         provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
         checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Cursor Agent CLI (`cursor-agent`) is not installed or not on PATH."
-          : `Failed to execute Cursor Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Cursor Agent CLI (`cursor-agent`) is not installed or not on PATH."
+            : `Failed to execute Cursor Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
-    if (Option.isNone(versionProbe.success)) {
+    if (versionProbe.outcome === "timeout") {
       return {
         provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1588,11 +2245,13 @@ export const makeCheckCursorProviderStatus = (
       } satisfies ServerProviderStatus;
     }
 
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
       const detail = detailFromResult(version);
       return {
         provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1602,21 +2261,265 @@ export const makeCheckCursorProviderStatus = (
           : "Cursor Agent CLI is installed but failed to run.",
       } satisfies ServerProviderStatus;
     }
+    const version = versionProbe.result;
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
+    const authProbe = yield* runCursorCommand(["status"], executable, probeEnv).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(authProbe)) {
+      const error = authProbe.failure;
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Could not verify Cursor Agent authentication status: ${error.message}.`
+            : "Could not verify Cursor Agent authentication status.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(authProbe.success)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          "Could not verify Cursor Agent authentication status. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const parsedAuth = parseCursorAuthStatusFromOutput(authProbe.success.value);
+    if (parsedAuth.authStatus !== "authenticated") {
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: parsedAuth.status,
+        available: true,
+        authStatus: parsedAuth.authStatus,
+        version: parsedVersion,
+        checkedAt,
+        ...(parsedAuth.message ? { message: parsedAuth.message } : {}),
+      } satisfies ServerProviderStatus;
+    }
+
+    const modelsProbe = yield* runCursorCommand(["models"], executable, probeEnv).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(modelsProbe)) {
+      const error = modelsProbe.failure;
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Cursor Agent is authenticated, but model discovery failed: ${error.message}.`
+            : "Cursor Agent is authenticated, but model discovery failed.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(modelsProbe.success)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          "Cursor Agent is authenticated, but model discovery timed out before Synara could verify available models.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const modelsResult = modelsProbe.success.value;
+    const modelsOutput = `${modelsResult.stdout}\n${modelsResult.stderr}`;
+    const modelAuth = parseCursorAuthStatusFromOutput(modelsResult);
+    if (modelAuth.authStatus === "unauthenticated") {
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: modelAuth.status,
+        available: true,
+        authStatus: modelAuth.authStatus,
+        version: parsedVersion,
+        checkedAt,
+        ...(modelAuth.message ? { message: modelAuth.message } : {}),
+      } satisfies ServerProviderStatus;
+    }
+    if (cursorModelsOutputHasNoModels(modelsOutput)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          "Cursor Agent is authenticated, but it reports no models available for this account.",
+      } satisfies ServerProviderStatus;
+    }
+    if (modelsResult.code !== 0) {
+      const detail = detailFromResult(modelsResult);
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message: detail
+          ? `Cursor Agent is authenticated, but model discovery failed. ${detail}`
+          : "Cursor Agent is authenticated, but model discovery failed.",
+      } satisfies ServerProviderStatus;
+    }
+    if (!cursorModelsOutputHasModels(modelsOutput)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          "Cursor Agent is authenticated, but model discovery returned no recognizable model rows.",
+      } satisfies ServerProviderStatus;
+    }
 
     return {
       provider: CURSOR_PROVIDER,
+      instanceId: CURSOR_PROVIDER,
+      driver: CURSOR_PROVIDER,
       status: "ready" as const,
       available: true,
-      authStatus: "unknown" as const,
+      authStatus: "authenticated" as const,
       version: parsedVersion,
       checkedAt,
-      message:
-        "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
     } satisfies ServerProviderStatus;
   });
 
 export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
+
+// ── Devin health check ───────────────────────────────────────────────
+
+export const makeCheckDevinProviderStatus = (
+  binaryPath?: string,
+  readStoredCredentials: typeof readDevinStoredCredentials = readDevinStoredCredentials,
+  environment?: Readonly<Record<string, string>>,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveDevinBinaryPath(binaryPath);
+    const env = makeProviderProbeEnv(DEVIN_PROVIDER, environment);
+
+    const versionProbe = yield* probeProviderCliVersion(
+      runProviderCommand(executable, ["--version"], { env }),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: DEVIN_PROVIDER,
+        instanceId: DEVIN_PROVIDER,
+        driver: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "Devin CLI (`devin`) is not installed or not on PATH."
+            : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: DEVIN_PROVIDER,
+        instanceId: DEVIN_PROVIDER,
+        driver: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Devin CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const versionResult = versionProbe.result;
+      const detail = detailFromResult(versionResult);
+      return {
+        provider: DEVIN_PROVIDER,
+        instanceId: DEVIN_PROVIDER,
+        driver: DEVIN_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Devin CLI is installed but failed to run. ${detail}`
+          : "Devin CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const versionResult = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(
+      `${versionResult.stdout}\n${versionResult.stderr}`,
+    );
+    const storedCredentials = yield* Effect.promise(() => readStoredCredentials(env));
+    const hasApiKey = hasDevinApiKeyEnv(env) || storedCredentials?.apiKey !== undefined;
+
+    return {
+      provider: DEVIN_PROVIDER,
+      instanceId: DEVIN_PROVIDER,
+      driver: DEVIN_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
+      version: parsedVersion,
+      checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey" as const, authLabel: "Devin API Key" }
+        : {
+            message:
+              "Devin CLI is installed. Run `devin auth login` to authenticate locally, or set WINDSURF_API_KEY before starting a session.",
+          }),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDevinProviderStatus = makeCheckDevinProviderStatus();
 
 // ── Snapshot helpers ────────────────────────────────────────────────
 
@@ -1642,12 +2545,18 @@ export function providerStatusesEqual(
     return (
       next !== undefined &&
       status.provider === next.provider &&
+      (status.instanceId ?? null) === (next.instanceId ?? null) &&
+      (status.driver ?? null) === (next.driver ?? null) &&
+      (status.displayName ?? null) === (next.displayName ?? null) &&
+      (status.enabled ?? null) === (next.enabled ?? null) &&
       status.status === next.status &&
       status.available === next.available &&
       status.authStatus === next.authStatus &&
       (status.authType ?? null) === (next.authType ?? null) &&
       (status.authLabel ?? null) === (next.authLabel ?? null) &&
       status.voiceTranscriptionAvailable === next.voiceTranscriptionAvailable &&
+      status.supportsAutoRuntimeMode === next.supportsAutoRuntimeMode &&
+      (status.autoRuntimeModeBinaryPath ?? null) === (next.autoRuntimeModeBinaryPath ?? null) &&
       (status.version ?? null) === (next.version ?? null) &&
       (status.message ?? null) === (next.message ?? null) &&
       JSON.stringify(comparableProviderVersionAdvisory(status.versionAdvisory)) ===
@@ -1658,11 +2567,13 @@ export function providerStatusesEqual(
 }
 
 function isTransientProviderCommandTimeout(status: ServerProviderStatus): boolean {
-  return (
-    status.status !== "ready" &&
-    status.authStatus === "unknown" &&
-    (status.message ?? "").includes(PROVIDER_COMMAND_TIMEOUT_DETAIL)
-  );
+  const message = status.message ?? "";
+  // Most providers use the shared detail string, but Pi's advisory probe has
+  // a provider-specific explanation. Keep a slow CLI probe from replacing an
+  // already usable status just because its wording differs.
+  const describesTimeout =
+    message.includes(PROVIDER_COMMAND_TIMEOUT_DETAIL) || /\btimed out\b/i.test(message);
+  return status.status !== "ready" && status.authStatus === "unknown" && describesTimeout;
 }
 
 function wasPreviouslyUsableProviderStatus(status: ServerProviderStatus): boolean {
@@ -1677,12 +2588,12 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
     return nextStatuses;
   }
 
-  const previousByProvider = new Map(
-    previousStatuses.map((status) => [status.provider, status] as const),
+  const previousByInstance = new Map(
+    previousStatuses.map((status) => [providerStatusIdentityKey(status), status] as const),
   );
 
   return nextStatuses.map((status) => {
-    const previous = previousByProvider.get(status.provider);
+    const previous = previousByInstance.get(providerStatusIdentityKey(status));
     if (
       !previous ||
       !wasPreviouslyUsableProviderStatus(previous) ||
@@ -1692,493 +2603,1230 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
     }
 
     // A single slow CLI probe should not make an already usable provider look broken.
-    return {
+    // The previous update advisory is network-backed evidence, though, so it must
+    // not survive a probe that could not confirm the installed version.
+    const stabilizedStatus = {
       ...previous,
       checkedAt: status.checkedAt,
       ...(status.updateState !== undefined ? { updateState: status.updateState } : {}),
     };
+    return previous.versionAdvisory
+      ? suppressProviderVersionAdvisory(stabilizedStatus)
+      : stabilizedStatus;
   });
+}
+
+export function isProviderEnabledForSettings(
+  provider: ProviderKind,
+  settings: ServerSettings,
+): boolean {
+  return (
+    settings.providers[provider]?.enabled !== false && settings.providers[provider] !== undefined
+  );
+}
+
+export function makeDisabledProviderStatus(
+  provider: ProviderKind,
+  checkedAt = new Date().toISOString(),
+): ServerProviderStatus {
+  return {
+    provider,
+    instanceId: provider,
+    driver: provider,
+    status: "warning" as const,
+    available: false,
+    authStatus: "unknown" as const,
+    checkedAt,
+    message: DISABLED_PROVIDER_STATUS_MESSAGE,
+  } satisfies ServerProviderStatus;
+}
+
+function isDisabledProviderStatusOverlay(status: ServerProviderStatus): boolean {
+  return status.message === DISABLED_PROVIDER_STATUS_MESSAGE && status.available === false;
+}
+
+interface ProviderStatusProjectionInstance {
+  readonly instanceId: ProviderInstanceId;
+  readonly driver: ProviderKind;
+  readonly displayName: string;
+  readonly enabled: boolean;
+  readonly isDefault?: boolean;
+}
+
+function projectStatusForProviderInstance(
+  status: ServerProviderStatus,
+  instance: ProviderStatusProjectionInstance,
+  enabled = instance.enabled,
+): ServerProviderStatus {
+  const projected = {
+    ...status,
+    instanceId: instance.instanceId,
+    driver: instance.driver,
+    displayName: instance.displayName,
+    enabled,
+  } satisfies ServerProviderStatus;
+  const isExactInstanceStatus =
+    providerStatusInstanceKey(status) === instance.instanceId &&
+    (status.driver ?? status.provider) === instance.driver;
+  if (isExactInstanceStatus || instance.isDefault || status.authStatus === "unknown") {
+    return projected;
+  }
+  const { authType, authLabel, voiceTranscriptionAvailable, ...withoutAuthMetadata } = projected;
+  void authType;
+  void authLabel;
+  void voiceTranscriptionAvailable;
+  return {
+    ...withoutAuthMetadata,
+    status: projected.status === "ready" ? "warning" : projected.status,
+    authStatus: "unknown",
+    message: projected.message ?? "Authentication has not been checked for this provider instance.",
+  } satisfies ServerProviderStatus;
+}
+
+function makeUncheckedProviderInstanceStatus(
+  provider: ProviderKind,
+  instance: ProviderStatusProjectionInstance,
+  checkedAt: string,
+): ServerProviderStatus {
+  return {
+    provider,
+    instanceId: instance.instanceId,
+    driver: instance.driver,
+    displayName: instance.displayName,
+    enabled: instance.enabled,
+    status: "warning",
+    available: false,
+    authStatus: "unknown",
+    checkedAt,
+    message: "Provider instance has not been checked yet.",
+  } satisfies ServerProviderStatus;
+}
+
+function makeUnsupportedProviderInstanceStatus(
+  instance: UnsupportedProviderInstance,
+  checkedAt: string,
+): ServerProviderStatus {
+  const unavailableReason = `Provider driver '${instance.driver}' is not supported by this Synara build.`;
+  return {
+    provider: instance.driver,
+    instanceId: instance.instanceId,
+    driver: instance.driver,
+    displayName: instance.displayName,
+    enabled: false,
+    status: "error",
+    available: false,
+    availability: "unavailable",
+    unavailableReason,
+    authStatus: "unknown",
+    checkedAt,
+    message: unavailableReason,
+  } satisfies ServerProviderStatus;
+}
+
+function mergeProviderStatusUpdates(
+  previousStatuses: ReadonlyArray<ServerProviderStatus>,
+  updatedStatuses: ReadonlyArray<ServerProviderStatus>,
+): ProviderStatuses {
+  const statusByInstance = new Map(
+    previousStatuses.map((status) => [providerStatusIdentityKey(status), status] as const),
+  );
+  for (const status of updatedStatuses) {
+    const instanceId = providerStatusInstanceKey(status);
+    for (const [key, previous] of statusByInstance) {
+      if (
+        providerStatusInstanceKey(previous) === instanceId &&
+        providerStatusIdentityKey(previous) !== providerStatusIdentityKey(status)
+      ) {
+        statusByInstance.delete(key);
+      }
+    }
+    statusByInstance.set(providerStatusIdentityKey(status), status);
+  }
+  return orderProviderStatuses([...statusByInstance.values()]);
+}
+
+// Keeps local CLI version/status visible while removing network-backed update metadata.
+function makeSuppressedProviderVersionAdvisory(
+  status: ServerProviderStatus,
+  currentVersion?: string | null,
+): NonNullable<ServerProviderStatus["versionAdvisory"]> {
+  return {
+    status: "unknown",
+    currentVersion: currentVersion ?? status.version ?? null,
+    latestVersion: null,
+    updateCommand: null,
+    canUpdate: false,
+    checkedAt: status.checkedAt,
+    message: null,
+  };
+}
+
+function suppressProviderVersionAdvisory(status: ServerProviderStatus): ServerProviderStatus {
+  return {
+    ...status,
+    versionAdvisory: makeSuppressedProviderVersionAdvisory(status),
+  };
+}
+
+// Disabled providers are a settings overlay, not a probe result. Keep the raw
+// cached/probed status intact so re-enabling a provider can reuse it immediately.
+export function projectProviderStatusesForSettings(
+  statuses: ReadonlyArray<ServerProviderStatus>,
+  settings: ServerSettings,
+  checkedAt = new Date().toISOString(),
+): ProviderStatuses {
+  const statusByInstance = new Map(
+    statuses.map((status) => [providerStatusIdentityKey(status), status] as const),
+  );
+  const legacyStatusByProvider = new Map(
+    statuses
+      .filter((status) => status.instanceId === undefined)
+      .map((status) => [status.driver ?? status.provider, status] as const),
+  );
+  const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
+  for (const instance of deriveProviderInstances(settings)) {
+    const entries = instancesByProvider.get(instance.driver) ?? [];
+    instancesByProvider.set(instance.driver, [...entries, instance]);
+  }
+  const projected: ServerProviderStatus[] = [];
+
+  for (const provider of PROVIDERS) {
+    const providerInstances = instancesByProvider.get(provider) ?? [];
+    const instances: ReadonlyArray<ResolvedProviderInstance> =
+      providerInstances.length > 0
+        ? providerInstances
+        : [
+            {
+              instanceId: provider,
+              driver: provider,
+              displayName: provider,
+              enabled: true,
+              isDefault: true,
+              config: {},
+              environment: {},
+              raw: { driver: provider },
+            },
+          ];
+    const defaultStatus =
+      statusByInstance.get(providerTargetIdentityKey({ provider, instanceId: provider })) ??
+      legacyStatusByProvider.get(provider);
+
+    if (instances.every((instance) => !instance.enabled)) {
+      const disabledStatus = makeDisabledProviderStatus(
+        provider,
+        defaultStatus?.checkedAt ?? checkedAt,
+      );
+      const disabledStatusWithAdvisory = {
+        ...disabledStatus,
+        versionAdvisory: makeSuppressedProviderVersionAdvisory(
+          disabledStatus,
+          defaultStatus?.version,
+        ),
+        ...(defaultStatus?.updateState ? { updateState: defaultStatus.updateState } : {}),
+      } satisfies ServerProviderStatus;
+      for (const instance of instances) {
+        projected.push(
+          projectStatusForProviderInstance(disabledStatusWithAdvisory, instance, false),
+        );
+      }
+      continue;
+    }
+
+    for (const instance of instances) {
+      const exactStatus = statusByInstance.get(
+        providerTargetIdentityKey({
+          provider: instance.driver,
+          instanceId: instance.instanceId,
+        }),
+      );
+      const status = exactStatus ?? (instance.isDefault ? defaultStatus : undefined);
+      if (!instance.enabled) {
+        const disabledStatus = makeDisabledProviderStatus(
+          provider,
+          status?.checkedAt ?? defaultStatus?.checkedAt ?? checkedAt,
+        );
+        const updateState = status?.updateState ?? defaultStatus?.updateState;
+        const disabledStatusWithAdvisory = {
+          ...disabledStatus,
+          versionAdvisory: makeSuppressedProviderVersionAdvisory(
+            disabledStatus,
+            status?.version ?? defaultStatus?.version,
+          ),
+          ...(updateState ? { updateState } : {}),
+        } satisfies ServerProviderStatus;
+        projected.push(
+          projectStatusForProviderInstance(disabledStatusWithAdvisory, instance, false),
+        );
+        continue;
+      }
+      if (status && !isDisabledProviderStatusOverlay(status)) {
+        const visibleStatus = settings.enableProviderUpdateChecks
+          ? status
+          : suppressProviderVersionAdvisory(status);
+        projected.push(projectStatusForProviderInstance(visibleStatus, instance));
+        continue;
+      }
+      if (!instance.isDefault || instances.length > 1) {
+        projected.push(
+          makeUncheckedProviderInstanceStatus(
+            provider,
+            instance,
+            defaultStatus?.checkedAt ?? checkedAt,
+          ),
+        );
+      }
+    }
+  }
+
+  for (const instance of deriveUnsupportedProviderInstances(settings)) {
+    projected.push(makeUnsupportedProviderInstanceStatus(instance, checkedAt));
+  }
+
+  return orderProviderStatuses(projected);
 }
 
 // ── Layer ───────────────────────────────────────────────────────────
 
-export const ProviderHealthLive = Layer.effect(
-  ProviderHealth,
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const serverConfig = yield* ServerConfig;
-    const serverSettings = yield* ServerSettingsService;
-    const changesPubSub = yield* Effect.acquireRelease(
-      PubSub.unbounded<ReadonlyArray<ServerProviderStatus>>(),
-      PubSub.shutdown,
-    );
-    const refreshScope = yield* Scope.make("sequential");
-    yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
+export function makeProviderHealthLive(options?: { readonly providerUpdateTimeoutMs?: number }) {
+  const providerUpdateTimeoutMs = options?.providerUpdateTimeoutMs ?? PROVIDER_UPDATE_TIMEOUT_MS;
+  return Layer.effect(
+    ProviderHealth,
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const serverConfig = yield* ServerConfig;
+      const serverSettings = yield* ServerSettingsService;
+      const changesPubSub = yield* Effect.acquireRelease(
+        PubSub.unbounded<ReadonlyArray<ServerProviderStatus>>(),
+        PubSub.shutdown,
+      );
+      const refreshScope = yield* Scope.make("sequential");
+      yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
 
-    const cachePathByProvider = new Map(
-      PROVIDERS.map(
-        (provider) =>
-          [
-            provider,
-            resolveProviderStatusCachePath({
-              stateDir: serverConfig.stateDir,
-              provider,
+      // Provider health is part of the server layer graph, which is acquired
+      // before Server.start can run. Initialize settings here so waiting for
+      // readiness below cannot deadlock layer acquisition. The start effect is
+      // idempotent, so the server lifecycle can still call it explicitly.
+      yield* serverSettings.start;
+
+      const cachePathForProviderTarget = (input: {
+        readonly provider: ServerProviderStatus["provider"];
+        readonly instanceId?: ProviderInstanceId | undefined;
+      }) =>
+        resolveProviderStatusCachePath({
+          stateDir: serverConfig.stateDir,
+          provider: input.provider,
+          ...(input.instanceId && input.instanceId !== input.provider
+            ? { instanceId: input.instanceId }
+            : {}),
+        });
+
+      const initialSettings = yield* serverSettings.ready.pipe(
+        Effect.flatMap(() => serverSettings.getSettings),
+      );
+      const initialInstances = deriveProviderInstances(initialSettings);
+      const cachedStatuses: ProviderStatuses = yield* Effect.forEach(
+        initialInstances,
+        (instance) =>
+          readProviderStatusCache(
+            cachePathForProviderTarget({
+              provider: instance.driver,
+              instanceId: instance.instanceId,
             }),
-          ] as const,
-      ),
-    );
-
-    const cachedStatuses: ProviderStatuses = yield* Effect.forEach(
-      PROVIDERS,
-      (provider) =>
-        readProviderStatusCache(cachePathByProvider.get(provider)!).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-        ),
-      { concurrency: "unbounded" },
-    ).pipe(
-      Effect.map((statuses) =>
-        orderProviderStatuses(
-          statuses.filter((status): status is ServerProviderStatus => status !== undefined),
-        ),
-      ),
-    );
-
-    const statusesRef = yield* Ref.make<ProviderStatuses>(cachedStatuses);
-    const updateStatesRef = yield* Ref.make<ReadonlyMap<ProviderKind, ServerProviderUpdateState>>(
-      new Map(),
-    );
-    const refreshFiberRef = yield* Ref.make<Fiber.Fiber<ProviderStatuses, never> | null>(null);
-    const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
-      makeAlreadyRunningError: (provider) =>
-        new ServerProviderUpdateError({
-          provider: provider as ProviderKind,
-          reason: "An update is already running for this provider.",
-        }),
-    });
-
-    // 5-minute TTL cache for the Claude SDK subscription probe. The probe
-    // spawns a short-lived `claude` subprocess to read account metadata
-    // from the local init handshake; capacity=1 because the probe has no
-    // parameters.
-    const claudeSubscriptionCache = yield* Cache.make({
-      capacity: 1,
-      timeToLive: Duration.minutes(5),
-      lookup: (_: "claude") => probeClaudeSubscription(),
-    });
-    const resolveClaudeSubscription = Cache.get(claudeSubscriptionCache, "claude").pipe(
-      Effect.map((probe) => probe?.subscriptionType),
-    );
-
-    const getProviderBinaryPath = (provider: ProviderKind, settings: ServerSettings) => {
-      switch (provider) {
-        case "codex":
-          return settings.providers.codex.binaryPath;
-        case "claudeAgent":
-          return settings.providers.claudeAgent.binaryPath;
-        case "cursor":
-          return settings.providers.cursor.binaryPath;
-        case "gemini":
-          return settings.providers.gemini.binaryPath;
-        case "grok":
-          return settings.providers.grok.binaryPath;
-        case "kilo":
-          return settings.providers.kilo.binaryPath;
-        case "opencode":
-          return settings.providers.opencode.binaryPath;
-        case "pi":
-          return settings.providers.pi.binaryPath;
-      }
-    };
-
-    const getProviderMaintenanceCapabilities = Effect.fn("getProviderMaintenanceCapabilities")(
-      function* (provider: ProviderKind) {
-        const settings = yield* serverSettings.getSettings;
-        if (provider === "cursor") {
-          return makeProviderMaintenanceCapabilities({
-            provider,
-            packageName: null,
-            updateExecutable: resolveCursorAgentBinaryPath(
-              getProviderBinaryPath(provider, settings),
+            {
+              provider: instance.driver,
+              instanceId: instance.instanceId,
+            },
+          ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.map((statuses) =>
+          orderProviderStatuses(
+            statuses.filter(
+              (status): status is ServerProviderStatus =>
+                status !== undefined && !isDisabledProviderStatusOverlay(status),
             ),
-            updateArgs: ["update"],
-            updateLockKey: "cursor-agent",
-          });
-        }
-        const definition = PACKAGE_MANAGED_PROVIDER_UPDATES[provider];
-        if (!definition) {
-          return makeProviderMaintenanceCapabilities({
-            provider,
-            packageName: null,
-            updateExecutable: null,
-            updateArgs: [],
-            updateLockKey: null,
-          });
-        }
-        return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-          binaryPath: getProviderBinaryPath(provider, settings),
-          env: process.env,
-          platform: process.platform,
-        }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
-      },
-    );
+          ),
+        ),
+      );
 
-    const applyVolatileProviderState = Effect.fn("applyVolatileProviderState")(function* (
-      status: ServerProviderStatus,
-    ) {
-      const updateStates = yield* Ref.get(updateStatesRef);
-      const updateState = updateStates.get(status.provider);
-      if (!updateState) {
-        const { updateState: _updateState, ...statusWithoutUpdateState } = status;
-        return statusWithoutUpdateState;
-      }
-      return {
-        ...status,
-        updateState,
+      const statusesRef = yield* Ref.make<ProviderStatuses>(cachedStatuses);
+      const updateStatesRef = yield* Ref.make<ReadonlyMap<string, ServerProviderUpdateState>>(
+        new Map(),
+      );
+      const refreshFiberRef = yield* Ref.make<Fiber.Fiber<ProviderStatuses, never> | null>(null);
+      const refreshNeedsFollowUpRef = yield* Ref.make(false);
+      const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
+        makeAlreadyRunningError: (provider) =>
+          new ServerProviderUpdateError({
+            provider: provider as ProviderKind,
+            reason: "An update is already running for this provider.",
+          }),
+      });
+
+      const claudeSubscriptionCacheRef = yield* Ref.make(
+        new Map<string, { readonly expiresAt: number; readonly subscriptionType?: string }>(),
+      );
+      const resolveClaudeSubscription = (input: ClaudeSubscriptionProbeInput) =>
+        Effect.gen(function* () {
+          const key = claudeSubscriptionProbeKey(input);
+          const now = Date.now();
+          const cached = (yield* Ref.get(claudeSubscriptionCacheRef)).get(key);
+          if (cached && cached.expiresAt > now) {
+            return cached.subscriptionType;
+          }
+          const probe = yield* probeClaudeSubscription(input);
+          const subscriptionType = probe?.subscriptionType;
+          yield* Ref.update(claudeSubscriptionCacheRef, (cache) => {
+            const next = new Map(cache);
+            next.set(key, {
+              expiresAt: now + CLAUDE_SUBSCRIPTION_CACHE_TTL_MS,
+              ...(subscriptionType !== undefined ? { subscriptionType } : {}),
+            });
+            return next;
+          });
+          return subscriptionType;
+        });
+
+      const readInstanceConfigString = (
+        instance: ResolvedProviderInstance,
+        key: string,
+      ): string | undefined => {
+        const value = instance.config[key];
+        return typeof value === "string" ? nonEmptyTrimmed(value) : undefined;
       };
-    });
+      const readInstanceConfigBoolean = (
+        instance: ResolvedProviderInstance,
+        key: string,
+      ): boolean | undefined => {
+        const value = instance.config[key];
+        return typeof value === "boolean" ? value : undefined;
+      };
 
-    const setProviderUpdateState = Effect.fn("setProviderUpdateState")(function* (
-      provider: ProviderKind,
-      state: ServerProviderUpdateState | null,
-    ) {
-      yield* Ref.update(updateStatesRef, (previous) => {
-        const next = new Map(previous);
-        if (!state || state.status === "idle") {
-          next.delete(provider);
-        } else {
-          next.set(provider, state);
+      const resolveProviderInstanceTarget = (
+        settings: ServerSettings,
+        target: {
+          readonly provider: ProviderKind;
+          readonly instanceId?: ProviderInstanceId | undefined;
+        },
+      ): ResolvedProviderInstance | null => {
+        const instances = deriveProviderInstances(settings).filter(
+          (instance) => instance.driver === target.provider,
+        );
+        if (target.instanceId !== undefined) {
+          return instances.find((instance) => instance.instanceId === target.instanceId) ?? null;
         }
-        return next;
+        return (
+          instances.find((instance) => instance.instanceId === target.provider) ??
+          instances.find((instance) => instance.isDefault) ??
+          null
+        );
+      };
+
+      const stampProviderStatusForInstance = (
+        status: ServerProviderStatus,
+        instance: ResolvedProviderInstance,
+      ): ServerProviderStatus =>
+        ({
+          ...status,
+          instanceId: instance.instanceId,
+          driver: instance.driver,
+          displayName: instance.displayName,
+          enabled: instance.enabled,
+        }) satisfies ServerProviderStatus;
+
+      const makeManualProviderMaintenanceCapabilities = (provider: ProviderKind) =>
+        makeProviderMaintenanceCapabilities({
+          provider,
+          packageName: null,
+          latestVersionSource: null,
+          updateExecutable: null,
+          updateArgs: [],
+          updateLockKey: null,
+        });
+
+      const getProviderMaintenanceCapabilities = Effect.fn("getProviderMaintenanceCapabilities")(
+        function* (target: {
+          readonly provider: ProviderKind;
+          readonly instanceId?: ProviderInstanceId | undefined;
+          readonly installedVersion?: string | null | undefined;
+        }) {
+          const settings = yield* serverSettings.getSettings;
+          const instance = resolveProviderInstanceTarget(settings, target);
+          if (!instance || !instance.enabled) {
+            return makeManualProviderMaintenanceCapabilities(target.provider);
+          }
+          if (target.provider === "opencode" && readInstanceConfigString(instance, "serverUrl")) {
+            return makeManualProviderMaintenanceCapabilities(target.provider);
+          }
+          const configuredBinaryPath = readInstanceConfigString(instance, "binaryPath");
+          const binaryPath =
+            target.provider === "opencode" && configuredBinaryPath
+              ? expandHomePath(configuredBinaryPath)
+              : configuredBinaryPath;
+          if (target.provider === "cursor") {
+            const command = buildCursorAgentCommand(binaryPath, ["update"]);
+            return makeProviderMaintenanceCapabilities({
+              provider: target.provider,
+              packageName: null,
+              updateExecutable: command.command,
+              updateArgs: command.args,
+              updateLockKey: "cursor-agent",
+            });
+          }
+          const definition = PACKAGE_MANAGED_PROVIDER_UPDATES[target.provider];
+          if (!definition) {
+            return makeManualProviderMaintenanceCapabilities(target.provider);
+          }
+          const updateEnv = yield* Effect.try({
+            try: () =>
+              makeProviderUpdateEnv(instance, {
+                homeDir: serverConfig.homeDir,
+                isolationRootDir: serverConfig.stateDir,
+              }),
+            catch: (cause) =>
+              new Error(
+                `Failed to prepare the private provider account home. ${cause instanceof Error ? cause.message : String(cause)}`,
+                { cause },
+              ),
+          });
+          let installedVersion = target.installedVersion;
+          if (target.provider === "opencode" && installedVersion === undefined) {
+            const probe = yield* probeProviderCliVersion(
+              runOpenCodeCommand(["--version"], binaryPath ?? "opencode", updateEnv),
+              OPENCODE_HEALTH_TIMEOUT_MS,
+            ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+            if (probe.outcome !== "success")
+              return makeManualProviderMaintenanceCapabilities(target.provider);
+            installedVersion = parseGenericCliVersion(
+              `${probe.result.stdout}\n${probe.result.stderr}`,
+            );
+          }
+          return yield* resolveProviderMaintenanceCapabilitiesEffect(
+            withOpenCodeMaintenanceVersion(definition, installedVersion),
+            {
+              binaryPath: binaryPath ?? null,
+              env: updateEnv,
+              platform: process.platform,
+            },
+          ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+        },
+      );
+
+      const applyVolatileProviderState = Effect.fn("applyVolatileProviderState")(function* (
+        status: ServerProviderStatus,
+      ) {
+        const updateStates = yield* Ref.get(updateStatesRef);
+        const updateState = updateStates.get(providerStatusIdentityKey(status));
+        if (!updateState) {
+          const { updateState: _updateState, ...statusWithoutUpdateState } = status;
+          return statusWithoutUpdateState;
+        }
+        return { ...status, updateState };
       });
 
-      const current = yield* Ref.get(statusesRef);
-      const next = yield* Effect.forEach(current, applyVolatileProviderState, {
-        concurrency: "unbounded",
-      });
-      yield* Ref.set(statusesRef, next);
-      yield* PubSub.publish(changesPubSub, next);
-      return next;
-    });
+      const applyVolatileProviderStates = (
+        statuses: ReadonlyArray<ServerProviderStatus>,
+      ): Effect.Effect<ProviderStatuses> =>
+        Effect.forEach(statuses, applyVolatileProviderState, {
+          concurrency: "unbounded",
+        });
 
-    const enrichStatuses = Effect.fn("enrichProviderStatuses")(function* (
-      statuses: ReadonlyArray<ServerProviderStatus>,
-    ) {
-      const enriched = yield* Effect.forEach(
-        statuses,
-        (status) =>
-          getProviderMaintenanceCapabilities(status.provider).pipe(
-            Effect.flatMap((capabilities) =>
-              enrichProviderStatusWithVersionAdvisory(status, capabilities),
-            ),
-            Effect.catch(() =>
-              Effect.succeed({
-                ...status,
-                versionAdvisory: {
-                  status: "unknown" as const,
-                  currentVersion: status.version ?? null,
-                  latestVersion: null,
-                  updateCommand: null,
-                  canUpdate: false,
-                  checkedAt: status.checkedAt,
-                  message: null,
+      const projectStatusesForCurrentSettings = Effect.fn(
+        "projectProviderStatusesForCurrentSettings",
+      )(function* (statuses: ReadonlyArray<ServerProviderStatus>) {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.catch(() => Effect.succeed(null)),
+        );
+        return yield* applyVolatileProviderStates(
+          settings ? projectProviderStatusesForSettings(statuses, settings) : statuses,
+        );
+      });
+
+      const publishProjectedStatuses = Effect.fn("publishProjectedProviderStatuses")(function* () {
+        const rawStatuses = yield* Ref.get(statusesRef);
+        const projectedStatuses = yield* projectStatusesForCurrentSettings(rawStatuses);
+        yield* PubSub.publish(changesPubSub, projectedStatuses);
+        return projectedStatuses;
+      });
+
+      const publishProjectedStatusesForSettings = Effect.fn(
+        "publishProjectedProviderStatusesForSettings",
+      )(function* (settings: ServerSettings) {
+        const rawStatuses = yield* Ref.get(statusesRef);
+        const projectedStatuses = yield* applyVolatileProviderStates(
+          projectProviderStatusesForSettings(rawStatuses, settings),
+        );
+        yield* PubSub.publish(changesPubSub, projectedStatuses);
+        return projectedStatuses;
+      });
+
+      const setProviderUpdateState = Effect.fn("setProviderUpdateState")(function* (
+        target: {
+          readonly provider: ProviderKind;
+          readonly instanceId?: ProviderInstanceId | undefined;
+        },
+        state: ServerProviderUpdateState | null,
+      ) {
+        const key = providerTargetIdentityKey(target);
+        yield* Ref.update(updateStatesRef, (previous) => {
+          const next = new Map(previous);
+          if (!state || state.status === "idle") {
+            next.delete(key);
+          } else {
+            next.set(key, state);
+          }
+          return next;
+        });
+        return yield* publishProjectedStatuses();
+      });
+
+      const enrichStatuses = Effect.fn("enrichProviderStatuses")(function* (
+        statuses: ReadonlyArray<ServerProviderStatus>,
+      ) {
+        const settings = yield* serverSettings.ready.pipe(
+          Effect.flatMap(() => serverSettings.getSettings),
+          Effect.catch(() => Effect.succeed(null)),
+        );
+        if (settings?.enableProviderUpdateChecks === false) {
+          return yield* Effect.forEach(
+            statuses.map(suppressProviderVersionAdvisory),
+            applyVolatileProviderState,
+            { concurrency: "unbounded" },
+          );
+        }
+
+        const enriched = yield* Effect.forEach(
+          statuses,
+          (status) => {
+            const provider = status.driver ?? status.provider;
+            if (!Schema.is(ProviderKind)(provider)) {
+              return Effect.succeed(status);
+            }
+            return getProviderMaintenanceCapabilities({
+              provider,
+              instanceId: providerStatusInstanceKey(status),
+              installedVersion: status.version ?? null,
+            }).pipe(
+              Effect.flatMap((capabilities) =>
+                enrichProviderStatusWithVersionAdvisory(status, capabilities),
+              ),
+              Effect.catch(() =>
+                Effect.succeed({
+                  ...status,
+                  versionAdvisory: {
+                    status: "unknown" as const,
+                    currentVersion: status.version ?? null,
+                    latestVersion: null,
+                    updateCommand: null,
+                    canUpdate: false,
+                    checkedAt: status.checkedAt,
+                    message: null,
+                  },
+                }),
+              ),
+            );
+          },
+          { concurrency: "unbounded" },
+        );
+        return yield* Effect.forEach(enriched, applyVolatileProviderState, {
+          concurrency: "unbounded",
+        });
+      });
+
+      const checkProviderInstanceWhenEnabled = <R>(
+        instance: ResolvedProviderInstance,
+        check: Effect.Effect<ServerProviderStatus, never, R>,
+      ): Effect.Effect<Option.Option<ServerProviderStatus>, never, R> =>
+        instance.enabled
+          ? check.pipe(
+              Effect.map((status) => Option.some(stampProviderStatusForInstance(status, instance))),
+            )
+          : Effect.succeed(Option.none());
+
+      const checkProviderInstanceStatus = (
+        instance: ResolvedProviderInstance,
+      ): Effect.Effect<
+        Option.Option<ServerProviderStatus>,
+        never,
+        ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+      > => {
+        const binaryPath = readInstanceConfigString(instance, "binaryPath");
+        switch (instance.driver) {
+          case "codex": {
+            // Launches derive their Codex homes and seeded account discriminator
+            // from these start options, so probe the same isolated account.
+            const codexOptions = providerStartOptionsFromInstance(instance)?.codex;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckCodexProviderStatus(
+                binaryPath,
+                codexOptions?.homePath,
+                codexOptions?.shadowHomePath,
+                codexOptions?.accountId,
+                instance.environment,
+              ),
+            );
+          }
+          case "claudeAgent": {
+            const claudeOptions = providerStartOptionsFromInstance(instance)?.claudeAgent;
+            const homePath = claudeOptions?.homePath;
+            const claudeEnvironment = claudeOptions?.environment;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckClaudeProviderStatus(
+                resolveClaudeSubscription({
+                  instanceId: instance.instanceId,
+                  binaryPath,
+                  homePath,
+                  environment: claudeEnvironment,
+                  homeDir: serverConfig.homeDir,
+                  isolationRootDir: serverConfig.stateDir,
+                }),
+                binaryPath,
+                homePath,
+                {
+                  providerInstanceId: instance.instanceId,
+                  isolationRootDir: serverConfig.stateDir,
+                  fallbackHomeDir: serverConfig.homeDir,
                 },
+                claudeEnvironment,
+              ),
+            );
+          }
+          case "cursor": {
+            const cursorOptions = providerStartOptionsFromInstance(instance)?.cursor;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckCursorProviderStatus(
+                binaryPath,
+                cursorOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
+            );
+          }
+          case "devin":
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckDevinProviderStatus(
+                binaryPath,
+                readDevinStoredCredentials,
+                instance.environment,
+              ),
+            );
+          case "antigravity":
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              checkAntigravityProviderStatus(binaryPath, instance.environment),
+            );
+          case "grok": {
+            const grokOptions = providerStartOptionsFromInstance(instance)?.grok;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckGrokProviderStatus(
+                binaryPath,
+                grokOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
+            );
+          }
+          case "droid":
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckDroidProviderStatus(binaryPath, instance.environment),
+            );
+          case "opencode": {
+            const openCodeOptions = providerStartOptionsFromInstance(instance)?.opencode;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              makeCheckOpenCodeProviderStatus(
+                binaryPath,
+                openCodeOptions?.environment,
+                {
+                  serverUrl: readInstanceConfigString(instance, "serverUrl"),
+                  serverPassword: readInstanceConfigString(instance, "serverPassword"),
+                  experimentalWebSockets: readInstanceConfigBoolean(
+                    instance,
+                    "experimentalWebSockets",
+                  ),
+                },
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
+            );
+          }
+          case "pi": {
+            const piOptions = providerStartOptionsFromInstance(instance)?.pi;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              checkPiProviderStatus(
+                readInstanceConfigString(instance, "agentDir"),
+                binaryPath,
+                piOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
+            );
+          }
+          case "omp": {
+            const ompOptions = providerStartOptionsFromInstance(instance)?.omp;
+            return checkProviderInstanceWhenEnabled(
+              instance,
+              checkOmpProviderStatus(
+                readInstanceConfigString(instance, "agentDir"),
+                binaryPath,
+                ompOptions?.environment,
+                instance.instanceId,
+                { homeDir: serverConfig.homeDir, isolationRootDir: serverConfig.stateDir },
+              ),
+            );
+          }
+        }
+      };
+
+      const loadProviderStatuses = serverSettings.ready
+        .pipe(
+          Effect.flatMap(() => serverSettings.getSettings),
+          Effect.flatMap((settings) =>
+            runProviderHealthProbes(
+              deriveProviderInstances(settings).map((instance) =>
+                checkProviderInstanceStatus(instance),
+              ),
+            ),
+          ),
+        )
+        .pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+          Effect.map((statuses) =>
+            orderProviderStatuses(
+              statuses.flatMap((status) => (Option.isSome(status) ? [status.value] : [])),
+            ),
+          ),
+          Effect.flatMap(enrichStatuses),
+        );
+
+      const persistStatuses = (statuses: ProviderStatuses) =>
+        Effect.forEach(
+          statuses,
+          (status) => {
+            const { updateState: _updateState, ...statusToPersist } = status;
+            return writeProviderStatusCache({
+              filePath: cachePathForProviderTarget({
+                provider: status.provider,
+                instanceId: providerStatusInstanceKey(status),
+              }),
+              provider: statusToPersist,
+            }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+              Effect.tapError(Effect.logError),
+              Effect.ignore,
+            );
+          },
+          { concurrency: "unbounded", discard: true },
+        );
+
+      const refreshNow = Effect.gen(function* () {
+        let revisionRetries = 0;
+        while (true) {
+          const refreshRevision = (yield* serverSettings.getSnapshot).revision;
+          // Drop the cached Claude subscription probe so switching accounts (login
+          // / logout / add account outside the app) is reflected on the next
+          // refresh instead of being pinned to the old account for up to 5 minutes.
+          yield* Ref.set(claudeSubscriptionCacheRef, new Map());
+          const loadedStatuses = yield* loadProviderStatuses;
+          if ((yield* serverSettings.getSnapshot).revision !== refreshRevision) {
+            // A caller that joined this refresh expects the settings mutation it
+            // just made to be reflected. Retry in the same shared fiber so an
+            // enable cannot resolve with the stale pre-mutation probe.
+            if (revisionRetries < MAX_REFRESH_REVISION_RETRIES) {
+              revisionRetries += 1;
+              continue;
+            }
+            // Keep the joined refresh bounded, but queue one final cycle so a
+            // second settings mutation cannot leave the newest provider state
+            // waiting for an unrelated future refresh.
+            yield* Ref.set(refreshNeedsFollowUpRef, true);
+            const currentStatuses = yield* Ref.get(statusesRef);
+            return yield* projectStatusesForCurrentSettings(currentStatuses);
+          }
+          const previousRawStatuses = yield* Ref.get(statusesRef);
+          const previousStatuses = yield* projectStatusesForCurrentSettings(previousRawStatuses);
+          const stabilizedLoadedStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
+            previousRawStatuses,
+            loadedStatuses,
+          );
+          const nextRawStatuses = mergeProviderStatusUpdates(
+            previousRawStatuses,
+            stabilizedLoadedStatuses,
+          );
+          const nextStatuses = yield* projectStatusesForCurrentSettings(nextRawStatuses);
+          yield* Ref.set(statusesRef, nextRawStatuses);
+          if (providerStatusesEqual(previousStatuses, nextStatuses)) {
+            return nextStatuses;
+          }
+          yield* persistStatuses(nextRawStatuses);
+          yield* PubSub.publish(changesPubSub, nextStatuses);
+          return nextStatuses;
+        }
+      });
+
+      // Keep a single refresh in flight so repeated config reads do not spawn
+      // overlapping CLI probes while the cache already gives us a usable answer.
+      function ensureRefreshFiber(): Effect.Effect<Fiber.Fiber<ProviderStatuses, never>> {
+        return Effect.gen(function* () {
+          const inFlight = yield* Ref.get(refreshFiberRef);
+          if (inFlight) {
+            return inFlight;
+          }
+          const refreshFiber = yield* Effect.gen(function* () {
+            const refreshExit = yield* Effect.exit(
+              Effect.gen(function* () {
+                const statuses = yield* refreshNow;
+                if (!(yield* Ref.getAndSet(refreshNeedsFollowUpRef, false))) {
+                  return statuses;
+                }
+                return yield* refreshNow;
+              }),
+            );
+            if (Exit.isSuccess(refreshExit)) {
+              return refreshExit.value;
+            }
+            // Keep the current in-memory snapshot as the source of truth if a
+            // foreground refresh fails after startup.
+            const rawStatuses = yield* Ref.get(statusesRef);
+            return yield* projectStatusesForCurrentSettings(rawStatuses);
+          }).pipe(
+            Effect.ensuring(
+              Effect.gen(function* () {
+                yield* Ref.set(refreshFiberRef, null);
+                if (!(yield* Ref.getAndSet(refreshNeedsFollowUpRef, false))) {
+                  return;
+                }
+                // The bounded follow-up was dirtied too. Debounce one more
+                // shared refresh so a sustained settings burst cannot keep the
+                // current callers stuck or spin CLI probes without a pause.
+                yield* Effect.sleep(Duration.millis(REFRESH_REVISION_RESCHEDULE_DELAY_MS)).pipe(
+                  Effect.andThen(ensureRefreshFiber().pipe(Effect.asVoid)),
+                  Effect.forkIn(refreshScope),
+                  Effect.asVoid,
+                );
               }),
             ),
-          ),
-        { concurrency: "unbounded" },
-      );
-      return yield* Effect.forEach(enriched, applyVolatileProviderState, {
-        concurrency: "unbounded",
-      });
-    });
-
-    const loadProviderStatuses = serverSettings.getSettings
-      .pipe(
-        Effect.flatMap((settings) =>
-          Effect.all(
-            [
-              makeCheckCodexProviderStatus(
-                settings.providers.codex.binaryPath,
-                settings.providers.codex.homePath,
-              ),
-              makeCheckClaudeProviderStatus(
-                resolveClaudeSubscription,
-                settings.providers.claudeAgent.binaryPath,
-              ),
-              makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
-              makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
-              makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
-              makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
-              makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
-              checkPiProviderStatus(
-                settings.providers.pi.agentDir,
-                settings.providers.pi.binaryPath,
-              ),
-            ],
-            {
-              concurrency: "unbounded",
-            },
-          ),
-        ),
-      )
-      .pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-        Effect.map(orderProviderStatuses),
-        Effect.flatMap(enrichStatuses),
-      );
-
-    const persistStatuses = (statuses: ProviderStatuses) =>
-      Effect.forEach(
-        statuses,
-        (status) => {
-          const { updateState: _updateState, ...statusToPersist } = status;
-          return writeProviderStatusCache({
-            filePath: cachePathByProvider.get(status.provider)!,
-            provider: statusToPersist,
-          }).pipe(
-            Effect.provideService(FileSystem.FileSystem, fileSystem),
-            Effect.provideService(Path.Path, path),
-            Effect.tapError(Effect.logError),
-            Effect.ignore,
+            Effect.forkIn(refreshScope),
           );
-        },
-        { concurrency: "unbounded", discard: true },
-      );
-
-    const refreshNow = Effect.gen(function* () {
-      // Drop the cached Claude subscription probe so switching accounts (login
-      // / logout / add account outside the app) is reflected on the next
-      // refresh instead of being pinned to the old account for up to 5 minutes.
-      yield* Cache.invalidate(claudeSubscriptionCache, "claude");
-      const loadedStatuses = yield* loadProviderStatuses;
-      const previousStatuses = yield* Ref.get(statusesRef);
-      const nextStatuses = stabilizeProviderStatusesAgainstTransientTimeouts(
-        previousStatuses,
-        loadedStatuses,
-      );
-      if (providerStatusesEqual(previousStatuses, nextStatuses)) {
-        yield* Ref.set(statusesRef, nextStatuses);
-        return nextStatuses;
+          yield* Ref.set(refreshFiberRef, refreshFiber);
+          return refreshFiber;
+        });
       }
-      yield* Ref.set(statusesRef, nextStatuses);
-      yield* persistStatuses(nextStatuses);
-      yield* PubSub.publish(changesPubSub, nextStatuses);
-      return nextStatuses;
-    });
 
-    // Keep a single refresh in flight so repeated config reads do not spawn
-    // overlapping CLI probes while the cache already gives us a usable answer.
-    const ensureRefreshFiber: Effect.Effect<Fiber.Fiber<ProviderStatuses, never>> = Effect.gen(
-      function* () {
-        const inFlight = yield* Ref.get(refreshFiberRef);
-        if (inFlight) {
-          return inFlight;
-        }
-        const refreshFiber = yield* Effect.gen(function* () {
-          const refreshExit = yield* Effect.exit(refreshNow);
-          if (Exit.isSuccess(refreshExit)) {
-            return refreshExit.value;
+      yield* serverSettings.streamChanges.pipe(
+        Stream.runForEach((settings) =>
+          Effect.gen(function* () {
+            // Publish settings-only projection changes immediately from the
+            // cached raw probes; a CLI refresh can finish in the background.
+            yield* publishProjectedStatusesForSettings(settings).pipe(Effect.asVoid);
+            // If this settings change lands during a CLI probe, make the shared
+            // refresh fiber run (or schedule) one more pass after the current
+            // snapshot so the change cannot be hidden by the in-flight result.
+            if (yield* Ref.get(refreshFiberRef)) {
+              yield* Ref.set(refreshNeedsFollowUpRef, true);
+            }
+            yield* ensureRefreshFiber().pipe(
+              Effect.flatMap(Fiber.join),
+              Effect.forkIn(refreshScope),
+              Effect.asVoid,
+            );
+          }),
+        ),
+        Effect.forkIn(refreshScope),
+      );
+
+      const refresh: Effect.Effect<ProviderStatuses> = ensureRefreshFiber().pipe(
+        Effect.flatMap(Fiber.join),
+      );
+
+      const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+      const makeUpdateState = (input: {
+        readonly status: ServerProviderUpdateState["status"];
+        readonly startedAt: string | null;
+        readonly finishedAt: string | null;
+        readonly message: string | null;
+        readonly output?: string | null;
+      }): ServerProviderUpdateState => ({
+        status: input.status,
+        startedAt: input.startedAt,
+        finishedAt: input.finishedAt,
+        message: input.message,
+        output: input.output ?? null,
+      });
+
+      const describeUpdateCommandError = (error: unknown): string => {
+        if (error instanceof Error && error.message.trim().length > 0) {
+          if (error.message.includes("initial is not a function")) {
+            return "Update command failed before producing output. Try running the provider update command from a terminal.";
           }
-          // Keep the current in-memory snapshot as the source of truth if a
-          // foreground refresh fails after startup.
-          return yield* Ref.get(statusesRef);
-        }).pipe(Effect.ensuring(Ref.set(refreshFiberRef, null)), Effect.forkIn(refreshScope));
-        yield* Ref.set(refreshFiberRef, refreshFiber);
-        return refreshFiber;
-      },
-    );
-
-    yield* ensureRefreshFiber;
-
-    const refresh: Effect.Effect<ProviderStatuses> = ensureRefreshFiber.pipe(
-      Effect.flatMap(Fiber.join),
-    );
-
-    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-
-    const makeUpdateState = (input: {
-      readonly status: ServerProviderUpdateState["status"];
-      readonly startedAt: string | null;
-      readonly finishedAt: string | null;
-      readonly message: string | null;
-      readonly output?: string | null;
-    }): ServerProviderUpdateState => ({
-      status: input.status,
-      startedAt: input.startedAt,
-      finishedAt: input.finishedAt,
-      message: input.message,
-      output: input.output ?? null,
-    });
-
-    const describeUpdateCommandError = (error: unknown): string => {
-      if (error instanceof Error && error.message.trim().length > 0) {
-        if (error.message.includes("initial is not a function")) {
-          return "Update command failed before producing output. Try running the provider update command from a terminal.";
+          return error.message;
         }
-        return error.message;
-      }
-      if (typeof error === "string" && error.trim().length > 0) {
-        return error;
-      }
-      return "Update command could not be started.";
-    };
-
-    const runUpdateCommand = Effect.fn("runProviderUpdateCommand")(function* (input: {
-      readonly command: string;
-      readonly args: ReadonlyArray<string>;
-    }) {
-      const child = yield* spawner.spawn(
-        ChildProcess.make(input.command, [...input.args], {
-          shell: process.platform === "win32",
-          env: process.env,
-        }),
-      );
-      yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
-      const [stdout, stderr, exitCode] = yield* Effect.all(
-        [
-          collectUint8StreamText({
-            stream: child.stdout,
-            maxBytes: UPDATE_OUTPUT_MAX_BYTES,
-          }),
-          collectUint8StreamText({
-            stream: child.stderr,
-            maxBytes: UPDATE_OUTPUT_MAX_BYTES,
-          }),
-          child.exitCode.pipe(Effect.map(Number)),
-        ],
-        { concurrency: "unbounded" },
-      );
-      return {
-        stdout: stdout.text,
-        stderr: stderr.text,
-        exitCode,
-        stdoutTruncated: stdout.truncated,
-        stderrTruncated: stderr.truncated,
+        if (typeof error === "string" && error.trim().length > 0) {
+          return error;
+        }
+        return "Update command could not be started.";
       };
-    });
 
-    const updateProvider: ProviderHealthShape["updateProvider"] = Effect.fn(
-      "ProviderHealth.updateProvider",
-    )(function* (input) {
-      const provider = input.provider;
-      const toUpdateError = (reason: unknown) =>
-        new ServerProviderUpdateError({
-          provider,
-          reason: reason instanceof Error ? reason.message : String(reason),
+      const runUpdateCommand = Effect.fn("runProviderUpdateCommand")(function* (input: {
+        readonly instance: ResolvedProviderInstance;
+        readonly command: string;
+        readonly args: ReadonlyArray<string>;
+        readonly pathPrepend?: string;
+      }) {
+        const baseEnv = yield* Effect.try({
+          try: () =>
+            makeProviderUpdateEnv(input.instance, {
+              homeDir: serverConfig.homeDir,
+              isolationRootDir: serverConfig.stateDir,
+            }),
+          catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
         });
-      const capabilities = yield* getProviderMaintenanceCapabilities(provider).pipe(
-        Effect.mapError(toUpdateError),
-      );
-      const update = capabilities.update;
-      if (!update) {
-        return yield* new ServerProviderUpdateError({
-          provider,
-          reason: "This provider does not support one-click updates.",
-        });
-      }
-
-      const run = Effect.gen(function* () {
-        const startedAt = yield* nowIso;
-        yield* setProviderUpdateState(
-          provider,
-          makeUpdateState({
-            status: "running",
-            startedAt,
-            finishedAt: null,
-            message: "Updating provider.",
+        const updateEnv = input.pathPrepend
+          ? prependPathEntry(baseEnv, input.pathPrepend)
+          : baseEnv;
+        const child = yield* spawner.spawn(
+          makeEffectProcessCommand(input.command, input.args, {
+            env: updateEnv,
+            // Update commands are non-interactive. An open stdin pipe lets CLIs such as
+            // `opencode upgrade` block on a confirmation prompt until the update timeout.
+            stdin: "ignore",
           }),
         );
-
-        const commandResult = yield* runUpdateCommand({
-          command: update.executable,
-          args: update.args,
-        }).pipe(
-          Effect.scoped,
-          Effect.timeoutOption(Duration.millis(UPDATE_TIMEOUT_MS)),
-          Effect.result,
+        yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
+        const [stdout, stderr, exitCode] = yield* Effect.all(
+          [
+            collectUint8StreamText({
+              stream: child.stdout,
+              maxBytes: UPDATE_OUTPUT_MAX_BYTES,
+            }),
+            collectUint8StreamText({
+              stream: child.stderr,
+              maxBytes: UPDATE_OUTPUT_MAX_BYTES,
+            }),
+            child.exitCode.pipe(Effect.map(Number)),
+          ],
+          { concurrency: "unbounded" },
         );
-        const finishedAt = yield* nowIso;
-        if (Result.isFailure(commandResult)) {
-          const providers = yield* setProviderUpdateState(
+        return {
+          stdout: stdout.text,
+          stderr: stderr.text,
+          exitCode,
+          stdoutTruncated: stdout.truncated,
+          stderrTruncated: stderr.truncated,
+        };
+      });
+
+      const updateProvider: ProviderHealthShape["updateProvider"] = Effect.fn(
+        "ProviderHealth.updateProvider",
+      )(function* (input) {
+        const provider = input.provider;
+        const instanceId = input.instanceId;
+        const target = { provider, ...(instanceId ? { instanceId } : {}) };
+        const toUpdateError = (reason: unknown) =>
+          new ServerProviderUpdateError({
             provider,
+            ...(instanceId ? { instanceId } : {}),
+            reason: reason instanceof Error ? reason.message : String(reason),
+          });
+        const resolveEnabledInstance = serverSettings.getSettings.pipe(
+          Effect.mapError(toUpdateError),
+          Effect.map((settings) => resolveProviderInstanceTarget(settings, target)),
+        );
+        const unavailableError = (instance: ResolvedProviderInstance | null) =>
+          new ServerProviderUpdateError({
+            provider,
+            ...(instanceId ? { instanceId } : {}),
+            reason: instance
+              ? instanceId
+                ? "Provider instance is disabled in Synara settings."
+                : "Provider is disabled in Synara settings."
+              : "Provider instance is not configured.",
+          });
+        const initialInstance = yield* resolveEnabledInstance;
+        if (!initialInstance || !initialInstance.enabled) {
+          return yield* unavailableError(initialInstance);
+        }
+        const capabilities = yield* getProviderMaintenanceCapabilities(target).pipe(
+          Effect.mapError(toUpdateError),
+        );
+        const update = capabilities.update;
+        if (!update) {
+          return yield* new ServerProviderUpdateError({
+            provider,
+            ...(instanceId ? { instanceId } : {}),
+            reason: "This provider does not support one-click updates.",
+          });
+        }
+
+        const run = Effect.gen(function* () {
+          const currentInstance = yield* resolveEnabledInstance;
+          if (!currentInstance || !currentInstance.enabled) {
+            const finishedAt = yield* nowIso;
+            yield* setProviderUpdateState(
+              target,
+              makeUpdateState({
+                status: "failed",
+                startedAt: null,
+                finishedAt,
+                message:
+                  "Provider instance was disabled or removed before its queued update could start.",
+              }),
+            );
+            return yield* unavailableError(currentInstance);
+          }
+          const startedAt = yield* nowIso;
+          yield* setProviderUpdateState(
+            target,
             makeUpdateState({
-              status: "failed",
+              status: "running",
               startedAt,
-              finishedAt,
-              message: describeUpdateCommandError(commandResult.failure),
+              finishedAt: null,
+              message: "Updating provider.",
             }),
           );
-          return { providers };
-        }
-        const result = commandResult.success;
-        const output = Option.isSome(result)
-          ? [result.value.stderr, result.value.stdout].filter(Boolean).join("\n\n").trim() || null
-          : null;
-        const failed = Option.isNone(result) || result.value.exitCode !== 0;
-        if (failed) {
-          const message = Option.isNone(result)
-            ? "Update timed out."
-            : `Update command exited with code ${result.value.exitCode}.`;
-          const providers = yield* setProviderUpdateState(
-            provider,
+
+          const waitForProviderDisablement = Effect.gen(function* () {
+            while (
+              yield* resolveEnabledInstance.pipe(
+                Effect.map((instance) => Boolean(instance?.enabled)),
+                Effect.catch(() => Effect.succeed(true)),
+              )
+            ) {
+              yield* Effect.sleep(Duration.millis(PROVIDER_UPDATE_ENABLEMENT_POLL_MS));
+            }
+          });
+          const commandOutcome = yield* Effect.raceFirst(
+            runUpdateCommand({
+              instance: currentInstance,
+              command: update.executable,
+              args: update.args,
+              ...(update.pathPrepend ? { pathPrepend: update.pathPrepend } : {}),
+            }).pipe(
+              Effect.scoped,
+              Effect.timeoutOption(Duration.millis(providerUpdateTimeoutMs)),
+              Effect.result,
+              Effect.map((result) => ({ _tag: "completed" as const, result })),
+            ),
+            waitForProviderDisablement.pipe(Effect.as({ _tag: "disabled" as const })),
+          );
+          const finishedAt = yield* nowIso;
+          if (commandOutcome._tag === "disabled") {
+            const providers = yield* setProviderUpdateState(
+              target,
+              makeUpdateState({
+                status: "failed",
+                startedAt,
+                finishedAt,
+                message: instanceId
+                  ? "Update stopped because the provider instance was disabled or removed."
+                  : "Update stopped because the provider was disabled.",
+              }),
+            );
+            return { providers };
+          }
+          const commandResult = commandOutcome.result;
+          if (Result.isFailure(commandResult)) {
+            const providers = yield* setProviderUpdateState(
+              target,
+              makeUpdateState({
+                status: "failed",
+                startedAt,
+                finishedAt,
+                message: describeUpdateCommandError(commandResult.failure),
+              }),
+            );
+            return { providers };
+          }
+          const result = commandResult.success;
+          const output = Option.isSome(result)
+            ? [result.value.stderr, result.value.stdout].filter(Boolean).join("\n\n").trim() || null
+            : null;
+          const failed = Option.isNone(result) || result.value.exitCode !== 0;
+          if (failed) {
+            const message = Option.isNone(result)
+              ? `Update timed out after ${formatProviderUpdateTimeout(providerUpdateTimeoutMs)}. The provider process was stopped.`
+              : `Update command exited with code ${result.value.exitCode}.`;
+            const providers = yield* setProviderUpdateState(
+              target,
+              makeUpdateState({
+                status: "failed",
+                startedAt,
+                finishedAt,
+                message,
+                output: output ? output.slice(0, UPDATE_OUTPUT_MAX_BYTES) : null,
+              }),
+            );
+            return { providers };
+          }
+
+          const providers = yield* refreshNow.pipe(Effect.mapError(toUpdateError));
+          const refreshed = providers.find(
+            (status) =>
+              (status.driver ?? status.provider) === provider &&
+              providerStatusInstanceKey(status) === providerStatusKey(target),
+          );
+          const refreshedAdvisory = refreshed?.versionAdvisory;
+          const stillOutdated = refreshedAdvisory?.status === "behind_latest";
+          const stillOutdatedVersions =
+            refreshedAdvisory?.currentVersion && refreshedAdvisory.latestVersion
+              ? ` (installed ${refreshedAdvisory.currentVersion}, latest ${refreshedAdvisory.latestVersion})`
+              : "";
+          const finalProviders = yield* setProviderUpdateState(
+            target,
             makeUpdateState({
-              status: "failed",
+              status: stillOutdated ? "unchanged" : "succeeded",
               startedAt,
               finishedAt,
-              message,
+              message: stillOutdated
+                ? `Update command completed, but Synara still detects an outdated provider version${stillOutdatedVersions}.`
+                : "Provider updated.",
               output: output ? output.slice(0, UPDATE_OUTPUT_MAX_BYTES) : null,
             }),
           );
-          return { providers };
-        }
+          return { providers: finalProviders };
+        });
 
-        const providers = yield* refreshNow.pipe(Effect.mapError(toUpdateError));
-        const refreshed = providers.find((status) => status.provider === provider);
-        const stillOutdated = refreshed?.versionAdvisory?.status === "behind_latest";
-        const finalProviders = yield* setProviderUpdateState(
-          provider,
-          makeUpdateState({
-            status: stillOutdated ? "unchanged" : "succeeded",
-            startedAt,
-            finishedAt,
-            message: stillOutdated
-              ? "Update command completed, but Synara still detects an outdated provider version."
-              : "Provider updated.",
-            output: output ? output.slice(0, UPDATE_OUTPUT_MAX_BYTES) : null,
-          }),
-        );
-        return { providers: finalProviders };
+        return yield* commandCoordinator.withCommandLock({
+          targetKey: `instance:${providerStatusKey(target)}`,
+          lockKey: update.lockKey,
+          onQueued: setProviderUpdateState(
+            target,
+            makeUpdateState({
+              status: "queued",
+              startedAt: null,
+              finishedAt: null,
+              message: "Waiting for another provider update to finish.",
+            }),
+          ).pipe(Effect.asVoid),
+          run,
+        });
       });
 
-      return yield* commandCoordinator.withCommandLock({
-        targetKey: provider,
-        lockKey: update.lockKey,
-        onQueued: setProviderUpdateState(
-          provider,
-          makeUpdateState({
-            status: "queued",
-            startedAt: null,
-            finishedAt: null,
-            message: "Waiting for another provider update to finish.",
-          }),
-        ).pipe(Effect.asVoid),
-        run,
-      });
-    });
+      return {
+        // Mirror upstream's behavior here: reads consume the latest stable
+        // snapshot, while refreshes happen explicitly or from provider streams.
+        getStatuses: Ref.get(statusesRef).pipe(Effect.flatMap(projectStatusesForCurrentSettings)),
+        refresh,
+        updateProvider,
+        get streamChanges() {
+          return Stream.fromPubSub(changesPubSub);
+        },
+      } satisfies ProviderHealthShape;
+    }),
+  );
+}
 
-    return {
-      // Mirror upstream's behavior here: reads consume the latest stable
-      // snapshot, while refreshes happen explicitly or from provider streams.
-      getStatuses: Ref.get(statusesRef),
-      refresh,
-      updateProvider,
-      get streamChanges() {
-        return Stream.fromPubSub(changesPubSub);
-      },
-    } satisfies ProviderHealthShape;
-  }),
-);
+export const ProviderHealthLive = makeProviderHealthLive();

@@ -1,0 +1,448 @@
+// FILE: MessagesTimeline.toolGroupCollapse.browser.tsx
+// Purpose: Browser regressions for collapsing settled tool-call runs into
+//          summary rows ("Ran 4 commands") once a newer narration block starts,
+//          and for folding the live run to one line wearing its newest call.
+// Layer: Vitest browser tests
+
+import "../../index.css";
+
+import { MessageId, TurnId } from "@synara/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { render } from "vitest-browser-react";
+
+import { MessagesTimeline } from "./MessagesTimeline";
+import type { TimelineEntry } from "../../session-logic";
+import { deriveTimelineEntries } from "../../workLog";
+import { AgentActivityDetailView } from "./AgentActivityDetailView";
+import { deriveAgentActivityTimelineState } from "./agentActivity.logic";
+
+function assistantEntry(id: string, text: string, streaming: boolean): TimelineEntry {
+  return {
+    id: `entry-${id}`,
+    kind: "message",
+    createdAt: "2026-03-17T19:12:28.000Z",
+    message: {
+      id: MessageId.makeUnsafe(id),
+      role: "assistant",
+      text,
+      createdAt: "2026-03-17T19:12:28.000Z",
+      streaming,
+    },
+  };
+}
+
+function commandEntry(id: string, command: string): TimelineEntry {
+  return {
+    id: `entry-${id}`,
+    kind: "work",
+    createdAt: "2026-03-17T19:12:28.000Z",
+    entry: {
+      id,
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label: "Ran command",
+      tone: "tool",
+      itemType: "command_execution",
+      toolStatus: "completed",
+      command,
+    },
+  };
+}
+
+function thinkingEntry(id: string, label: string): TimelineEntry {
+  return {
+    id: `entry-${id}`,
+    kind: "work",
+    createdAt: "2026-03-17T19:12:28.000Z",
+    entry: {
+      id,
+      createdAt: "2026-03-17T19:12:28.000Z",
+      label,
+      tone: "thinking",
+    },
+  };
+}
+
+const SETTLED_COMMANDS = [
+  "bun run lint",
+  "bun run typecheck",
+  "bun run build",
+  "node scripts/check.mjs",
+];
+// Commands whose display text passes through verbatim (no humanized rewrite).
+const LIVE_COMMANDS = ["git status", "node scripts/tail.mjs"];
+
+function ToolGroupCollapseTimeline(props: {
+  timelineEntries: TimelineEntry[];
+  onOpenAgentActivity?: (id: string) => void;
+}) {
+  return (
+    <MessagesTimeline
+      hasMessages
+      isWorking={false}
+      activeTurnInProgress
+      activeTurnStartedAt="2026-03-17T19:12:20.000Z"
+      timelineEntries={props.timelineEntries}
+      turnDiffSummaryByAssistantMessageId={new Map()}
+      nowIso="2026-03-17T19:12:30.000Z"
+      expandedWorkGroups={{}}
+      onToggleWorkGroup={() => {}}
+      onOpenTurnDiff={() => {}}
+      revertTurnCountByUserMessageId={new Map()}
+      onRevertUserMessage={() => {}}
+      isRevertingCheckpoint={false}
+      onImageExpand={() => {}}
+      markdownCwd={undefined}
+      resolvedTheme="dark"
+      timestampFormat="locale"
+      workspaceRoot={undefined}
+      {...(props.onOpenAgentActivity ? { onOpenAgentActivity: props.onOpenAgentActivity } : {})}
+    />
+  );
+}
+
+function createTimelineHost(): HTMLDivElement {
+  const host = document.createElement("div");
+  host.style.cssText =
+    "display:flex;flex-direction:column;width:600px;height:520px;overflow:hidden;";
+  document.body.append(host);
+  return host;
+}
+
+function findSummaryTrigger(label: string): HTMLButtonElement | null {
+  return (
+    [...document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((button) =>
+      (button.textContent ?? "").includes(label),
+    ) ?? null
+  );
+}
+
+function isVisibleOutsideClosedDisclosure(text: string): boolean {
+  // The innermost element containing the text (command labels may span nested
+  // spans, so a leaf-only check would miss them).
+  const match = [...document.querySelectorAll<HTMLElement>("*")].findLast((element) =>
+    (element.textContent ?? "").includes(text),
+  );
+  return match !== undefined && match.closest("[aria-hidden='true']") === null;
+}
+
+// The live run is one disclosure line wearing its newest call; the earlier
+// calls stay unmounted until that line is opened.
+async function expectLiveRunFoldedToNewestCall(): Promise<HTMLButtonElement> {
+  const [earlierCommand, newestCommand] = LIVE_COMMANDS as [string, string];
+  await expect.poll(() => findSummaryTrigger(newestCommand) !== null).toBe(true);
+  const liveTrigger = findSummaryTrigger(newestCommand)!;
+  expect(liveTrigger.getAttribute("aria-expanded")).toBe("false");
+  expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+  expect(document.body.textContent ?? "").not.toContain(earlierCommand);
+  return liveTrigger;
+}
+
+describe("MessagesTimeline tool group collapse", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("renders submitted questions and answers as separate transcript bubbles", async () => {
+    const entries = [
+      assistantEntry("before-question", "I need your preference.", false),
+      commandEntry("earlier-command", "git status"),
+      {
+        id: "entry-answer",
+        kind: "work" as const,
+        createdAt: "2026-03-17T19:12:28.000Z",
+        entry: {
+          id: "answered",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "User input submitted",
+          tone: "info" as const,
+          activityKind: "user-input.resolved",
+          userInputExchange: [
+            {
+              id: "q",
+              header: "Color",
+              question: "Which accent color?",
+              options: ["Amber", "Blue"],
+              answer: "Amber",
+            },
+          ],
+        },
+      },
+      assistantEntry("after-question", "I applied your preference.", false),
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} />, {
+      container: createTimelineHost(),
+    });
+    await expect.element(screen.getByText("Which accent color?", { exact: true })).toBeVisible();
+    await expect.element(screen.getByText("Amber", { exact: true })).toBeVisible();
+    await expect.element(screen.getByText("Amber · Blue", { exact: true })).toBeVisible();
+    expect(isVisibleOutsideClosedDisclosure("Which accent color?")).toBe(true);
+    expect(isVisibleOutsideClosedDisclosure("Amber")).toBe(true);
+  });
+
+  it.each(["reasoning", "tool summary"] as const)(
+    "keeps %s between tool runs and reveals its complete text on click",
+    async (kind) => {
+      const host = createTimelineHost();
+      const onOpenAgentActivity = vi.fn();
+      const reasoning: TimelineEntry = {
+        id: "reasoning-row",
+        kind: "work",
+        createdAt: "2026-03-17T19:12:28.000Z",
+        entry: {
+          id: "reasoning-row",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: kind === "reasoning" ? "Reasoning trace" : "Tool summary",
+          tone: kind === "reasoning" ? "tool" : "info",
+          ...(kind === "reasoning"
+            ? { toolCallId: "reasoning-item", toolStatus: "running" as const }
+            : { activityKind: "tool.summary" }),
+          detail: "First inspect the provider boundary.\n\nThen verify cancellation.",
+        },
+      };
+      const screen = await render(
+        <ToolGroupCollapseTimeline
+          timelineEntries={[
+            ...SETTLED_COMMANDS.map((command, index) => commandEntry(`before-${index}`, command)),
+            reasoning,
+            ...LIVE_COMMANDS.map((command, index) => commandEntry(`after-${index}`, command)),
+          ]}
+          onOpenAgentActivity={onOpenAgentActivity}
+        />,
+        { container: host },
+      );
+
+      try {
+        await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
+        await expectLiveRunFoldedToNewestCall();
+        expect(isVisibleOutsideClosedDisclosure("Then verify cancellation.")).toBe(true);
+        if (kind === "reasoning") {
+          expect(document.body.textContent).not.toContain("First inspect the provider boundary.");
+        }
+        const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+          button.textContent?.includes("Then verify cancellation."),
+        );
+        expect(row).toBeDefined();
+        expect(row!.closest("[data-tool-group-live='true']")).toBeNull();
+        row!.click();
+        expect(onOpenAgentActivity).toHaveBeenCalledWith("reasoning-row");
+        const detail = deriveAgentActivityTimelineState([reasoning.entry]).detailById.get(
+          "reasoning-row",
+        )!;
+        await screen.rerender(
+          <AgentActivityDetailView
+            detail={detail}
+            chatFontSizePx={13}
+            markdownCwd={undefined}
+            onBack={() => {}}
+            onImageExpand={() => {}}
+            timestampFormat="locale"
+          />,
+        );
+        await expect
+          .poll(() => host.textContent?.includes("First inspect the provider boundary."))
+          .toBe(true);
+        expect(host.textContent).toContain("Then verify cancellation.");
+      } finally {
+        await screen.unmount();
+        host.remove();
+      }
+    },
+  );
+
+  it("keeps the latest status above tool calls and reveals the other entries on expansion", async () => {
+    const host = createTimelineHost();
+    const statusEntry = (id: string, preview: string): TimelineEntry => ({
+      id,
+      kind: "work",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      entry: {
+        id,
+        createdAt: "2026-03-17T19:12:28.000Z",
+        label: "Reasoning summary",
+        tone: "tool",
+        preview,
+      },
+    });
+    const entries = [
+      assistantEntry("narration", "Checking the integrations.", true),
+      commandEntry("first-command", LIVE_COMMANDS[0]!),
+      statusEntry("first-status", "Inspecting integrations"),
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} />, {
+      container: host,
+    });
+
+    try {
+      await expect.poll(() => findSummaryTrigger("Inspecting integrations") !== null).toBe(true);
+      entries.push(commandEntry("last-command", LIVE_COMMANDS[1]!));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} />);
+      expect(findSummaryTrigger("Inspecting integrations")?.getAttribute("aria-expanded")).toBe(
+        "false",
+      );
+      for (const command of LIVE_COMMANDS) {
+        expect(document.body.textContent).not.toContain(command);
+      }
+
+      entries.push(statusEntry("last-status", "Verifying the adapter"));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} />);
+      await expect.poll(() => findSummaryTrigger("Verifying the adapter") !== null).toBe(true);
+      expect(document.body.textContent).not.toContain("Inspecting integrations");
+      expect(document.querySelectorAll('[data-tool-group-live="true"]')).toHaveLength(1);
+
+      findSummaryTrigger("Verifying the adapter")!.click();
+      for (const text of [...LIVE_COMMANDS, "Inspecting integrations"]) {
+        await expect.poll(() => isVisibleOutsideClosedDisclosure(text)).toBe(true);
+      }
+      expect(document.body.textContent?.match(/Verifying the adapter/g)).toHaveLength(1);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("keeps calls made after steering reachable from the live tool line", async () => {
+    const host = createTimelineHost();
+    const turnId = TurnId.makeUnsafe("steered-turn");
+    const timelineEntries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.makeUnsafe("request"),
+          role: "user",
+          text: "Investigate usage",
+          createdAt: "2026-03-17T19:12:20.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("preamble"),
+          role: "assistant",
+          turnId,
+          text: "Checking usage records.",
+          createdAt: "2026-03-17T19:12:21.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("steering"),
+          role: "user",
+          dispatchMode: "steer",
+          text: "Only Codex",
+          createdAt: "2026-03-17T19:12:22.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("continued"),
+          role: "assistant",
+          turnId,
+          text: "Continuing with Codex.",
+          createdAt: "2026-03-17T19:12:23.000Z",
+          streaming: true,
+        },
+      ],
+      [],
+      LIVE_COMMANDS.map((command, index) => ({
+        id: `steered-tool-${index}`,
+        turnId,
+        createdAt: `2026-03-17T19:12:2${4 + index}.000Z`,
+        label: "Running command",
+        tone: "tool",
+        itemType: "command_execution",
+        toolStatus: "running",
+        activityKind: "tool.started",
+        command,
+      })),
+    );
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={timelineEntries} />, {
+      container: host,
+    });
+
+    try {
+      const liveTrigger = await expectLiveRunFoldedToNewestCall();
+
+      liveTrigger.click();
+
+      await expect.poll(() => liveTrigger.getAttribute("aria-expanded")).toBe("true");
+      await expect.poll(() => isVisibleOutsideClosedDisclosure(LIVE_COMMANDS[0]!)).toBe(true);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("collapses the settled run behind a summary and folds the live run to one line", async () => {
+    const host = createTimelineHost();
+    const screen = await render(
+      <ToolGroupCollapseTimeline
+        timelineEntries={[
+          assistantEntry("narration-1", "Looking at the failing checks first.", false),
+          ...SETTLED_COMMANDS.map((command, index) => commandEntry(`settled-${index}`, command)),
+          assistantEntry("narration-2", "Now inspecting the working tree.", true),
+          ...LIVE_COMMANDS.map((command, index) => commandEntry(`live-${index}`, command)),
+        ]}
+      />,
+      { container: host },
+    );
+
+    try {
+      await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
+      const trigger = findSummaryTrigger("Ran 4 commands")!;
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+      // Closed groups do not mount every tool row; this keeps large settled
+      // transcripts cheap until the user asks to inspect the details.
+      for (const command of SETTLED_COMMANDS) {
+        expect(document.body.textContent ?? "").not.toContain(command);
+      }
+
+      await expectLiveRunFoldedToNewestCall();
+
+      trigger.click();
+
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+      for (const command of SETTLED_COMMANDS) {
+        await expect.poll(() => isVisibleOutsideClosedDisclosure(command)).toBe(true);
+      }
+
+      trigger.click();
+
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+      // Rows remain mounted only long enough for the shared 220ms close motion.
+      await expect
+        .poll(() => (document.body.textContent ?? "").includes(SETTLED_COMMANDS[0]!))
+        .toBe(false);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("collapses mid-turn as soon as a thinking block splits the live group", async () => {
+    const host = createTimelineHost();
+    // One live inline group: settled commands, then a thinking boundary, then
+    // the live tail. The run before the boundary must collapse while the turn
+    // is still in progress — not only once it finishes.
+    const screen = await render(
+      <ToolGroupCollapseTimeline
+        timelineEntries={[
+          assistantEntry("narration-1", "Looking at the failing checks first.", true),
+          ...SETTLED_COMMANDS.map((command, index) => commandEntry(`settled-${index}`, command)),
+          thinkingEntry("think-1", "Weighing the next verification step"),
+          ...LIVE_COMMANDS.map((command, index) => commandEntry(`live-${index}`, command)),
+        ]}
+      />,
+      { container: host },
+    );
+
+    try {
+      await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
+      expect(findSummaryTrigger("Ran 4 commands")!.getAttribute("aria-expanded")).toBe("false");
+      for (const command of SETTLED_COMMANDS) {
+        expect(document.body.textContent ?? "").not.toContain(command);
+      }
+
+      // The run after the thinking boundary is the live tail.
+      await expectLiveRunFoldedToNewestCall();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+});

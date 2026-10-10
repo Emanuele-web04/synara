@@ -8,64 +8,96 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useStore } from "zustand";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ServerLocalServerProcess,
+  type ThreadBrowserState,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
-  CameraIcon,
-  CopyIcon,
-  EllipsisIcon,
+  Camera01Icon,
+  CircleAlertIcon,
   ExternalLinkIcon,
   GlobeIcon,
+  LinkIcon,
   LoaderCircleIcon,
+  MoreHorizontalIcon,
   type LucideIcon,
   PlusIcon,
   RefreshCwIcon,
   XIcon,
 } from "~/lib/icons";
 
-import { localServerPrimaryLabel } from "@t3tools/shared/localServers";
+import { localServerPrimaryLabel } from "@synara/shared/localServers";
+import {
+  BROWSER_BLANK_URL,
+  isBlankBrowserTabUrl,
+  resolveCopyableBrowserTabUrl,
+} from "@synara/shared/browserSession";
+import {
+  BROWSER_COPY_LINK_TOAST_TITLE,
+  isBrowserCopyLinkChord,
+} from "@synara/shared/browserShortcuts";
 
+import { isElectron } from "~/env";
+import { CentralIcon } from "~/lib/central-icons";
 import { readNativeApi } from "~/nativeApi";
+import { BrowserVaultButton } from "./BrowserVault";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
-import { IMAGE_SIZE_LIMIT_LABEL } from "~/lib/composerSend";
-import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
+import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
+import { BROWSER_PANEL_BOUNDS_SYNC_EVENT } from "~/lib/browserPanelBoundsSync";
+import {
+  NATIVE_SURFACE_MENU_OVERLAY_SELECTOR,
+  NATIVE_SURFACE_OCCLUSION_SYNC_EVENT,
+} from "~/lib/nativeSurfaceOcclusion";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
-import { cn } from "~/lib/utils";
+import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 
 import {
   useBrowserStateStore,
   selectThreadBrowserHistory,
   selectThreadBrowserState,
 } from "../browserStateStore";
-import { useComposerDraftStore } from "../composerDraftStore";
+import { useComposerDraftStore, type BrowserAnnotationDraft } from "../composerDraftStore";
 import { anchoredToastManager } from "./ui/toast";
+import { prepareComposerImageFromBrowserScreenshot } from "../lib/browserPromptContext";
 import {
-  composerImageFromBrowserScreenshot,
-  screenshotAttachmentName,
-} from "../lib/browserPromptContext";
-import {
+  BROWSER_CHROME_CONTROL_CLASS_NAME,
+  BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
   browserAddressDisplayValue,
+  browserWebviewInitialUrl,
   buildBrowserAddressSuggestions,
+  createBrowserPanelHideScheduler,
+  createBrowserPanelRendererHandoff,
+  createBrowserRendererLossHandler,
+  hasObscuringHitStackElementAboveSurface,
   normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
+  shouldOccludeBrowserWebview,
+  applyBrowserWebviewPresentation,
+  isBrowserPanelBoundsHiddenKey,
+  resolveBrowserRuntimePresentation,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
+import { BrowserTabStrip } from "./BrowserTabStrip";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import {
+  useBrowserAnnotations,
+  type BrowserAnnotationsController,
+} from "./browser/useBrowserAnnotations";
 import { LocalServerIdentity } from "./LocalServerIdentity";
 import { Button } from "./ui/button";
+import { ButtonGroup, ButtonGroupSeparator } from "./ui/button-group";
+import { IconButton } from "./ui/icon-button";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Input } from "./ui/input";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 interface BrowserPanelProps {
   mode: DiffPanelMode;
@@ -78,15 +110,18 @@ interface BrowserPanelProps {
 const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 30;
 const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
 const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
-const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const SYNARA_BROWSER_LABEL = "Synara browser";
+const browserPanelHideScheduler = createBrowserPanelHideScheduler();
+const browserPanelRendererHandoff = createBrowserPanelRendererHandoff();
 const BROWSER_ACTION_MENU_PANEL_CLASS_NAME = "w-52 min-w-52";
 const BROWSER_ACTION_MENU_ITEM_CLASS_NAME =
   "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";
 const BROWSER_ACTION_MENU_ICON_CLASS_NAME =
   "inline-flex size-3.5 shrink-0 items-center justify-center text-[var(--color-text-foreground-secondary)] [&>svg]:size-3.5 [&>[data-slot=central-icon]]:size-3.5";
+const EMPTY_BROWSER_ANNOTATIONS: readonly BrowserAnnotationDraft[] = [];
 const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
+  NATIVE_SURFACE_MENU_OVERLAY_SELECTOR,
   "[data-slot='dialog-backdrop']",
   "[data-slot='dialog-popup']",
   "[data-slot='dialog-viewport']",
@@ -108,10 +143,46 @@ function BrowserActionMenuIcon({ icon: Icon }: { icon: LucideIcon }) {
   );
 }
 
+export function BrowserAnnotationButton(props: {
+  controller: BrowserAnnotationsController;
+  disabled: boolean;
+}) {
+  const label = props.controller.active ? "Cancel annotation" : "Annotate page";
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            variant={props.controller.active ? "default" : "ghost"}
+            size="icon-sm"
+            className="size-7 [&_[data-slot=central-icon]]:!opacity-100"
+            disabled={props.disabled}
+            aria-label={label}
+            aria-pressed={props.controller.active}
+            aria-busy={props.controller.starting || undefined}
+            data-pressed={props.controller.active ? "" : undefined}
+            title={label}
+            onClick={props.controller.toggle}
+          />
+        }
+      >
+        <CentralIcon name="window-cursor" className="size-3.5" />
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {props.controller.active
+          ? "Cancel element selection (Esc)"
+          : "Select an element to annotate"}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 // The browser itself lives inside a sheet, and toast portals/positioners are just
 // layout containers. Treating either as blockers hides the WebContentsView.
 const NATIVE_BROWSER_NON_OBSCURING_OVERLAY_SELECTOR = [
   "[data-panel-resize-overlay='true']",
+  "[data-floating-browser-controls='true']",
   "[data-slot='sheet-backdrop']",
   "[data-slot='sheet-popup']",
   "[data-slot='toast-portal']",
@@ -161,13 +232,6 @@ const VIEWPORT_TRANSITION_PROPERTIES = new Set([
   "inset-block-start",
   "inset-block-end",
 ]);
-function closeButtonClassName(isActive: boolean) {
-  return cn(
-    "ml-1 size-5 shrink-0 rounded-sm p-0 text-muted-foreground/70 hover:bg-background/80 hover:text-foreground",
-    isActive ? "hover:bg-background" : "hover:bg-card",
-  );
-}
-
 function formatBrowserActionError(error: unknown): string | null {
   if (!(error instanceof Error)) {
     return "Couldn't complete that browser action.";
@@ -184,6 +248,10 @@ function ignoreBrowserBoundsSyncError(): void {
   // browser errors because they do not reflect page navigation health.
 }
 
+function ignoreBrowserWebviewDetachError(): void {
+  // Renderer webview detach is best-effort cleanup; a stale/destroyed guest is already gone.
+}
+
 function setBrowserWebviewOverlayOcclusion(
   webview: BrowserWebviewElement | null,
   occluded: boolean,
@@ -191,7 +259,8 @@ function setBrowserWebviewOverlayOcclusion(
   if (!webview) {
     return;
   }
-  webview.style.visibility = occluded ? "hidden" : "visible";
+  // Never use visibility:hidden on a <webview>. Electron unpaints or kills the
+  // guest, which shows as a black card and BrowserHostUnavailable to the agent.
   webview.style.pointerEvents = occluded ? "none" : "auto";
 }
 
@@ -255,19 +324,18 @@ function hasTopLayerDomObstruction(element: HTMLElement): boolean {
     }
 
     const hitElements = document.elementsFromPoint(x, y);
-    for (const hitElement of hitElements) {
-      if (!(hitElement instanceof HTMLElement)) {
-        continue;
-      }
-      if (hitElement === element || element.contains(hitElement) || hitElement.contains(element)) {
-        continue;
-      }
-      if (isNativeBrowserNonObscuringOverlayElement(hitElement)) {
-        continue;
-      }
-      if (!isVisibleOverlayElement(hitElement)) {
-        continue;
-      }
+    if (
+      hasObscuringHitStackElementAboveSurface(hitElements, {
+        isSurfaceBoundary: (hitElement) =>
+          hitElement === element ||
+          (hitElement instanceof HTMLElement && element.contains(hitElement)),
+        isNonObscuring: (hitElement) =>
+          hitElement instanceof HTMLElement &&
+          isNativeBrowserNonObscuringOverlayElement(hitElement),
+        isVisible: (hitElement) =>
+          hitElement instanceof HTMLElement && isVisibleOverlayElement(hitElement),
+      })
+    ) {
       return true;
     }
   }
@@ -313,11 +381,7 @@ function isBrowserPerfLoggingEnabled(): boolean {
   }
 
   try {
-    return (
-      window.localStorage.getItem("synara:browser-perf") === "1" ||
-      window.localStorage.getItem("dpcode:browser-perf") === "1" ||
-      window.localStorage.getItem("t3code:browser-perf") === "1"
-    );
+    return window.localStorage.getItem("synara:browser-perf") === "1";
   } catch {
     return false;
   }
@@ -348,11 +412,35 @@ function BrowserRuntimePreview(props: { title: string; detail: string }) {
           </div>
         </div>
         <div className="mt-4 min-w-0 text-center">
-          <p className="text-xs font-medium text-foreground">Restoring browser</p>
-          <p className="mt-1 truncate text-[11px] text-muted-foreground" title={props.detail}>
+          <p className="text-ui leading-snug font-medium text-foreground">Restoring browser</p>
+          <p className="mt-1 truncate text-ui-sm text-muted-foreground" title={props.detail}>
             {props.title}
           </p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BrowserRuntimeError(props: { message: string; onReload: () => void }) {
+  return (
+    <div
+      className="absolute inset-0 z-20 flex items-center justify-center bg-[#0d0d0d] px-6 text-center text-white"
+      role="alert"
+    >
+      <div className="flex max-w-xs flex-col items-center">
+        <CircleAlertIcon className="size-7 text-white/35" aria-hidden="true" />
+        <p className="mt-3 text-ui-lg font-medium text-white/80">This page could not be loaded</p>
+        <p className="mt-1 text-ui leading-snug text-white/45">{props.message}</p>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="mt-4"
+          onClick={props.onReload}
+        >
+          Reload page
+        </Button>
       </div>
     </div>
   );
@@ -440,13 +528,13 @@ function BrowserLocalServersHome({
               <>
                 <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
                 <p className="text-base font-semibold text-white">Scanning local servers</p>
-                <p className="mt-2 text-sm text-white/35">Checking localhost ports</p>
+                <p className="mt-2 text-ui leading-snug text-white/35">Checking localhost ports</p>
               </>
             ) : (
               <>
                 <GlobeIcon className="mb-4 size-16 stroke-[1.5] text-white/30" />
                 <p className="text-base font-semibold text-white">No local servers</p>
-                <p className="mt-2 text-sm text-white/35">Try another browser URL</p>
+                <p className="mt-2 text-ui leading-snug text-white/35">Try another browser URL</p>
               </>
             )}
           </div>
@@ -487,27 +575,46 @@ export function BrowserPanel({
   mode,
   threadId,
   onClosePanel,
-  runtimeMode = "live",
+  runtimeMode: runtimeModeProp,
   onRequestLive,
 }: BrowserPanelProps) {
+  // Defaults belong in the body, never in the destructuring pattern: React Compiler cannot lower an
+  // AssignmentPattern there and silently drops the whole component's memoization.
+  const runtimeMode = runtimeModeProp ?? "live";
+  const isFloatingMode = mode === "floating";
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
-  const threadBrowserState = useStore(useBrowserStateStore, selectThreadBrowserState(threadId));
-  const recentHistory = useStore(useBrowserStateStore, selectThreadBrowserHistory(threadId));
+  const threadBrowserState = useBrowserStateStore(selectThreadBrowserState(threadId));
+  const recentHistory = useBrowserStateStore(selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
+  const addBrowserAnnotation = useComposerDraftStore((store) => store.addBrowserAnnotation);
+  const browserAnnotations = useComposerDraftStore(
+    (store) => store.draftsByThreadId[threadId]?.browserAnnotations ?? EMPTY_BROWSER_ANNOTATIONS,
+  );
   const composerDraftImageCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.images.length ?? 0,
+  );
+  const composerDraftFileCount = useComposerDraftStore(
+    (store) => store.draftsByThreadId[threadId]?.files.length ?? 0,
   );
   const composerDraftAssistantSelectionCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.assistantSelections.length ?? 0,
   );
   const addressInputRef = useRef<HTMLInputElement>(null);
-  const browserTabsBarRef = useRef<HTMLDivElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
   const browserWebviewRef = useRef<BrowserWebviewElement | null>(null);
+  const browserWebviewStageRef = useRef<HTMLDivElement | null>(null);
   const browserWebviewTabIdRef = useRef<string | null>(null);
+  const browserWebviewWebContentsIdRef = useRef<number | null>(null);
+  const detachedBrowserWebviewsRef = useRef(new WeakSet<BrowserWebviewElement>());
   const browserWebviewAttachKeyRef = useRef<string | null>(null);
+  // Unlike effect-local state, this lease survives browser metadata pushes.
+  // Main can emit a newer tab snapshot before attachWebview() resolves; keeping
+  // the in-flight key here prevents that render from issuing another bind for
+  // the same physical guest and starving its compositor with IPC churn.
+  const browserWebviewAttachInFlightKeyRef = useRef<string | null>(null);
+  const activeTabInitialUrlRef = useRef(BROWSER_BLANK_URL);
   const copyScreenshotButtonRef = useRef<HTMLButtonElement>(null);
   const addressDraftsByTabIdRef = useRef(new Map<string, string>());
   const lastSyncedAddressByTabIdRef = useRef(new Map<string, string>());
@@ -534,29 +641,42 @@ export function BrowserPanel({
   });
   const [addressValue, setAddressValue] = useState("");
   const [isAddressFocused, setIsAddressFocused] = useState(false);
+  // Programmatic focus (e.g. right after "New tab") should not pop the suggestion list
+  // over the tab strip; the user has to type or click into the field first.
+  const [addressSuggestionsSuppressed, setAddressSuggestionsSuppressed] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
+  const [browserActionsMenuOpen, setBrowserActionsMenuOpen] = useState(false);
+  const [isBrowserSurfaceOccluded, setIsBrowserSurfaceOccluded] = useState(false);
+  const [previewFrame, setPreviewFrame] = useState<{ tabId: string; src: string } | null>(null);
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
     threadBrowserState?.tabs.find((tab) => tab.id === threadBrowserState.activeTabId) ??
     threadBrowserState?.tabs[0] ??
     null;
+  const activeTabId = activeTab?.id ?? null;
+  const usesNativeRuntime = activeTab?.runtimeSurface === "native";
+  const rendererHasPopup =
+    threadBrowserState?.tabs.some(
+      (tab) =>
+        Boolean(tab.openerTabId) && tab.openerTabId === browserWebviewRef.current?.dataset.tabId,
+    ) ?? false;
+  const activeTabInitialUrl = activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
+  activeTabInitialUrlRef.current = activeTabInitialUrl;
   const loading = activeTab?.isLoading ?? false;
-  const activeTabCurrentUrl = activeTab?.url?.trim() ?? "";
-  const activeTabCommittedUrl = activeTab?.lastCommittedUrl?.trim() ?? "";
-  const activeTabIsBlank =
-    (!activeTabCurrentUrl || activeTabCurrentUrl === BROWSER_BLANK_URL) &&
-    (!activeTabCommittedUrl || activeTabCommittedUrl === BROWSER_BLANK_URL);
+  const activeTabIsBlank = isBlankBrowserTabUrl(activeTab);
   const showLocalServersHome = isLiveRuntime && workspaceReady && (!activeTab || activeTabIsBlank);
   const localServersQuery = useQuery(serverLocalServersQueryOptions(showLocalServersHome));
   const activeTabStatus = activeTab?.status ?? "suspended";
   const browserChromeStatus = resolveBrowserChromeStatus({
     localError,
     threadLastError: threadBrowserState?.lastError,
-    activeTabStatus,
+    activeTabStatus: showLocalServersHome ? "live" : activeTabStatus,
     hasActiveTab: activeTab !== null,
     workspaceReady: runtimeReady,
   });
+  const browserPageError = threadBrowserState?.lastError ?? null;
   const browserAddressSuggestions = buildBrowserAddressSuggestions({
     query: addressValue,
     activeTabId: activeTab?.id ?? null,
@@ -564,7 +684,23 @@ export function BrowserPanel({
     recentHistory,
   });
   const showBrowserAddressSuggestions =
-    isLiveRuntime && isAddressFocused && browserAddressSuggestions.length > 0 && runtimeReady;
+    isLiveRuntime &&
+    isAddressFocused &&
+    !addressSuggestionsSuppressed &&
+    browserAddressSuggestions.length > 0 &&
+    runtimeReady;
+  const annotationMethods = api?.browser.annotations;
+  const annotationController = useBrowserAnnotations({
+    methods: annotationMethods,
+    threadId,
+    activeTabId,
+    browserStateVersion: threadBrowserState?.version ?? 0,
+    enabled:
+      isElectron && isLiveRuntime && workspaceReady && activeTab !== null && !showLocalServersHome,
+    annotations: browserAnnotations,
+    addAnnotation: addBrowserAnnotation,
+    onError: setLocalError,
+  });
 
   const requestLiveRuntime = useCallback(() => {
     onRequestLive?.();
@@ -589,6 +725,63 @@ export function BrowserPanel({
     }
   }, []);
 
+  // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
+  // removing the DOM node so main never keeps a stale webContents runtime.
+  const detachRendererBrowserWebview = useCallback(
+    (expectedWebview?: BrowserWebviewElement) => {
+      const webview = browserWebviewRef.current;
+      if (
+        !webview ||
+        (expectedWebview !== undefined && webview !== expectedWebview) ||
+        detachedBrowserWebviewsRef.current.has(webview)
+      ) {
+        return;
+      }
+      detachedBrowserWebviewsRef.current.add(webview);
+
+      const tabId = browserWebviewTabIdRef.current;
+
+      if (api && isLiveRuntime && tabId) {
+        let webContentsId = browserWebviewWebContentsIdRef.current ?? undefined;
+        try {
+          webContentsId ??= webview.getWebContentsId?.();
+        } catch {
+          // A destroyed guest can no longer answer getWebContentsId(). Retain the
+          // id captured during attachment so main can still discard its lease.
+        }
+        if (webContentsId && webContentsId > 0) {
+          try {
+            const detachPromise = api.browser.detachWebview({ threadId, tabId, webContentsId });
+            browserPanelRendererHandoff.trackDetach(threadId, detachPromise);
+            void detachPromise.catch(ignoreBrowserWebviewDetachError);
+          } catch {
+            ignoreBrowserWebviewDetachError();
+          }
+        }
+      }
+
+      try {
+        webview.remove();
+      } catch {
+        ignoreBrowserWebviewDetachError();
+      } finally {
+        if (browserWebviewRef.current === webview) {
+          browserWebviewRef.current = null;
+          browserWebviewTabIdRef.current = null;
+          browserWebviewWebContentsIdRef.current = null;
+          browserWebviewAttachKeyRef.current = null;
+          browserWebviewAttachInFlightKeyRef.current = null;
+        }
+        const stage = browserWebviewStageRef.current;
+        if (stage && stage.childElementCount === 0) {
+          stage.remove();
+          browserWebviewStageRef.current = null;
+        }
+      }
+    },
+    [api, isLiveRuntime, threadId],
+  );
+
   useEffect(() => {
     if (!api || !isLiveRuntime) {
       return;
@@ -604,25 +797,38 @@ export function BrowserPanel({
       return;
     }
 
-    let cancelled = false;
-    setWorkspaceReady(false);
-    setLocalError(null);
+    const releaseLiveHost = browserPanelHideScheduler.acquire(threadId);
 
-    void runBrowserAction(() => api.browser.open({ threadId })).then((state) => {
+    // Timeout-0 keeps the reset writes asynchronous (no wasted pre-paint
+    // render), which also keeps this component eligible for React Compiler.
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
       if (cancelled) {
         return;
       }
-      if (!state) {
+      setWorkspaceReady(false);
+      setLocalError(null);
+
+      void runBrowserAction(() => api.browser.open({ threadId })).then((state) => {
+        if (cancelled) {
+          return;
+        }
+        if (!state) {
+          setWorkspaceReady(true);
+          return;
+        }
+        upsertThreadState(state);
         setWorkspaceReady(true);
-        return;
-      }
-      upsertThreadState(state);
-      setWorkspaceReady(true);
-    });
+      });
+    }, 0);
 
     return () => {
       cancelled = true;
-      void api.browser.hide({ threadId });
+      window.clearTimeout(timeoutId);
+      releaseLiveHost();
+      browserPanelHideScheduler.schedule(threadId, () => {
+        void api.browser.hide({ threadId });
+      });
     };
   }, [api, isLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
 
@@ -654,7 +860,17 @@ export function BrowserPanel({
   }, [activeTab]);
 
   useLayoutEffect(() => {
-    if (!api || !isLiveRuntime || !workspaceReady || !activeTab) {
+    if (!api || !isLiveRuntime || !workspaceReady || !activeTabId) {
+      return;
+    }
+
+    if (showLocalServersHome || usesNativeRuntime) {
+      if (rendererHasPopup && browserWebviewStageRef.current) {
+        // Keep the renderer-owned opener alive while its native popup is shown.
+        browserWebviewStageRef.current.style.visibility = "hidden";
+        return;
+      }
+      detachRendererBrowserWebview();
       return;
     }
 
@@ -663,6 +879,19 @@ export function BrowserPanel({
       return;
     }
 
+    let stage = browserWebviewStageRef.current;
+    if (!stage) {
+      stage = document.createElement("div");
+      stage.dataset.floatingBrowserStage = "true";
+      browserWebviewStageRef.current = stage;
+    }
+    if (stage.parentElement !== host) {
+      host.append(stage);
+    }
+    stage.style.visibility = "visible";
+    stage.style.pointerEvents = isFloatingMode ? "none" : "";
+    stage.inert = isFloatingMode;
+
     let webview = browserWebviewRef.current;
     if (!webview) {
       webview = document.createElement("webview") as BrowserWebviewElement;
@@ -670,77 +899,201 @@ export function BrowserPanel({
       webview.style.display = "flex";
       webview.style.width = "100%";
       webview.style.height = "100%";
+      webview.style.transform = "";
       webview.style.backgroundColor = "#0d0d0d";
       webview.setAttribute("partition", BROWSER_WEBVIEW_PARTITION);
       webview.setAttribute("webpreferences", "contextIsolation=yes,nodeIntegration=no,sandbox=yes");
+      // A <webview> blocks window.open() unless `allowpopups` is set. Without it, clicking
+      // "Continue with Google" (and any OAuth/popup flow) is silently dropped before the main
+      // process's window-open handler ever runs. Enabling it lets the popup classifier in
+      // browserManager decide popup-vs-tab and keep the OAuth `window.opener` handshake alive.
+      webview.setAttribute("allowpopups", "true");
+      // No `useragent` attribute on purpose: the desktop main process spoofs a desktop Chrome
+      // UA on the shared persistent partition, so this webview (and OAuth popups) inherit the
+      // same identity. This keeps in-app Google/OAuth sign-in working without duplicating the
+      // UA string into the renderer.
+      webview.dataset.rendererGeneration = String(browserRendererGeneration);
+      browserWebviewWebContentsIdRef.current = null;
       browserWebviewRef.current = webview;
-      host.append(webview);
-    } else if (webview.parentElement !== host) {
-      host.append(webview);
     }
+    if (webview.parentElement !== stage) {
+      stage.append(webview);
+    }
+    applyBrowserWebviewPresentation(stage, {
+      floating: isFloatingMode,
+      slotWidth: host.clientWidth,
+      slotHeight: host.clientHeight,
+    });
 
-    const initialUrl = activeTab.lastCommittedUrl ?? activeTab.url ?? BROWSER_BLANK_URL;
-    if (browserWebviewTabIdRef.current !== activeTab.id) {
-      browserWebviewTabIdRef.current = activeTab.id;
+    const initialUrl = activeTabInitialUrlRef.current;
+    const shouldLoadInitialUrl = browserWebviewTabIdRef.current !== activeTabId;
+    if (shouldLoadInitialUrl) {
+      browserWebviewTabIdRef.current = activeTabId;
       browserWebviewAttachKeyRef.current = null;
-      webview.setAttribute("src", initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL);
+      webview.dataset.tabId = activeTabId;
     }
 
-    const attachVisibleWebview = () => {
+    let cancelled = false;
+    let attachRetryTimer: number | null = null;
+    let attachRetryDelayMs = 25;
+
+    const scheduleAttachRetry = () => {
+      if (cancelled || attachRetryTimer !== null) {
+        return;
+      }
+      attachRetryTimer = window.setTimeout(() => {
+        attachRetryTimer = null;
+        attachVisibleWebview();
+      }, attachRetryDelayMs);
+      attachRetryDelayMs = Math.min(attachRetryDelayMs * 2, 500);
+    };
+
+    let attachHandoffInFlight = false;
+    const attachVisibleWebviewNow = () => {
+      if (cancelled) {
+        return;
+      }
+      if (attachRetryTimer !== null) {
+        window.clearTimeout(attachRetryTimer);
+        attachRetryTimer = null;
+      }
+
       let webContentsId: number | undefined;
       try {
         webContentsId = webview.getWebContentsId?.();
       } catch {
+        scheduleAttachRetry();
         return;
       }
       if (!webContentsId || webContentsId <= 0) {
+        scheduleAttachRetry();
         return;
       }
+      if (browserWebviewRef.current === webview) {
+        browserWebviewWebContentsIdRef.current = webContentsId;
+      }
 
-      const attachKey = `${activeTab.id}:${webContentsId}`;
+      const attachKey = `${browserRendererGeneration}:${activeTabId}:${webContentsId}`;
       if (browserWebviewAttachKeyRef.current === attachKey) {
         return;
       }
+      // A previous layout-effect generation may still be completing. Serialize
+      // physical guest adoption so an older response can never overwrite the
+      // currently visible tab binding.
+      if (browserWebviewAttachInFlightKeyRef.current !== null) {
+        scheduleAttachRetry();
+        return;
+      }
+      browserWebviewAttachInFlightKeyRef.current = attachKey;
+      // Publish the requested lease before IPC. attachWebview() emits browser
+      // state synchronously from main, so waiting for its Promise to resolve
+      // would let React clean this effect up and immediately submit it again.
       browserWebviewAttachKeyRef.current = attachKey;
-      void runBrowserAction(() =>
-        api.browser.attachWebview({
-          threadId,
-          tabId: activeTab.id,
-          webContentsId,
-        }),
-      ).then((state) => {
-        if (state) {
+      const finishAttachment = (state: ThreadBrowserState | null) => {
+        if (browserWebviewAttachInFlightKeyRef.current === attachKey) {
+          browserWebviewAttachInFlightKeyRef.current = null;
+        }
+        if (!state) {
+          if (browserWebviewAttachKeyRef.current === attachKey) {
+            browserWebviewAttachKeyRef.current = null;
+          }
+          if (
+            !cancelled &&
+            browserWebviewRef.current === webview &&
+            browserWebviewTabIdRef.current === activeTabId
+          ) {
+            scheduleAttachRetry();
+          }
+          return;
+        }
+        // A tab switch can supersede this request while IPC is in flight. Main
+        // processes invokes in order, and the current effect will bind the new
+        // tab next; never let the stale completion rewrite its renderer lease.
+        if (
+          browserWebviewRef.current === webview &&
+          browserWebviewTabIdRef.current === activeTabId
+        ) {
+          browserWebviewAttachKeyRef.current = attachKey;
           upsertThreadState(state);
         }
+      };
+      void api.browser
+        .attachWebview({
+          threadId,
+          tabId: activeTabId,
+          webContentsId,
+        })
+        .then(finishAttachment, () => finishAttachment(null));
+    };
+    const attachVisibleWebview = () => {
+      if (cancelled || attachHandoffInFlight) {
+        return;
+      }
+      attachHandoffInFlight = true;
+      void browserPanelRendererHandoff.waitForDetach(threadId).then(() => {
+        attachHandoffInFlight = false;
+        attachVisibleWebviewNow();
       });
     };
 
+    const handleRendererLoss = createBrowserRendererLossHandler({
+      renderer: webview,
+      rendererGeneration: browserRendererGeneration,
+      tabId: activeTabId,
+      isCurrent: (candidate) =>
+        browserWebviewRef.current === candidate && browserWebviewTabIdRef.current === activeTabId,
+      detach: detachRendererBrowserWebview,
+      recover: ({ generation }) => {
+        setBrowserRendererGeneration((current) => Math.max(current + 1, generation));
+      },
+    });
+
+    // Subscribe before assigning src: a cached/blank page may begin loading
+    // synchronously, before getWebContentsId() becomes available. The bounded
+    // backoff below makes that renderer-to-main handshake reliable even while
+    // Electron throttles requestAnimationFrame in the background.
     webview.addEventListener("dom-ready", attachVisibleWebview);
     webview.addEventListener("did-start-loading", attachVisibleWebview);
-    window.requestAnimationFrame(attachVisibleWebview);
+    webview.addEventListener("render-process-gone", handleRendererLoss);
+    webview.addEventListener("destroyed", handleRendererLoss);
+    if (shouldLoadInitialUrl) {
+      webview.setAttribute(
+        "src",
+        browserWebviewInitialUrl(initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL),
+      );
+    }
+    attachVisibleWebview();
 
     return () => {
+      cancelled = true;
+      if (attachRetryTimer !== null) {
+        window.clearTimeout(attachRetryTimer);
+      }
       webview.removeEventListener("dom-ready", attachVisibleWebview);
       webview.removeEventListener("did-start-loading", attachVisibleWebview);
+      webview.removeEventListener("render-process-gone", handleRendererLoss);
+      webview.removeEventListener("destroyed", handleRendererLoss);
     };
   }, [
-    activeTab,
+    activeTabId,
     api,
+    browserRendererGeneration,
+    detachRendererBrowserWebview,
     isLiveRuntime,
-    runBrowserAction,
+    isFloatingMode,
+    showLocalServersHome,
     threadId,
     upsertThreadState,
+    usesNativeRuntime,
+    rendererHasPopup,
     workspaceReady,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     return () => {
-      browserWebviewRef.current?.remove();
-      browserWebviewRef.current = null;
-      browserWebviewTabIdRef.current = null;
-      browserWebviewAttachKeyRef.current = null;
+      detachRendererBrowserWebview();
     };
-  }, []);
+  }, [detachRendererBrowserWebview]);
 
   useEffect(() => {
     const liveTabIds = new Set(threadBrowserState?.tabs.map((tab) => tab.id) ?? []);
@@ -784,26 +1137,46 @@ export function BrowserPanel({
       // While the local-servers home is up, force the browser surface hidden instead of
       // trusting the obscuring-overlay heuristic. The native/inline webview otherwise paints
       // about:blank white over our dark DOM home — the "always white" empty state.
-      const obscuredByOverlay = showLocalServersHome || hasNativeBrowserObscuringOverlay(element);
+      const obscuredByOverlay =
+        (!isFloatingMode || usesNativeRuntime) &&
+        (browserPageError !== null ||
+          shouldOccludeBrowserWebview({
+            showLocalServersHome,
+            browserActionsMenuOpen,
+            hasObscuringOverlay:
+              showBrowserAddressSuggestions || hasNativeBrowserObscuringOverlay(element),
+          }));
       lastOverlayObscuredRef.current = obscuredByOverlay;
+      setIsBrowserSurfaceOccluded(usesNativeRuntime && obscuredByOverlay);
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
+      const webview = browserWebviewRef.current;
+      const stage = browserWebviewStageRef.current;
+      if (stage) {
+        applyBrowserWebviewPresentation(stage, {
+          floating: isFloatingMode,
+          slotWidth: element.clientWidth,
+          slotHeight: element.clientHeight,
+        });
+      } else if (webview) {
+        applyBrowserWebviewPresentation(webview, {
+          floating: isFloatingMode,
+          slotWidth: element.clientWidth,
+          slotHeight: element.clientHeight,
+        });
+      }
       const rect = element.getBoundingClientRect();
-      const bounds = obscuredByOverlay
-        ? null
-        : (() => {
-            if (rect.width <= 0 || rect.height <= 0) {
-              return null;
-            }
-            return {
-              x: rect.left,
-              y: rect.top,
-              width: rect.width,
-              height: rect.height,
-            };
-          })();
+      const presentation = resolveBrowserRuntimePresentation({
+        native: usesNativeRuntime,
+        floating: isFloatingMode,
+        rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+        desktopZoom: readDesktopZoomFactor(),
+      });
+      const bounds =
+        obscuredByOverlay || rect.width <= 0 || rect.height <= 0 ? null : presentation.bounds;
+      const { surface, pageZoomFactor } = presentation;
       const nextKey = bounds
-        ? `renderer:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}`
-        : "renderer:hidden";
+        ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}:preview-${isFloatingMode}`
+        : `${surface}:hidden:zoom-${pageZoomFactor}:preview-${isFloatingMode}`;
       lastMeasuredBoundsKeyRef.current = nextKey;
       if (lastSentBoundsRef.current === nextKey) {
         perfCountersRef.current.syncSkips += 1;
@@ -812,7 +1185,14 @@ export function BrowserPanel({
       lastSentBoundsRef.current = nextKey;
       perfCountersRef.current.syncSends += 1;
       void api.browser
-        .setPanelBounds({ threadId, bounds, surface: "renderer" })
+        .setPanelBounds({
+          threadId,
+          bounds,
+          surface,
+          pageZoomFactor,
+          occluded: obscuredByOverlay,
+          preview: isFloatingMode,
+        })
         .catch(ignoreBrowserBoundsSyncError);
     };
 
@@ -833,7 +1213,9 @@ export function BrowserPanel({
         perfCountersRef.current.burstFrames += 1;
         const previousMeasuredKey = lastMeasuredBoundsKeyRef.current;
         syncBounds();
-        const measuredHidden = lastMeasuredBoundsKeyRef.current?.endsWith(":hidden") ?? false;
+        const measuredHidden = lastMeasuredBoundsKeyRef.current
+          ? isBrowserPanelBoundsHiddenKey(lastMeasuredBoundsKeyRef.current)
+          : false;
         if (!measuredHidden && lastMeasuredBoundsKeyRef.current === previousMeasuredKey) {
           burstStableFramesRef.current += 1;
         } else {
@@ -894,8 +1276,13 @@ export function BrowserPanel({
       scheduleSyncBounds();
     });
     observer.observe(element);
+    // A zoom change moves the slot on the DIP grid. It usually reflows the panel too
+    // (so the observer above fires), but a slot with a fixed CSS px size keeps its
+    // measured rect and would otherwise strand the native view at the old scale.
+    const unsubscribeZoom = subscribeDesktopZoomFactor(scheduleSyncBounds);
     window.addEventListener("resize", scheduleSyncBounds);
-    window.addEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
+    window.addEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, scheduleSyncBounds);
+    window.addEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, scheduleSyncBounds);
     document.addEventListener("transitionrun", handleTransitionBounds, true);
     document.addEventListener("transitionend", handleTransitionBounds, true);
     document.addEventListener("transitioncancel", handleTransitionBounds, true);
@@ -903,8 +1290,10 @@ export function BrowserPanel({
     return () => {
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, false);
       observer.disconnect();
+      unsubscribeZoom();
       window.removeEventListener("resize", scheduleSyncBounds);
-      window.removeEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
+      window.removeEventListener(BROWSER_PANEL_BOUNDS_SYNC_EVENT, scheduleSyncBounds);
+      window.removeEventListener(NATIVE_SURFACE_OCCLUSION_SYNC_EVENT, scheduleSyncBounds);
       document.removeEventListener("transitionrun", handleTransitionBounds, true);
       document.removeEventListener("transitionend", handleTransitionBounds, true);
       document.removeEventListener("transitioncancel", handleTransitionBounds, true);
@@ -919,7 +1308,62 @@ export function BrowserPanel({
       burstFramesRemainingRef.current = 0;
       burstStableFramesRef.current = 0;
     };
-  }, [api, isLiveRuntime, showLocalServersHome, threadId]);
+  }, [
+    api,
+    browserActionsMenuOpen,
+    browserPageError,
+    isLiveRuntime,
+    isFloatingMode,
+    showBrowserAddressSuggestions,
+    showLocalServersHome,
+    threadId,
+    usesNativeRuntime,
+  ]);
+
+  useEffect(() => {
+    if (
+      !api ||
+      !isLiveRuntime ||
+      !workspaceReady ||
+      (!isFloatingMode && !isBrowserSurfaceOccluded) ||
+      !usesNativeRuntime ||
+      !activeTabId ||
+      showLocalServersHome ||
+      browserPageError !== null
+    )
+      return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const capture = async () => {
+      try {
+        if (!document.hidden) {
+          const src = await api.browser.capturePreview({ threadId, tabId: activeTabId });
+          if (!cancelled && src) setPreviewFrame({ tabId: activeTabId, src });
+        }
+      } catch {
+        // A navigation or closing tab can invalidate a frame; retry without
+        // disturbing the live page or surfacing a transient capture error.
+      } finally {
+        if (!cancelled) timer = setTimeout(capture, 500);
+      }
+    };
+    void capture();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    api,
+    isLiveRuntime,
+    workspaceReady,
+    isFloatingMode,
+    isBrowserSurfaceOccluded,
+    usesNativeRuntime,
+    activeTabId,
+    threadId,
+    showLocalServersHome,
+    browserPageError,
+  ]);
 
   const onSubmitAddress = useCallback(() => {
     if (!ensureLiveRuntime()) {
@@ -954,6 +1398,34 @@ export function BrowserPanel({
     upsertThreadState,
   ]);
 
+  const onReloadActiveTab = useCallback(() => {
+    if (!ensureLiveRuntime() || !api || !activeTab) {
+      return;
+    }
+    void runBrowserAction(() => api.browser.reload({ threadId, tabId: activeTab.id })).then(
+      (state) => {
+        if (state) {
+          upsertThreadState(state);
+        }
+      },
+    );
+  }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
+
+  const onSelectTab = useCallback(
+    (tabId: string): Promise<ThreadBrowserState | null> => {
+      if (!ensureLiveRuntime() || !api) {
+        return Promise.resolve(null);
+      }
+      return runBrowserAction(() => api.browser.selectTab({ threadId, tabId })).then((state) => {
+        if (state) {
+          upsertThreadState(state);
+        }
+        return state;
+      });
+    },
+    [api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState],
+  );
+
   const onChooseSuggestion = useCallback(
     (suggestion: BrowserAddressSuggestion) => {
       if (!api) {
@@ -969,10 +1441,7 @@ export function BrowserPanel({
 
       const tabId = suggestion.tabId;
       if (suggestion.kind === "tab" && typeof tabId === "string") {
-        void runBrowserAction(() => api.browser.selectTab({ threadId, tabId })).then((state) => {
-          if (state) {
-            upsertThreadState(state);
-          }
+        void onSelectTab(tabId).then(() => {
           window.requestAnimationFrame(() => {
             addressInputRef.current?.focus();
             addressInputRef.current?.select();
@@ -997,7 +1466,7 @@ export function BrowserPanel({
         }
       });
     },
-    [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState],
+    [activeTab, api, ensureLiveRuntime, onSelectTab, runBrowserAction, threadId, upsertThreadState],
   );
 
   const onOpenLocalServer = useCallback(
@@ -1032,22 +1501,27 @@ export function BrowserPanel({
   );
 
   const onCreateTab = useCallback(() => {
-    if (!ensureLiveRuntime()) {
-      return;
-    }
     if (!api) {
       return;
     }
+    // Creating a tab never needs a live renderer: main records it (suspended when this
+    // thread's panel is not attached) and the next bounds sync shows it. Wake a preview
+    // pane instead of silently dropping the action until the user clicks twice.
+    if (!isLiveRuntime) {
+      requestLiveRuntime();
+    }
     void runBrowserAction(() => api.browser.newTab({ threadId, activate: true })).then((state) => {
-      if (state) {
-        upsertThreadState(state);
+      if (!state) {
+        return;
       }
+      upsertThreadState(state);
+      setAddressSuggestionsSuppressed(true);
       window.requestAnimationFrame(() => {
         addressInputRef.current?.focus();
         addressInputRef.current?.select();
       });
     });
-  }, [api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
+  }, [api, isLiveRuntime, requestLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
 
   const onCaptureScreenshot = useCallback(() => {
     if (!ensureLiveRuntime()) {
@@ -1057,7 +1531,8 @@ export function BrowserPanel({
       return;
     }
 
-    const attachmentCount = composerDraftImageCount + composerDraftAssistantSelectionCount;
+    const attachmentCount =
+      composerDraftImageCount + composerDraftFileCount + composerDraftAssistantSelectionCount;
     if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
       setLocalError(
         `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
@@ -1067,25 +1542,33 @@ export function BrowserPanel({
 
     void runBrowserAction(() =>
       api.browser.captureScreenshot({ threadId, tabId: activeTab.id }),
-    ).then((screenshot) => {
+    ).then(async (screenshot) => {
       if (!screenshot) {
         return;
       }
-      if (screenshot.sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-        setLocalError(
-          `'${screenshotAttachmentName(screenshot)}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`,
+      try {
+        const inserted = addComposerDraftImage(
+          threadId,
+          await prepareComposerImageFromBrowserScreenshot(screenshot),
         );
-        return;
+        if (!inserted) {
+          throw new Error(
+            `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+          );
+        }
+        setLocalError(null);
+      } catch (cause) {
+        setLocalError(
+          cause instanceof Error ? cause.message : "The browser screenshot could not be prepared.",
+        );
       }
-
-      addComposerDraftImage(threadId, composerImageFromBrowserScreenshot(screenshot));
-      setLocalError(null);
     });
   }, [
     activeTab,
     addComposerDraftImage,
     api,
     composerDraftAssistantSelectionCount,
+    composerDraftFileCount,
     composerDraftImageCount,
     ensureLiveRuntime,
     runBrowserAction,
@@ -1128,6 +1611,81 @@ export function BrowserPanel({
     });
   }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId]);
 
+  const copyActiveTabLink = useCallback(() => {
+    if (!activeTab) {
+      return;
+    }
+    // Desktop: copy through the native Electron clipboard. navigator.clipboard can reject
+    // with "Document is not focused" while the native browser view holds focus, so this
+    // mirrors the keyboard chord — main writes the URL and emits onCopyLink, which surfaces
+    // the toast in the listener below.
+    if (isElectron && api) {
+      void runBrowserAction(() => api.browser.copyLink({ threadId, tabId: activeTab.id }));
+      return;
+    }
+    const url = resolveCopyableBrowserTabUrl(activeTab);
+    if (!url) {
+      return;
+    }
+    const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+    if (!clipboard) {
+      return;
+    }
+    void clipboard.writeText(url).then(
+      () => {
+        toastManager.add({ type: "success", title: BROWSER_COPY_LINK_TOAST_TITLE });
+      },
+      () => {
+        // Clipboard writes can reject without user gesture; nothing actionable to surface.
+      },
+    );
+  }, [activeTab, api, runBrowserAction, threadId]);
+
+  // React chrome focus path: the native page handles the chord through the desktop main
+  // process, so this only fires when the address bar/tab strip (not the page) is focused.
+  useEffect(() => {
+    if (!isLiveRuntime) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      const matches = isBrowserCopyLinkChord(
+        {
+          meta: event.metaKey,
+          ctrl: event.ctrlKey,
+          shift: event.shiftKey,
+          alt: event.altKey,
+          key: event.key,
+        },
+        isMacNavigatorPlatform(),
+      );
+      if (!matches) {
+        return;
+      }
+      event.preventDefault();
+      copyActiveTabLink();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [copyActiveTabLink, isLiveRuntime]);
+
+  // Native page focus path: main already wrote the URL to the clipboard, so just toast.
+  useEffect(() => {
+    if (!api || !isLiveRuntime) {
+      return;
+    }
+    return api.browser.onCopyLink((event) => {
+      if (event.threadId !== threadId) {
+        return;
+      }
+      toastManager.add({ type: "success", title: BROWSER_COPY_LINK_TOAST_TITLE });
+    });
+  }, [api, isLiveRuntime, threadId]);
+
   const onCloseTab = useCallback(
     (tabId: string) => {
       if (!ensureLiveRuntime()) {
@@ -1150,15 +1708,17 @@ export function BrowserPanel({
   );
 
   const header = (
-    <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div
+      className={cn("flex min-w-0 flex-1 items-center gap-2", mode === "floating" && "cursor-grab")}
+      data-floating-browser-header={mode === "floating" ? "true" : undefined}
+    >
       {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
       <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-        <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-          <Button
-            type="button"
+        <ButtonGroup label="Navigation">
+          <IconButton
             variant="ghost"
             size="icon-sm"
-            className="size-7 shrink-0"
+            label="Go back"
             disabled={!activeTab?.canGoBack}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1173,13 +1733,11 @@ export function BrowserPanel({
             }}
           >
             <ArrowLeftIcon className="size-3.5" />
-            <span className="sr-only">Go back</span>
-          </Button>
-          <Button
-            type="button"
+          </IconButton>
+          <IconButton
             variant="ghost"
             size="icon-sm"
-            className="size-7 shrink-0"
+            label="Go forward"
             disabled={!activeTab?.canGoForward}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1194,13 +1752,12 @@ export function BrowserPanel({
             }}
           >
             <ArrowRightIcon className="size-3.5" />
-            <span className="sr-only">Go forward</span>
-          </Button>
-          <Button
-            type="button"
+          </IconButton>
+          <ButtonGroupSeparator />
+          <IconButton
             variant="ghost"
             size="icon-sm"
-            className="size-7 shrink-0"
+            label="Reload"
             disabled={!activeTab}
             onClick={() => {
               if (!ensureLiveRuntime()) return;
@@ -1219,9 +1776,21 @@ export function BrowserPanel({
             ) : (
               <RefreshCwIcon className="size-3.5" />
             )}
-            <span className="sr-only">Reload</span>
-          </Button>
-        </div>
+          </IconButton>
+        </ButtonGroup>
+        <ButtonGroup label="Page tools">
+          <BrowserAnnotationButton
+            controller={annotationController}
+            disabled={
+              !isLiveRuntime ||
+              !isElectron ||
+              !workspaceReady ||
+              !activeTab ||
+              showLocalServersHome ||
+              !annotationMethods
+            }
+          />
+        </ButtonGroup>
         <form
           className="min-w-0 flex-1 [-webkit-app-region:no-drag]"
           onSubmit={(event) => {
@@ -1231,6 +1800,7 @@ export function BrowserPanel({
         >
           <Input
             ref={addressInputRef}
+            shape="capsule"
             value={addressValue}
             onChange={(event) => {
               if (!isLiveRuntime) {
@@ -1238,6 +1808,7 @@ export function BrowserPanel({
               }
               const nextValue = event.target.value;
               isAddressEditingRef.current = true;
+              setAddressSuggestionsSuppressed(false);
               setAddressValue(nextValue);
               if (activeTab) {
                 addressDraftsByTabIdRef.current.set(activeTab.id, nextValue);
@@ -1253,9 +1824,22 @@ export function BrowserPanel({
             onBlur={() => {
               isAddressEditingRef.current = false;
               setIsAddressFocused(false);
+              setAddressSuggestionsSuppressed(false);
+            }}
+            onMouseDown={() => {
+              setAddressSuggestionsSuppressed(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                setAddressSuggestionsSuppressed(false);
+              }
             }}
             placeholder="Search or enter a URL"
-            className="font-mono h-8 min-w-0 bg-background/70 text-xs [-webkit-app-region:no-drag]"
+            className={cn(
+              "min-w-0 [-webkit-app-region:no-drag]",
+              BROWSER_CHROME_CONTROL_CLASS_NAME,
+              BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
+            )}
           />
         </form>
         {showBrowserAddressSuggestions ? (
@@ -1265,7 +1849,7 @@ export function BrowserPanel({
                 <button
                   key={suggestion.id}
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui leading-snug text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                   onMouseDown={(event) => {
                     event.preventDefault();
                     onChooseSuggestion(suggestion);
@@ -1282,7 +1866,7 @@ export function BrowserPanel({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{suggestion.title}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
+                    <span className="block truncate text-ui-sm text-muted-foreground">
                       {suggestion.detail}
                     </span>
                   </span>
@@ -1292,180 +1876,173 @@ export function BrowserPanel({
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        <Menu modal={false}>
-          <MenuTrigger
-            render={
-              <Button
-                ref={copyScreenshotButtonRef}
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="size-7"
-                aria-label="Browser actions"
-              />
+      <div className="flex shrink-0 items-center gap-1.5 [-webkit-app-region:no-drag]">
+        <ButtonGroup label="Page actions">
+          <BrowserVaultButton
+            destination={
+              activeTab
+                ? {
+                    threadId,
+                    tabId: activeTab.id,
+                    origin: /^https?:\/\//.test(activeTab.url)
+                      ? new URL(activeTab.url).origin
+                      : null,
+                  }
+                : undefined
             }
+          />
+          <IconButton
+            ref={copyScreenshotButtonRef}
+            variant="ghost"
+            size="icon-sm"
+            label="Copy screenshot"
+            disabled={!activeTab}
+            title="Copy screenshot"
+            onClick={onCopyScreenshotToClipboard}
           >
-            <EllipsisIcon className="size-3.5" />
-          </MenuTrigger>
-          <ComposerPickerMenuPopup
-            align="end"
-            side="bottom"
-            className={BROWSER_ACTION_MENU_PANEL_CLASS_NAME}
+            <Camera01Icon className="size-3.5" />
+          </IconButton>
+          <IconButton
+            variant="ghost"
+            size="icon-sm"
+            label="Copy link"
+            disabled={!activeTab}
+            title="Copy link"
+            onClick={copyActiveTabLink}
           >
-            <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
-              <BrowserActionMenuIcon icon={PlusIcon} />
-              <span>New tab</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-              disabled={!activeTab}
-              onClick={onCaptureScreenshot}
+            <LinkIcon className="size-3.5" />
+          </IconButton>
+        </ButtonGroup>
+        <ButtonGroup label="Browser menu">
+          <Menu
+            modal={false}
+            open={browserActionsMenuOpen}
+            onOpenChange={setBrowserActionsMenuOpen}
+          >
+            <MenuTrigger
+              render={
+                <IconButton variant="ghost" size="icon-sm" label="Browser actions">
+                  <MoreHorizontalIcon className="size-3.5" />
+                </IconButton>
+              }
+            />
+            <ComposerPickerMenuPopup
+              align="end"
+              side="bottom"
+              className={BROWSER_ACTION_MENU_PANEL_CLASS_NAME}
             >
-              <BrowserActionMenuIcon icon={CameraIcon} />
-              <span>Capture screenshot</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-              disabled={!activeTab}
-              onClick={onCopyScreenshotToClipboard}
-            >
-              <BrowserActionMenuIcon icon={CopyIcon} />
-              <span>Copy screenshot</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-              disabled={!activeTab}
-              onClick={() => {
-                if (!ensureLiveRuntime()) return;
-                if (!api || !activeTab) return;
-                void api.shell.openExternal(activeTab.url);
-              }}
-            >
-              <BrowserActionMenuIcon icon={ExternalLinkIcon} />
-              <span>Open externally</span>
-            </MenuItem>
-            <MenuSeparator />
-            <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
-              <BrowserActionMenuIcon icon={XIcon} />
-              <span>Close browser panel</span>
-            </MenuItem>
-          </ComposerPickerMenuPopup>
-        </Menu>
+              <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
+                <BrowserActionMenuIcon icon={PlusIcon} />
+                <span>New tab</span>
+              </MenuItem>
+              <MenuItem
+                className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                disabled={!activeTab}
+                onClick={onCaptureScreenshot}
+              >
+                <BrowserActionMenuIcon icon={Camera01Icon} />
+                <span>Capture screenshot</span>
+              </MenuItem>
+              <MenuItem
+                className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
+                disabled={!activeTab}
+                onClick={() => {
+                  if (!ensureLiveRuntime()) return;
+                  if (!api || !activeTab) return;
+                  void api.shell.openExternal(activeTab.url);
+                }}
+              >
+                <BrowserActionMenuIcon icon={ExternalLinkIcon} />
+                <span>Open externally</span>
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
+                <BrowserActionMenuIcon icon={XIcon} />
+                <span>Close browser panel</span>
+              </MenuItem>
+            </ComposerPickerMenuPopup>
+          </Menu>
+        </ButtonGroup>
       </div>
     </div>
   );
 
   if (!api && isLiveRuntime) {
     return (
-      <DiffPanelShell mode={mode} header={header}>
-        <DiffPanelLoadingState label="Browser is unavailable." />
-      </DiffPanelShell>
+      <div className="contents" data-browser-panel="true">
+        <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
+          <DiffPanelLoadingState label="Browser is unavailable." />
+        </DiffPanelShell>
+      </div>
     );
   }
 
   return (
-    <DiffPanelShell mode={mode} header={header}>
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div
-          ref={browserTabsBarRef}
-          className="flex items-center gap-2 border-b border-border px-2 py-1.5"
-        >
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-            {threadBrowserState?.tabs.map((tab) => {
-              const isActive = tab.id === activeTab?.id;
-              return (
-                <div
-                  key={tab.id}
-                  className={cn(
-                    "group flex h-8 min-w-0 max-w-[14rem] items-center rounded-md border px-2 text-left text-xs transition-colors",
-                    isActive
-                      ? "border-border/70 text-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground",
-                    tab.status === "suspended" ? "opacity-75" : "",
-                  )}
-                >
-                  <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">
-                    {tab.faviconUrl ? (
-                      <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
-                    ) : (
-                      <GlobeIcon className="size-3 text-muted-foreground" />
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 truncate text-left"
-                    onClick={() => {
-                      if (!ensureLiveRuntime()) return;
-                      if (!api) return;
-                      void runBrowserAction(() =>
-                        api.browser.selectTab({ threadId, tabId: tab.id }),
-                      ).then((state) => {
-                        if (state) {
-                          upsertThreadState(state);
-                        }
-                      });
-                    }}
-                  >
-                    {tab.title || "Untitled"}
-                  </button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className={closeButtonClassName(isActive)}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCloseTab(tab.id);
-                    }}
-                  >
-                    <XIcon className="size-3" />
-                    <span className="sr-only">Close tab</span>
-                  </Button>
-                </div>
-              );
-            })}
+    <div className="contents" data-browser-panel="true">
+      <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
+        <div className="flex min-h-0 flex-1 flex-col">
+          {!isFloatingMode ? (
+            <BrowserTabStrip
+              tabs={threadBrowserState?.tabs ?? []}
+              activeTabId={activeTabId}
+              status={browserChromeStatus}
+              dragRegion={isElectron && mode !== "sheet"}
+              onSelectTab={(tabId) => void onSelectTab(tabId)}
+              onCloseTab={onCloseTab}
+              onCreateTab={onCreateTab}
+            />
+          ) : null}
+          <div className="relative min-h-0 flex-1 bg-transparent">
+            {!isLiveRuntime ? (
+              <BrowserRuntimePreview
+                title={activeTab?.title || "Browser is sleeping"}
+                detail={activeTab?.lastCommittedUrl ?? activeTab?.url ?? "Restoring cached browser"}
+              />
+            ) : !workspaceReady ? (
+              <div className="absolute inset-0 z-10">
+                <DiffPanelLoadingState label="Starting browser..." />
+              </div>
+            ) : null}
+            {isLiveRuntime ? (
+              <div
+                ref={browserViewportRef}
+                data-floating-browser-viewport={isFloatingMode ? "true" : undefined}
+                className={cn(
+                  "absolute overflow-hidden",
+                  isFloatingMode ? "bg-transparent" : "bg-[#0d0d0d]",
+                  isFloatingMode && "rounded-[10px] [clip-path:inset(0_round_10px)]",
+                  "inset-0",
+                )}
+              />
+            ) : null}
+            {isLiveRuntime && browserPageError ? (
+              <BrowserRuntimeError message={browserPageError} onReload={onReloadActiveTab} />
+            ) : null}
+            {(isFloatingMode || isBrowserSurfaceOccluded) &&
+            usesNativeRuntime &&
+            !showLocalServersHome &&
+            !browserPageError &&
+            previewFrame?.tabId === activeTabId ? (
+              <img
+                src={previewFrame.src}
+                alt="Browser preview"
+                draggable={false}
+                className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
+              />
+            ) : null}
+            {showLocalServersHome ? (
+              <BrowserLocalServersHome
+                activeTabId={activeTab?.id ?? null}
+                loading={localServersQuery.isLoading || localServersQuery.isFetching}
+                onNavigate={onOpenLocalServer}
+                onRefresh={() => void localServersQuery.refetch()}
+                servers={localServersQuery.data?.servers ?? []}
+              />
+            ) : null}
           </div>
-          {browserChromeStatus ? (
-            <div
-              className={cn(
-                "max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
-                browserChromeStatus.tone === "error"
-                  ? "border-destructive/25 bg-destructive/8 text-destructive"
-                  : "border-border/60 bg-background/80 text-muted-foreground",
-              )}
-              title={browserChromeStatus.label}
-            >
-              {browserChromeStatus.label}
-            </div>
-          ) : null}
         </div>
-        <div className="relative min-h-0 flex-1 bg-transparent">
-          {!isLiveRuntime ? (
-            <BrowserRuntimePreview
-              title={activeTab?.title || "Browser is sleeping"}
-              detail={activeTab?.lastCommittedUrl ?? activeTab?.url ?? "Restoring cached browser"}
-            />
-          ) : !workspaceReady ? (
-            <div className="absolute inset-0 z-10">
-              <DiffPanelLoadingState label="Starting browser..." />
-            </div>
-          ) : null}
-          {isLiveRuntime ? (
-            <div ref={browserViewportRef} className="absolute inset-0 bg-[#0d0d0d]" />
-          ) : null}
-          {showLocalServersHome ? (
-            <BrowserLocalServersHome
-              activeTabId={activeTab?.id ?? null}
-              loading={localServersQuery.isLoading || localServersQuery.isFetching}
-              onNavigate={onOpenLocalServer}
-              onRefresh={() => void localServersQuery.refetch()}
-              servers={localServersQuery.data?.servers ?? []}
-            />
-          ) : null}
-        </div>
-      </div>
-    </DiffPanelShell>
+      </DiffPanelShell>
+    </div>
   );
 }
 

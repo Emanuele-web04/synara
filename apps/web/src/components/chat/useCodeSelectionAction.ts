@@ -3,7 +3,7 @@
 //          surfaces (file preview, diff view), mirroring the transcript behavior.
 // Layer: Chat selection interaction controller
 
-import { useCallback, useEffect, useState, type MouseEventHandler } from "react";
+import { useEffect, useState, type MouseEventHandler } from "react";
 
 import {
   getActiveSelectionRect,
@@ -31,47 +31,43 @@ export function useCodeSelectionAction<T>(options: {
   commit: () => void;
 } {
   const { enabled, onCommit, readSelection } = options;
-  const [pendingAction, setPendingAction] = useState<PendingCodeSelectionAction<T> | null>(null);
-
-  const onContainerMouseUp = useCallback<MouseEventHandler<HTMLElement>>(
-    (event) => {
-      const container = event.currentTarget;
-      const pointer = { x: event.clientX, y: event.clientY };
-      // Wait a frame so the browser finalizes the selection before reading it.
-      window.requestAnimationFrame(() => {
-        if (!enabled || !container.isConnected) {
-          setPendingAction(null);
-          return;
-        }
-        const payload = readSelection(container);
-        if (payload === null) {
-          setPendingAction(null);
-          return;
-        }
-        const layout = resolveTranscriptSelectionActionLayout({
-          selectionRect: getActiveSelectionRect(),
-          pointer,
-        });
-        setPendingAction({ payload, ...layout });
-      });
-    },
-    [enabled, readSelection],
+  const [pendingActionState, setPendingAction] = useState<PendingCodeSelectionAction<T> | null>(
+    null,
   );
+  // Derived: disabling clears the visible action in the same render, with no
+  // state-resetting effect (the stale state simply stops being surfaced).
+  const pendingAction = enabled ? pendingActionState : null;
 
-  const commit = useCallback(() => {
+  const onContainerMouseUp: MouseEventHandler<HTMLElement> = (event) => {
+    const container = event.currentTarget;
+    const pointer = { x: event.clientX, y: event.clientY };
+    // Wait a frame so the browser finalizes the selection before reading it.
+    window.requestAnimationFrame(() => {
+      if (!enabled || !container.isConnected) {
+        setPendingAction(null);
+        return;
+      }
+      const payload = readSelection(container);
+      if (payload === null) {
+        setPendingAction(null);
+        return;
+      }
+      const layout = resolveTranscriptSelectionActionLayout({
+        selectionRect: getActiveSelectionRect(),
+        pointer,
+      });
+      setPendingAction({ payload, ...layout });
+    });
+  };
+
+  const commit = () => {
     if (!pendingAction) {
       return;
     }
     onCommit(pendingAction.payload);
     setPendingAction(null);
     window.getSelection()?.removeAllRanges();
-  }, [onCommit, pendingAction]);
-
-  useEffect(() => {
-    if (!enabled) {
-      setPendingAction(null);
-    }
-  }, [enabled]);
+  };
 
   useEffect(() => {
     if (!pendingAction) {

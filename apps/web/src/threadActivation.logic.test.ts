@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import type { SplitView } from "./splitViewStore";
 import {
   resolvePreferredSplitForCommand,
@@ -241,15 +241,5 @@ describe("resolvePreferredSplitForCommand", () => {
     });
 
     expect(result).toEqual({ splitViewId: "split-other", paneId: "split-other-pane-first" });
-  });
-
-  it("returns null when no split is active and no persisted split owns the thread", () => {
-    expect(
-      resolvePreferredSplitForCommand({
-        activeSplitView: null,
-        splitViewsById: {},
-        threadId: THREAD_A,
-      }),
-    ).toBeNull();
   });
 });

@@ -1,20 +1,44 @@
 import { describe, expect, it } from "vitest";
-import * as EffectAcpErrors from "effect-acp/errors";
+import * as AcpErrors from "./AcpErrors.ts";
 
 import {
-  acpPermissionOutcome,
+  canonicalItemTypeFromAcpToolKind,
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
+  resolveAcpFullAccessPermissionOutcome,
+  resolveAcpPermissionPolicy,
   selectAcpFullAccessPermissionOptionId,
   selectAcpPermissionOptionId,
 } from "./AcpAdapterSupport.ts";
 
 describe("AcpAdapterSupport", () => {
-  it("maps ACP approval decisions to permission outcomes", () => {
-    expect(acpPermissionOutcome("accept")).toBe("allow-once");
-    expect(acpPermissionOutcome("acceptForSession")).toBe("allow-always");
-    expect(acpPermissionOutcome("decline")).toBe("reject-once");
+  it("maps every ACP tool kind to its canonical runtime item type", () => {
+    expect(
+      [
+        "execute",
+        "edit",
+        "delete",
+        "move",
+        "fetch",
+        "search",
+        "read",
+        "agent",
+        "image_generation",
+        undefined,
+      ].map((kind) => [kind, canonicalItemTypeFromAcpToolKind(kind)]),
+    ).toEqual([
+      ["execute", "command_execution"],
+      ["edit", "file_change"],
+      ["delete", "file_change"],
+      ["move", "file_change"],
+      ["fetch", "web_search"],
+      ["search", "dynamic_tool_call"],
+      ["read", "dynamic_tool_call"],
+      ["agent", "collab_agent_tool_call"],
+      ["image_generation", "image_generation"],
+      [undefined, "dynamic_tool_call"],
+    ]);
   });
 
   it("selects the provider's real permission option id for approval decisions", () => {
@@ -30,16 +54,155 @@ describe("AcpAdapterSupport", () => {
     expect(selectAcpPermissionOptionId("cancel", options)).toBeUndefined();
   });
 
-  it("selects the session-wide approval option for full-access ACP sessions", () => {
+  it("prefers request-scoped Full Access approvals and falls back to persistent grants", () => {
     expect(
       selectAcpFullAccessPermissionOptionId([
         { kind: "allow_once", optionId: "allow-once" },
         { kind: "allow_always", optionId: "allow-session" },
       ]),
-    ).toBe("allow-session");
-    expect(
-      selectAcpFullAccessPermissionOptionId([{ kind: "allow_once", optionId: "allow-once" }]),
     ).toBe("allow-once");
+    expect(
+      selectAcpFullAccessPermissionOptionId([{ kind: "allow_always", optionId: "allow-session" }]),
+    ).toBe("allow-session");
+  });
+
+  it("keeps Full Access operational with the allow options offered by the provider", () => {
+    expect(
+      resolveAcpFullAccessPermissionOutcome([{ kind: "allow_always", optionId: "allow-session" }]),
+    ).toEqual({ outcome: "selected", optionId: "allow-session" });
+    expect(
+      resolveAcpFullAccessPermissionOutcome([{ kind: "reject_once", optionId: "deny-now" }]),
+    ).toEqual({ outcome: "cancelled" });
+  });
+
+  it("keeps Plan above Full Access and releases the gate for the next default turn", () => {
+    const options = [
+      { kind: "allow_once", optionId: "implement-once" },
+      { kind: "allow_always", optionId: "implement-always" },
+      { kind: "reject_once", optionId: "stay-in-plan" },
+    ] as const;
+
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "stay-in-plan" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "plan",
+        options: [{ kind: "allow_always", optionId: "implement" }],
+      }),
+    ).toEqual({ outcome: "cancelled" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        options,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "implement-once" });
+  });
+
+  it("surfaces Default prompts only for active approval-required turns", () => {
+    const options = [{ kind: "allow_once", optionId: "allow" }] as const;
+
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        options,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "full-access",
+        interactionMode: undefined,
+        options,
+      }),
+    ).toEqual({ outcome: "cancelled" });
+  });
+
+  it("selects only allow-once for active Synara Computer calls in approval-required mode", () => {
+    const options = [
+      { kind: "allow_always", optionId: "allow-session" },
+      { kind: "allow_once", optionId: "allow-this-call" },
+      { kind: "reject_once", optionId: "deny-now" },
+    ] as const;
+    const computer = {
+      computerControlEnabled: true,
+      activeTurn: true,
+      toolCall: { rawInput: { _toolName: "mcp__synara__computer_click" } },
+    } as const;
+
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        options,
+        ...computer,
+      }),
+    ).toEqual({ outcome: "selected", optionId: "allow-this-call" });
+    expect(
+      resolveAcpPermissionPolicy({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        options: [{ kind: "allow_always", optionId: "allow-session" }],
+        ...computer,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves ACP Plan, Auto, disabled, and namespace boundaries for Computer calls", () => {
+    const options = [
+      { kind: "allow_once", optionId: "allow-this-call" },
+      { kind: "reject_once", optionId: "deny-now" },
+    ] as const;
+    const base = {
+      interactionMode: "default" as const,
+      options,
+      computerControlEnabled: true,
+      activeTurn: true,
+      toolCall: { title: "mcp__synara__computer_click" },
+    };
+
+    expect(resolveAcpPermissionPolicy({ ...base, runtimeMode: "auto" })).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        activeTurn: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        interactionMode: "" as never,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      }),
+    ).toEqual({ outcome: "selected", optionId: "deny-now" });
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        computerControlEnabled: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAcpPermissionPolicy({
+        ...base,
+        runtimeMode: "approval-required",
+        toolCall: { title: "mcp__other__computer_click" },
+      }),
+    ).toBeUndefined();
   });
 
   it("reads failed ACP tool details without treating successful tools as failures", () => {
@@ -83,7 +246,7 @@ describe("AcpAdapterSupport", () => {
       "cursor",
       "thread-1" as never,
       "session/prompt",
-      new EffectAcpErrors.AcpRequestError({
+      new AcpErrors.AcpRequestError({
         code: -32602,
         errorMessage: "Invalid params",
       }),
@@ -91,5 +254,73 @@ describe("AcpAdapterSupport", () => {
 
     expect(error._tag).toBe("ProviderAdapterRequestError");
     expect(error.message).toContain("Invalid params");
+  });
+
+  it("surfaces provider detail from generic ACP internal errors", () => {
+    const error = mapAcpToAdapterError(
+      "droid",
+      "thread-1" as never,
+      "session/prompt",
+      new AcpErrors.AcpRequestError({
+        code: -32603,
+        errorMessage: "Internal error: Agent error",
+        data: '402 {"title":"Payment Required"}',
+      }),
+    );
+
+    expect(error.message).toContain('402 {"title":"Payment Required"}');
+    expect(error.message).not.toContain("Internal error: Agent error");
+  });
+
+  it("preserves filesystem detail from ACP persistence errors", () => {
+    const error = mapAcpToAdapterError(
+      "grok",
+      "thread-1" as never,
+      "session/start",
+      new AcpErrors.AcpRequestError({
+        code: -32603,
+        errorMessage: "Path not found.",
+        data: {
+          code: "FS_NOT_FOUND",
+          detail: "No such file or directory (os error 2)",
+        },
+      }),
+    );
+
+    expect(error.message).toContain("Path not found.");
+    expect(error.message).toContain("No such file or directory (os error 2)");
+  });
+
+  it("surfaces transport detail and never emits an untrimmed blank message", () => {
+    const error = mapAcpToAdapterError(
+      "omp",
+      "thread-1" as never,
+      "session/prompt",
+      new AcpErrors.AcpTransportError({
+        detail: "ACP transport closed mid-request",
+        cause: new Error("socket closed"),
+      }),
+    );
+
+    expect(error._tag).toBe("ProviderAdapterRequestError");
+    expect(error.message).toBe(
+      "Provider adapter request failed (omp) for session/prompt: ACP transport closed mid-request",
+    );
+    expect(error.message).toBe(error.message.trim());
+  });
+
+  it("falls back to a non-empty detail when the error message is blank", () => {
+    const error = mapAcpToAdapterError(
+      "omp",
+      "thread-1" as never,
+      "session/prompt",
+      new AcpErrors.AcpTransportError({
+        detail: "",
+        cause: new Error("socket closed"),
+      }),
+    );
+
+    expect(error.message).toBe(error.message.trim());
+    expect(error.message).toContain("ACP request failed");
   });
 });

@@ -3,15 +3,23 @@
 // Layer: Web utility tests
 // Exports: Vitest suites for providerUpdates.ts
 
-import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getNotifiableProviderUpdateStatuses,
   getVisibleProviderUpdateStatuses,
+  isProviderLatestVersionKnowable,
   isProviderUpdateActive,
   providerUpdateNotificationKey,
-  shouldShowProviderUpdateStatus,
+  shouldOfferProviderUpdateAction,
+  shouldPromptProviderUpdate,
+  withProviderUpdateTimeout,
 } from "./providerUpdates";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function providerStatus(
   provider: ProviderKind,
@@ -19,6 +27,8 @@ function providerStatus(
 ): ServerProviderStatus {
   return {
     provider,
+    instanceId: provider,
+    driver: provider,
     status: "ready",
     available: true,
     authStatus: "authenticated",
@@ -46,26 +56,48 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
 
   return {
     enableAssistantStreaming: false,
+    enableProviderUpdateChecks: true,
+    keepAwakeMode: "off",
+    lowerProviderProcessPriority: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
+    githubInboxIncludeUpstreams: false,
+    sidechatExpiry: "1h",
+    sourceControlWritingStyle: "repository",
+    sourceControlCustomInstructions: "",
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
     providers: {
-      codex: { ...provider, binaryPath: "codex", homePath: "" },
-      claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },
+      codex: {
+        ...provider,
+        binaryPath: "codex",
+        homePath: "",
+        selectedAccountId: "default",
+        accounts: [],
+      },
+      claudeAgent: {
+        ...provider,
+        binaryPath: "claude",
+        homePath: "",
+        launchArgs: "",
+        enableArtifacts: false,
+      },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
-      gemini: { ...provider, binaryPath: "gemini" },
+      devin: { ...provider, binaryPath: "devin" },
+      antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
-      kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPassword: "" },
+      droid: { ...provider, binaryPath: "droid" },
       opencode: {
         ...provider,
         binaryPath: "opencode",
         serverUrl: "",
-        serverPassword: "",
+        serverPasswordConfigured: false,
         experimentalWebSockets: false,
       },
       pi: { ...provider, binaryPath: "pi", agentDir: "" },
+      omp: { ...provider, binaryPath: "omp", agentDir: "" },
       ...overrides,
     },
+    providerInstances: {},
     skills: { disabled: [] },
   };
 }
@@ -92,10 +124,67 @@ describe("getVisibleProviderUpdateStatuses", () => {
     expect(result.map((provider) => provider.provider)).toEqual(["codex"]);
   });
 
+  it.each([
+    { enabled: false, visible: [] },
+    { enabled: true, visible: ["claude_work"] },
+  ])(
+    "requires global and account enablement for custom instance updates ($enabled)",
+    ({ enabled, visible }) => {
+      const settings = serverSettings({
+        claudeAgent: {
+          enabled,
+          binaryPath: "claude",
+          homePath: "",
+          launchArgs: "",
+          enableArtifacts: false,
+          customModels: [],
+        },
+      });
+      const result = getVisibleProviderUpdateStatuses({
+        providers: [
+          providerStatus("claudeAgent", {
+            instanceId: "claude_work",
+            driver: "claudeAgent",
+          }),
+          providerStatus("claudeAgent", {
+            instanceId: "claude_disabled",
+            driver: "claudeAgent",
+          }),
+        ],
+        serverSettings: {
+          ...settings,
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              enabled: true,
+              config: { homePath: "/tmp/claude-work" },
+            },
+            claude_disabled: {
+              driver: "claudeAgent",
+              enabled: false,
+              config: { homePath: "/tmp/claude-disabled" },
+            },
+          },
+        },
+      });
+
+      expect(result.map((provider) => provider.instanceId)).toEqual(visible);
+    },
+  );
+
   it("waits for server settings before showing provider updates", () => {
     const result = getVisibleProviderUpdateStatuses({
       providers: [providerStatus("codex")],
       serverSettings: null,
+    });
+
+    expect(result).toEqual([]);
+  });
+
+  it("excludes provider updates when automatic update checks are disabled", () => {
+    const result = getVisibleProviderUpdateStatuses({
+      providers: [providerStatus("codex")],
+      serverSettings: { ...serverSettings(), enableProviderUpdateChecks: false },
     });
 
     expect(result).toEqual([]);
@@ -130,6 +219,46 @@ describe("getVisibleProviderUpdateStatuses", () => {
   });
 });
 
+describe("getNotifiableProviderUpdateStatuses", () => {
+  it("suppresses cached update advisories until a live version check completes", () => {
+    const providers = [providerStatus("claudeAgent")];
+    const settings = serverSettings();
+
+    expect(
+      getNotifiableProviderUpdateStatuses({
+        providers,
+        serverSettings: settings,
+        liveVersionCheckCompleted: false,
+      }),
+    ).toEqual([]);
+    expect(
+      getNotifiableProviderUpdateStatuses({
+        providers,
+        serverSettings: settings,
+        liveVersionCheckCompleted: true,
+      }).map((provider) => provider.provider),
+    ).toEqual(["claudeAgent"]);
+  });
+
+  it("keeps notifications limited to one-click updates after verification", () => {
+    const manualOnly = providerStatus("claudeAgent", {
+      versionAdvisory: {
+        ...providerStatus("claudeAgent").versionAdvisory!,
+        updateCommand: null,
+        canUpdate: false,
+      },
+    });
+
+    expect(
+      getNotifiableProviderUpdateStatuses({
+        providers: [manualOnly],
+        serverSettings: serverSettings(),
+        liveVersionCheckCompleted: true,
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe("providerUpdateNotificationKey", () => {
   it("keys by provider/version and ignores ordering", () => {
     const left = providerUpdateNotificationKey([
@@ -155,31 +284,6 @@ describe("providerUpdateNotificationKey", () => {
   });
 });
 
-describe("shouldShowProviderUpdateStatus", () => {
-  it("matches the list filter for hidden and server-disabled providers", () => {
-    const codex = providerStatus("codex");
-    const hiddenPi = providerStatus("pi");
-    const settings = serverSettings({
-      codex: { enabled: false, binaryPath: "codex", homePath: "", customModels: [] },
-    });
-
-    expect(
-      shouldShowProviderUpdateStatus({
-        provider: codex,
-        hiddenProviderSet: new Set(),
-        serverSettings: settings,
-      }),
-    ).toBe(false);
-    expect(
-      shouldShowProviderUpdateStatus({
-        provider: hiddenPi,
-        hiddenProviders: ["pi"],
-        serverSettings: serverSettings(),
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("isProviderUpdateActive", () => {
   it("only treats queued and running provider updates as active", () => {
     const queuedState = {
@@ -200,5 +304,153 @@ describe("isProviderUpdateActive", () => {
     expect(isProviderUpdateActive(providerStatus("codex", { updateState: succeededState }))).toBe(
       false,
     );
+  });
+});
+
+describe("withProviderUpdateTimeout", () => {
+  it("rejects a provider request that never settles", async () => {
+    vi.useFakeTimers();
+    const pending = new Promise<never>(() => undefined);
+    const assertion = expect(
+      withProviderUpdateTimeout({
+        provider: "opencode",
+        request: pending,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenCode update timed out after 1 second");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await assertion;
+  });
+
+  it("clears its watchdog when the provider request finishes", async () => {
+    vi.useFakeTimers();
+    await expect(
+      withProviderUpdateTimeout({
+        provider: "antigravity",
+        request: Promise.resolve("updated"),
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe("updated");
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("shouldOfferProviderUpdateAction", () => {
+  it("does not offer updates without a confirmed CLI version", () => {
+    const uninstalledPi = providerStatus("pi", {
+      status: "warning",
+      available: true,
+      version: null,
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: null,
+        latestVersion: null,
+        updateCommand: "pi update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+    const uninstalledDroid = providerStatus("droid", {
+      status: "error",
+      available: false,
+      version: null,
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: null,
+        latestVersion: null,
+        updateCommand: "droid update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+
+    expect(shouldOfferProviderUpdateAction(uninstalledPi)).toBe(false);
+    expect(shouldOfferProviderUpdateAction(uninstalledDroid)).toBe(false);
+  });
+
+  it("offers native AGY updates even when upstream latest-version metadata is unavailable", () => {
+    expect(
+      shouldOfferProviderUpdateAction(
+        providerStatus("antigravity", {
+          versionAdvisory: {
+            status: "unknown",
+            currentVersion: "1.1.2",
+            latestVersion: null,
+            updateCommand: "agy update",
+            canUpdate: true,
+            checkedAt: "2026-07-15T14:00:00.000Z",
+            message: null,
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("shouldPromptProviderUpdate", () => {
+  // Cursor and Antigravity self-update, so Synara has no registry to read a latest
+  // version from and their advisory is pinned to "unknown" forever. Prompting on that
+  // left a permanent "Update" badge on a fully up-to-date CLI.
+  const selfManaged = providerStatus("cursor", {
+    version: "2026.07.09-c59fd9a",
+    versionAdvisory: {
+      status: "unknown",
+      currentVersion: "2026.07.09-c59fd9a",
+      latestVersion: null,
+      latestVersionKnowable: false,
+      updateCommand: "cursor-agent update",
+      canUpdate: true,
+      checkedAt: "2026-07-15T14:00:00.000Z",
+      message: null,
+    },
+  });
+
+  it("does not prompt when the latest version is unknowable", () => {
+    expect(isProviderLatestVersionKnowable(selfManaged)).toBe(false);
+    expect(shouldPromptProviderUpdate(selfManaged)).toBe(false);
+    // The update itself stays reachable as a manual action.
+    expect(shouldOfferProviderUpdateAction(selfManaged)).toBe(true);
+  });
+
+  it("still prompts when a lookup source exists but the latest version is missing", () => {
+    const transient = providerStatus("antigravity", {
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: "1.1.2",
+        latestVersion: null,
+        latestVersionKnowable: true,
+        updateCommand: "agy update",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+
+    expect(shouldPromptProviderUpdate(transient)).toBe(true);
+  });
+
+  it("assumes a lookup source when an older server omits the flag", () => {
+    const legacy = providerStatus("opencode", {
+      versionAdvisory: {
+        status: "unknown",
+        currentVersion: "1.1.2",
+        latestVersion: null,
+        updateCommand: "opencode upgrade",
+        canUpdate: true,
+        checkedAt: "2026-07-15T14:00:00.000Z",
+        message: null,
+      },
+    });
+
+    expect(isProviderLatestVersionKnowable(legacy)).toBe(true);
+    expect(shouldPromptProviderUpdate(legacy)).toBe(true);
+  });
+
+  it("keeps prompting for providers Synara can prove are behind", () => {
+    expect(shouldPromptProviderUpdate(providerStatus("codex"))).toBe(true);
   });
 });

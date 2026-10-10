@@ -4,9 +4,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ApprovalRequestId,
   ProviderKind,
+  ThreadId,
   type OrchestrationEvent,
   type OrchestrationThread,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   Effect,
   Exit,
@@ -30,34 +31,43 @@ import { TextGeneration, type TextGenerationShape } from "../src/git/Services/Te
 import { OrchestrationCommandReceiptRepositoryLive } from "../src/persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../src/persistence/Layers/OrchestrationEventStore.ts";
 import { ProjectionCheckpointRepositoryLive } from "../src/persistence/Layers/ProjectionCheckpoints.ts";
-import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Layers/ProjectionPendingApprovals.ts";
+import { ProjectionPendingInteractionRepositoryLive } from "../src/persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { ProjectionCheckpointRepository } from "../src/persistence/Services/ProjectionCheckpoints.ts";
-import { ProjectionPendingApprovalRepository } from "../src/persistence/Services/ProjectionPendingApprovals.ts";
+import { ProjectionPendingInteractionRepository } from "../src/persistence/Services/ProjectionPendingInteractions.ts";
 import { ProviderUnsupportedError } from "../src/provider/Errors.ts";
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
+import {
+  ProviderHealth,
+  type ProviderHealthShape,
+} from "../src/provider/Services/ProviderHealth.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
-import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
+import { ServerSecretStore } from "../src/auth/Services/ServerSecretStore.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
+import { HubOutputReactorLive } from "../src/orchestration/Layers/HubOutputReactor.ts";
+import { SidechatExpiryReactorLive } from "../src/orchestration/Layers/SidechatExpiryReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBusLive } from "../src/orchestration/Layers/RuntimeReceiptBus.ts";
 import { OrchestrationReactorLive } from "../src/orchestration/Layers/OrchestrationReactor.ts";
+import { AgentGatewayOperationRepositoryLive } from "../src/agentGateway/Layers/AgentGatewayOperationRepository.ts";
 import { ProviderCommandReactorLive } from "../src/orchestration/Layers/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionLive } from "../src/orchestration/Layers/ProviderRuntimeIngestion.ts";
+import { TurnCheckpointCoordinatorLive } from "../src/orchestration/Layers/TurnCheckpointCoordinator.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ThreadGitMetadataReactor } from "../src/orchestration/Services/ThreadGitMetadataReactor.ts";
 import {
   RuntimeReceiptBus,
   type OrchestrationRuntimeReceipt,
@@ -169,7 +179,6 @@ export interface OrchestrationIntegrationHarness {
   readonly providerService: ProviderService["Service"];
   readonly checkpointStore: CheckpointStore["Service"];
   readonly checkpointRepository: ProjectionCheckpointRepository["Service"];
-  readonly pendingApprovalRepository: ProjectionPendingApprovalRepository["Service"];
   readonly waitForThread: (
     threadId: string,
     predicate: (thread: OrchestrationThread) => boolean,
@@ -180,17 +189,20 @@ export interface OrchestrationIntegrationHarness {
     timeoutMs?: number,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEvent>, never>;
   readonly waitForPendingApproval: (
+    threadId: string,
     requestId: string,
     predicate: (row: {
-      readonly status: "pending" | "resolved";
+      readonly status: "pending" | "responding" | "confirmed" | "retryable" | "uncertain";
       readonly decision: "accept" | "acceptForSession" | "decline" | "cancel" | null;
+      readonly lifecycleGeneration: string | null;
       readonly resolvedAt: string | null;
     }) => boolean,
     timeoutMs?: number,
   ) => Effect.Effect<
     {
-      readonly status: "pending" | "resolved";
+      readonly status: "pending" | "responding" | "confirmed" | "retryable" | "uncertain";
       readonly decision: "accept" | "acceptForSession" | "decline" | "cancel" | null;
+      readonly lifecycleGeneration: string | null;
       readonly resolvedAt: string | null;
     },
     never
@@ -237,7 +249,7 @@ export const makeOrchestrationIntegrationHarness = (
         } as typeof ProviderAdapterRegistry.Service)
       : null;
     const rootDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-orchestration-integration-",
+      prefix: "synara-orchestration-integration-",
     });
     const workspaceDir = path.join(rootDir, "workspace");
     const { stateDir, dbPath } = yield* deriveServerPaths(rootDir, undefined).pipe(
@@ -253,6 +265,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+      Layer.provide(ServerSettingsService.layerTest()),
     );
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
@@ -279,12 +292,28 @@ export const makeOrchestrationIntegrationHarness = (
       ? makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(realCodexRegistry),
-          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(
+            Layer.succeed(ServerSecretStore, {
+              get: () => Effect.succeed(null),
+              set: () => Effect.void,
+              getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+              remove: () => Effect.void,
+            }),
+          ),
         )
       : makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(fakeRegistry!),
-          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(
+            Layer.succeed(ServerSecretStore, {
+              get: () => Effect.succeed(null),
+              set: () => Effect.void,
+              getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+              remove: () => Effect.void,
+            }),
+          ),
         );
 
     const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
@@ -292,10 +321,11 @@ export const makeOrchestrationIntegrationHarness = (
       orchestrationLayer,
       OrchestrationProjectionSnapshotQueryLive,
       ProjectionCheckpointRepositoryLive,
-      ProjectionPendingApprovalRepositoryLive,
+      ProjectionPendingInteractionRepositoryLive,
       checkpointStoreLayer,
       providerLayer,
       RuntimeReceiptBusLive,
+      TurnCheckpointCoordinatorLive,
     );
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
@@ -308,27 +338,52 @@ export const makeOrchestrationIntegrationHarness = (
     const textGenerationLayer = Layer.succeed(TextGeneration, {
       generateBranchName: () => Effect.succeed({ branch: null }),
     } as unknown as TextGenerationShape);
+    const hubOutputReactorLayer = HubOutputReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+    );
+    const providerHealthLayer = Layer.succeed(ProviderHealth, {
+      getStatuses: Effect.succeed([]),
+      refresh: Effect.succeed([]),
+      updateProvider: () => Effect.die("updateProvider unsupported in harness"),
+      streamChanges: Stream.empty,
+    } as unknown as ProviderHealthShape);
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
+      Layer.provideMerge(providerHealthLayer),
+      Layer.provideMerge(hubOutputReactorLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
     );
+    const sidechatExpiryReactorLayer = SidechatExpiryReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+    );
+    const threadGitMetadataReactorLayer = Layer.succeed(ThreadGitMetadataReactor, {
+      start: Effect.void,
+      drain: Effect.void,
+    });
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(hubOutputReactorLayer),
+      Layer.provideMerge(threadGitMetadataReactorLayer),
+      Layer.provideMerge(sidechatExpiryReactorLayer),
     );
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
 
-    const runtime = ManagedRuntime.make(layer);
+    const runtime = ManagedRuntime.make(
+      layer.pipe(Layer.orDie) as Layer.Layer<Layer.Success<typeof layer>>,
+    );
     const engine = yield* tryRuntimePromise("load OrchestrationEngine service", () =>
       runtime.runPromise(Effect.service(OrchestrationEngineService)),
     ).pipe(Effect.orDie);
@@ -348,9 +403,9 @@ export const makeOrchestrationIntegrationHarness = (
       "load ProjectionCheckpointRepository service",
       () => runtime.runPromise(Effect.service(ProjectionCheckpointRepository)),
     ).pipe(Effect.orDie);
-    const pendingApprovalRepository = yield* tryRuntimePromise(
-      "load ProjectionPendingApprovalRepository service",
-      () => runtime.runPromise(Effect.service(ProjectionPendingApprovalRepository)),
+    const pendingInteractionRepository = yield* tryRuntimePromise(
+      "load ProjectionPendingInteractionRepository service",
+      () => runtime.runPromise(Effect.service(ProjectionPendingInteractionRepository)),
     ).pipe(Effect.orDie);
     const runtimeReceiptBus = yield* tryRuntimePromise("load RuntimeReceiptBus service", () =>
       runtime.runPromise(Effect.service(RuntimeReceiptBus)),
@@ -376,7 +431,9 @@ export const makeOrchestrationIntegrationHarness = (
           .getSnapshot()
           .pipe(
             Effect.map(
-              (snapshot) => snapshot.threads.find((thread) => thread.id === threadId) ?? null,
+              (snapshot) =>
+                snapshot.threads.find((thread: OrchestrationThread) => thread.id === threadId) ??
+                null,
             ),
           ),
         (thread): thread is OrchestrationThread => thread !== null && predicate(thread),
@@ -398,13 +455,18 @@ export const makeOrchestrationIntegrationHarness = (
       );
 
     const waitForPendingApproval: OrchestrationIntegrationHarness["waitForPendingApproval"] = (
+      threadId,
       requestId,
       predicate,
       timeoutMs,
     ) =>
       waitFor(
-        pendingApprovalRepository
-          .getByRequestId({ requestId: ApprovalRequestId.makeUnsafe(requestId) })
+        pendingInteractionRepository
+          .getByIdentity({
+            threadId: ThreadId.makeUnsafe(threadId),
+            interactionKind: "approval",
+            requestId: ApprovalRequestId.makeUnsafe(requestId),
+          })
           .pipe(
             Effect.map((row) =>
               Option.match(row, {
@@ -412,6 +474,7 @@ export const makeOrchestrationIntegrationHarness = (
                 onSome: (value) => ({
                   status: value.status,
                   decision: value.decision,
+                  lifecycleGeneration: value.lifecycleGeneration,
                   resolvedAt: value.resolvedAt,
                 }),
               }),
@@ -420,16 +483,18 @@ export const makeOrchestrationIntegrationHarness = (
         (
           row,
         ): row is {
-          readonly status: "pending" | "resolved";
+          readonly status: "pending" | "responding" | "confirmed" | "retryable" | "uncertain";
           readonly decision: "accept" | "acceptForSession" | "decline" | "cancel" | null;
+          readonly lifecycleGeneration: string | null;
           readonly resolvedAt: string | null;
         } => row !== null && predicate(row),
         `pending approval '${requestId}'`,
         timeoutMs,
       ) as Effect.Effect<
         {
-          readonly status: "pending" | "resolved";
+          readonly status: "pending" | "responding" | "confirmed" | "retryable" | "uncertain";
           readonly decision: "accept" | "acceptForSession" | "decline" | "cancel" | null;
+          readonly lifecycleGeneration: string | null;
           readonly resolvedAt: string | null;
         },
         never
@@ -494,7 +559,6 @@ export const makeOrchestrationIntegrationHarness = (
       providerService,
       checkpointStore,
       checkpointRepository,
-      pendingApprovalRepository,
       waitForThread,
       waitForDomainEvent,
       waitForPendingApproval,

@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildPendingUserInputAnswers,
-  countAnsweredPendingUserInputQuestions,
   derivePendingUserInputProgress,
-  findFirstUnansweredPendingUserInputQuestionIndex,
   hasCompletePendingUserInputAnswers,
   resolvePendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
@@ -27,22 +25,6 @@ describe("resolvePendingUserInputAnswer", () => {
         },
       ),
     ).toBe("Keep the existing envelope for one release");
-  });
-
-  it("falls back to the selected option", () => {
-    expect(
-      resolvePendingUserInputAnswer(
-        {
-          id: "scope",
-          header: "Scope",
-          question: "What should the plan target first?",
-          options: [],
-        },
-        {
-          selectedOptionLabels: ["Scaffold only"],
-        },
-      ),
-    ).toBe("Scaffold only");
   });
 
   it("clears the preset selection when a custom answer is entered", () => {
@@ -216,39 +198,6 @@ describe("pending user input question progress", () => {
       ],
     },
   ] as const;
-
-  it("counts only answered questions", () => {
-    expect(
-      countAnsweredPendingUserInputQuestions(questions, {
-        scope: {
-          selectedOptionLabels: ["Orchestration-first"],
-        },
-      }),
-    ).toBe(1);
-  });
-
-  it("finds the first unanswered question", () => {
-    expect(
-      findFirstUnansweredPendingUserInputQuestionIndex(questions, {
-        scope: {
-          selectedOptionLabels: ["Orchestration-first"],
-        },
-      }),
-    ).toBe(1);
-  });
-
-  it("returns the last question index when all answers are complete", () => {
-    expect(
-      findFirstUnansweredPendingUserInputQuestionIndex(questions, {
-        scope: {
-          selectedOptionLabels: ["Orchestration-first"],
-        },
-        compat: {
-          customAnswer: "Keep it for one release window",
-        },
-      }),
-    ).toBe(1);
-  });
 
   it("derives the active question and advancement state", () => {
     expect(

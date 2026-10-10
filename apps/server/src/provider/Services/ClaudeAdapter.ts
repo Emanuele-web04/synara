@@ -20,11 +20,17 @@ import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
  */
 export interface ClaudeAdapterShape extends ProviderAdapterShape<ProviderAdapterError> {
   readonly provider: "claudeAgent";
+  readonly steerTurn: NonNullable<ProviderAdapterShape<ProviderAdapterError>["steerTurn"]>;
+  readonly stopTask: NonNullable<ProviderAdapterShape<ProviderAdapterError>["stopTask"]>;
+  readonly backgroundTask: NonNullable<
+    ProviderAdapterShape<ProviderAdapterError>["backgroundTask"]
+  >;
+  readonly steerSubagent: NonNullable<ProviderAdapterShape<ProviderAdapterError>["steerSubagent"]>;
 }
 
 /**
  * ClaudeAdapter - Service tag for Claude Agent provider adapter operations.
  */
 export class ClaudeAdapter extends ServiceMap.Service<ClaudeAdapter, ClaudeAdapterShape>()(
-  "t3/provider/Services/ClaudeAdapter",
+  "synara/provider/Services/ClaudeAdapter",
 ) {}

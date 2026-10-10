@@ -1,4 +1,4 @@
-import { AuthClientMetadataDeviceType, AuthSessionId } from "@t3tools/contracts";
+import { AuthClientMetadataDeviceType, AuthSessionId } from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -90,4 +90,4 @@ export interface AuthSessionRepositoryShape {
 export class AuthSessionRepository extends ServiceMap.Service<
   AuthSessionRepository,
   AuthSessionRepositoryShape
->()("t3/persistence/Services/AuthSessions/AuthSessionRepository") {}
+>()("synara/persistence/Services/AuthSessions/AuthSessionRepository") {}

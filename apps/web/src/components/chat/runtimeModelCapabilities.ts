@@ -8,14 +8,16 @@ import type {
   ModelCapabilities,
   ProviderKind,
   ProviderModelDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
+  getClaudeContextWindowSuffix,
   getDefaultEffort,
   getModelCapabilities,
   normalizeModelSlug,
   trimOrNull,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { normalizeCursorModelVariantBaseId } from "../../cursorModelVariants";
+import { normalizeClaudeModelOptionSlug } from "../../providerModelOptions";
 
 function runtimeEffortLabel(value: string): string {
   switch (value) {
@@ -31,6 +33,8 @@ function runtimeEffortLabel(value: string): string {
       return "High";
     case "xhigh":
       return "Extra High";
+    case "max":
+      return "Max";
     default:
       return value
         .split(/[-_\s]+/u)
@@ -56,9 +60,11 @@ export function resolveRuntimeModelDescriptor(input: {
     return undefined;
   }
 
-  return runtimeModels.find((candidate) => {
+  const exactMatch = runtimeModels.find((candidate) => {
     const normalizedCandidate = normalizeModelSlug(candidate.slug, provider) ?? candidate.slug;
-    if (normalizedCandidate === normalizedModel) {
+    const normalizedResolvedModel =
+      normalizeModelSlug(candidate.resolvedModel, provider) ?? candidate.resolvedModel;
+    if (normalizedCandidate === normalizedModel || normalizedResolvedModel === normalizedModel) {
       return true;
     }
     return (
@@ -67,6 +73,16 @@ export function resolveRuntimeModelDescriptor(input: {
         normalizeCursorModelVariantBaseId(normalizedModel)
     );
   });
+  if (exactMatch || provider !== "claudeAgent" || getClaudeContextWindowSuffix(model)) {
+    return exactMatch;
+  }
+
+  // The Claude picker hides context qualifiers and may replace an alias with
+  // a newer resolved id. Use the same projection to recover its metadata,
+  // while preserving exact matches and explicitly qualified selections above.
+  return runtimeModels.find(
+    (candidate) => normalizeClaudeModelOptionSlug(candidate) === normalizedModel,
+  );
 }
 
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
@@ -78,7 +94,8 @@ export function getRuntimeAwareModelCapabilities(input: {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
-    (input.provider === "codex" || input.provider === "cursor") && input.runtimeModel
+    (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
+    input.runtimeModel
       ? input.runtimeModel.supportsFastMode === true
       : staticCapabilities.supportsFastMode;
   const supportsThinkingToggle =
@@ -92,13 +109,17 @@ export function getRuntimeAwareModelCapabilities(input: {
   const optionDescriptors =
     input.runtimeModel?.optionDescriptors ?? staticCapabilities.optionDescriptors;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
+  // Providers with dynamic catalogs, including Droid, expose model-specific effort ladders here.
   if (
     (input.provider !== "codex" &&
       input.provider !== "cursor" &&
+      input.provider !== "antigravity" &&
       input.provider !== "grok" &&
-      input.provider !== "kilo" &&
+      input.provider !== "droid" &&
       input.provider !== "opencode" &&
-      input.provider !== "pi") ||
+      input.provider !== "pi" &&
+      input.provider !== "devin" &&
+      input.provider !== "omp") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {
@@ -128,7 +149,7 @@ export function getRuntimeAwareModelCapabilities(input: {
     };
   });
 
-  if (input.provider === "kilo" || input.provider === "opencode") {
+  if (input.provider === "opencode") {
     return {
       ...staticCapabilities,
       ...(optionDescriptors ? { optionDescriptors } : {}),

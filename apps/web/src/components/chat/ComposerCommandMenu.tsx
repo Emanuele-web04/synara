@@ -3,50 +3,40 @@ import {
   type ModelSlug,
   type ProviderNativeCommandDescriptor,
   type ProviderMentionReference,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
-} from "@t3tools/contracts";
-import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
+} from "@synara/contracts";
+import { type ReactNode } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
 import {
   BotIcon,
   BrainIcon,
-  BugIcon,
   ChangesIcon,
+  CircleAlertIcon,
   DeviceLaptopIcon,
-  DisposableThreadIcon,
-  EraserIcon,
   GitBranchIcon,
-  GitForkIcon,
-  InfoIcon,
-  ListTodoIcon,
   type LucideIcon,
-  MessageCircleIcon,
-  Minimize2,
   PluginIcon,
   SkillCubeIcon,
   TerminalIcon,
   WorktreeIcon,
-  ZapIcon,
 } from "~/lib/icons";
+import { type ProviderCommandNotice } from "~/lib/claudeArtifactCommands";
+import { slashCommandIcon } from "~/lib/slashCommandIcons";
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
-import {
-  Command,
-  CommandGroup,
-  CommandGroupLabel,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-} from "../ui/command";
 import { FileEntryIcon } from "./FileEntryIcon";
+import { ProviderIcon } from "../ProviderIcon";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
-  COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
-  COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
-  COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
-} from "./composerPickerStyles";
+  COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME,
+  COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME,
+  ComposerMenuPanel,
+  type ComposerMenuPanelGroup,
+} from "./ComposerMenuPanel";
 
 function humanizeProviderCommandName(command: string): string {
   return command
@@ -70,6 +60,8 @@ function commandMenuTitle(
       return "Fast Mode";
     case "plan":
       return "Plan Mode";
+    case "debug":
+      return "Debug Mode";
     case "default":
       return "Default Mode";
     case "review":
@@ -82,6 +74,8 @@ function commandMenuTitle(
       return "Status";
     case "subagents":
       return "Subagents";
+    case "feedback":
+      return "Feedback Synara";
     default:
       return humanizeProviderCommandName(item.command);
   }
@@ -94,6 +88,10 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
 
   if (item.type === "plugin") {
     return "Plugin";
+  }
+
+  if (item.type === "thread") {
+    return null;
   }
 
   if (item.type === "local-root") {
@@ -122,6 +120,12 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
 }
 
 function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
+  // The menu is driven from the composer, so focus never reaches the warning icon:
+  // the row itself has to say why the command will not work.
+  if (item.type === "provider-native-command" && item.notice) {
+    return item.notice.summary;
+  }
+
   if (item.type === "slash-command" || item.type === "provider-native-command") {
     return item.description;
   }
@@ -130,7 +134,12 @@ function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
     return item.description;
   }
 
-  if (item.type === "plugin" || item.type === "skill" || item.type === "local-root") {
+  if (
+    item.type === "plugin" ||
+    item.type === "skill" ||
+    item.type === "local-root" ||
+    item.type === "thread"
+  ) {
     return item.description;
   }
 
@@ -167,6 +176,8 @@ export type ComposerCommandItem =
       command: ProviderNativeCommandDescriptor["name"];
       label: string;
       description: string;
+      /** Why the command cannot fully work right now: row text plus a warning tooltip. */
+      notice?: ProviderCommandNotice | null;
     }
   | {
       id: string;
@@ -186,6 +197,7 @@ export type ComposerCommandItem =
       id: string;
       type: "model";
       provider: ProviderKind;
+      instanceId: ProviderInstanceId;
       model: ModelSlug;
       label: string;
       description: string;
@@ -194,6 +206,15 @@ export type ComposerCommandItem =
       id: string;
       type: "plugin";
       plugin: ProviderPluginDescriptor;
+      mention: ProviderMentionReference;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "thread";
+      threadId: string;
+      provider: ProviderKind;
       mention: ProviderMentionReference;
       label: string;
       description: string;
@@ -221,9 +242,6 @@ type ComposerCommandGroupModel = {
   items: ComposerCommandItem[];
 };
 
-const COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME =
-  "px-2 pt-1.5 pb-1 text-[11px] font-normal text-muted-foreground/60";
-
 export function groupCommandItems(
   items: ComposerCommandItem[],
   triggerKind: ComposerTriggerKind | null,
@@ -231,11 +249,13 @@ export function groupCommandItems(
 ): ComposerCommandGroupModel[] {
   if (triggerKind === "mention") {
     const pluginItems = items.filter((item) => item.type === "plugin");
+    const threadItems = items.filter((item) => item.type === "thread");
     const localItems = items.filter((item) => item.type === "local-root" || item.type === "path");
     const agentItems = items.filter((item) => item.type === "agent");
     const otherItems = items.filter(
       (item) =>
         item.type !== "plugin" &&
+        item.type !== "thread" &&
         item.type !== "local-root" &&
         item.type !== "path" &&
         item.type !== "agent",
@@ -244,6 +264,9 @@ export function groupCommandItems(
     const groups: ComposerCommandGroupModel[] = [];
     if (pluginItems.length > 0) {
       groups.push({ id: "plugins", label: "Plugins", items: pluginItems });
+    }
+    if (threadItems.length > 0) {
+      groups.push({ id: "chats", label: "Chats", items: threadItems });
     }
     if (localItems.length > 0) {
       groups.push({ id: "local", label: "Local", items: localItems });
@@ -287,7 +310,26 @@ export function groupCommandItems(
   return groups;
 }
 
-export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
+function CommandNoticeBadge(props: { notice: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span role="img" aria-label={props.notice} className="inline-flex items-center" />}
+      >
+        <CircleAlertIcon className="size-3.5 text-warning" />
+      </TooltipTrigger>
+      <TooltipPopup
+        side="top"
+        align="end"
+        className="max-w-72 whitespace-normal text-ui-sm leading-snug"
+      >
+        {props.notice}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+export function ComposerCommandMenu(props: {
   items: ComposerCommandItem[];
   resolvedTheme: "light" | "dark";
   isLoading: boolean;
@@ -298,82 +340,72 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   onHighlightedItemChange: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
-  const itemRefs = useRef<Record<string, HTMLElement | null>>({});
-  const groups = useMemo(
-    () =>
-      groupCommandItems(props.items, props.triggerKind, props.groupSlashCommandSections ?? true),
-    [props.groupSlashCommandSections, props.items, props.triggerKind],
+  const groups = groupCommandItems(
+    props.items,
+    props.triggerKind,
+    props.groupSlashCommandSections ?? true,
   );
-
-  useEffect(() => {
-    if (!props.activeItemId) {
-      return;
-    }
-
-    itemRefs.current[props.activeItemId]?.scrollIntoView({
-      block: "nearest",
-    });
-  }, [props.activeItemId]);
+  const panelGroups: ComposerMenuPanelGroup[] = groups.map((group) => ({
+    id: group.id,
+    label: group.label,
+    rows: group.items.map((item) => ({
+      id: item.id,
+      icon: commandMenuItemGlyph(item, props.resolvedTheme),
+      title:
+        item.type === "slash-command" || item.type === "provider-native-command"
+          ? commandMenuTitle(item)
+          : item.label,
+      secondary: commandMenuSecondaryText(item),
+      trailing:
+        item.type === "provider-native-command" && item.notice ? (
+          <span className="inline-flex items-center gap-1.5">
+            {commandMenuTrailingMeta(item)}
+            <CommandNoticeBadge notice={item.notice.detail} />
+          </span>
+        ) : (
+          commandMenuTrailingMeta(item)
+        ),
+    })),
+  }));
+  const itemsById = new Map(props.items.map((item) => [item.id, item]));
 
   return (
-    <Command
-      autoHighlight={false}
-      mode="none"
-      onItemHighlighted={(highlightedValue) => {
-        props.onHighlightedItemChange(
-          typeof highlightedValue === "string" ? highlightedValue : null,
-        );
+    <ComposerMenuPanel
+      groups={panelGroups}
+      activeRowId={props.activeItemId}
+      onHighlightRow={props.onHighlightedItemChange}
+      onSelectRow={(rowId) => {
+        const item = itemsById.get(rowId);
+        if (item) props.onSelect(item);
       }}
-    >
-      <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME}>
-        <CommandList className="max-h-72 scroll-py-1 p-1">
-          {groups.map((group, groupIndex) => (
-            <div key={group.id}>
-              {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
-              <CommandGroup>
-                {group.label ? (
-                  <CommandGroupLabel className={COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME}>
-                    {group.label}
-                  </CommandGroupLabel>
-                ) : null}
-                {group.items.map((item) => (
-                  <ComposerCommandMenuItem
-                    key={item.id}
-                    item={item}
-                    resolvedTheme={props.resolvedTheme}
-                    isActive={props.activeItemId === item.id}
-                    itemRef={(node) => {
-                      itemRefs.current[item.id] = node;
-                    }}
-                    onHighlight={props.onHighlightedItemChange}
-                    onSelect={props.onSelect}
-                  />
-                ))}
-              </CommandGroup>
-            </div>
-          ))}
-          {props.triggerKind === "mention" ? (
-            <>
-              {groups.length > 0 ? <CommandSeparator className="my-0.5" /> : null}
-              {/* This footer is informational copy, not a selectable result group. */}
-              <div className="pt-0.5 pb-2">
-                <p
-                  className={cn(
-                    COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME,
-                    "px-2 py-0 font-medium text-muted-foreground text-xs",
-                  )}
-                >
-                  Files
-                </p>
-                <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
-                  Type to search for files
-                </p>
-              </div>
-            </>
-          ) : null}
-        </CommandList>
-        {props.items.length === 0 && (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+      footer={
+        props.triggerKind === "mention" ? (
+          /* This footer is informational copy, not a selectable result group. */
+          <div className="pt-0.5 pb-2">
+            <p
+              className={cn(
+                COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME,
+                "px-2 py-0 font-medium text-muted-foreground text-ui leading-snug",
+              )}
+            >
+              Files
+            </p>
+            <p className="px-2 pt-0.5 text-ui-sm text-muted-foreground/55">
+              Type to search for files
+            </p>
+          </div>
+        ) : null
+      }
+      status={
+        props.items.length === 0 ? (
+          <p
+            className={cn(
+              "text-muted-foreground/50 text-ui-sm",
+              props.isLoading
+                ? "flex h-[calc(1.625rem+0.5rem)] items-center px-2 text-left"
+                : "px-2 py-1.5",
+            )}
+          >
             {props.isLoading
               ? props.triggerKind === "mention"
                 ? "Searching mentions..."
@@ -382,22 +414,16 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                   : "Loading commands..."
               : (props.emptyStateText ??
                 (props.triggerKind === "mention"
-                  ? "No matching plugin or file."
+                  ? "No matching plugin, chat, or file."
                   : props.triggerKind === "skill"
                     ? "No matching skill."
                     : "No matching command."))}
           </p>
-        )}
-      </div>
-    </Command>
+        ) : null
+      }
+    />
   );
-});
-
-// Single icon column shared by every menu row. Rows differ only by the glyph,
-// its color, and the name — slot geometry stays constant so files, folders,
-// skills, plugins, commands, and agents line up identically.
-const COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME =
-  "flex size-4 shrink-0 items-center justify-center text-muted-foreground/60";
+}
 
 // Files mirror the recap / diff changed-files treatment (FileEntryIcon at
 // size-3.5 with the same dimmed foreground) so a file reads identically whether
@@ -405,27 +431,10 @@ const COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME =
 const COMPOSER_COMMAND_ITEM_FILE_ICON_CLASSNAME =
   "size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80";
 
-const COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME = "size-3.5";
-
-// Reuse the app's existing icon components for each concept so the command menu
-// stays coherent with how plan/fork/review/model/etc. appear everywhere else.
-// Don't introduce bespoke glyphs here — map to the shared `~/lib/icons` exports.
-const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
-  clear: EraserIcon,
-  compact: Minimize2,
-  model: BrainIcon,
-  fast: ZapIcon,
-  plan: ListTodoIcon,
-  default: MessageCircleIcon,
-  review: BugIcon,
-  fork: GitForkIcon,
-  side: DisposableThreadIcon,
-  status: InfoIcon,
-  subagents: BotIcon,
-};
+const COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME = COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME;
 
 function commandMenuSlashGlyph(command: string, fallback: LucideIcon): ReactNode {
-  const Icon = SLASH_COMMAND_ICONS[command] ?? fallback;
+  const Icon = slashCommandIcon(command, fallback);
   return <Icon className={COMPOSER_COMMAND_ITEM_GLYPH_CLASSNAME} />;
 }
 
@@ -470,81 +479,11 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
       return <BotIcon className={cls} />;
     case "plugin":
       return <PluginIcon className={cls} />;
+    case "thread":
+      return <ProviderIcon provider={item.provider} className={cls} />;
     case "skill":
       return <SkillCubeIcon className={cls} />;
     default:
       return null;
   }
 }
-
-const ComposerCommandItemIcon = memo(function ComposerCommandItemIcon(props: {
-  item: ComposerCommandItem;
-  resolvedTheme: "light" | "dark";
-  isActive: boolean;
-}) {
-  return (
-    <span
-      className={cn(
-        COMPOSER_COMMAND_ITEM_ICON_SLOT_CLASSNAME,
-        props.isActive && "text-foreground/70",
-      )}
-    >
-      {commandMenuItemGlyph(props.item, props.resolvedTheme)}
-    </span>
-  );
-});
-
-const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
-  item: ComposerCommandItem;
-  resolvedTheme: "light" | "dark";
-  isActive: boolean;
-  itemRef: (node: HTMLElement | null) => void;
-  onHighlight: (itemId: string | null) => void;
-  onSelect: (item: ComposerCommandItem) => void;
-}) {
-  const secondaryText = commandMenuSecondaryText(props.item);
-  const trailingMeta = commandMenuTrailingMeta(props.item);
-
-  return (
-    <CommandItem
-      ref={props.itemRef}
-      value={props.item.id}
-      className={cn(
-        COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME,
-        props.isActive && COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME,
-      )}
-      onMouseMove={() => {
-        if (!props.isActive) props.onHighlight(props.item.id);
-      }}
-      onMouseDown={(event) => {
-        event.preventDefault();
-      }}
-      onClick={() => {
-        props.onSelect(props.item);
-      }}
-    >
-      <ComposerCommandItemIcon
-        item={props.item}
-        resolvedTheme={props.resolvedTheme}
-        isActive={props.isActive}
-      />
-      <div className="min-w-0 flex flex-1 items-center gap-3">
-        <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
-          <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
-            {props.item.type === "slash-command" || props.item.type === "provider-native-command"
-              ? commandMenuTitle(props.item)
-              : props.item.label}
-          </span>
-          {secondaryText ? (
-            <span className="truncate text-[11px] text-muted-foreground/55">{secondaryText}</span>
-          ) : null}
-        </div>
-        {trailingMeta ? (
-          <span className="shrink-0 pl-2 text-right text-[10.5px] text-muted-foreground/42">
-            {trailingMeta}
-          </span>
-        ) : null}
-      </div>
-    </CommandItem>
-  );
-});

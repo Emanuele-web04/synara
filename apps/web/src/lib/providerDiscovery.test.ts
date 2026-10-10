@@ -3,7 +3,7 @@
 // Layer: Web lib tests
 // Exports: Vitest cases for composer/plugin discovery helpers.
 
-import type { ProviderSkillDescriptor } from "@t3tools/contracts";
+import type { ProviderSkillDescriptor } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { buildSkillSearchFields, rankProviderDiscoveryItems } from "./providerDiscovery";
 
@@ -87,5 +87,23 @@ describe("rankProviderDiscoveryItems", () => {
     );
 
     expect(ranked.map((skill) => skill.name)).toEqual(["check-code"]);
+  });
+
+  it("finds namespaced Claude plugin skills by their unqualified skill name", () => {
+    const ranked = rankProviderDiscoveryItems(
+      [
+        makeSkill({
+          name: "workflow-kit:feature-delivery",
+          description: "Deliver a feature from planning through review.",
+          path: "/Users/tester/.claude/plugins/cache/skill-forge/workflow-kit/1.21.0/skills/feature-delivery/SKILL.md",
+          scope: "claude",
+        }),
+        makeSkill({ name: "check-code" }),
+      ],
+      "feature-delivery",
+      buildSkillSearchFields,
+    );
+
+    expect(ranked.map((skill) => skill.name)).toEqual(["workflow-kit:feature-delivery"]);
   });
 });

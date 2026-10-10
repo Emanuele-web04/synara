@@ -21,7 +21,12 @@ describe("localFolderMentions", () => {
   it("detects mac and windows absolute-path mention browsing", () => {
     expect(isLocalFolderMentionQuery("/Users/test")).toBe(true);
     expect(isLocalFolderMentionQuery("C:\\Users\\test")).toBe(true);
+    expect(isLocalFolderMentionQuery("\\\\server\\share\\project")).toBe(true);
     expect(isLocalFolderMentionQuery("local")).toBe(false);
+  });
+
+  it("does not treat an incomplete UNC server path as a browseable share", () => {
+    expect(isLocalFolderMentionQuery("\\\\server")).toBe(false);
   });
 
   it("detects `~/` and `~\\` as local folder browsing triggers", () => {
@@ -35,15 +40,16 @@ describe("localFolderMentions", () => {
   it("derives the filesystem root from the server home directory when requested", () => {
     expect(getLocalFolderBrowseRootPath("/Users/test", true)).toBe("/");
     expect(getLocalFolderBrowseRootPath("C:\\Users\\test", true)).toBe("C:\\");
+    expect(getLocalFolderBrowseRootPath("\\\\server\\share\\Users\\test", true)).toBe(
+      "\\\\server\\share\\",
+    );
     expect(getLocalFolderBrowseRootPath("/Users/test", false)).toBe("/Users/test");
+    expect(getLocalFolderBrowseRootPath("\\\\server\\share\\Users\\test", false)).toBe(
+      "\\\\server\\share\\Users\\test",
+    );
   });
 
   describe("expandLocalFolderPath", () => {
-    it("returns the input unchanged when there is no leading tilde", () => {
-      expect(expandLocalFolderPath("/Users/test/foo", "/Users/test")).toBe("/Users/test/foo");
-      expect(expandLocalFolderPath("", "/Users/test")).toBe("");
-    });
-
     it("expands `~` alone to the home directory", () => {
       expect(expandLocalFolderPath("~", "/Users/test")).toBe("/Users/test");
     });

@@ -3,8 +3,7 @@
 // Layer: Chat status presentation
 // Exports: ProviderHealthBanner
 
-import { PROVIDER_DISPLAY_NAMES, type ServerProviderStatus } from "@t3tools/contracts";
-import { memo } from "react";
+import { PROVIDER_DISPLAY_NAMES, type ServerProviderStatus } from "@synara/contracts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import {
@@ -14,8 +13,9 @@ import {
 import { CircleAlertIcon, TriangleAlertIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ChatColumnBannerFrame } from "./ChatColumnBannerFrame";
+import { isProviderKind } from "../../providerOrdering";
 
-export const ProviderHealthBanner = memo(function ProviderHealthBanner({
+export const ProviderHealthBanner = function ProviderHealthBanner({
   onDismiss,
   status,
 }: {
@@ -26,7 +26,10 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
     return null;
   }
 
-  const providerLabel = PROVIDER_DISPLAY_NAMES[status.provider] ?? status.provider;
+  const providerLabelFallback = isProviderKind(status.provider)
+    ? PROVIDER_DISPLAY_NAMES[status.provider]
+    : status.provider;
+  const providerLabel = status.displayName?.trim() || providerLabelFallback || status.provider;
   const defaultMessage =
     status.status === "error"
       ? `${providerLabel} provider is unavailable.`
@@ -63,4 +66,4 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
       </Alert>
     </ChatColumnBannerFrame>
   );
-});
+};

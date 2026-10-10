@@ -6,15 +6,22 @@
  *
  * @module Open
  */
-import { spawn } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
-import { dirname, extname, join } from "node:path";
+import { createBatchExecutableResolver, resolveExecutable } from "@synara/shared/executable";
+import { spawnProcess } from "@synara/shared/processRuntime";
+import { statSync } from "node:fs";
+import { dirname, extname } from "node:path";
+import pathWin32 from "node:path/win32";
 
-import { EDITORS, type EditorId } from "@t3tools/contracts";
+import { EDITORS, type EditorId } from "@synara/contracts";
+import { isMacAppBundlePath } from "@synara/shared/filesystemPlatform";
+import { resolveWindowsSystemRoot } from "@synara/shared/platformEnvironment";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
 import {
   getEditorMacApplications,
+  getEditorWindowsStorePackages,
+  getEditorWindowsUriScheme,
   resolveAvailableMacApplication,
+  resolveWindowsStorePackageInstallLocation,
   type EditorDefinition,
 } from "./editorAppDiscovery";
 
@@ -32,7 +39,7 @@ export interface OpenInEditorInput {
   readonly editor: EditorId;
 }
 
-interface EditorLaunch {
+export interface EditorLaunch {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
 }
@@ -119,10 +126,10 @@ function resolveMacOpenArgs(
 
 function resolveAvailableCommand(
   commands: ReadonlyArray<string>,
-  options: CommandAvailabilityOptions = {},
+  resolve: (command: string) => string | null,
 ): string | null {
   for (const command of commands) {
-    if (isCommandAvailable(command, options)) {
+    if (resolve(command) !== null) {
       return command;
     }
   }
@@ -139,6 +146,23 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
     default:
       return "xdg-open";
   }
+}
+
+// `open` launches an app bundle like a double-click, so reveal those as well as files.
+function shouldRevealInFinder(target: string): boolean {
+  try {
+    const stat = statSync(target, { throwIfNoEntry: false });
+    return stat !== undefined && (!stat.isDirectory() || isMacAppBundlePath(target, "darwin"));
+  } catch {
+    return false;
+  }
+}
+
+function resolveFileManagerLaunch(target: string, platform: NodeJS.Platform): EditorLaunch {
+  const command = fileManagerCommandForPlatform(platform);
+  const shouldReveal = platform === "darwin" && shouldRevealInFinder(target);
+
+  return { command, args: shouldReveal ? ["-R", target] : [target] };
 }
 
 // Terminal integrations should receive a directory even when the source target is file:line:column.
@@ -185,6 +209,8 @@ const TERMINAL_ARGS_BY_COMMAND: Readonly<Record<string, TerminalArgsBuilder>> = 
   kitty: (workingDirectory) => ["--directory", workingDirectory],
   wezterm: (workingDirectory) => ["start", "--cwd", workingDirectory],
   ghostty: DEFAULT_TERMINAL_ARGS,
+  // Muxy's CLI opens a project from a bare path, matching its `muxy .` flow.
+  muxy: (workingDirectory) => [workingDirectory],
   warp: DEFAULT_TERMINAL_ARGS,
 };
 
@@ -217,109 +243,48 @@ function resolveFallbackEditorCommand(
   return editor.commands?.[0] ?? null;
 }
 
-function stripWrappingQuotes(value: string): string {
-  return value.replace(/^"+|"+$/g, "");
+function encodeWindowsEditorUriPath(targetPath: string): string {
+  return targetPath
+    .replaceAll("\\", "/")
+    .split("/")
+    .map((segment) => encodeURIComponent(segment).replaceAll("%3A", ":"))
+    .join("/");
 }
 
-function resolvePathEnvironmentVariable(env: NodeJS.ProcessEnv): string {
-  return env.PATH ?? env.Path ?? env.path ?? "";
+function resolveWindowsEditorUri(scheme: string, target: string): string {
+  const parsedTarget = parseTargetPathAndPosition(target);
+  const targetPath = parsedTarget?.path ?? target;
+  const encodedPath = encodeWindowsEditorUriPath(targetPath);
+  // UNC paths normalize to //server/share; adding another slash changes the network path.
+  const filePathSeparator = encodedPath.startsWith("//") ? "" : "/";
+  const directorySuffix =
+    !parsedTarget && statSync(targetPath, { throwIfNoEntry: false })?.isDirectory() === true
+      ? "/"
+      : "";
+  const positionSuffix = parsedTarget?.line
+    ? `:${parsedTarget.line}${parsedTarget.column ? `:${parsedTarget.column}` : ""}`
+    : "";
+
+  return `${scheme}://file${filePathSeparator}${encodedPath}${directorySuffix}${positionSuffix}`;
 }
 
-function resolveWindowsPathExtensions(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
-  const rawValue = env.PATHEXT;
-  const fallback = [".COM", ".EXE", ".BAT", ".CMD"];
-  if (!rawValue) return fallback;
+function resolveWindowsEditorUriLaunch(
+  editor: EditorDefinition,
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): EditorLaunch | null {
+  const scheme = getEditorWindowsUriScheme(editor);
+  if (platform !== "win32" || !scheme) return null;
 
-  const parsed = rawValue
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .map((entry) => (entry.startsWith(".") ? entry.toUpperCase() : `.${entry.toUpperCase()}`));
-  return parsed.length > 0 ? Array.from(new Set(parsed)) : fallback;
+  return {
+    command: pathWin32.join(resolveWindowsSystemRoot(env), "explorer.exe"),
+    args: [resolveWindowsEditorUri(scheme, target)],
+  };
 }
 
-function resolveCommandCandidates(
-  command: string,
-  platform: NodeJS.Platform,
-  windowsPathExtensions: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  if (platform !== "win32") return [command];
-  const extension = extname(command);
-  const normalizedExtension = extension.toUpperCase();
-
-  if (extension.length > 0 && windowsPathExtensions.includes(normalizedExtension)) {
-    const commandWithoutExtension = command.slice(0, -extension.length);
-    return Array.from(
-      new Set([
-        command,
-        `${commandWithoutExtension}${normalizedExtension}`,
-        `${commandWithoutExtension}${normalizedExtension.toLowerCase()}`,
-      ]),
-    );
-  }
-
-  const candidates: string[] = [];
-  for (const extension of windowsPathExtensions) {
-    candidates.push(`${command}${extension}`);
-    candidates.push(`${command}${extension.toLowerCase()}`);
-  }
-  return Array.from(new Set(candidates));
-}
-
-function isExecutableFile(
-  filePath: string,
-  platform: NodeJS.Platform,
-  windowsPathExtensions: ReadonlyArray<string>,
-): boolean {
-  try {
-    const stat = statSync(filePath);
-    if (!stat.isFile()) return false;
-    if (platform === "win32") {
-      const extension = extname(filePath);
-      if (extension.length === 0) return false;
-      return windowsPathExtensions.includes(extension.toUpperCase());
-    }
-    accessSync(filePath, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolvePathDelimiter(platform: NodeJS.Platform): string {
-  return platform === "win32" ? ";" : ":";
-}
-
-export function isCommandAvailable(
-  command: string,
-  options: CommandAvailabilityOptions = {},
-): boolean {
-  const platform = options.platform ?? process.platform;
-  const env = options.env ?? process.env;
-  const windowsPathExtensions = platform === "win32" ? resolveWindowsPathExtensions(env) : [];
-  const commandCandidates = resolveCommandCandidates(command, platform, windowsPathExtensions);
-
-  if (command.includes("/") || command.includes("\\")) {
-    return commandCandidates.some((candidate) =>
-      isExecutableFile(candidate, platform, windowsPathExtensions),
-    );
-  }
-
-  const pathValue = resolvePathEnvironmentVariable(env);
-  if (pathValue.length === 0) return false;
-  const pathEntries = pathValue
-    .split(resolvePathDelimiter(platform))
-    .map((entry) => stripWrappingQuotes(entry.trim()))
-    .filter((entry) => entry.length > 0);
-
-  for (const pathEntry of pathEntries) {
-    for (const candidate of commandCandidates) {
-      if (isExecutableFile(join(pathEntry, candidate), platform, windowsPathExtensions)) {
-        return true;
-      }
-    }
-  }
-  return false;
+function isCommandAvailable(command: string, options: CommandAvailabilityOptions = {}): boolean {
+  return resolveExecutable(command, options) !== null;
 }
 
 export function resolveAvailableEditors(
@@ -327,10 +292,12 @@ export function resolveAvailableEditors(
   env: NodeJS.ProcessEnv = process.env,
 ): ReadonlyArray<EditorId> {
   const available: EditorId[] = [];
+  // One PATH scan for every editor: per-command probing is seconds of sync IO on Windows.
+  const resolve = createBatchExecutableResolver({ platform, env });
 
   for (const editor of EDITORS) {
     if (editor.commands !== null) {
-      if (resolveAvailableCommand(editor.commands, { platform, env }) !== null) {
+      if (resolveAvailableCommand(editor.commands, resolve) !== null) {
         available.push(editor.id);
         continue;
       }
@@ -341,9 +308,20 @@ export function resolveAvailableEditors(
       continue;
     }
 
+    if (
+      resolveWindowsStorePackageInstallLocation(
+        getEditorWindowsStorePackages(editor),
+        platform,
+        env,
+      ) !== null
+    ) {
+      available.push(editor.id);
+      continue;
+    }
+
     if (editor.id === "file-manager") {
       const command = fileManagerCommandForPlatform(platform);
-      if (isCommandAvailable(command, { platform, env })) {
+      if (resolve(command) !== null) {
         available.push(editor.id);
       }
     }
@@ -372,7 +350,7 @@ export interface OpenShape {
 /**
  * Open - Service tag for browser/editor launch operations.
  */
-export class Open extends ServiceMap.Service<Open, OpenShape>()("t3/open") {}
+export class Open extends ServiceMap.Service<Open, OpenShape>()("synara/open") {}
 
 // ==============================
 // Implementations
@@ -402,13 +380,20 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
   }
 
   if (editorDef.commands) {
-    const command = resolveAvailableCommand(editorDef.commands, { platform, env });
+    const command = resolveAvailableCommand(editorDef.commands, (candidate) =>
+      resolveExecutable(candidate, { platform, env }),
+    );
     if (command) {
       return {
         command,
         args: resolveCommandEditorArgs(editorDef, input.cwd, command),
       };
     }
+  }
+
+  const windowsUriLaunch = resolveWindowsEditorUriLaunch(editorDef, input.cwd, platform, env);
+  if (windowsUriLaunch) {
+    return windowsUriLaunch;
   }
 
   const macApplication =
@@ -436,8 +421,30 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
     return yield* new OpenError({ message: `Unsupported editor: ${input.editor}` });
   }
 
-  return { command: fileManagerCommandForPlatform(platform), args: [input.cwd] };
+  return resolveFileManagerLaunch(input.cwd, platform);
 });
+
+function editorLaunchesEqual(left: EditorLaunch, right: EditorLaunch): boolean {
+  return left.command === right.command && left.args.join("\0") === right.args.join("\0");
+}
+
+function launchDetachedWithEditorFallback(
+  input: OpenInEditorInput,
+  launch: EditorLaunch,
+): Effect.Effect<void, OpenError> {
+  return launchDetached(launch).pipe(
+    Effect.catch((primaryError) => {
+      const editorDef = EDITORS.find((editor) => editor.id === input.editor);
+      const fallbackLaunch = editorDef ? resolveWindowsEditorUriLaunch(editorDef, input.cwd) : null;
+
+      if (!fallbackLaunch || editorLaunchesEqual(launch, fallbackLaunch)) {
+        return Effect.fail(primaryError);
+      }
+
+      return launchDetached(fallbackLaunch);
+    }),
+  );
+}
 
 export const launchDetached = (launch: EditorLaunch) =>
   Effect.gen(function* () {
@@ -448,10 +455,10 @@ export const launchDetached = (launch: EditorLaunch) =>
     yield* Effect.callback<void, OpenError>((resume) => {
       let child;
       try {
-        child = spawn(launch.command, [...launch.args], {
+        child = spawnProcess(launch.command, launch.args, {
           detached: true,
           stdio: "ignore",
-          shell: process.platform === "win32",
+          requireExecutable: true,
         });
       } catch (error) {
         return resume(
@@ -483,7 +490,19 @@ const make = Effect.gen(function* () {
         try: () => open.default(target),
         catch: (cause) => new OpenError({ message: "Browser auto-open failed", cause }),
       }),
-    openInEditor: (input) => Effect.flatMap(resolveEditorLaunch(input), launchDetached),
+    openInEditor: (input) =>
+      // The "system-default" pseudo-editor opens the target with the OS default
+      // application (Preview for PDFs on macOS, the registered viewer elsewhere).
+      // Reuse the already-loaded cross-platform `open` package instead of guessing
+      // per-platform launch commands.
+      input.editor === "system-default"
+        ? Effect.tryPromise({
+            try: () => open.default(input.cwd),
+            catch: (cause) => new OpenError({ message: "Failed to open with default app", cause }),
+          })
+        : Effect.flatMap(resolveEditorLaunch(input), (launch) =>
+            launchDetachedWithEditorFallback(input, launch),
+          ),
   } satisfies OpenShape;
 });
 

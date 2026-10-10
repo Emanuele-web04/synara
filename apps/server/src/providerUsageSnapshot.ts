@@ -1,8 +1,7 @@
 // FILE: providerUsageSnapshot.ts
-// Purpose: Read provider-specific local usage archives so the UI can show
-// recent usage even when the active thread has no fresh rate-limit events.
+// Purpose: Read provider-specific local usage archives for recent usage snapshots.
 
-import type { Dirent, Stats } from "node:fs";
+import { createReadStream, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -12,7 +11,7 @@ import type {
   ServerGetProviderUsageSnapshotResult,
   ServerProviderUsageLimit,
   ServerProviderUsageLine,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import { ServerConfig } from "./config";
@@ -25,6 +24,10 @@ const USAGE_CACHE_TTL_MS = 30_000;
 // Keep enough recent archives to make the 30d summary materially different from 7d
 // for heavy local usage without scanning the full historical archive every refresh.
 const MAX_RECENT_USAGE_FILES = 2_000;
+const PROVIDER_USAGE_FILE_READ_CONCURRENCY = 16;
+const CODEX_SESSION_READ_CHUNK_BYTES = 64 * 1024;
+const MAX_CODEX_SESSION_LINE_BYTES = 1024 * 1024;
+const MAX_CLAUDE_TRANSCRIPT_LINE_BYTES = 1024 * 1024;
 
 type UsageSnapshot = Exclude<ServerGetProviderUsageSnapshotResult, null>;
 
@@ -100,15 +103,6 @@ function formatRecentSessionsSubtitle(sessionCount: number): string | undefined 
   return `${new Intl.NumberFormat(undefined).format(sessionCount)} recent ${sessionCount === 1 ? "session" : "sessions"}`;
 }
 
-function formatUsageTimestamp(timestampMs: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "short",
-  }).format(timestampMs);
-}
-
 async function safeReadDir(path: string): Promise<ReadonlyArray<Dirent>> {
   try {
     return await fs.readdir(path, { withFileTypes: true });
@@ -125,17 +119,53 @@ async function safeStat(path: string): Promise<Stats | null> {
   }
 }
 
-async function listRecentFiles(paths: ReadonlyArray<string>): Promise<ReadonlyArray<string>> {
-  const filesWithStats = await Promise.all(
-    paths.map(async (path) => ({
+// Bounds archive reads so a cold stats load does useful parallel work without
+// flooding the filesystem with thousands of simultaneous readFile calls.
+async function mapWithConcurrency<T, R>(
+  items: ReadonlyArray<T>,
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: Array<{ index: number; value: R }> = [];
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) {
+          return;
+        }
+        const item = items[index];
+        if (item === undefined) {
+          continue;
+        }
+        results.push({ index, value: await mapper(item) });
+      }
+    }),
+  );
+
+  return results.toSorted((left, right) => left.index - right.index).map((entry) => entry.value);
+}
+
+async function listRecentFiles(
+  paths: ReadonlyArray<string>,
+  maxFiles: number = MAX_RECENT_USAGE_FILES,
+): Promise<ReadonlyArray<string>> {
+  const filesWithStats = await mapWithConcurrency(
+    paths,
+    PROVIDER_USAGE_FILE_READ_CONCURRENCY,
+    async (path) => ({
       path,
       mtimeMs: (await safeStat(path))?.mtimeMs ?? 0,
-    })),
+    }),
   );
 
   return filesWithStats
-    .sort((left, right) => right.mtimeMs - left.mtimeMs)
-    .slice(0, MAX_RECENT_USAGE_FILES)
+    .toSorted((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, maxFiles)
     .map((entry) => entry.path);
 }
 
@@ -254,55 +284,123 @@ async function listRecentCodexSessionFiles(sessionsRoot: string): Promise<Readon
   return listRecentFiles(candidates);
 }
 
-async function readCodexSessionSummary(path: string): Promise<CodexSessionSummary | null> {
-  let fileContents: string;
+async function readFileRange(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  position: number,
+  length: number,
+): Promise<Buffer> {
+  const buffer = Buffer.allocUnsafe(length);
+  let bytesRead = 0;
+  while (bytesRead < length) {
+    const result = await handle.read(buffer, bytesRead, length - bytesRead, position + bytesRead);
+    if (result.bytesRead === 0) {
+      break;
+    }
+    bytesRead += result.bytesRead;
+  }
+  return buffer.subarray(0, bytesRead);
+}
+
+function parseCodexSessionSummaryLine(line: string): CodexSessionSummary | null {
+  if (!line.trim()) {
+    return null;
+  }
+
+  let parsed: unknown;
   try {
-    fileContents = await fs.readFile(path, "utf8");
+    parsed = JSON.parse(line);
   } catch {
     return null;
   }
 
-  let latestSummary: CodexSessionSummary | null = null;
-  const lines = fileContents.split(/\r?\n/u);
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    const record = asRecord(parsed);
-    if (!record || record.type !== "event_msg") {
-      continue;
-    }
-
-    const payload = asRecord(record.payload);
-    if (!payload || payload.type !== "token_count") {
-      continue;
-    }
-
-    const timestampMs = parseTimestampMs(record.timestamp ?? payload.timestamp);
-    if (timestampMs === null) {
-      continue;
-    }
-
-    const summary = {
-      timestampMs,
-      totalTokens: readCodexTotalTokens(payload),
-      limits: normalizeCodexUsageLimits(payload.rate_limits ?? payload.rateLimits),
-    } satisfies CodexSessionSummary;
-
-    if (!latestSummary || summary.timestampMs > latestSummary.timestampMs) {
-      latestSummary = summary;
-    }
+  const record = asRecord(parsed);
+  if (!record || record.type !== "event_msg") {
+    return null;
   }
 
-  return latestSummary;
+  const payload = asRecord(record.payload);
+  if (!payload || payload.type !== "token_count") {
+    return null;
+  }
+
+  const timestampMs = parseTimestampMs(record.timestamp ?? payload.timestamp);
+  if (timestampMs === null) {
+    return null;
+  }
+
+  return {
+    timestampMs,
+    totalTokens: readCodexTotalTokens(payload),
+    limits: normalizeCodexUsageLimits(payload.rate_limits ?? payload.rateLimits),
+  };
+}
+
+export async function readCodexSessionSummary(path: string): Promise<CodexSessionSummary | null> {
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(path, "r");
+  } catch {
+    return null;
+  }
+
+  try {
+    const { size } = await handle.stat();
+    let position = size;
+    let partialLine = Buffer.alloc(0);
+    let skippingOversizedLine = false;
+
+    while (position > 0) {
+      const length = Math.min(CODEX_SESSION_READ_CHUNK_BYTES, position);
+      position -= length;
+      const bytes = await readFileRange(handle, position, length);
+      let lineEnd = bytes.length;
+
+      for (let index = bytes.length - 1; index >= 0; index -= 1) {
+        if (bytes[index] !== 0x0a) {
+          continue;
+        }
+
+        const linePrefix = bytes.subarray(index + 1, lineEnd);
+        if (skippingOversizedLine) {
+          skippingOversizedLine = false;
+        } else {
+          const lineLength = linePrefix.length + partialLine.length;
+          if (lineLength <= MAX_CODEX_SESSION_LINE_BYTES) {
+            const summary = parseCodexSessionSummaryLine(
+              Buffer.concat([linePrefix, partialLine], lineLength).toString("utf8"),
+            );
+            if (summary) {
+              return summary;
+            }
+          }
+        }
+
+        partialLine = Buffer.alloc(0);
+        lineEnd = index;
+      }
+
+      if (skippingOversizedLine) {
+        continue;
+      }
+
+      const linePrefix = bytes.subarray(0, lineEnd);
+      const lineLength = linePrefix.length + partialLine.length;
+      if (lineLength > MAX_CODEX_SESSION_LINE_BYTES) {
+        partialLine = Buffer.alloc(0);
+        skippingOversizedLine = true;
+        continue;
+      }
+      partialLine = Buffer.concat([linePrefix, partialLine], lineLength);
+    }
+
+    return skippingOversizedLine
+      ? null
+      : parseCodexSessionSummaryLine(partialLine.toString("utf8"));
+  } catch {
+    return null;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 function readClaudeTotalTokens(value: unknown): number {
@@ -386,8 +484,17 @@ function readClaudeToolResultSample(input: {
   };
 }
 
+// Claude Code stores transcripts under `<CLAUDE_CONFIG_DIR>/projects`, defaulting to
+// `~/.claude/projects`. Honor the override so the Profile reads the SAME transcripts
+// the active Claude provider does (the adapter inherits `process.env`).
+function resolveClaudeProjectsRoot(homeDir: string): string {
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return nodePath.join(configDir || nodePath.join(homeDir, ".claude"), "projects");
+}
+
 async function listRecentClaudeTranscriptFiles(
   projectsRoot: string,
+  maxFiles: number = MAX_RECENT_USAGE_FILES,
 ): Promise<ReadonlyArray<string>> {
   const candidates: string[] = [];
   const projectEntries = await safeReadDir(projectsRoot);
@@ -406,37 +513,47 @@ async function listRecentClaudeTranscriptFiles(
     }
   }
 
-  return listRecentFiles(candidates);
+  return listRecentFiles(candidates, maxFiles);
 }
 
-async function readClaudeUsageSamples(path: string): Promise<ReadonlyArray<ClaudeUsageSample>> {
-  let fileContents: string;
-  try {
-    fileContents = await fs.readFile(path, "utf8");
-  } catch {
-    return [];
-  }
-
+/**
+ * Claude transcripts are unbounded: a long-running session writes hundreds of megabytes
+ * into one file, and a snapshot reads PROVIDER_USAGE_FILE_READ_CONCURRENCY of them at
+ * once. Reading one into a string costs its full size in the heap plus a second copy for
+ * the line split, so a few large transcripts are enough to exhaust old space and abort the
+ * backend. Stream chunks and cap individual records so malformed or tool-heavy lines cannot
+ * recreate the same problem inside a line reader.
+ */
+export async function readClaudeUsageSamples(
+  path: string,
+): Promise<ReadonlyArray<ClaudeUsageSample>> {
   const samples: ClaudeUsageSample[] = [];
   const seenKeys = new Set<string>();
-  const lines = fileContents.split(/\r?\n/u);
+  const stream = createReadStream(path);
+  let lineChunks: Buffer[] = [];
+  let lineBytes = 0;
+  let lineIndex = 0;
+  let skippingOversizedLine = false;
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line || !line.trim()) {
-      continue;
+  const collectLine = (line: Buffer, index: number): void => {
+    if (line.length === 0) {
+      return;
+    }
+    const contents = line.toString("utf8");
+    if (!contents.trim()) {
+      return;
     }
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(contents);
     } catch {
-      continue;
+      return;
     }
 
     const record = asRecord(parsed);
     if (!record) {
-      continue;
+      return;
     }
 
     const fallbackKey = `${path}:${index}`;
@@ -451,6 +568,55 @@ async function readClaudeUsageSamples(path: string): Promise<ReadonlyArray<Claud
       seenKeys.add(toolResultSample.dedupeKey);
       samples.push(toolResultSample.sample);
     }
+  };
+
+  const appendLineChunk = (chunk: Buffer): void => {
+    if (skippingOversizedLine || chunk.length === 0) {
+      return;
+    }
+    if (lineBytes + chunk.length > MAX_CLAUDE_TRANSCRIPT_LINE_BYTES) {
+      lineChunks = [];
+      lineBytes = 0;
+      skippingOversizedLine = true;
+      return;
+    }
+    lineChunks.push(chunk);
+    lineBytes += chunk.length;
+  };
+
+  const finishLine = (): void => {
+    if (!skippingOversizedLine) {
+      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
+    }
+    lineChunks = [];
+    lineBytes = 0;
+    lineIndex += 1;
+    skippingOversizedLine = false;
+  };
+
+  try {
+    for await (const chunk of stream) {
+      let lineStart = 0;
+      for (let index = 0; index < chunk.length; index += 1) {
+        if (chunk[index] !== 0x0a) {
+          continue;
+        }
+        appendLineChunk(chunk.subarray(lineStart, index));
+        finishLine();
+        lineStart = index + 1;
+      }
+      appendLineChunk(chunk.subarray(lineStart));
+    }
+
+    // Match readFile/split behavior for a final record that has not been newline-terminated.
+    if (lineBytes > 0 && !skippingOversizedLine) {
+      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
+    }
+  } catch {
+    // A transcript that vanishes or fails partway through yields what was read by then,
+    // which is the same outcome as a truncated archive.
+  } finally {
+    stream.destroy();
   }
 
   return samples;
@@ -468,13 +634,13 @@ async function loadCodexUsageSnapshot(input: {
     return null;
   }
 
-  const sessionSummaries: CodexSessionSummary[] = [];
-  for (const sessionFile of sessionFiles) {
-    const summary = await readCodexSessionSummary(sessionFile);
-    if (summary) {
-      sessionSummaries.push(summary);
-    }
-  }
+  const sessionSummaries = (
+    await mapWithConcurrency(
+      sessionFiles,
+      PROVIDER_USAGE_FILE_READ_CONCURRENCY,
+      readCodexSessionSummary,
+    )
+  ).filter((summary): summary is CodexSessionSummary => summary !== null);
 
   if (sessionSummaries.length === 0) {
     return null;
@@ -509,16 +675,19 @@ async function loadCodexUsageSnapshot(input: {
 }
 
 async function loadClaudeUsageSnapshot(input: { homeDir: string }): Promise<UsageSnapshot | null> {
-  const projectsRoot = nodePath.join(input.homeDir, ".claude", "projects");
+  const projectsRoot = resolveClaudeProjectsRoot(input.homeDir);
   const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot);
   if (transcriptFiles.length === 0) {
     return null;
   }
 
-  const usageSamples: ClaudeUsageSample[] = [];
-  for (const transcriptFile of transcriptFiles) {
-    usageSamples.push(...(await readClaudeUsageSamples(transcriptFile)));
-  }
+  const usageSamples = (
+    await mapWithConcurrency(
+      transcriptFiles,
+      PROVIDER_USAGE_FILE_READ_CONCURRENCY,
+      readClaudeUsageSamples,
+    )
+  ).flat();
 
   if (usageSamples.length === 0) {
     return null;
@@ -564,7 +733,6 @@ async function loadProviderUsageSnapshot(input: {
       });
     case "claudeAgent":
       return loadClaudeUsageSnapshot({ homeDir: input.homeDir });
-    case "gemini":
     default:
       return null;
   }
@@ -575,7 +743,7 @@ async function getCachedProviderUsageSnapshot(input: {
   homeDir: string;
   homePath?: string;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
-  const cacheKey = `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}`;
+  const cacheKey = `${input.provider}:${input.homeDir}:${input.homePath?.trim() ?? ""}:${process.env.CLAUDE_CONFIG_DIR?.trim() ?? ""}`;
   const nowMs = Date.now();
   const existing = usageSnapshotCache.get(cacheKey);
 

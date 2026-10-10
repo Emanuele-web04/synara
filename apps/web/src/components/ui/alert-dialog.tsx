@@ -3,6 +3,7 @@
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
 
 import { cn } from "~/lib/utils";
+import { dialogFooterButtonClassName } from "~/components/ui/dialog";
 
 const AlertDialogCreateHandle = AlertDialogPrimitive.createHandle;
 
@@ -31,7 +32,7 @@ function AlertDialogViewport({ className, ...props }: AlertDialogPrimitive.Viewp
   return (
     <AlertDialogPrimitive.Viewport
       className={cn(
-        "fixed inset-0 z-50 grid grid-rows-[1fr_auto_3fr] justify-items-center p-4",
+        "fixed inset-0 z-50 grid grid-rows-[1fr_auto_1fr] justify-items-center p-4",
         className,
       )}
       data-slot="alert-dialog-viewport"
@@ -40,19 +41,18 @@ function AlertDialogViewport({ className, ...props }: AlertDialogPrimitive.Viewp
   );
 }
 
+// Same opaque, centered surface as `dialogPopupClassName` in dialog.tsx — keep in sync.
 const alertDialogPopupClassName =
-  "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] opacity-[calc(1-0.1*var(--nested-dialogs))] transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0";
-
-const alertDialogFooterButtonClassName =
-  "[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!h-auto [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!min-h-8 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!rounded-md [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!px-3 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!py-1 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!font-normal sm:[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!min-h-7";
+  "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-3xl border border-[color:var(--color-border-light)] bg-popover text-[var(--color-text-foreground)] shadow-[0_16px_50px_-12px_rgba(0,0,0,0.34)] dark:shadow-[0_16px_50px_-12px_rgba(0,0,0,0.7)] opacity-[calc(1-0.1*var(--nested-dialogs))] transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0";
 
 function AlertDialogPopup({
   className,
-  bottomStickOnMobile = true,
+  bottomStickOnMobile: bottomStickOnMobileProp,
   ...props
 }: AlertDialogPrimitive.Popup.Props & {
   bottomStickOnMobile?: boolean;
 }) {
+  const bottomStickOnMobile = bottomStickOnMobileProp ?? true;
   return (
     <AlertDialogPortal>
       <AlertDialogBackdrop />
@@ -86,16 +86,17 @@ function AlertDialogHeader({ className, ...props }: React.ComponentProps<"div">)
 
 function AlertDialogFooter({
   className,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: React.ComponentProps<"div"> & {
   variant?: "default" | "bare";
 }) {
+  const variant = variantProp ?? "default";
   return (
     <div
       className={cn(
         "flex flex-col-reverse gap-2 px-4 sm:flex-row sm:justify-end",
-        alertDialogFooterButtonClassName,
+        dialogFooterButtonClassName,
         variant === "default" && "py-3",
         variant === "bare" && "pb-4 pt-3",
         className,
@@ -119,7 +120,7 @@ function AlertDialogTitle({ className, ...props }: AlertDialogPrimitive.Title.Pr
 function AlertDialogDescription({ className, ...props }: AlertDialogPrimitive.Description.Props) {
   return (
     <AlertDialogPrimitive.Description
-      className={cn("text-muted-foreground text-sm leading-snug", className)}
+      className={cn("text-muted-foreground text-ui leading-snug", className)}
       data-slot="alert-dialog-description"
       {...props}
     />
@@ -135,10 +136,8 @@ export {
   AlertDialog,
   AlertDialogPortal,
   AlertDialogBackdrop,
-  AlertDialogBackdrop as AlertDialogOverlay,
   AlertDialogTrigger,
   AlertDialogPopup,
-  AlertDialogPopup as AlertDialogContent,
   AlertDialogHeader,
   AlertDialogFooter,
   AlertDialogTitle,

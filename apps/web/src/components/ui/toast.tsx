@@ -1,9 +1,12 @@
 "use client";
 
 import { Toast, type ToastObject } from "@base-ui/react/toast";
-import { useEffect, useMemo, type CSSProperties } from "react";
+import { useMemo, useEffect, useState, type CSSProperties } from "react";
 import { useParams } from "@tanstack/react-router";
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, type DesktopDiagnosticIssue } from "@synara/contracts";
+import { reportHandledIssue } from "~/lib/rendererErrorDiagnostics";
+import { DiagnosticReportAction } from "../DiagnosticReportAction";
+import { CopyTextButton } from "./copyTextButton";
 import {
   CircleAlertIcon,
   CircleCheckIcon,
@@ -17,15 +20,24 @@ import {
 
 import { cn } from "~/lib/utils";
 import { Button, buttonVariants } from "~/components/ui/button";
+import { APP_TOOLTIP_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
 import {
-  COMPACT_NOTIFICATION_SURFACE_CLASS_NAME,
-  EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+  buildVisibleToastLayout,
+  DEFAULT_TOAST_TIMEOUT_MS,
+  shouldHideCollapsedToastContent,
+  shouldRunVisibleToastAutoDismiss,
+  shouldUseCompactToast,
+  type ToastCopyItem,
+} from "./toast.logic";
+import {
   NOTIFICATION_ICON_CLASS_NAME,
+  notificationSurfaceClassName,
+  type NotificationTone,
 } from "./notificationSurface";
 import { useDiffRouteSearch } from "../../hooks/useDiffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../../splitViewStore";
+import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import {
   resolveVisibleToastThreadIds,
   shouldRenderToastForVisibleThreads,
@@ -33,17 +45,38 @@ import {
 
 type ThreadToastData = {
   allowCrossThreadVisibility?: boolean;
+  compactContextual?: boolean;
+  copyItems?: ReadonlyArray<ToastCopyItem>;
   copyText?: string;
+  diagnosticId?: string;
   onClose?: () => void;
   secondaryActionProps?: React.ComponentProps<typeof Button>;
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
   dismissAfterVisibleMs?: number;
+  /** Compact Undo toast for chat actions. Archive links to Settings; Done and snooze pass a message. */
+  archiveUndo?: {
+    onUndo: () => boolean | Promise<boolean>;
+    onViewArchived?: () => void | Promise<void>;
+    onNoUndo?: () => void;
+    message?: string;
+  };
 };
 
 const toastManager = Toast.createToastManager<ThreadToastData>();
 const anchoredToastManager = Toast.createToastManager<ThreadToastData>();
 type ToastId = ReturnType<typeof toastManager.add>;
+
+/** Enrich the existing error toast asynchronously; diagnostics never delays its display. */
+export function reportToastIssue(
+  id: ToastId,
+  issue: DesktopDiagnosticIssue,
+  data?: ThreadToastData,
+): void {
+  void reportHandledIssue(issue).then((diagnosticId) => {
+    if (diagnosticId) toastManager.update(id, { data: { ...data, diagnosticId } });
+  });
+}
 const threadToastVisibleTimeoutRemainingMs = new Map<ToastId, number>();
 
 const TOAST_ICONS = {
@@ -54,13 +87,38 @@ const TOAST_ICONS = {
   warning: TriangleAlertIcon,
 } as const;
 
-function shouldUseCompactToast(toast: ToastObject<ThreadToastData>): boolean {
-  return !toast.data?.copyText && !toast.actionProps && !toast.data?.secondaryActionProps;
+function isArchiveUndoToast(toast: ToastObject<ThreadToastData>): boolean {
+  return Boolean(toast.data?.archiveUndo);
 }
 
-function toastRootClassName(position: ToastPosition, compact: boolean): string {
+// Archive undo uses the tooltip chrome from the original design, but keeps the
+// toast root no-drag so Electron titlebar hit testing cannot swallow clicks.
+const ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME = cn(
+  APP_TOOLTIP_SURFACE_CLASS_NAME,
+  "absolute w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-2xl [--notification-fg:var(--popover-foreground)] [-webkit-app-region:no-drag]",
+);
+
+// Toast actions are ghost buttons on the notification foreground. They keep the
+// toast body's UI font size and family instead of the smaller `xs` button text.
+const TOAST_ACTION_BUTTON_SIZE = "xs";
+const TOAST_ACTION_BUTTON_VARIANT = "ghost";
+const TOAST_ACTION_BUTTON_CLASS_NAME =
+  "self-start rounded-md px-2 font-sans font-medium text-ui text-[var(--notification-fg)]/80 sm:text-ui [:hover,[data-pressed]]:bg-[var(--notification-fg)]/10 [:hover,[data-pressed]]:text-[var(--notification-fg)] data-pressed:bg-[var(--notification-fg)]/10 data-pressed:text-[var(--notification-fg)] focus-visible:ring-[var(--notification-fg)]/35";
+
+const ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME =
+  "rounded-sm font-medium text-[var(--info-foreground)] underline-offset-2 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--info-foreground)]/35 disabled:pointer-events-none disabled:opacity-55";
+
+function toastTone(type: ToastObject<ThreadToastData>["type"]): NotificationTone {
+  return type === "error" ? "error" : "default";
+}
+
+function toastRootClassName(
+  position: ToastPosition,
+  compact: boolean,
+  tone: NotificationTone,
+): string {
   return cn(
-    compact ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+    notificationSurfaceClassName({ compact, tone, floating: true }),
     position.includes("center") ? "mx-auto" : compact ? "" : "w-full",
   );
 }
@@ -99,20 +157,36 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
       typeof params.threadId === "string" ? ThreadId.makeUnsafe(params.threadId) : null,
   });
   const routeSearch = useDiffRouteSearch();
-  const splitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
+  const splitView = useSplitViewStore(
+    useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
+  );
+  const rightDockState = useRightDockStore(
+    useMemo(() => selectRightDockState(activeThreadId), [activeThreadId]),
+  );
 
-  return useMemo(() => {
-    return resolveVisibleToastThreadIds({ activeThreadId, splitView });
-  }, [activeThreadId, splitView]);
+  return resolveVisibleToastThreadIds({
+    activeThreadId,
+    splitView,
+    rightDockRendered: routeSearch.view !== "editor",
+    rightDockState,
+  });
 }
 
 function ThreadToastVisibleAutoDismiss({
-  toastId,
+  toast,
   dismissAfterVisibleMs,
+  paused: pausedProp,
 }: {
-  toastId: ToastId;
+  toast: ToastObject<ThreadToastData>;
   dismissAfterVisibleMs: number | undefined;
+  // While paused (e.g. an Undo is in flight) the visible timer holds so the
+  // toast can't auto-dismiss out from under an action the user just triggered.
+  paused?: boolean;
 }) {
+  const paused = pausedProp ?? false;
+  const toastId = toast.id;
+  const toastRef = toast.ref;
+  const onNoUndo = toast.data?.archiveUndo?.onNoUndo;
   useEffect(() => {
     if (!dismissAfterVisibleMs || dismissAfterVisibleMs <= 0) return;
     if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -121,6 +195,7 @@ function ThreadToastVisibleAutoDismiss({
     let startedAtMs: number | null = null;
     let timeoutId: number | null = null;
     let closed = false;
+    let disposed = false;
 
     const clearTimer = () => {
       if (timeoutId === null) return;
@@ -128,10 +203,17 @@ function ThreadToastVisibleAutoDismiss({
       timeoutId = null;
     };
 
+    const toastHasFocus = () => {
+      const toastElement = toastRef?.current;
+      const activeElement = document.activeElement;
+      return Boolean(toastElement && activeElement && toastElement.contains(activeElement));
+    };
+
     const closeToast = () => {
       if (closed) return;
       closed = true;
       threadToastVisibleTimeoutRemainingMs.delete(toastId);
+      onNoUndo?.();
       toastManager.close(toastId);
     };
 
@@ -159,67 +241,106 @@ function ThreadToastVisibleAutoDismiss({
     };
 
     const syncTimer = () => {
-      const shouldRun = document.visibilityState === "visible" && document.hasFocus();
+      // Focus events settle in a microtask, possibly after this effect was
+      // cleaned up by navigation or an in-flight Undo changing `paused`.
+      if (disposed) return;
+      const shouldRun = shouldRunVisibleToastAutoDismiss({
+        paused,
+        documentVisible: document.visibilityState === "visible",
+        windowFocused: document.hasFocus(),
+        toastFocused: toastHasFocus(),
+      });
       if (shouldRun) {
         start();
         return;
       }
       pause();
     };
+    const syncTimerAfterFocusChange = () => {
+      window.queueMicrotask(syncTimer);
+    };
 
     syncTimer();
     document.addEventListener("visibilitychange", syncTimer);
+    document.addEventListener("focusin", syncTimerAfterFocusChange);
+    document.addEventListener("focusout", syncTimerAfterFocusChange);
     window.addEventListener("focus", syncTimer);
     window.addEventListener("blur", syncTimer);
 
     return () => {
+      disposed = true;
       document.removeEventListener("visibilitychange", syncTimer);
+      document.removeEventListener("focusin", syncTimerAfterFocusChange);
+      document.removeEventListener("focusout", syncTimerAfterFocusChange);
       window.removeEventListener("focus", syncTimer);
       window.removeEventListener("blur", syncTimer);
       pause();
       clearTimer();
     };
-  }, [dismissAfterVisibleMs, toastId]);
+  }, [dismissAfterVisibleMs, onNoUndo, toastId, toastRef, paused]);
 
   return null;
 }
 
+// Each copyItems entry owns a hook instance, so its Copied state doesn't
+// clear when a sibling path is copied.
+function ToastCopyItemButton({ item }: { item: ToastCopyItem }) {
+  return (
+    <CopyTextButton
+      text={item.text}
+      label={item.label}
+      className={TOAST_ACTION_BUTTON_CLASS_NAME}
+    />
+  );
+}
+
 function ToastActions({
   actionProps,
+  copyItems,
   copyText,
+  diagnosticId,
   secondaryActionProps,
 }: {
   actionProps: ToastObject<ThreadToastData>["actionProps"];
+  copyItems: ThreadToastData["copyItems"];
   copyText: string | undefined;
+  diagnosticId: string | undefined;
   secondaryActionProps: ThreadToastData["secondaryActionProps"];
 }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
-  if (!actionProps && !copyText && !secondaryActionProps) return null;
+  if (!actionProps && !copyText && !secondaryActionProps && !copyItems?.length && !diagnosticId)
+    return null;
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+    <div className="-ms-2 mt-1.5 flex flex-wrap items-center gap-0.5">
+      {diagnosticId ? <DiagnosticReportAction id={diagnosticId} /> : null}
       {copyText && (
         <Button
           aria-label={isCopied ? "Copied error message" : "Copy error message"}
-          className="self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20"
+          className={TOAST_ACTION_BUTTON_CLASS_NAME}
           onClick={() => {
             copyToClipboard(copyText, undefined);
           }}
-          size="xs"
+          size={TOAST_ACTION_BUTTON_SIZE}
           title={isCopied ? "Copied error message" : "Copy error message"}
-          variant="outline"
+          variant={TOAST_ACTION_BUTTON_VARIANT}
         >
           {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
           <span>{isCopied ? "Copied" : "Copy"}</span>
         </Button>
       )}
+      {copyItems?.map((item) => (
+        <ToastCopyItemButton item={item} key={item.label} />
+      ))}
       {actionProps && (
         <Toast.Action
-          {...actionProps}
           className={cn(
-            buttonVariants({ size: "xs", variant: "outline" }),
-            "self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20",
+            buttonVariants({
+              size: TOAST_ACTION_BUTTON_SIZE,
+              variant: TOAST_ACTION_BUTTON_VARIANT,
+            }),
+            TOAST_ACTION_BUTTON_CLASS_NAME,
             actionProps.className,
           )}
           data-slot="toast-action"
@@ -230,12 +351,9 @@ function ToastActions({
       {secondaryActionProps && (
         <Button
           {...secondaryActionProps}
-          className={cn(
-            "self-start rounded-md border-[var(--notification-fg)]/20 bg-[var(--notification-fg)]/10 text-[var(--notification-fg)] hover:bg-[var(--notification-fg)]/20",
-            secondaryActionProps.className,
-          )}
-          size={secondaryActionProps.size ?? "xs"}
-          variant={secondaryActionProps.variant ?? "outline"}
+          className={cn(TOAST_ACTION_BUTTON_CLASS_NAME, secondaryActionProps.className)}
+          size={TOAST_ACTION_BUTTON_SIZE}
+          variant={TOAST_ACTION_BUTTON_VARIANT}
         />
       )}
     </div>
@@ -243,33 +361,138 @@ function ToastActions({
 }
 
 function ToastCloseButton({
-  compact = false,
-  onDismiss,
+  compact: compactProp,
+  disabled,
   onClose,
 }: {
   compact?: boolean;
-  onDismiss: () => void;
+  disabled?: boolean;
   onClose?: (() => void) | undefined;
 }) {
+  const compact = compactProp ?? false;
   return (
-    <button
-      type="button"
+    <Toast.Close
       aria-label="Dismiss toast"
       className={cn(
         // pointer-events-auto keeps the X clickable even when a stacked/collapsed
         // toast still gates its content with pointer-events-none.
-        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
+        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35 disabled:pointer-events-none disabled:opacity-55",
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
+      disabled={disabled}
       onClick={() => {
         onClose?.();
-        onDismiss();
       }}
       title="Dismiss toast"
     >
       <XIcon className={compact ? "size-3" : "size-3.5"} />
-    </button>
+    </Toast.Close>
+  );
+}
+
+function blurFocusedToastElement(toast: ToastObject<ThreadToastData>) {
+  if (typeof document === "undefined") return;
+  const toastElement = toast.ref?.current;
+  const activeElement = document.activeElement;
+  if (
+    toastElement &&
+    activeElement instanceof HTMLElement &&
+    toastElement.contains(activeElement)
+  ) {
+    activeElement.blur();
+  }
+}
+
+function ArchiveUndoToastSurface({
+  archiveUndo,
+  toast,
+  dismissAfterVisibleMs,
+  hideCollapsedContent,
+  onDismiss,
+}: {
+  archiveUndo: NonNullable<ThreadToastData["archiveUndo"]>;
+  toast: ToastObject<ThreadToastData>;
+  dismissAfterVisibleMs: number | undefined;
+  hideCollapsedContent: boolean;
+  onDismiss: () => void;
+}) {
+  const [undoPending, setUndoPending] = useState(false);
+  // A pending Undo owns the next navigation; keep the Settings path idle until it settles.
+  const actionsDisabled = undoPending;
+
+  const handleUndoClick = () => {
+    if (actionsDisabled) return;
+    setUndoPending(true);
+    void (async () => {
+      try {
+        const restored = await archiveUndo.onUndo();
+        if (restored) {
+          blurFocusedToastElement(toast);
+          onDismiss();
+          return;
+        }
+        setUndoPending(false);
+      } catch {
+        setUndoPending(false);
+      }
+    })();
+  };
+
+  const handleViewArchivedClick = () => {
+    if (actionsDisabled) return;
+    archiveUndo.onNoUndo?.();
+    void archiveUndo.onViewArchived?.();
+  };
+
+  return (
+    <>
+      <ThreadToastVisibleAutoDismiss
+        toast={toast}
+        dismissAfterVisibleMs={dismissAfterVisibleMs}
+        paused={undoPending}
+      />
+      <Toast.Content
+        className={cn(
+          "pointer-events-auto relative flex items-center gap-2 overflow-hidden px-3.5 py-2 text-ui-sm leading-normal transition-opacity duration-250 data-expanded:opacity-100",
+          hideCollapsedContent &&
+            "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
+        )}
+        data-slot="toast-archive-undo"
+      >
+        <Toast.Title
+          className="min-w-0 flex-1 font-normal whitespace-nowrap"
+          data-slot="toast-title"
+          render={<div />}
+        >
+          {archiveUndo.message ? <>{archiveUndo.message}. </> : null}
+          <button
+            type="button"
+            className={ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME}
+            data-base-ui-swipe-ignore
+            disabled={actionsDisabled}
+            onClick={handleUndoClick}
+          >
+            Undo
+          </button>
+          {archiveUndo.onViewArchived ? (
+            <>
+              {" "}
+              or view archived chats in{" "}
+              <Toast.Close
+                className={ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME}
+                data-base-ui-swipe-ignore
+                disabled={actionsDisabled}
+                onClick={handleViewArchivedClick}
+              >
+                Settings
+              </Toast.Close>
+            </>
+          ) : null}
+        </Toast.Title>
+        <ToastCloseButton compact disabled={undoPending} onClose={archiveUndo.onNoUndo} />
+      </Toast.Content>
+    </>
   );
 }
 
@@ -277,22 +500,24 @@ function ToastSurface({
   toast,
   compact,
   hideCollapsedContent,
-  onDismiss,
 }: {
   toast: ToastObject<ThreadToastData>;
   compact: boolean;
   hideCollapsedContent: boolean;
-  onDismiss: () => void;
 }) {
   const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
+  const compactContextual = compact && toast.data?.compactContextual === true;
 
   return (
     <Toast.Content
       className={cn(
         "pointer-events-auto relative flex overflow-hidden transition-opacity duration-250 data-expanded:opacity-100",
         compact
-          ? "items-center gap-2 px-3 py-1.5 pr-1.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal"
-          : "items-start gap-2 px-3.5 py-3 pr-10 text-sm",
+          ? cn(
+              "gap-2 px-3 py-1.5 pr-1.5 text-ui-sm leading-normal",
+              compactContextual ? "items-start py-2" : "items-center",
+            )
+          : "items-start gap-2 px-3.5 py-3 pr-10 text-ui leading-normal",
         hideCollapsedContent && "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
       )}
     >
@@ -300,7 +525,9 @@ function ToastSurface({
         <div
           className={cn(
             "shrink-0 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-            compact ? "[&>svg]:size-3.5" : "[&>svg]:h-lh [&>svg]:w-4",
+            compact
+              ? cn("[&>svg]:size-3.5", compactContextual && "pt-0.5")
+              : "[&>svg]:h-lh [&>svg]:w-4",
           )}
           data-slot="toast-icon"
         >
@@ -309,51 +536,86 @@ function ToastSurface({
       ) : null}
 
       <div
-        className={cn("min-w-0 flex-1", compact ? "flex items-center" : "flex flex-col gap-0.5")}
+        className={cn(
+          "min-w-0 flex-1",
+          compact && !compactContextual ? "flex items-center" : "flex flex-col gap-0.5",
+        )}
       >
         <Toast.Title
           className={cn(
             "min-w-0 font-normal",
-            compact ? "truncate whitespace-nowrap" : "break-words",
+            compact && !compactContextual
+              ? "truncate whitespace-nowrap"
+              : compactContextual
+                ? "truncate whitespace-nowrap font-medium"
+                : "break-words",
           )}
           data-slot="toast-title"
         />
-        {!compact ? (
+        {!compact || compactContextual ? (
           <Toast.Description
-            className="min-w-0 break-words text-[var(--notification-fg)]/72"
+            className={cn(
+              "min-w-0 text-[var(--notification-fg)]/72",
+              compactContextual ? "line-clamp-2 max-w-80 break-words leading-snug" : "break-words",
+            )}
             data-slot="toast-description"
           />
         ) : null}
         {!compact ? (
           <ToastActions
             actionProps={toast.actionProps}
+            copyItems={toast.data?.copyItems}
             copyText={toast.data?.copyText}
+            diagnosticId={toast.data?.diagnosticId}
             secondaryActionProps={toast.data?.secondaryActionProps}
           />
         ) : null}
       </div>
 
-      <ToastCloseButton compact={compact} onClose={toast.data?.onClose} onDismiss={onDismiss} />
+      {compactContextual && toast.actionProps ? (
+        <Toast.Action
+          className={cn(
+            "mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 font-medium text-[var(--notification-fg)]/76 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
+            toast.actionProps.className,
+          )}
+          data-slot="toast-action"
+        >
+          {toast.actionProps.children}
+        </Toast.Action>
+      ) : null}
+      <ToastCloseButton compact={compact} onClose={toast.data?.onClose} />
     </Toast.Content>
   );
 }
 
-function ToastProvider({ children, position = "top-center", ...props }: ToastProviderProps) {
+function ToastProvider({
+  children,
+  position: positionProp,
+  timeout = DEFAULT_TOAST_TIMEOUT_MS,
+  ...props
+}: ToastProviderProps) {
+  const position = positionProp ?? "top-center";
   return (
-    <Toast.Provider toastManager={toastManager} {...props}>
+    <Toast.Provider timeout={timeout} toastManager={toastManager} {...props}>
       {children}
       <Toasts position={position} />
     </Toast.Provider>
   );
 }
 
-function Toasts({ position = "top-center" }: { position: ToastPosition }) {
+function Toasts({ position: positionProp }: { position: ToastPosition }) {
+  const position = positionProp ?? "top-center";
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const visibleThreadIds = useVisibleThreadIdsFromRoute();
   const isTop = position.startsWith("top");
-  const visibleToasts = toasts.filter((toast) =>
-    shouldRenderForActiveThread(toast.data, visibleThreadIds),
-  );
+  const visibleToasts = toasts
+    .filter((toast) => shouldRenderForActiveThread(toast.data, visibleThreadIds))
+    .toSorted((left, right) => {
+      const leftEnding = left.transitionStatus === "ending";
+      const rightEnding = right.transitionStatus === "ending";
+      if (leftEnding === rightEnding) return 0;
+      return leftEnding ? 1 : -1;
+    });
   const visibleToastLayout = buildVisibleToastLayout(visibleToasts);
 
   useEffect(() => {
@@ -370,10 +632,11 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
       <Toast.Viewport
         className={cn(
           "fixed z-[200] mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
-          // Vertical positioning
+          // Vertical positioning; corner toasts clear the top bar
+          // (CHAT_SURFACE_HEADER_HEIGHT_PX, literal so Tailwind can scan it).
           "data-[position=top-center]:top-4",
-          "data-[position=top-left]:top-[calc(var(--toast-inset)+46px)]",
-          "data-[position=top-right]:top-[calc(var(--toast-inset)+46px)]",
+          "data-[position=top-left]:top-[calc(var(--toast-inset)+44px)]",
+          "data-[position=top-right]:top-[calc(var(--toast-inset)+44px)]",
           "data-[position*=bottom]:bottom-(--toast-inset)",
           // Horizontal positioning
           "data-[position*=left]:left-(--toast-inset)",
@@ -394,12 +657,18 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
             visibleToastLayout.items.length,
           );
           const compact = shouldUseCompactToast(toast);
+          const archiveUndoToast = isArchiveUndoToast(toast);
 
           return (
             <Toast.Root
               className={cn(
                 "absolute z-[calc(9999-var(--toast-index))] h-(--toast-calc-height) select-none [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s]",
-                toastRootClassName(position, compact),
+                archiveUndoToast
+                  ? cn(
+                      ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME,
+                      position.includes("center") ? "mx-auto" : "",
+                    )
+                  : toastRootClassName(position, compact, toastTone(toast.type)),
                 // Base positioning using data-position
                 "data-[position*=right]:right-0 data-[position*=right]:left-auto",
                 "data-[position*=left]:right-auto data-[position*=left]:left-0",
@@ -419,6 +688,10 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
                 "data-[position=top-center]:[--toast-peek:0px] data-[position=top-center]:[--toast-scale:1] data-[position=top-center]:[--toast-shrink:0]",
                 "data-[position=top-center]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(var(--toast-swipe-movement-y))]",
                 "data-[position=top-center]:data-expanded:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-offset-y)+var(--toast-swipe-movement-y)))]",
+                // With no peek, toasts behind the front one would sit exactly under it and
+                // show their edges when wider; hide them until hover expands the stack.
+                hideCollapsedContent &&
+                  "data-[position=top-center]:not-data-expanded:pointer-events-none data-[position=top-center]:not-data-expanded:opacity-0",
                 // Define offset-y variable
                 "data-[position*=top]:[--toast-calc-offset-y:calc(var(--toast-offset-y)+var(--toast-index)*var(--toast-gap)+var(--toast-swipe-movement-y))]",
                 "data-[position*=bottom]:[--toast-calc-offset-y:calc(var(--toast-offset-y)*-1+var(--toast-index)*var(--toast-gap)*-1+var(--toast-swipe-movement-y))]",
@@ -448,6 +721,9 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
                 "data-expanded:data-ending-style:data-[swipe-direction=right]:transform-[translateX(calc(var(--toast-swipe-movement-x)+100%+var(--toast-inset)))_translateY(var(--toast-calc-offset-y))]",
                 "data-expanded:data-ending-style:data-[swipe-direction=up]:transform-[translateY(calc(var(--toast-swipe-movement-y)-100%-var(--toast-inset)))]",
                 "data-expanded:data-ending-style:data-[swipe-direction=down]:transform-[translateY(calc(var(--toast-swipe-movement-y)+100%+var(--toast-inset)))]",
+                // Closed/limited toasts stay mounted briefly for animation; they must
+                // never sit as invisible hit targets above a fresh interactive toast.
+                "data-ending-style:pointer-events-none data-limited:pointer-events-none",
               )}
               data-position={position}
               key={toast.id}
@@ -466,16 +742,27 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
               }
               toast={toast}
             >
-              <ThreadToastVisibleAutoDismiss
-                dismissAfterVisibleMs={toast.data?.dismissAfterVisibleMs}
-                toastId={toast.id}
-              />
-              <ToastSurface
-                compact={compact}
-                hideCollapsedContent={hideCollapsedContent}
-                onDismiss={() => toastManager.close(toast.id)}
-                toast={toast}
-              />
+              {archiveUndoToast && toast.data?.archiveUndo ? (
+                <ArchiveUndoToastSurface
+                  archiveUndo={toast.data.archiveUndo}
+                  toast={toast}
+                  dismissAfterVisibleMs={toast.data.dismissAfterVisibleMs}
+                  hideCollapsedContent={hideCollapsedContent}
+                  onDismiss={() => toastManager.close(toast.id)}
+                />
+              ) : (
+                <>
+                  <ThreadToastVisibleAutoDismiss
+                    dismissAfterVisibleMs={toast.data?.dismissAfterVisibleMs}
+                    toast={toast}
+                  />
+                  <ToastSurface
+                    compact={compact}
+                    hideCollapsedContent={hideCollapsedContent}
+                    toast={toast}
+                  />
+                </>
+              )}
             </Toast.Root>
           );
         })}
@@ -484,9 +771,13 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
   );
 }
 
-function AnchoredToastProvider({ children, ...props }: Toast.Provider.Props) {
+function AnchoredToastProvider({
+  children,
+  timeout = DEFAULT_TOAST_TIMEOUT_MS,
+  ...props
+}: Toast.Provider.Props) {
   return (
-    <Toast.Provider toastManager={anchoredToastManager} {...props}>
+    <Toast.Provider timeout={timeout} toastManager={anchoredToastManager} {...props}>
       {children}
       <AnchoredToasts />
     </Toast.Provider>
@@ -523,10 +814,12 @@ function AnchoredToasts() {
                   className={cn(
                     "relative text-balance transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0",
                     tooltipStyle
-                      ? "rounded-lg border bg-popover text-popover-foreground text-xs shadow-md/5 [-webkit-app-region:no-drag] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
-                      : compact
-                        ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME
-                        : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+                      ? "rounded-lg border bg-popover text-popover-foreground text-ui leading-snug shadow-md/5 [-webkit-app-region:no-drag] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
+                      : notificationSurfaceClassName({
+                          compact,
+                          tone: toastTone(toast.type),
+                          floating: true,
+                        }),
                   )}
                   data-slot="toast-popup"
                   toast={toast}
@@ -536,12 +829,7 @@ function AnchoredToasts() {
                       <Toast.Title data-slot="toast-title" />
                     </Toast.Content>
                   ) : (
-                    <ToastSurface
-                      compact={compact}
-                      hideCollapsedContent={false}
-                      onDismiss={() => anchoredToastManager.close(toast.id)}
-                      toast={toast}
-                    />
+                    <ToastSurface compact={compact} hideCollapsedContent={false} toast={toast} />
                   )}
                 </Toast.Root>
               </Toast.Positioner>

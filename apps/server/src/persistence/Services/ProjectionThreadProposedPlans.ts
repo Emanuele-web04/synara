@@ -4,8 +4,8 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
-} from "@t3tools/contracts";
-import { Schema, ServiceMap } from "effect";
+} from "@synara/contracts";
+import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
@@ -22,11 +22,26 @@ export const ProjectionThreadProposedPlan = Schema.Struct({
 });
 export type ProjectionThreadProposedPlan = typeof ProjectionThreadProposedPlan.Type;
 
+export const ProjectionThreadProposedPlanSummary = Schema.Struct({
+  planId: OrchestrationProposedPlanId,
+  turnId: Schema.NullOr(TurnId),
+  implementedAt: Schema.NullOr(IsoDateTime),
+  updatedAt: IsoDateTime,
+});
+export type ProjectionThreadProposedPlanSummary = typeof ProjectionThreadProposedPlanSummary.Type;
+
 export const ListProjectionThreadProposedPlansInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type ListProjectionThreadProposedPlansInput =
   typeof ListProjectionThreadProposedPlansInput.Type;
+
+export const GetLatestProjectionThreadProposedPlanSummaryInput = Schema.Struct({
+  threadId: ThreadId,
+  preferredTurnId: Schema.NullOr(TurnId),
+});
+export type GetLatestProjectionThreadProposedPlanSummaryInput =
+  typeof GetLatestProjectionThreadProposedPlanSummaryInput.Type;
 
 export const DeleteProjectionThreadProposedPlansInput = Schema.Struct({
   threadId: ThreadId,
@@ -41,6 +56,9 @@ export interface ProjectionThreadProposedPlanRepositoryShape {
   readonly listByThreadId: (
     input: ListProjectionThreadProposedPlansInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadProposedPlan>, ProjectionRepositoryError>;
+  readonly getLatestSummaryByThreadId: (
+    input: GetLatestProjectionThreadProposedPlanSummaryInput,
+  ) => Effect.Effect<Option.Option<ProjectionThreadProposedPlanSummary>, ProjectionRepositoryError>;
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadProposedPlansInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
@@ -50,5 +68,5 @@ export class ProjectionThreadProposedPlanRepository extends ServiceMap.Service<
   ProjectionThreadProposedPlanRepository,
   ProjectionThreadProposedPlanRepositoryShape
 >()(
-  "t3/persistence/Services/ProjectionThreadProposedPlans/ProjectionThreadProposedPlanRepository",
+  "synara/persistence/Services/ProjectionThreadProposedPlans/ProjectionThreadProposedPlanRepository",
 ) {}

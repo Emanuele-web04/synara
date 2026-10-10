@@ -7,8 +7,13 @@ import type { IpcMain, WebContents } from "electron";
 
 import type {
   BrowserAttachWebviewInput,
+  BrowserAnnotationCancelInput,
+  BrowserAnnotationEvent,
+  BrowserAnnotationStartInput,
+  BrowserAnnotationSyncMarkersInput,
   BrowserCaptureScreenshotResult,
-  BrowserExecuteCdpInput,
+  BrowserCopyLinkEvent,
+  BrowserDetachWebviewInput,
   BrowserNavigateInput,
   BrowserNewTabInput,
   BrowserOpenInput,
@@ -16,31 +21,10 @@ import type {
   BrowserTabInput,
   BrowserThreadInput,
   ThreadBrowserState,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { DesktopBrowserManager } from "./browserManager";
-
-export const BROWSER_IPC_CHANNELS = {
-  state: "desktop:browser-state",
-  open: "desktop:browser-open",
-  close: "desktop:browser-close",
-  hide: "desktop:browser-hide",
-  getState: "desktop:browser-get-state",
-  setBounds: "desktop:browser-set-bounds",
-  attachWebview: "desktop:browser-attach-webview",
-  requestOpenPanel: "desktop:browser-use-request-open-panel",
-  copyScreenshotToClipboard: "desktop:browser-copy-screenshot-to-clipboard",
-  captureScreenshot: "desktop:browser-capture-screenshot",
-  executeCdp: "desktop:browser-execute-cdp",
-  navigate: "desktop:browser-navigate",
-  reload: "desktop:browser-reload",
-  goBack: "desktop:browser-go-back",
-  goForward: "desktop:browser-go-forward",
-  newTab: "desktop:browser-new-tab",
-  closeTab: "desktop:browser-close-tab",
-  selectTab: "desktop:browser-select-tab",
-  openDevTools: "desktop:browser-open-devtools",
-} as const;
+import { BROWSER_IPC_CHANNELS } from "./ipcChannels";
 
 // Pushes the latest browser state snapshot to the renderer shell.
 export function sendBrowserState(
@@ -50,11 +34,32 @@ export function sendBrowserState(
   webContents?.send(BROWSER_IPC_CHANNELS.state, state);
 }
 
+// Notifies the renderer that the native browser page handled the copy-link chord so the
+// shell can surface the confirmation toast (the URL is already on the clipboard).
+export function sendBrowserCopyLink(
+  webContents: WebContents | null | undefined,
+  event: BrowserCopyLinkEvent,
+): void {
+  webContents?.send(BROWSER_IPC_CHANNELS.copyLink, event);
+}
+
+export function sendBrowserAnnotationEvent(
+  webContents: WebContents | null | undefined,
+  event: BrowserAnnotationEvent,
+): void {
+  webContents?.send(BROWSER_IPC_CHANNELS.annotations.event, event);
+}
+
 // Registers the desktop browser bridge in one place so main.ts stays focused on app boot.
 export function registerBrowserIpcHandlers(
   ipcMain: IpcMain,
   browserManager: DesktopBrowserManager,
 ): void {
+  const requireTrustedRenderer = (senderId: number): void => {
+    if (!browserManager.isTrustedRenderer(senderId)) {
+      throw new Error("Browser annotation IPC rejected an untrusted renderer.");
+    }
+  };
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.open);
   ipcMain.handle(BROWSER_IPC_CHANNELS.open, async (_event, input: BrowserOpenInput) =>
     browserManager.open(input),
@@ -84,10 +89,23 @@ export function registerBrowserIpcHandlers(
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.attachWebview);
   ipcMain.handle(
     BROWSER_IPC_CHANNELS.attachWebview,
-    async (_event, input: BrowserAttachWebviewInput) => browserManager.attachWebview(input),
+    async (event, input: BrowserAttachWebviewInput) =>
+      browserManager.attachWebview(input, event.sender.id),
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.detachWebview);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.detachWebview,
+    async (_event, input: BrowserDetachWebviewInput) => {
+      browserManager.detachWebview(input);
+    },
   );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.captureScreenshot);
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.capturePreview);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.capturePreview, async (_event, input: BrowserTabInput) =>
+    browserManager.capturePreview(input),
+  );
   ipcMain.handle(
     BROWSER_IPC_CHANNELS.captureScreenshot,
     async (_event, input: BrowserTabInput): Promise<BrowserCaptureScreenshotResult> =>
@@ -102,10 +120,10 @@ export function registerBrowserIpcHandlers(
     },
   );
 
-  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.executeCdp);
-  ipcMain.handle(BROWSER_IPC_CHANNELS.executeCdp, async (_event, input: BrowserExecuteCdpInput) =>
-    browserManager.executeCdp(input),
-  );
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.requestCopyLink);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.requestCopyLink, async (_event, input: BrowserTabInput) => {
+    browserManager.copyLink(input);
+  });
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.navigate);
   ipcMain.handle(BROWSER_IPC_CHANNELS.navigate, async (_event, input: BrowserNavigateInput) =>
@@ -145,5 +163,40 @@ export function registerBrowserIpcHandlers(
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.openDevTools);
   ipcMain.handle(BROWSER_IPC_CHANNELS.openDevTools, async (_event, input: BrowserTabInput) => {
     browserManager.openDevTools(input);
+  });
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.annotations.start);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.annotations.start,
+    async (event, input: BrowserAnnotationStartInput) => {
+      requireTrustedRenderer(event.sender.id);
+      return browserManager.startAnnotation(input);
+    },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.annotations.cancel);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.annotations.cancel,
+    async (event, input: BrowserAnnotationCancelInput) => {
+      requireTrustedRenderer(event.sender.id);
+      browserManager.cancelAnnotation(input);
+    },
+  );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.annotations.syncMarkers);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.annotations.syncMarkers,
+    async (event, input: BrowserAnnotationSyncMarkersInput) => {
+      requireTrustedRenderer(event.sender.id);
+      browserManager.syncAnnotationMarkers(input);
+    },
+  );
+
+  ipcMain.removeAllListeners(BROWSER_IPC_CHANNELS.annotations.guestMessage);
+  ipcMain.on(BROWSER_IPC_CHANNELS.annotations.guestMessage, (event, payload: unknown) => {
+    // Guest subframes inherit the preload in some embed configurations. Only
+    // the current main frame may establish document/session affinity.
+    if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return;
+    browserManager.handleAnnotationGuestMessage(event.sender, payload);
   });
 }

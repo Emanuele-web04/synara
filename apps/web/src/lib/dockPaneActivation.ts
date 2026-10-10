@@ -3,17 +3,94 @@
 // Layer: Web UI lifecycle helper
 // Depends on: rightDockStore pane kind taxonomy
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 
 import type { RightDockPaneKind } from "~/rightDockStore.logic";
 
 export type DockPaneActivationReason = "explicit" | "restore";
 export type DockPaneRuntimeMode = "live" | "preview";
 
-export const DOCK_PANE_DEFERRED_HYDRATION_FRAMES = 2;
+const DOCK_PANE_DEFERRED_HYDRATION_FRAMES = 2;
+// requestAnimationFrame is intentionally suspended by Chromium for hidden or
+// offscreen documents. A route transition can commit a restored dock while its
+// subtree is still offscreen, so frame-only promotion can leave a heavy pane in
+// preview forever even after the route becomes visible. Keep the paint-friendly
+// frame path, but cap it with a task-based fallback.
+export const DOCK_PANE_DEFERRED_HYDRATION_TIMEOUT_MS = 250;
 
+export interface DeferredDockPaneHydrationScheduler {
+  readonly requestFrame: (callback: () => void) => number;
+  readonly cancelFrame: (frameId: number) => void;
+  readonly setTimer: (callback: () => void, delayMs: number) => number;
+  readonly clearTimer: (timerId: number) => void;
+}
+
+/**
+ * Promotes a restored heavy pane after the requested number of paint frames,
+ * with a bounded timeout for Electron/Chromium states where rAF is paused.
+ * Completion and cancellation are both exactly-once.
+ */
+export function scheduleDeferredDockPaneHydration(input: {
+  readonly onHydrate: () => void;
+  readonly scheduler: DeferredDockPaneHydrationScheduler;
+  readonly frames?: number;
+  readonly timeoutMs?: number;
+}): () => void {
+  const frames = Math.max(0, input.frames ?? DOCK_PANE_DEFERRED_HYDRATION_FRAMES);
+  const timeoutMs = Math.max(0, input.timeoutMs ?? DOCK_PANE_DEFERRED_HYDRATION_TIMEOUT_MS);
+  let completed = false;
+  let frameId: number | null = null;
+  let timerId: number | null = null;
+  let framesRemaining = frames;
+
+  function clearScheduledWork(): void {
+    if (frameId !== null) {
+      input.scheduler.cancelFrame(frameId);
+      frameId = null;
+    }
+    if (timerId !== null) {
+      input.scheduler.clearTimer(timerId);
+      timerId = null;
+    }
+  }
+
+  const finish = () => {
+    if (completed) return;
+    completed = true;
+    clearScheduledWork();
+    input.onHydrate();
+  };
+
+  const tick = () => {
+    frameId = null;
+    if (completed) return;
+    framesRemaining -= 1;
+    if (framesRemaining <= 0) {
+      finish();
+      return;
+    }
+    frameId = input.scheduler.requestFrame(tick);
+  };
+
+  timerId = input.scheduler.setTimer(finish, timeoutMs);
+  if (framesRemaining <= 0) {
+    finish();
+  } else {
+    frameId = input.scheduler.requestFrame(tick);
+  }
+
+  return () => {
+    if (completed) return;
+    completed = true;
+    clearScheduledWork();
+  };
+}
+
+// The device pane holds a WebCodecs decoder and a frame socket, so a restored
+// tab must stay in preview until the user actually looks at it.
 const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "browser",
+  "device",
   "sidechat",
   "terminal",
 ]);
@@ -24,8 +101,16 @@ const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<Righ
 // triggers a double FitAddon pass, which the user sees as a slow open plus a
 // multi-line reflow flicker. Keeping it mounted and toggling visibility makes
 // tab switches instant and flicker-free while preserving scrollback/runtime.
+// The explorer pane's browse state (selected file, expanded directories, search
+// query) is per-thread in dockExplorerBrowseStore, so a remount already restores
+// it — but keeping the pane mounted while another tab is active still avoids the
+// re-list flash and preserves the tree's DOM scroll position on tab switches.
+// File panes keep their reading scroll position in the DOM, so unmounting on a
+// tab switch resets the reader to the top when the file is selected again.
 const KEEP_MOUNTED_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "terminal",
+  "explorer",
+  "file",
 ]);
 
 export function dockPaneActivationKey(input: {
@@ -36,11 +121,11 @@ export function dockPaneActivationKey(input: {
   return `${input.threadId}\u0000${input.paneId}\u0000${input.kind}`;
 }
 
-export function isDeferredRuntimePaneKind(kind: RightDockPaneKind): boolean {
+function isDeferredRuntimePaneKind(kind: RightDockPaneKind): boolean {
   return DEFERRED_RUNTIME_PANE_KINDS.has(kind);
 }
 
-export function isKeepMountedPaneKind(kind: RightDockPaneKind): boolean {
+function isKeepMountedPaneKind(kind: RightDockPaneKind): boolean {
   return KEEP_MOUNTED_PANE_KINDS.has(kind);
 }
 

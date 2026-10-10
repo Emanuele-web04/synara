@@ -1,5 +1,5 @@
 // FILE: ComposerColumnFrame.tsx
-// Purpose: Shared composer column wrapper and the 11/12 stacked-activity rail that must
+// Purpose: Shared composer column wrapper and the stacked-activity rail that must
 // live inside it (queued follow-ups, active plan/task activity). Keeps stacked panels
 // aligned with the composer input instead of the full gutter viewport.
 // Layer: Chat composer layout
@@ -26,7 +26,7 @@ function useComposerColumnFrameContext(componentName: string) {
   const insideComposerColumnFrame = useContext(ComposerColumnFrameContext);
   if (import.meta.env.DEV && !insideComposerColumnFrame) {
     console.warn(
-      `${componentName} must render inside ComposerColumnFrame so stacked activity stays at 11/12 of the composer input width.`,
+      `${componentName} must render inside ComposerColumnFrame so stacked activity stays aligned to the composer input width.`,
     );
   }
   return insideComposerColumnFrame;
@@ -38,7 +38,7 @@ interface ComposerColumnFrameProps {
 }
 
 /** Centers the composer column at the shared chat max width. */
-export const ComposerColumnFrame = memo(function ComposerColumnFrame({
+export const ComposerColumnFrame = function ComposerColumnFrame({
   children,
   className,
 }: ComposerColumnFrameProps) {
@@ -47,7 +47,7 @@ export const ComposerColumnFrame = memo(function ComposerColumnFrame({
       <div className={cn(COMPOSER_COLUMN_FRAME_CLASS_NAME, className)}>{children}</div>
     </ComposerColumnFrameContext.Provider>
   );
-});
+};
 
 interface ComposerStackedHeaderFrameProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
@@ -56,14 +56,15 @@ interface ComposerStackedHeaderFrameProps extends HTMLAttributes<HTMLDivElement>
   passthroughSideMargins?: boolean;
 }
 
-/** 11/12-width rail for panels stacked flush above the composer input. */
+/** Full-width rail for panels stacked flush above the composer input. */
 export const ComposerStackedHeaderFrame = memo(function ComposerStackedHeaderFrame({
   children,
   className,
   ref,
-  passthroughSideMargins = false,
+  passthroughSideMargins: passthroughSideMarginsProp,
   ...rest
 }: ComposerStackedHeaderFrameProps) {
+  const passthroughSideMargins = passthroughSideMarginsProp ?? false;
   useComposerColumnFrameContext("ComposerStackedHeaderFrame");
 
   const frameClassName = cn(COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME, className);

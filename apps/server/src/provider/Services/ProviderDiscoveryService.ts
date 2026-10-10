@@ -13,7 +13,7 @@ import type {
   ProviderListSkillsResult,
   ProviderReadPluginInput,
   ProviderReadPluginResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -55,4 +55,4 @@ export interface ProviderDiscoveryServiceShape {
 export class ProviderDiscoveryService extends ServiceMap.Service<
   ProviderDiscoveryService,
   ProviderDiscoveryServiceShape
->()("t3/provider/Services/ProviderDiscoveryService") {}
+>()("synara/provider/Services/ProviderDiscoveryService") {}

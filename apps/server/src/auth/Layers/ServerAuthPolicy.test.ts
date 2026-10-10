@@ -18,7 +18,7 @@ const makeLayer = (overrides: Partial<ServerConfigShape>) =>
       ).pipe(
         Layer.provide(
           ServerConfig.layerTest(process.cwd(), {
-            prefix: "dpcode-auth-policy-test-",
+            prefix: "synara-auth-policy-test-",
           }),
         ),
       ),
@@ -41,7 +41,7 @@ describe("ServerAuthPolicyLive", () => {
 
     expect(descriptor.policy).toBe("desktop-managed-local");
     expect(descriptor.bootstrapMethods).toEqual(["desktop-bootstrap"]);
-    expect(descriptor.sessionCookieName).toBe("t3_session_3773");
+    expect(descriptor.sessionCookieName).toBe("synara_session_3773");
   });
 
   it("uses remote-reachable policy for wildcard desktop mode", async () => {
@@ -64,7 +64,7 @@ describe("ServerAuthPolicyLive", () => {
 
     expect(descriptor.policy).toBe("loopback-browser");
     expect(descriptor.bootstrapMethods).toEqual(["one-time-token"]);
-    expect(descriptor.sessionCookieName).toBe("t3_session");
+    expect(descriptor.sessionCookieName).toBe("synara_session");
   });
 
   it("uses remote-reachable policy for non-loopback web mode", async () => {

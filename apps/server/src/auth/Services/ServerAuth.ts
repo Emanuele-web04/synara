@@ -11,7 +11,7 @@ import type {
   AuthWebSocketTokenResult,
   ServerAuthDescriptor,
   ServerAuthSessionMethod,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Data, DateTime, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -31,9 +31,13 @@ export interface AuthenticatedSession {
   readonly expiresAt?: DateTime.DateTime;
 }
 
+export interface AuthenticatedHttpSession extends AuthenticatedSession {
+  readonly credentialSource: "bearer" | "cookie";
+}
+
 export class AuthError extends Data.TaggedError("AuthError")<{
   readonly message: string;
-  readonly status?: 400 | 401 | 403 | 500;
+  readonly status?: 400 | 401 | 403 | 429 | 500;
   readonly cause?: unknown;
 }> {}
 
@@ -71,9 +75,10 @@ export interface ServerAuthShape {
   readonly revokeOtherClientSessions: (
     currentSessionId: AuthSessionId,
   ) => Effect.Effect<number, AuthError>;
+  readonly logoutSession: (sessionId: AuthSessionId) => Effect.Effect<boolean, AuthError>;
   readonly authenticateHttpRequest: (
     request: AuthRequest,
-  ) => Effect.Effect<AuthenticatedSession, AuthError>;
+  ) => Effect.Effect<AuthenticatedHttpSession, AuthError>;
   readonly authenticateWebSocketUpgrade: (
     request: AuthRequest,
   ) => Effect.Effect<AuthenticatedSession, AuthError>;
@@ -84,5 +89,5 @@ export interface ServerAuthShape {
 }
 
 export class ServerAuth extends ServiceMap.Service<ServerAuth, ServerAuthShape>()(
-  "t3/auth/Services/ServerAuth",
+  "synara/auth/Services/ServerAuth",
 ) {}

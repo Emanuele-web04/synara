@@ -7,7 +7,7 @@ import {
   THREAD_NOTES_MAX_CHARS,
   type MessageId,
   type PinnedMessage,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 // Preserve no-op references while keeping mutation helpers typed as mutable-array outputs.
 function keepExistingPins(pins: readonly PinnedMessage[]): PinnedMessage[] {
@@ -38,15 +38,6 @@ export function removePinnedMessage(
   const existingPins = pins ?? [];
   const nextPins = existingPins.filter((pin) => pin.messageId !== messageId);
   return nextPins.length === existingPins.length ? keepExistingPins(existingPins) : nextPins;
-}
-
-export function togglePinnedMessage(
-  pins: readonly PinnedMessage[] | null | undefined,
-  pin: PinnedMessage,
-): PinnedMessage[] {
-  return isMessagePinned(pins, pin.messageId)
-    ? removePinnedMessage(pins, pin.messageId)
-    : addPinnedMessage(pins, pin);
 }
 
 export function setPinnedMessageDone(

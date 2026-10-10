@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect";
+import { AsyncUserInputQuestions } from "./asyncUserInput";
 import {
   EventId,
   IsoDateTime,
@@ -12,7 +13,8 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas";
-import { ProviderKind } from "./orchestration";
+import { ClaudeCacheObservation } from "./claudeCache";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -23,13 +25,11 @@ const RuntimeEventRawSource = Schema.Literals([
   "codex.eventmsg",
   "claude.sdk.message",
   "claude.sdk.permission",
+  "claude.sdk.hook",
   "codex.sdk.thread-event",
-  "gemini.acp.message",
-  "gemini.acp.stdout",
-  "gemini.acp.stderr",
+  "antigravity.cli.event",
   "acp.jsonrpc",
   "acp.cursor.extension",
-  "kilo.sdk.event",
   "opencode.sdk.event",
   "pi.sdk.event",
 ]);
@@ -144,9 +144,11 @@ export const CanonicalRequestType = Schema.Literals([
   "command_execution_approval",
   "file_read_approval",
   "file_change_approval",
+  "permissions_approval",
   "apply_patch_approval",
   "exec_command_approval",
   "tool_user_input",
+  "tool_approval",
   "dynamic_tool_call",
   "auth_tokens_refresh",
   "unknown",
@@ -174,6 +176,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "turn.proposed.delta",
   "turn.proposed.completed",
   "turn.diff.updated",
+  "turn.steered",
   "item.started",
   "item.updated",
   "item.completed",
@@ -184,6 +187,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "user-input.resolved",
   "task.started",
   "task.progress",
+  "task.updated",
   "task.completed",
   "hook.started",
   "hook.progress",
@@ -199,8 +203,10 @@ const ProviderRuntimeEventType = Schema.Literals([
   "config.warning",
   "deprecation.notice",
   "files.persisted",
+  "vcs.state.changed",
   "runtime.warning",
   "runtime.error",
+  "event.unmapped",
 ]);
 export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
 
@@ -224,6 +230,7 @@ const TurnTasksUpdatedType = Schema.Literal("turn.tasks.updated");
 const TurnProposedDeltaType = Schema.Literal("turn.proposed.delta");
 const TurnProposedCompletedType = Schema.Literal("turn.proposed.completed");
 const TurnDiffUpdatedType = Schema.Literal("turn.diff.updated");
+const TurnSteeredType = Schema.Literal("turn.steered");
 const ItemStartedType = Schema.Literal("item.started");
 const ItemUpdatedType = Schema.Literal("item.updated");
 const ItemCompletedType = Schema.Literal("item.completed");
@@ -234,6 +241,7 @@ const UserInputRequestedType = Schema.Literal("user-input.requested");
 const UserInputResolvedType = Schema.Literal("user-input.resolved");
 const TaskStartedType = Schema.Literal("task.started");
 const TaskProgressType = Schema.Literal("task.progress");
+const TaskUpdatedType = Schema.Literal("task.updated");
 const TaskCompletedType = Schema.Literal("task.completed");
 const HookStartedType = Schema.Literal("hook.started");
 const HookProgressType = Schema.Literal("hook.progress");
@@ -249,18 +257,22 @@ const ModelReroutedType = Schema.Literal("model.rerouted");
 const ConfigWarningType = Schema.Literal("config.warning");
 const DeprecationNoticeType = Schema.Literal("deprecation.notice");
 const FilesPersistedType = Schema.Literal("files.persisted");
+const VcsStateChangedType = Schema.Literal("vcs.state.changed");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
+const EventUnmappedType = Schema.Literal("event.unmapped");
 
 const ProviderRuntimeEventBase = Schema.Struct({
   eventId: EventId,
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   threadId: ThreadId,
   createdAt: IsoDateTime,
   turnId: Schema.optional(TurnId),
   parentTurnId: Schema.optional(TurnId),
   itemId: Schema.optional(RuntimeItemId),
   requestId: Schema.optional(RuntimeRequestId),
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyStringSchema),
   providerRefs: Schema.optional(ProviderRefs),
   raw: Schema.optional(RuntimeEventRaw),
 });
@@ -309,11 +321,23 @@ const ThreadMetadataUpdatedPayload = Schema.Struct({
 export type ThreadMetadataUpdatedPayload = typeof ThreadMetadataUpdatedPayload.Type;
 
 export const ThreadTokenUsageSnapshot = Schema.Struct({
+  claudeCache: Schema.optional(ClaudeCacheObservation),
+  // Provider session totals, distinct from the latest request/context snapshot.
+  cumulativeUsage: Schema.optional(
+    Schema.Struct({
+      inputTokens: NonNegativeInt,
+      outputTokens: NonNegativeInt,
+      cachedInputTokens: Schema.optional(NonNegativeInt),
+      cacheCreationInputTokens: Schema.optional(NonNegativeInt),
+    }),
+  ),
   usedTokens: NonNegativeInt,
   usedPercent: Schema.optional(
     Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
   ),
   totalProcessedTokens: Schema.optional(NonNegativeInt),
+  // Claude v1 counts API responses once; unversioned Claude totals are unreliable.
+  tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
   maxTokens: Schema.optional(PositiveInt),
   inputTokens: Schema.optional(NonNegativeInt),
   cachedInputTokens: Schema.optional(NonNegativeInt),
@@ -368,12 +392,18 @@ export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
 const TurnCompletedPayload = Schema.Struct({
   state: RuntimeTurnState,
+  // Present only for an explicitly requested native compaction operation.
+  contextCompacted: Schema.optional(Schema.Boolean),
   stopReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   usage: Schema.optional(Schema.Unknown),
   modelUsage: Schema.optional(UnknownRecordSchema),
+  tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
+  // Per-turn main-loop usage, including observed usage when no result arrives.
+  mainLoopTokens: Schema.optional(NonNegativeInt),
   totalCostUsd: Schema.optional(Schema.Number),
   cumulativeCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
@@ -410,10 +440,16 @@ const TurnDiffUpdatedPayload = Schema.Struct({
 export type TurnDiffUpdatedPayload = typeof TurnDiffUpdatedPayload.Type;
 
 export const ItemLifecyclePayload = Schema.Struct({
+  asyncQuestions: Schema.optional(AsyncUserInputQuestions),
   itemType: CanonicalItemType,
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
-  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Free-form body (e.g. raw tool output), which legitimately carries leading
+  // and/or trailing whitespace. Keep it unconstrained so item events from
+  // provider adapters (pi, opencode, codex, ...) always pass the durable
+  // journal's encode step; a TrimmedNonEmptyString here rejects ordinary
+  // tool output and forces the event into quarantine.
+  detail: Schema.optional(Schema.String),
   data: Schema.optional(Schema.Unknown),
 });
 export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;
@@ -476,10 +512,78 @@ const UserInputResolvedPayload = Schema.Struct({
 });
 export type UserInputResolvedPayload = typeof UserInputResolvedPayload.Type;
 
+// Phase declared in a workflow script's `meta.phases` literal.
+const WorkflowPhase = Schema.Struct({
+  title: TrimmedNonEmptyStringSchema,
+  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowPhase = typeof WorkflowPhase.Type;
+
+// Final per-agent snapshot from a settled workflow's progress file.
+const WorkflowAgentSnapshot = Schema.Struct({
+  label: TrimmedNonEmptyStringSchema,
+  phaseIndex: Schema.optional(Schema.Int),
+  // Authoritative phase name from the progress file; phaseIndex is 1-based in
+  // recent CLI output files, so prefer the title when both are present.
+  phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),
+  agentId: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Backfilled from the live runtime snapshots at settle when the progress
+  // file itself carries no effort.
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  state: Schema.optional(TrimmedNonEmptyStringSchema),
+  tokens: Schema.optional(Schema.Int),
+  toolCalls: Schema.optional(Schema.Int),
+  durationMs: Schema.optional(Schema.Int),
+  lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  promptPreview: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentSnapshot = typeof WorkflowAgentSnapshot.Type;
+
+// Live per-agent snapshot polled from a running workflow's transcript directory
+// (journal.jsonl + agent-<id>.jsonl). The label is a best-effort join against
+// the workflow's progress descriptions and may be absent.
+const WorkflowAgentRuntimeSnapshot = Schema.Struct({
+  agentId: TrimmedNonEmptyStringSchema,
+  label: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Top-level `effort` field on the transcript's assistant lines.
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  state: Schema.optional(Schema.Literals(["running", "completed"])),
+  tokens: Schema.optional(Schema.Int),
+  toolCalls: Schema.optional(Schema.Int),
+  recentToolNames: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  promptPreview: Schema.optional(TrimmedNonEmptyStringSchema),
+  startedAt: Schema.optional(TrimmedNonEmptyStringSchema),
+  lastActivityAt: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentRuntimeSnapshot = typeof WorkflowAgentRuntimeSnapshot.Type;
+
+// Per-agent() opts scanned statically from a workflow script (string literals
+// only): planned phase/model/effort for an agent label before it runs live.
+const WorkflowAgentPlan = Schema.Struct({
+  phase: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentPlan = typeof WorkflowAgentPlan.Type;
+
 const TaskStartedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentType: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Parsed statically from the workflow script (task_started.prompt or the
+  // Workflow tool input); absent when the meta literal is not parseable.
+  workflowPhases: Schema.optional(Schema.Array(WorkflowPhase)),
+  // agent() label -> phase title pairs scanned from the script text.
+  workflowAgentPhases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  // agent() label -> planned {phase, model, effort} opts scanned from the script
+  // text. Superset of workflowAgentPhases (kept for already-persisted events).
+  workflowAgentPlans: Schema.optional(Schema.Record(Schema.String, WorkflowAgentPlan)),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
 
@@ -489,21 +593,65 @@ const TaskProgressPayload = Schema.Struct({
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
   lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Live per-agent snapshots for workflow tasks, polled from the run's
+  // transcript directory while the workflow is running.
+  workflowAgents: Schema.optional(Schema.Array(WorkflowAgentRuntimeSnapshot)),
+  // Set when the task is a provider-native subagent: the spawning tool call id
+  // (the child thread's provider thread id) and the subagent's own title, so
+  // progress is attributed to that subagent instead of the parent's reasoning.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentTitle: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
+
+const TaskUpdatedPayload = Schema.Struct({
+  taskId: RuntimeTaskId,
+  status: Schema.optional(
+    Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
+  ),
+  error: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Set when the SDK moves a blocking Task call between foreground and background.
+  isBackgrounded: Schema.optional(Schema.Boolean),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  // Persisted launch identifiers from the Workflow tool result; re-invoking the
+  // tool with {scriptPath, resumeFromRunId} resumes the run.
+  workflowRunId: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowScriptPath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
 
 const TaskCompletedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   status: Schema.Literals(["completed", "failed", "stopped"]),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
+  // Spawning tool call id when the task is a provider-native subagent.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
+
+// A user message was injected into running work without interrupting it.
+// `target` says where it landed, which decides whether the message needs its own
+// transcript marker: a `"subagent"` steer is delivered on the child thread where
+// nothing else shows it, while a `"turn"` steer is already rendered as the sent
+// user message on the thread it steers. Absent means `"subagent"` (the only
+// producer before turn steering existed).
+const TurnSteeredPayload = Schema.Struct({
+  message: TrimmedNonEmptyStringSchema,
+  target: Schema.optional(Schema.Literals(["turn", "subagent"])),
+});
+export type TurnSteeredPayload = typeof TurnSteeredPayload.Type;
 
 const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
   hookName: TrimmedNonEmptyStringSchema,
   hookEvent: TrimmedNonEmptyStringSchema,
+  statusMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  data: Schema.optional(Schema.Unknown),
 });
 export type HookStartedPayload = typeof HookStartedPayload.Type;
 
@@ -517,11 +665,17 @@ export type HookProgressPayload = typeof HookProgressPayload.Type;
 
 const HookCompletedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
+  hookName: Schema.optional(TrimmedNonEmptyStringSchema),
+  hookEvent: Schema.optional(TrimmedNonEmptyStringSchema),
   outcome: Schema.Literals(["success", "error", "cancelled"]),
+  status: Schema.optional(Schema.Literals(["completed", "failed", "blocked", "stopped"])),
+  statusMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  durationMs: Schema.optional(NonNegativeInt),
   output: Schema.optional(Schema.String),
   stdout: Schema.optional(Schema.String),
   stderr: Schema.optional(Schema.String),
   exitCode: Schema.optional(Schema.Int),
+  data: Schema.optional(Schema.Unknown),
 });
 export type HookCompletedPayload = typeof HookCompletedPayload.Type;
 
@@ -607,18 +761,35 @@ const FilesPersistedPayload = Schema.Struct({
 });
 export type FilesPersistedPayload = typeof FilesPersistedPayload.Type;
 
+const VcsStateChangedPayload = Schema.Struct({
+  kind: Schema.optional(TrimmedNonEmptyStringSchema),
+  cwd: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type VcsStateChangedPayload = typeof VcsStateChangedPayload.Type;
+
 const RuntimeWarningPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
+  willRetry: Schema.optional(Schema.Boolean),
   detail: Schema.optional(Schema.Unknown),
 });
 export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 
 const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
+  errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
   class: Schema.optional(RuntimeErrorClass),
   detail: Schema.optional(Schema.Unknown),
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
+
+// Forward-compatible diagnostic for provider events without an explicit mapping.
+// The adapter bounds and redacts `data`; `detail` is a safe readable one-liner.
+const EventUnmappedPayload = Schema.Struct({
+  nativeType: TrimmedNonEmptyStringSchema,
+  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+  data: Schema.optional(Schema.Unknown),
+});
+export type EventUnmappedPayload = typeof EventUnmappedPayload.Type;
 
 const ProviderRuntimeSessionStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -772,6 +943,13 @@ const ProviderRuntimeTurnDiffUpdatedEvent = Schema.Struct({
 });
 export type ProviderRuntimeTurnDiffUpdatedEvent = typeof ProviderRuntimeTurnDiffUpdatedEvent.Type;
 
+const ProviderRuntimeTurnSteeredEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TurnSteeredType,
+  payload: TurnSteeredPayload,
+});
+export type ProviderRuntimeTurnSteeredEvent = typeof ProviderRuntimeTurnSteeredEvent.Type;
+
 const ProviderRuntimeItemStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: ItemStartedType,
@@ -843,6 +1021,13 @@ const ProviderRuntimeTaskProgressEvent = Schema.Struct({
   payload: TaskProgressPayload,
 });
 export type ProviderRuntimeTaskProgressEvent = typeof ProviderRuntimeTaskProgressEvent.Type;
+
+const ProviderRuntimeTaskUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TaskUpdatedType,
+  payload: TaskUpdatedPayload,
+});
+export type ProviderRuntimeTaskUpdatedEvent = typeof ProviderRuntimeTaskUpdatedEvent.Type;
 
 const ProviderRuntimeTaskCompletedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -952,12 +1137,26 @@ const ProviderRuntimeFilesPersistedEvent = Schema.Struct({
 });
 export type ProviderRuntimeFilesPersistedEvent = typeof ProviderRuntimeFilesPersistedEvent.Type;
 
+const ProviderRuntimeVcsStateChangedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: VcsStateChangedType,
+  payload: VcsStateChangedPayload,
+});
+export type ProviderRuntimeVcsStateChangedEvent = typeof ProviderRuntimeVcsStateChangedEvent.Type;
+
 const ProviderRuntimeWarningEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: RuntimeWarningType,
   payload: RuntimeWarningPayload,
 });
 export type ProviderRuntimeWarningEvent = typeof ProviderRuntimeWarningEvent.Type;
+
+const ProviderRuntimeEventUnmappedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: EventUnmappedType,
+  payload: EventUnmappedPayload,
+});
+export type ProviderRuntimeEventUnmappedEvent = typeof ProviderRuntimeEventUnmappedEvent.Type;
 
 const ProviderRuntimeErrorEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -987,6 +1186,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeTurnProposedDeltaEvent,
   ProviderRuntimeTurnProposedCompletedEvent,
   ProviderRuntimeTurnDiffUpdatedEvent,
+  ProviderRuntimeTurnSteeredEvent,
   ProviderRuntimeItemStartedEvent,
   ProviderRuntimeItemUpdatedEvent,
   ProviderRuntimeItemCompletedEvent,
@@ -997,6 +1197,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeUserInputResolvedEvent,
   ProviderRuntimeTaskStartedEvent,
   ProviderRuntimeTaskProgressEvent,
+  ProviderRuntimeTaskUpdatedEvent,
   ProviderRuntimeTaskCompletedEvent,
   ProviderRuntimeHookStartedEvent,
   ProviderRuntimeHookProgressEvent,
@@ -1012,8 +1213,10 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeConfigWarningEvent,
   ProviderRuntimeDeprecationNoticeEvent,
   ProviderRuntimeFilesPersistedEvent,
+  ProviderRuntimeVcsStateChangedEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
+  ProviderRuntimeEventUnmappedEvent,
 ]);
 export type ProviderRuntimeEventV2 = typeof ProviderRuntimeEventV2.Type;
 

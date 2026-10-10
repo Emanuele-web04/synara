@@ -7,12 +7,13 @@ import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
 } from "./chat/chatHeaderControls";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
 import { Skeleton } from "./ui/skeleton";
 
-export type DiffPanelMode = "inline" | "sheet" | "sidebar";
+export type DiffPanelMode = "inline" | "sheet" | "sidebar" | "floating";
 
 function getDiffPanelHeaderRowClassName(mode: DiffPanelMode) {
-  const shouldUseDragRegion = isElectron && mode !== "sheet";
+  const shouldUseDragRegion = isElectron && mode !== "sheet" && mode !== "floating";
   // Match RightDock tab strip inset (`px-1.5`) so picker triggers line up under dock tabs.
   return cn(
     "flex w-full min-w-0 items-center gap-1.5 px-1.5",
@@ -26,13 +27,14 @@ export function DiffPanelShell(props: {
   header?: ReactNode;
   children: ReactNode;
 }) {
-  const shouldUseDragRegion = isElectron && props.mode !== "sheet";
+  const shouldUseDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "floating";
   const hasHeader = props.header !== null && props.header !== undefined;
 
   return (
     <div
       className={cn(
-        "flex h-full min-w-0 flex-col bg-[var(--color-background-surface)]",
+        "flex h-full min-w-0 flex-col",
+        props.mode === "floating" ? "bg-transparent" : CHAT_BACKGROUND_CLASS_NAME,
         props.mode === "inline"
           ? "w-[42vw] min-w-[360px] max-w-[560px] shrink-0 border-l border-border"
           : "w-full",
@@ -55,13 +57,13 @@ export function DiffPanelShell(props: {
 export function DiffPanelHeaderSkeleton() {
   return (
     <div className="flex h-full w-full items-center gap-2">
-      <Skeleton className="h-8 w-28 shrink-0 rounded-lg" />
+      <Skeleton className="h-8 w-28 shrink-0 rounded-full" />
       <Skeleton className="h-4 w-14 shrink-0 rounded-full" />
       <div className="ml-auto flex items-center gap-1.5">
-        <Skeleton className="size-7 rounded-md" />
-        <Skeleton className="size-7 rounded-md" />
-        <Skeleton className="h-7 w-16 rounded-md" />
-        <Skeleton className="h-8 w-20 rounded-lg" />
+        <Skeleton className="size-7 rounded-full" />
+        <Skeleton className="size-7 rounded-full" />
+        <Skeleton className="h-7 w-16 rounded-full" />
+        <Skeleton className="h-8 w-20 rounded-full" />
       </div>
     </div>
   );

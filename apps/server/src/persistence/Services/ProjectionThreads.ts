@@ -8,20 +8,25 @@
  */
 import {
   IsoDateTime,
+  MessageId,
   ModelSelection,
   NonNegativeInt,
   OrchestrationThreadPullRequest,
+  PendingClaudeCacheReview,
   ThreadNotes,
+  ThreadGoal,
+  ThreadGoalAchievements,
   ThreadPinnedMessages,
-  ThreadMarkers,
   ThreadHandoff,
+  ThreadSidechatContext,
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadCreationSource,
   ThreadEnvironmentMode,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -37,30 +42,77 @@ export const ProjectionThread = Schema.Struct({
   envMode: ThreadEnvironmentMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  workingDirectory: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   associatedWorktreePath: Schema.NullOr(Schema.String),
   associatedWorktreeBranch: Schema.NullOr(Schema.String),
   associatedWorktreeRef: Schema.NullOr(Schema.String),
   createBranchFlowCompleted: Schema.Boolean,
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  creationSource: Schema.optional(Schema.NullOr(ThreadCreationSource)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  sourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  sourceTurnId: Schema.optional(Schema.NullOr(TurnId)).pipe(Schema.withDecodingDefault(() => null)),
+  gatewayOperationId: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  gatewayOperationIndex: Schema.optional(Schema.NullOr(NonNegativeInt)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   subagentAgentId: Schema.optional(Schema.NullOr(Schema.String)),
   subagentNickname: Schema.optional(Schema.NullOr(Schema.String)),
   subagentRole: Schema.optional(Schema.NullOr(Schema.String)),
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  forkSourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
   sidechatSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Standalone sidechats only (see ThreadSidechatContext); null for every other thread.
+  sidechatContext: Schema.optional(Schema.NullOr(ThreadSidechatContext)),
+  sidechatLastActivityAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  sidechatExpiredAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
   latestTurnId: Schema.NullOr(TurnId),
   handoff: Schema.NullOr(ThreadHandoff),
+  // Omission preserves an existing review during legacy whole-row upserts;
+  // null explicitly clears it.
+  claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   pinnedMessages: Schema.NullOr(ThreadPinnedMessages),
-  threadMarkers: Schema.NullOr(ThreadMarkers),
   notes: Schema.NullOr(ThreadNotes),
+  goal: Schema.NullOr(ThreadGoal),
+  goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  goalAchievements: Schema.optional(Schema.NullOr(ThreadGoalAchievements)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
+  latestHumanMessageAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  settledAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  snoozeReminderAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -123,4 +175,4 @@ export interface ProjectionThreadRepositoryShape {
 export class ProjectionThreadRepository extends ServiceMap.Service<
   ProjectionThreadRepository,
   ProjectionThreadRepositoryShape
->()("t3/persistence/Services/ProjectionThreads/ProjectionThreadRepository") {}
+>()("synara/persistence/Services/ProjectionThreads/ProjectionThreadRepository") {}

@@ -12,15 +12,15 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import {
   defaultTerminalTitleForCliKind,
   consumeTerminalIdentityInput,
-} from "@t3tools/shared/terminalThreads";
-import { describeErrorMessage } from "@t3tools/shared/errorMessages";
+} from "@synara/shared/terminalThreads";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 import {
   TERMINAL_MAX_COLS,
   TERMINAL_MAX_ROWS,
   TERMINAL_MIN_COLS,
   TERMINAL_MIN_ROWS,
-} from "@t3tools/contracts";
-import type { TerminalSessionSnapshot } from "@t3tools/contracts";
+} from "@synara/contracts";
+import type { TerminalSessionSnapshot } from "@synara/contracts";
 import { Terminal } from "@xterm/xterm";
 
 import { readNativeApi } from "~/nativeApi";
@@ -42,6 +42,8 @@ import {
   getTerminalFontFamily,
   getTerminalFontSizePx,
   getTerminalFontWeight,
+  getTerminalMinimumContrastRatio,
+  isTerminalBackgroundTranslucent,
   terminalThemeFromApp,
   writeSystemMessage,
 } from "./terminalRuntimeAppearance";
@@ -139,7 +141,10 @@ function scheduleFontSettleRefit(entry: TerminalRuntimeEntry): void {
   const fontSize = Number(entry.terminal.options.fontSize ?? 12);
   void waitForTerminalFontReady({ fontFamily, fontSize }).then(() => {
     if (entry.disposed) return;
-    runTerminalResize(entry, { refresh: true });
+    // Rebuild the WebGL glyph atlas: the immediate refit may have cached glyphs in
+    // the fallback font while the requested font was still loading, and a plain
+    // refresh would keep redrawing those stale glyphs.
+    runTerminalResize(entry, { clearTextureAtlas: true, refresh: true });
   });
 }
 
@@ -184,6 +189,9 @@ function buildOpenInput(entry: TerminalRuntimeEntry) {
     cwd: entry.cwd,
     cols: entry.terminal.cols,
     rows: entry.terminal.rows,
+    ...(entry.providerAuthInstanceId
+      ? { providerAuthInstanceId: entry.providerAuthInstanceId }
+      : {}),
     ...(entry.runtimeEnv ? { env: entry.runtimeEnv } : {}),
   };
 }
@@ -491,6 +499,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   const nextFontSize = getTerminalFontSizePx();
   const nextFontWeight = getTerminalFontWeight();
   const nextBoldFontWeight = getTerminalBoldFontWeight();
+  const nextMinimumContrastRatio = getTerminalMinimumContrastRatio();
   const nextFontKey = JSON.stringify({
     fontFamily: nextFontFamily,
     fontSize: nextFontSize,
@@ -505,6 +514,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
     cursorStyle: TERMINAL_CURSOR_STYLE,
     cursorInactiveStyle: TERMINAL_INACTIVE_CURSOR_STYLE,
     cursorWidth: TERMINAL_CURSOR_WIDTH,
+    minimumContrastRatio: nextMinimumContrastRatio,
     theme: nextTheme,
   });
   const previousAppearanceKey = (entry.wrapper.dataset.themeKey ?? "") as string;
@@ -515,7 +525,9 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   entry.wrapper.dataset.themeKey = nextAppearanceKey;
   entry.wrapper.dataset.fontKey = nextFontKey;
   const terminalOptions = entry.terminal.options as SynaraTerminalOptions;
+  terminalOptions.allowTransparency = isTerminalBackgroundTranslucent(nextTheme);
   terminalOptions.theme = nextTheme;
+  terminalOptions.minimumContrastRatio = nextMinimumContrastRatio;
   terminalOptions.fontFamily = nextFontFamily;
   terminalOptions.fontSize = nextFontSize;
   terminalOptions.fontWeight = nextFontWeight;
@@ -691,6 +703,11 @@ function reconcileTerminalSnapshot(entry: TerminalRuntimeEntry): void {
   void api.terminal
     .open(buildOpenInput(entry))
     .then((snapshot) => {
+      if (entry.disposed && entry.providerAuthInstanceId) {
+        void api.terminal
+          .close({ threadId: entry.threadId, terminalId: entry.terminalId, deleteHistory: true })
+          .catch(() => undefined);
+      }
       if (
         entry.disposed ||
         !entry.opened ||
@@ -701,6 +718,16 @@ function reconcileTerminalSnapshot(entry: TerminalRuntimeEntry): void {
       }
 
       if (entry.outputEventVersion !== outputEventVersionAtRequest) {
+        return;
+      }
+      if (snapshot.status === "error" || snapshot.status === "exited") {
+        replaySnapshot(entry, snapshot, () =>
+          setRuntimeStatus(entry, snapshot.status === "error" ? "error" : "exited"),
+        );
+        if (snapshot.status === "exited" && !entry.hasHandledExit) {
+          entry.hasHandledExit = true;
+          entry.callbacks.onSessionExited();
+        }
         return;
       }
 
@@ -742,6 +769,8 @@ export function syncRuntimeConfig(
   } else {
     entry.runtimeEnv = config.runtimeEnv;
   }
+  if (config.providerAuthInstanceId === undefined) delete entry.providerAuthInstanceId;
+  else entry.providerAuthInstanceId = config.providerAuthInstanceId;
   entry.callbacks = config.callbacks;
 }
 
@@ -754,6 +783,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   const imageAddon = new ImageAddon();
   const searchAddon = new SearchAddon();
   const unicode11Addon = new Unicode11Addon();
+  const theme = terminalThemeFromApp();
   const terminalOptions: SynaraTerminalOptions = {
     cursorBlink: true,
     fontSize: getTerminalFontSizePx(),
@@ -761,7 +791,8 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     fontWeightBold: getTerminalBoldFontWeight(),
     scrollback: 5_000,
     fontFamily: getTerminalFontFamily(),
-    theme: terminalThemeFromApp(),
+    theme,
+    minimumContrastRatio: getTerminalMinimumContrastRatio(),
     allowProposedApi: true,
     customGlyphs: true,
     macOptionIsMeta: false,
@@ -769,7 +800,8 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     cursorInactiveStyle: TERMINAL_INACTIVE_CURSOR_STYLE,
     cursorWidth: TERMINAL_CURSOR_WIDTH,
     screenReaderMode: false,
-    allowTransparency: false,
+    // Off unless the theme background is see-through: transparency costs the renderer.
+    allowTransparency: isTerminalBackgroundTranslucent(theme),
     vtExtensions: { kittyKeyboard: true },
     scrollbar: { showScrollbar: false },
   };
@@ -794,6 +826,9 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     terminalLabel: config.terminalLabel,
     terminalCliKind: config.terminalCliKind ?? null,
     cwd: config.cwd,
+    ...(config.providerAuthInstanceId
+      ? { providerAuthInstanceId: config.providerAuthInstanceId }
+      : {}),
     callbacks: config.callbacks,
     wrapper,
     container: null,
@@ -1053,6 +1088,11 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
       if (event.type === "exited") {
         flushPendingWrites(entry);
+        setRuntimeStatus(entry, "exited");
+        entry.callbacks.onTerminalActivityChange(entry.terminalId, {
+          hasRunningSubprocess: false,
+          agentState: null,
+        });
         const details = [
           typeof event.exitCode === "number" ? `code ${event.exitCode}` : null,
           typeof event.exitSignal === "number" ? `signal ${event.exitSignal}` : null,
@@ -1094,7 +1134,23 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
   void api.terminal
     .open(openInput)
     .then((snapshot) => {
-      if (entry.disposed) return;
+      if (entry.disposed) {
+        if (entry.providerAuthInstanceId)
+          void api.terminal
+            .close({ threadId: entry.threadId, terminalId: entry.terminalId, deleteHistory: true })
+            .catch(() => undefined);
+        return;
+      }
+      if (snapshot.status === "error" || snapshot.status === "exited") {
+        replaySnapshot(entry, snapshot, () =>
+          setRuntimeStatus(entry, snapshot.status === "error" ? "error" : "exited"),
+        );
+        if (snapshot.status === "exited" && !entry.hasHandledExit) {
+          entry.hasHandledExit = true;
+          entry.callbacks.onSessionExited();
+        }
+        return;
+      }
       if (
         snapshotHasReplayPayload(snapshot) &&
         entry.outputEventVersion === outputEventVersionAtOpen

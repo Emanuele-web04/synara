@@ -237,6 +237,101 @@ describe("syncShellEnvironment", () => {
     expect(env.PATH).toBe("C:\\Windows\\system32");
   });
 
+  // The result is what lets the backend child skip its own ~1s login-shell probe, so
+  // it must be true only when PATH really came from the user's environment.
+  it("reports PATH as hydrated when the login shell supplied one", () => {
+    const result = syncShellEnvironment(
+      { SHELL: "/bin/zsh", PATH: "/usr/bin" },
+      {
+        platform: "darwin",
+        readEnvironment: () => ({ PATH: "/opt/homebrew/bin:/usr/bin" }),
+      },
+    );
+
+    expect(result).toEqual({ pathHydrated: true });
+  });
+
+  it("reports PATH as hydrated when only launchctl supplied one", () => {
+    const result = syncShellEnvironment(
+      { SHELL: "/bin/zsh", PATH: "/usr/bin" },
+      {
+        platform: "darwin",
+        readEnvironment: () => ({}),
+        readLaunchctlPath: () => "/opt/homebrew/bin",
+      },
+    );
+
+    expect(result).toEqual({ pathHydrated: true });
+  });
+
+  it("reports PATH as not hydrated when neither the shell nor launchctl supplied one", () => {
+    const env: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+    const result = syncShellEnvironment(env, {
+      platform: "darwin",
+      readEnvironment: () => ({}),
+      readLaunchctlPath: () => undefined,
+    });
+
+    expect(result).toEqual({ pathHydrated: false });
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
+  it("reports PATH as not hydrated when every login shell probe throws", () => {
+    const result = syncShellEnvironment(
+      { SHELL: "/bin/zsh", PATH: "/usr/bin" },
+      {
+        platform: "linux",
+        readEnvironment: () => {
+          throw new Error("probe failed");
+        },
+        logWarning: vi.fn(),
+      },
+    );
+
+    expect(result).toEqual({ pathHydrated: false });
+  });
+
+  it("reports Windows registry hydration through the same result", () => {
+    expect(
+      syncShellEnvironment(
+        { PATH: "C:\\Windows\\system32" },
+        {
+          platform: "win32",
+          readWindowsEnvironment: () => ({ PATH: "C:\\Users\\ramar\\.local\\bin" }),
+        },
+      ),
+    ).toEqual({ pathHydrated: true });
+
+    expect(
+      syncShellEnvironment(
+        { PATH: "C:\\Windows\\system32" },
+        {
+          platform: "win32",
+          readWindowsEnvironment: () => ({ CLAUDE_CONFIG_DIR: "C:\\config" }),
+        },
+      ),
+    ).toEqual({ pathHydrated: false });
+
+    expect(
+      syncShellEnvironment(
+        { PATH: "C:\\Windows\\system32" },
+        {
+          platform: "win32",
+          readWindowsEnvironment: () => {
+            throw new Error("powershell.exe ENOENT");
+          },
+          logWarning: vi.fn(),
+        },
+      ),
+    ).toEqual({ pathHydrated: false });
+  });
+
+  it("reports PATH as not hydrated on unsupported platforms", () => {
+    expect(
+      syncShellEnvironment({ PATH: "/usr/bin" }, { platform: "freebsd", readEnvironment: vi.fn() }),
+    ).toEqual({ pathHydrated: false });
+  });
+
   it("does nothing on unsupported platforms", () => {
     const env: NodeJS.ProcessEnv = {
       SHELL: "/bin/zsh",

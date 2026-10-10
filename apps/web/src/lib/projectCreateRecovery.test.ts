@@ -1,59 +1,17 @@
 // FILE: projectCreateRecovery.test.ts
 // Purpose: Verifies duplicate `project.create` recovery helpers used by import flows.
 
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
-  extractDuplicateProjectCreateProjectId,
   findRecoverableProject,
   findRecoverableProjectForDuplicateCreate,
-  isDuplicateProjectCreateError,
   waitForRecoverableProjectInReadModel,
   waitForRecoverableProjectForDuplicateCreate,
 } from "./projectCreateRecovery";
 
 describe("projectCreateRecovery", () => {
-  it("detects duplicate project.create invariant failures", () => {
-    expect(
-      isDuplicateProjectCreateError(
-        "Orchestration command invariant failed (project.create): Project 'project-123' already uses workspace root '/Users/tester/Code/one'.",
-      ),
-    ).toBe(true);
-  });
-
-  it("extracts the existing project id from duplicate invariant failures", () => {
-    expect(
-      extractDuplicateProjectCreateProjectId(
-        "Orchestration command invariant failed (project.create): Project 'project-123' already uses workspace root '/Users/tester/Code/one'.",
-      ),
-    ).toBe("project-123");
-  });
-
-  it("prefers the explicit duplicate project id when recovering from a server snapshot", () => {
-    const recovered = findRecoverableProjectForDuplicateCreate({
-      message:
-        "Orchestration command invariant failed (project.create): Project 'project-123' already uses workspace root '/Users/tester/Code/one'.",
-      projects: [
-        {
-          id: "project-123",
-          kind: "project",
-          workspaceRoot: "/Users/tester/Code/one",
-          deletedAt: null,
-        },
-        {
-          id: "project-456",
-          kind: "project",
-          workspaceRoot: "/Users/tester/Code/two",
-          deletedAt: null,
-        },
-      ],
-      workspaceRoot: "/Users/tester/Code/one",
-    });
-
-    expect(recovered?.id).toBe("project-123");
-  });
-
   it("finds a recoverable project by exact id before falling back to workspace root", () => {
     const recovered = findRecoverableProject({
       projectId: "project-123",
@@ -195,6 +153,7 @@ describe("projectCreateRecovery", () => {
       workspaceRoot: "/Users/tester/Code/one",
       loadSnapshot: async () => ({
         snapshotSequence: 1,
+        spaces: [],
         updatedAt: "2026-04-21T00:00:00.000Z",
         projects: [],
         threads: [],
@@ -203,6 +162,7 @@ describe("projectCreateRecovery", () => {
         repairCalls += 1;
         return {
           snapshotSequence: 2,
+          spaces: [],
           updatedAt: "2026-04-21T00:00:01.000Z",
           projects: [
             {

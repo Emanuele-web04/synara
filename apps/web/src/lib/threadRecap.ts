@@ -3,7 +3,7 @@
 // Layer: Client utility
 // Exports: recap source derivation plus per-thread localStorage cache helpers.
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import type { Thread, ChatMessage } from "~/types";
 import { isPlainObject, sanitizeStringKeyedRecord } from "~/persistedRecord";
 
@@ -126,9 +126,12 @@ function formatMessageForRecap(message: ChatMessage): string {
   const attachmentSummary =
     message.attachments && message.attachments.length > 0
       ? ` Attachments: ${message.attachments
-          .map((attachment) =>
-            attachment.type === "image" ? attachment.name : "assistant selection",
-          )
+          .map((attachment) => {
+            if (attachment.type === "image" || attachment.type === "file") {
+              return attachment.name;
+            }
+            return "assistant selection";
+          })
           .join(", ")}.`
       : "";
   return `[${message.role}] ${text}${attachmentSummary}`;

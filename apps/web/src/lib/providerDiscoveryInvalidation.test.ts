@@ -2,13 +2,15 @@
 // Purpose: Verifies provider-discovery invalidation ignores provider-status metadata noise.
 // Layer: Web UI provider discovery tests
 
-import type { ServerProviderStatus } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { providerModelDiscoveryInvalidationFingerprint } from "./providerDiscoveryInvalidation";
 
 const BASE_PROVIDER_STATUS = {
   provider: "cursor",
+  instanceId: "cursor",
+  driver: "cursor",
   status: "ready",
   available: true,
   authStatus: "unknown",
@@ -68,10 +70,32 @@ describe("providerModelDiscoveryInvalidationFingerprint", () => {
     ).not.toBe(previous);
   });
 
+  it("distinguishes same-provider instances", () => {
+    const previous = providerModelDiscoveryInvalidationFingerprint([
+      {
+        ...BASE_PROVIDER_STATUS,
+        instanceId: "cursor_personal",
+        driver: "cursor",
+      },
+    ]);
+
+    expect(
+      providerModelDiscoveryInvalidationFingerprint([
+        {
+          ...BASE_PROVIDER_STATUS,
+          instanceId: "cursor_work",
+          driver: "cursor",
+        },
+      ]),
+    ).not.toBe(previous);
+  });
+
   it("is stable across provider ordering", () => {
     const codexStatus = {
       ...BASE_PROVIDER_STATUS,
       provider: "codex",
+      instanceId: "codex",
+      driver: "codex",
       version: "1.2.3",
     } satisfies ServerProviderStatus;
 

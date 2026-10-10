@@ -16,7 +16,7 @@ import {
 // ── Shared spacing ────────────────────────────────────────────────────
 // One gap token for block sides (vs plain text) and icon→label inside the block.
 export const COMPOSER_INLINE_CHIP_SIDE_GAP_CLASS_NAME = "mx-0.5";
-export const COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME = "mr-0.5";
+export const COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME = "mr-1";
 
 // ── Shared base ───────────────────────────────────────────────────────
 // Plain inline flow (not inline-flex) so parsed tokens share the same line box /
@@ -152,26 +152,31 @@ export const COMPOSER_INLINE_MENTION_CHIP_INTERACTIVE_CLASS_NAME = composerInlin
 // ── Composer attachment chips (image / selection / terminal context) ──
 // Bordered shell used by attachment-style chips (distinct from inline tokens).
 export const COMPOSER_INLINE_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent-active)] p-0.5 font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
+  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent-active)] p-0.5 font-medium text-ui-sm leading-[1.1] text-[var(--color-text-foreground)] align-middle";
 
 export const COMPOSER_INLINE_CHIP_ICON_CLASS_NAME = "size-3.5 shrink-0 opacity-85";
 
 export const COMPOSER_ATTACHMENT_CHIP_CLASS_NAME =
-  "inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] p-px text-[11px] font-medium text-[var(--color-text-foreground)]";
-
-export const COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME =
-  "ml-0.5 inline-flex size-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/72 transition-colors hover:bg-foreground/6 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+  "inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] p-px text-ui-sm font-medium text-[var(--color-text-foreground)]";
 
 // ── Skill helpers ─────────────────────────────────────────────────────
 /** Central icon basename shared by every skill token (editor + timeline). */
 export const COMPOSER_INLINE_SKILL_CHIP_ICON_NAME = "building-blocks";
 
-// Formats raw skill ids like `check-code` into the label used by inline skill chips.
-export function formatComposerSkillChipLabel(name: string): string {
+function formatComposerInlineTokenLabel(name: string): string {
   return name
     .split(/[-_]/)
     .map((segment) =>
       segment.length > 0 ? segment.charAt(0).toUpperCase() + segment.slice(1) : segment,
     )
     .join(" ");
+}
+
+// Formats raw skill ids like `check-code` into the label used by inline skill chips.
+export function formatComposerSkillChipLabel(name: string): string {
+  return formatComposerInlineTokenLabel(name);
+}
+
+export function formatComposerSlashCommandChipLabel(command: string): string {
+  return formatComposerInlineTokenLabel(command);
 }

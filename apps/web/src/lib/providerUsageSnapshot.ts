@@ -2,7 +2,7 @@
 // Purpose: Normalize provider usage snapshots returned by the server into the
 // same shapes consumed by the shared usage/rate-limit UI in the web app.
 
-import type { ServerGetProviderUsageSnapshotResult } from "@t3tools/contracts";
+import type { ServerGetProviderUsageSnapshotResult } from "@synara/contracts";
 
 import type { OpenUsageUsageLine } from "./openUsageRateLimits";
 import type { ProviderRateLimit } from "./rateLimits";

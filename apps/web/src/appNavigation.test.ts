@@ -63,7 +63,7 @@ describe("resolveAppNavigationState", () => {
       canGoForward: true,
     });
 
-    history.push("/workspace/workspace-1");
+    history.push("/automations");
     expect(syncAppNavigationState(history, { type: "PUSH" })).toEqual({
       canGoBack: true,
       canGoForward: false,

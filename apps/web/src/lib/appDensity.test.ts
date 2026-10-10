@@ -1,23 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  DEFAULT_UI_DENSITY,
-  getDensityCssVariables,
-  getDensityScale,
-  normalizeUiDensity,
-} from "./appDensity";
+import { DEFAULT_UI_DENSITY, getDensityCssVariables, normalizeUiDensity } from "./appDensity";
 
 describe("appDensity", () => {
   it("normalizes unknown values to the default density", () => {
     expect(normalizeUiDensity("spacious")).toBe("spacious");
     expect(normalizeUiDensity("invalid")).toBe(DEFAULT_UI_DENSITY);
     expect(normalizeUiDensity(undefined)).toBe(DEFAULT_UI_DENSITY);
-  });
-
-  it("maps density modes to scale factors", () => {
-    expect(getDensityScale("compact")).toBe(0.85);
-    expect(getDensityScale("comfortable")).toBe(1);
-    expect(getDensityScale("spacious")).toBe(1.15);
   });
 
   it("derives scaled spacing variables from the active density", () => {

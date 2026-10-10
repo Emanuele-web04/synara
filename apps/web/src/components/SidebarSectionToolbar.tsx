@@ -7,8 +7,8 @@ import type { ReactNode } from "react";
 import { cn } from "~/lib/utils";
 
 export function SidebarSectionToolbar({
-  placement = "inline",
-  revealOnHover = false,
+  placement: placementProp,
+  revealOnHover: revealOnHoverProp,
   className,
   children,
 }: {
@@ -19,6 +19,8 @@ export function SidebarSectionToolbar({
   className?: string;
   children: ReactNode;
 }) {
+  const placement = placementProp ?? "inline";
+  const revealOnHover = revealOnHoverProp ?? false;
   return (
     <div
       className={cn(

@@ -4,38 +4,53 @@
 // Layer: Web hooks
 // Exports: useProviderStatusRefresh, useRefreshProviderStatusesNow
 
-import { useCallback, useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import type { ServerConfig } from "@t3tools/contracts";
+import { useEffect } from "react";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import type { ServerProviderStatus } from "@synara/contracts";
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
-import { serverQueryKeys } from "../lib/serverReactQuery";
+import { reconcileServerProviderStatuses } from "../lib/serverReactQuery";
+
+export type RefreshProviderStatusesOptions = {
+  readonly silent?: boolean;
+};
+
+export type RefreshProviderStatusesNow = (
+  options?: RefreshProviderStatusesOptions,
+) => Promise<readonly ServerProviderStatus[] | null>;
+
+function writeProviderStatusesToConfigCache(
+  queryClient: QueryClient,
+  providers: readonly ServerProviderStatus[],
+) {
+  return reconcileServerProviderStatuses(queryClient, providers);
+}
 
 /**
  * Imperative one-shot provider-status refresh: re-checks providers on the server
  * and folds the result into the cached server config. Surfaces failures as a toast.
  */
-export function useRefreshProviderStatusesNow(): () => void {
+export function useRefreshProviderStatusesNow(): RefreshProviderStatusesNow {
   const queryClient = useQueryClient();
-  return useCallback(() => {
+  return async (options?: RefreshProviderStatusesOptions) => {
     const api = readNativeApi();
-    if (!api) return;
-    void api.server
-      .refreshProviders()
-      .then((result) => {
-        queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) =>
-          current ? { ...current, providers: result.providers } : current,
-        );
-      })
-      .catch((error) => {
+    if (!api) return null;
+    try {
+      const result = await api.server.refreshProviders();
+      await writeProviderStatusesToConfigCache(queryClient, result.providers);
+      return result.providers;
+    } catch (error) {
+      if (!options?.silent) {
         toastManager.add({
           type: "error",
           title: "Unable to refresh provider status",
           description:
             error instanceof Error ? error.message : "Unknown error refreshing provider status.",
         });
-      });
-  }, [queryClient]);
+      }
+      return null;
+    }
+  };
 }
 
 type ProviderStatusRefreshOptions = {
@@ -44,6 +59,7 @@ type ProviderStatusRefreshOptions = {
   readonly intervalMs?: number;
   readonly minIntervalMs?: number;
   readonly refreshOnFocus?: boolean;
+  readonly onRefreshSuccess?: () => void;
 };
 
 export function useProviderStatusRefresh(options: ProviderStatusRefreshOptions): void {
@@ -53,6 +69,7 @@ export function useProviderStatusRefresh(options: ProviderStatusRefreshOptions):
   const intervalMs = options.intervalMs;
   const minIntervalMs = options.minIntervalMs ?? 0;
   const refreshOnFocus = options.refreshOnFocus ?? false;
+  const onRefreshSuccess = options.onRefreshSuccess;
 
   useEffect(() => {
     if (!enabled || typeof window === "undefined" || typeof document === "undefined") {
@@ -60,45 +77,82 @@ export function useProviderStatusRefresh(options: ProviderStatusRefreshOptions):
     }
 
     let disposed = false;
-    let lastRefreshAtMs = 0;
-    const refreshProviderStatuses = () => {
+    let hasSuccessfulRefresh = false;
+    let startupRefreshPending = false;
+    let lastRefreshAttemptAtMs = 0;
+    let refreshInFlight: Promise<boolean> | null = null;
+    const refreshProviderStatuses = (input?: {
+      readonly ignoreMinInterval?: boolean;
+    }): Promise<boolean> => {
       if (document.visibilityState !== "visible") {
-        return;
+        return Promise.resolve(false);
+      }
+      if (refreshInFlight) {
+        return refreshInFlight;
       }
       const nowMs = Date.now();
-      if (minIntervalMs > 0 && nowMs - lastRefreshAtMs < minIntervalMs) {
-        return;
+      if (
+        input?.ignoreMinInterval !== true &&
+        minIntervalMs > 0 &&
+        nowMs - lastRefreshAttemptAtMs < minIntervalMs
+      ) {
+        return Promise.resolve(false);
       }
       const api = readNativeApi();
       if (!api) {
+        return Promise.resolve(false);
+      }
+      lastRefreshAttemptAtMs = nowMs;
+      const refresh = api.server
+        .refreshProviders()
+        .then(async (result) => {
+          if (disposed) {
+            return false;
+          }
+          await writeProviderStatusesToConfigCache(queryClient, result.providers);
+          if (!disposed) {
+            hasSuccessfulRefresh = true;
+            startupRefreshPending = false;
+            onRefreshSuccess?.();
+          }
+          return true;
+        })
+        .catch(() => false)
+        .finally(() => {
+          refreshInFlight = null;
+        });
+      refreshInFlight = refresh;
+      return refresh;
+    };
+
+    const runInitialRefresh = async () => {
+      const existingRefresh = refreshInFlight;
+      if (existingRefresh) {
+        await existingRefresh;
+      }
+      if (disposed || hasSuccessfulRefresh) {
         return;
       }
-      lastRefreshAtMs = nowMs;
-      void api.server
-        .refreshProviders()
-        .then((result) => {
-          if (disposed) {
-            return;
-          }
-          queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) =>
-            current ? { ...current, providers: result.providers } : current,
-          );
-        })
-        .catch(() => undefined);
+      startupRefreshPending = true;
+      // A failed early focus refresh must not consume the throttle window and
+      // suppress the one scheduled startup attempt.
+      await refreshProviderStatuses({ ignoreMinInterval: true });
     };
 
     const initialRefreshId =
       typeof initialDelayMs === "number" && initialDelayMs >= 0
-        ? window.setTimeout(refreshProviderStatuses, initialDelayMs)
+        ? window.setTimeout(() => void runInitialRefresh(), initialDelayMs)
         : null;
     const refreshIntervalId =
       typeof intervalMs === "number" && intervalMs > 0
-        ? window.setInterval(refreshProviderStatuses, intervalMs)
+        ? window.setInterval(() => void refreshProviderStatuses(), intervalMs)
         : null;
+    const refreshOnVisible = () =>
+      void refreshProviderStatuses({ ignoreMinInterval: startupRefreshPending });
 
     if (refreshOnFocus) {
-      window.addEventListener("focus", refreshProviderStatuses);
-      document.addEventListener("visibilitychange", refreshProviderStatuses);
+      window.addEventListener("focus", refreshOnVisible);
+      document.addEventListener("visibilitychange", refreshOnVisible);
     }
 
     return () => {
@@ -110,9 +164,17 @@ export function useProviderStatusRefresh(options: ProviderStatusRefreshOptions):
         window.clearInterval(refreshIntervalId);
       }
       if (refreshOnFocus) {
-        window.removeEventListener("focus", refreshProviderStatuses);
-        document.removeEventListener("visibilitychange", refreshProviderStatuses);
+        window.removeEventListener("focus", refreshOnVisible);
+        document.removeEventListener("visibilitychange", refreshOnVisible);
       }
     };
-  }, [enabled, initialDelayMs, intervalMs, minIntervalMs, queryClient, refreshOnFocus]);
+  }, [
+    enabled,
+    initialDelayMs,
+    intervalMs,
+    minIntervalMs,
+    onRefreshSuccess,
+    queryClient,
+    refreshOnFocus,
+  ]);
 }

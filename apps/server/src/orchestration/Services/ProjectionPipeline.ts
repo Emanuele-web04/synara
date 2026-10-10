@@ -6,12 +6,17 @@
  *
  * @module OrchestrationProjectionPipeline
  */
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import type { OrchestrationEvent } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import type { ProjectMetadataOrchestrationEvent } from "../projectMetadataProjection.ts";
+import type { SpaceMetadataOrchestrationEvent } from "../spaceMetadataProjection.ts";
+
+export type ShellMetadataOrchestrationEvent =
+  | ProjectMetadataOrchestrationEvent
+  | SpaceMetadataOrchestrationEvent;
 
 /**
  * OrchestrationProjectionPipelineShape - Service API for projection execution.
@@ -34,18 +39,16 @@ export interface OrchestrationProjectionPipelineShape {
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**
-   * Project only the hot-path repositories required for live transcript and
-   * session updates during streaming.
+   * Project the repositories required for live transcript, session and shell
+   * notifications before their domain events are published.
+   *
+   * PRECONDITION: the caller MUST already hold an open transaction. This method
+   * performs NO transaction management of its own — it runs the hot projectors
+   * directly against the ambient transaction so their writes commit atomically
+   * with the caller's. Use `projectEvent` (or another wrapping variant) when no
+   * surrounding transaction is held.
    */
-  readonly projectHotEvent: (
-    event: OrchestrationEvent,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
-
-  /**
-   * Project deferred repositories whose derived shell metadata is safe to
-   * compute after the main event transaction commits.
-   */
-  readonly projectDeferredEvent: (
+  readonly projectHotEventInCurrentTransaction: (
     event: OrchestrationEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
@@ -54,7 +57,7 @@ export interface OrchestrationProjectionPipelineShape {
    * surrounding transaction.
    */
   readonly projectMetadataEvent: (
-    event: ProjectMetadataOrchestrationEvent,
+    event: ShellMetadataOrchestrationEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
@@ -64,4 +67,4 @@ export interface OrchestrationProjectionPipelineShape {
 export class OrchestrationProjectionPipeline extends ServiceMap.Service<
   OrchestrationProjectionPipeline,
   OrchestrationProjectionPipelineShape
->()("t3/orchestration/Services/ProjectionPipeline/OrchestrationProjectionPipeline") {}
+>()("synara/orchestration/Services/ProjectionPipeline/OrchestrationProjectionPipeline") {}

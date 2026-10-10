@@ -1,8 +1,12 @@
 // Purpose: Scores sidebar palette results for actions, themes, projects, and chat threads.
-// Keeps search local and deterministic so the palette can rank title hits above
+// Scoring stays local and deterministic so the palette can rank title hits above
 // message-content hits while still surfacing a useful snippet for chat matches.
-import type { ProviderKind } from "@t3tools/contracts";
+// Server message hits cover threads whose messages this client has not loaded.
+import type { ComponentType } from "react";
+
+import type { ProviderKind } from "@synara/contracts";
 import { basenameOfPath } from "../file-icons";
+import type { ProjectAppearance } from "../lib/projectAppearance";
 import type { ThemeMode, ThemeVariant } from "../theme/theme.logic";
 
 export interface SidebarSearchAction {
@@ -11,6 +15,17 @@ export interface SidebarSearchAction {
   description: string;
   keywords?: readonly string[];
   shortcutLabel?: string | null;
+  /** Context shown beside the command, such as the owning Settings section. */
+  metaLabel?: string;
+  /** Dynamic actions (e.g. "Switch to <space>") execute this instead of a wired-up prop. */
+  run?: () => void;
+  /** Overrides the id-keyed icon map for actions whose glyph is data (a space's icon). */
+  icon?: ComponentType<{ className?: string }>;
+  /**
+   * Type-to-jump targets (one per space) only appear once the user types; listing them
+   * all in the empty palette would push threads and projects below the fold.
+   */
+  requiresQuery?: boolean;
 }
 
 export interface SidebarSearchTheme {
@@ -31,7 +46,9 @@ export interface SidebarSearchProject {
   remoteName: string;
   folderName: string;
   localName: string | null;
+  appearance?: ProjectAppearance | null;
   cwd: string;
+  spaceName: string;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 }
@@ -47,12 +64,47 @@ export interface SidebarSearchThread {
   projectId: string;
   projectName: string;
   projectRemoteName: string;
+  spaceName: string;
   provider: ProviderKind;
   createdAt: string;
   updatedAt?: string | undefined;
   messages: readonly {
     text: string;
   }[];
+}
+
+/** Field-wise equality so a rebuilt search thread list can keep its previous identity. */
+export function areSidebarSearchThreadListsEqual(
+  previous: readonly SidebarSearchThread[],
+  next: readonly SidebarSearchThread[],
+): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  for (let index = 0; index < previous.length; index += 1) {
+    const left = previous[index]!;
+    const right = next[index]!;
+    if (
+      left.id !== right.id ||
+      left.title !== right.title ||
+      left.projectId !== right.projectId ||
+      left.projectName !== right.projectName ||
+      left.projectRemoteName !== right.projectRemoteName ||
+      left.spaceName !== right.spaceName ||
+      left.provider !== right.provider ||
+      left.createdAt !== right.createdAt ||
+      left.updatedAt !== right.updatedAt ||
+      left.messages !== right.messages
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Server-side message hit for a thread whose messages may not be loaded on this client. */
+export interface SidebarSearchServerThreadMatch {
+  excerpt: string;
+  matchCount: number;
 }
 
 export interface SidebarSearchThreadMatch {
@@ -190,6 +242,11 @@ function scoreAction(action: SidebarSearchAction, query: string): number | null 
   if (label.includes(query)) return 100;
   if (keywords.some((keyword) => keyword.includes(query))) return 90;
   if (description.includes(query)) return 70;
+  const tokens = tokenizeQuery(query);
+  const fields = [label, description, ...keywords];
+  if (tokens.length > 1 && tokens.every((token) => fields.some((field) => field.includes(token)))) {
+    return 60;
+  }
   return null;
 }
 
@@ -216,6 +273,7 @@ function scoreProject(project: SidebarSearchProject, query: string): number | nu
   const remoteName = normalizeText(project.remoteName);
   const cwd = normalizeText(project.cwd);
   const folder = normalizeText(project.folderName || basenameOfPath(project.cwd));
+  const spaceName = normalizeText(project.spaceName);
 
   if (name === query) return 150;
   if (remoteName === query) return 150;
@@ -226,7 +284,9 @@ function scoreProject(project: SidebarSearchProject, query: string): number | nu
   if (name.includes(query)) return 105;
   if (remoteName.includes(query)) return 105;
   if (folder.includes(query)) return 95;
+  if (spaceName === query) return 90;
   if (cwd.includes(query)) return 70;
+  if (spaceName.includes(query)) return 60;
   return null;
 }
 
@@ -237,6 +297,7 @@ export function matchSidebarSearchActions(
   const normalizedQuery = normalizeText(query);
 
   return actions
+    .filter((action) => !action.requiresQuery || normalizedQuery.length > 0)
     .map((action, index) => ({
       action,
       index,
@@ -301,10 +362,67 @@ export function matchSidebarSearchProjects(
     .map(({ id, project }) => ({ id, project }));
 }
 
+/**
+ * Indexes server hits by thread. While a newer query is still in flight, the
+ * previous response only keeps hits whose excerpt matches the current query,
+ * so stale results never surface a thread the current query does not match.
+ */
+export function buildSidebarSearchServerThreadMatches(
+  result:
+    | {
+        readonly query: string;
+        readonly matches: readonly ({
+          readonly threadId: string;
+        } & SidebarSearchServerThreadMatch)[];
+      }
+    | null
+    | undefined,
+  query: string,
+): ReadonlyMap<string, SidebarSearchServerThreadMatch> {
+  const serverMatches = new Map<string, SidebarSearchServerThreadMatch>();
+  if (!result) return serverMatches;
+  const isCurrent = normalizeText(result.query) === normalizeText(query);
+  const queryTokens = tokenizeQuery(query);
+  for (const { threadId, excerpt, matchCount } of result.matches) {
+    const normalizedExcerpt = normalizeText(excerpt);
+    if (isCurrent || queryTokens.every((token) => normalizedExcerpt.includes(token))) {
+      serverMatches.set(threadId, { excerpt, matchCount });
+    }
+  }
+  return serverMatches;
+}
+
+// A server hit matched every query token somewhere in the message; its excerpt
+// may not contain them all, so it still ranks as the weakest message match.
+const SERVER_MESSAGE_MATCH_SCORE = 132;
+
+function resolveMessageMatch(
+  thread: SidebarSearchThread,
+  query: string,
+  queryTokens: readonly string[],
+  serverMatch: SidebarSearchServerThreadMatch | undefined,
+): ReturnType<typeof scoreMessage> {
+  const localMatch = scoreMessage(thread.messages, query, queryTokens);
+  if (!serverMatch) {
+    return localMatch;
+  }
+  const messageMatchCount = Math.max(localMatch.messageMatchCount, serverMatch.matchCount);
+  if (localMatch.score !== null) {
+    return { ...localMatch, messageMatchCount };
+  }
+  const excerptMatch = scoreMessage([{ text: serverMatch.excerpt }], query, queryTokens);
+  return {
+    messageMatchCount,
+    score: excerptMatch.score ?? SERVER_MESSAGE_MATCH_SCORE,
+    snippet: excerptMatch.snippet ?? buildMessageSnippet(serverMatch.excerpt, query, queryTokens),
+  };
+}
+
 export function matchSidebarSearchThreads(
   threads: readonly SidebarSearchThread[],
   query: string,
   limit = 8,
+  serverMatches?: ReadonlyMap<string, SidebarSearchServerThreadMatch>,
 ): SidebarSearchThreadMatch[] {
   const normalizedQuery = normalizeText(query);
   const queryTokens = tokenizeQuery(query);
@@ -335,7 +453,13 @@ export function matchSidebarSearchThreads(
       const title = normalizeText(thread.title);
       const projectName = normalizeText(thread.projectName);
       const projectRemoteName = normalizeText(thread.projectRemoteName);
-      const messageMatch = scoreMessage(thread.messages, normalizedQuery, queryTokens);
+      const spaceName = normalizeText(thread.spaceName);
+      const messageMatch = resolveMessageMatch(
+        thread,
+        normalizedQuery,
+        queryTokens,
+        serverMatches?.get(thread.id),
+      );
       let score: number | null = null;
       let matchKind: SidebarSearchThreadMatch["matchKind"] = "title";
       let snippet: string | null = null;
@@ -364,6 +488,9 @@ export function matchSidebarSearchThreads(
         projectRemoteName.includes(normalizedQuery)
       ) {
         score = 65;
+        matchKind = "project";
+      } else if (spaceName.includes(normalizedQuery)) {
+        score = 55;
         matchKind = "project";
       }
 
@@ -394,12 +521,4 @@ export function matchSidebarSearchThreads(
       snippet,
       messageMatchCount,
     }));
-}
-
-export function hasSidebarSearchResults(input: {
-  actions: readonly SidebarSearchAction[];
-  projects: readonly SidebarSearchProjectMatch[];
-  threads: readonly SidebarSearchThreadMatch[];
-}): boolean {
-  return input.actions.length > 0 || input.projects.length > 0 || input.threads.length > 0;
 }

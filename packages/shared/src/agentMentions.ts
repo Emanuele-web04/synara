@@ -3,7 +3,7 @@ import {
   type ClaudeSubagentAliasDefinition,
   type ProviderKind,
   type ResolvedAgentAlias,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export interface ParsedAgentMentionInvocation {
   readonly alias: string;
@@ -81,10 +81,15 @@ export function parseAgentMentionInvocations(
     if (!taskMatch) {
       continue;
     }
+    const task = taskMatch.task.trim();
+    if (task.length === 0) {
+      index = taskMatch.end - 1;
+      continue;
+    }
 
     invocations.push({
       alias,
-      task: taskMatch.task.trim(),
+      task,
       raw: text.slice(index, taskMatch.end),
       start: index,
       end: taskMatch.end,

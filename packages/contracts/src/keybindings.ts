@@ -7,11 +7,31 @@ export const MAX_WHEN_EXPRESSION_DEPTH = 64;
 export const MAX_SCRIPT_ID_LENGTH = 24;
 export const MAX_KEYBINDINGS_COUNT = 256;
 
-const STATIC_KEYBINDING_COMMANDS = [
+/**
+ * Key value marking a command as intentionally left without a shortcut. A rule carrying
+ * it keeps the command "configured", so neither the server's default backfill nor the
+ * web fallback table re-adds a binding the user removed, and it can never match a key
+ * event because no key reports this name.
+ */
+export const UNASSIGNED_KEYBINDING_KEY = "unassigned";
+
+export const STATIC_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
   "sidebar.search",
+  "sidebar.activity",
   "sidebar.addProject",
   "sidebar.importThread",
+  "space.previous",
+  "space.next",
+  "space.jump.1",
+  "space.jump.2",
+  "space.jump.3",
+  "space.jump.4",
+  "space.jump.5",
+  "space.jump.6",
+  "space.jump.7",
+  "space.jump.8",
+  "space.jump.9",
   "terminal.toggle",
   "terminal.split",
   "terminal.splitRight",
@@ -25,8 +45,16 @@ const STATIC_KEYBINDING_COMMANDS = [
   "terminal.workspace.terminal",
   "terminal.workspace.chat",
   "browser.toggle",
+  "device.toggle",
   "diff.toggle",
+  "diff.change.next",
+  "diff.change.previous",
+  "composer.focus.toggle",
+  "chat.find",
   "modelPicker.toggle",
+  "model.next",
+  "model.previous",
+  "model.effort.next",
   "traitsPicker.toggle",
   "settings.usage",
   "chat.new",
@@ -37,8 +65,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "chat.newClaude",
   "chat.newCodex",
   "chat.newCursor",
-  "chat.newGemini",
   "chat.split",
+  "sidechat.toggle",
   "view.recent.next",
   "view.recent.previous",
   "thread.jump.1",
@@ -50,9 +78,19 @@ const STATIC_KEYBINDING_COMMANDS = [
   "thread.jump.7",
   "thread.jump.8",
   "thread.jump.9",
+  "thread.copyId",
+  "thread.archive",
+  "thread.snooze",
+  "thread.markUnread",
   "chat.visible.next",
   "chat.visible.previous",
+  "threadTab.next",
+  "threadTab.previous",
   "editor.openFavorite",
+  "editor.file.save",
+  "git.commitAndPush",
+  "search.files",
+  "search.content",
 ] as const;
 
 // Shared list of numbered thread-jump commands used by the web shortcut UI.
@@ -68,6 +106,21 @@ export const THREAD_JUMP_KEYBINDING_COMMANDS = [
   "thread.jump.9",
 ] as const;
 export type ThreadJumpKeybindingCommand = (typeof THREAD_JUMP_KEYBINDING_COMMANDS)[number];
+
+// Shared list of numbered space-jump commands used by the web shortcut UI. Index 0 is
+// the first tab in the space strip (Void), matching the visual order of the switcher.
+export const SPACE_JUMP_KEYBINDING_COMMANDS = [
+  "space.jump.1",
+  "space.jump.2",
+  "space.jump.3",
+  "space.jump.4",
+  "space.jump.5",
+  "space.jump.6",
+  "space.jump.7",
+  "space.jump.8",
+  "space.jump.9",
+] as const;
+export type SpaceJumpKeybindingCommand = (typeof SPACE_JUMP_KEYBINDING_COMMANDS)[number];
 
 export const SCRIPT_RUN_COMMAND_PATTERN = Schema.TemplateLiteral([
   Schema.Literal("script."),
@@ -115,24 +168,24 @@ export const KeybindingShortcut = Schema.Struct({
 });
 export type KeybindingShortcut = typeof KeybindingShortcut.Type;
 
-export const KeybindingWhenNode: Schema.Schema<KeybindingWhenNode> = Schema.Union([
+export const KeybindingWhenNode: Schema.Codec<KeybindingWhenNode> = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("identifier"),
     name: Schema.NonEmptyString,
   }),
   Schema.Struct({
     type: Schema.Literal("not"),
-    node: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
+    node: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
   }),
   Schema.Struct({
     type: Schema.Literal("and"),
-    left: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
-    right: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
+    left: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
+    right: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
   }),
   Schema.Struct({
     type: Schema.Literal("or"),
-    left: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
-    right: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
+    left: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
+    right: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
   }),
 ]);
 export type KeybindingWhenNode =
@@ -148,7 +201,13 @@ export const ResolvedKeybindingRule = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: "ignore" } });
 export type ResolvedKeybindingRule = typeof ResolvedKeybindingRule.Type;
 
+// Runtime snapshots include missing shipped defaults alongside the persisted rules.
+// Reserve the built-in inventory's space without lowering the 256-rule user budget; a
+// command may ship one rule per platform (macOS and the rest), so allow two each.
+export const MAX_RESOLVED_KEYBINDINGS_COUNT =
+  MAX_KEYBINDINGS_COUNT + 2 * STATIC_KEYBINDING_COMMANDS.length;
+
 export const ResolvedKeybindingsConfig = Schema.Array(ResolvedKeybindingRule).check(
-  Schema.isMaxLength(MAX_KEYBINDINGS_COUNT),
+  Schema.isMaxLength(MAX_RESOLVED_KEYBINDINGS_COUNT),
 );
 export type ResolvedKeybindingsConfig = typeof ResolvedKeybindingsConfig.Type;

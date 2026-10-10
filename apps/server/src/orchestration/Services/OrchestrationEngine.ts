@@ -14,17 +14,57 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
-import type { Effect, Stream } from "effect";
+import type { Effect, Scope, Stream } from "effect";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
-import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
+import type {
+  OrchestrationEventStoreError,
+  ProjectionRepositoryError,
+} from "../../persistence/Errors.ts";
+import type { ManagedAttachmentPrincipal } from "../../managedAttachmentPrincipal.ts";
+
+export interface OrchestrationDispatchContext {
+  readonly attachmentPrincipal?: ManagedAttachmentPrincipal;
+  /** Resolve an uncertain turn start, durably rejecting it if it has not committed. Never execute it. */
+  readonly settleOnly?: boolean;
+}
+
+export interface OrchestrationProjectionCatchUpStatus {
+  /**
+   * "unknown" means the lag probe itself failed (journal or cursor read
+   * error): the projection may be fine or badly broken, and reporting either
+   * extreme would mislead — a monitor must treat it as not-healthy.
+   */
+  readonly state: "healthy" | "degraded" | "unknown";
+  readonly inFlight: boolean;
+  readonly retryAttempts: number;
+  readonly lastFailure: string | null;
+  /** Journal head the per-projector lag below is measured against. */
+  readonly highWaterSequence: number;
+  /** Events behind the journal head, per projector cursor; only lagging projectors appear. */
+  readonly lagByProjector: Readonly<Record<string, number>>;
+  /** Projector cursors absent from a non-empty projection_state table (interrupted repair). */
+  readonly missingProjectors: ReadonlyArray<string>;
+}
 
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
  */
 export interface OrchestrationEngineShape {
+  /** Reject new normal mutations while retaining reserved lifecycle progress. */
+  readonly quiesce: Effect.Effect<void>;
+
+  /** Resolve after admitted commands finish their hot commit and ordered publication. */
+  readonly drain: Effect.Effect<void>;
+
+  /** Reject all admission, finish admitted commands, then stop the command workers. */
+  readonly stop: Effect.Effect<void>;
+
+  /** Current supervised projection-recovery state for health and diagnostics. */
+  readonly getProjectionCatchUpStatus: Effect.Effect<OrchestrationProjectionCatchUpStatus>;
+
   /**
    * Replay persisted orchestration events from an exclusive sequence cursor.
    *
@@ -34,6 +74,47 @@ export interface OrchestrationEngineShape {
   readonly readEvents: (
     fromSequenceExclusive: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Read a durable inclusive range; an optional limit bounds SQL fetches and eager decoding. */
+  readonly readEventsThrough: (
+    fromSequenceExclusive: number,
+    throughSequenceInclusive: number,
+    limit?: number,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Replay one thread's persisted events from an exclusive global cursor. */
+  readonly readThreadEvents: (
+    threadId: string,
+    fromSequenceExclusive: number,
+    eventTypes?: ReadonlyArray<string>,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Read one thread's inclusive range, filtering event types before the optional SQL limit. */
+  readonly readThreadEventsThrough: (
+    threadId: string,
+    fromSequenceExclusive: number,
+    throughSequenceInclusive: number,
+    eventTypes?: ReadonlyArray<string>,
+    limit?: number,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Capture the durable orchestration event-log high-water sequence. */
+  readonly getEventHighWaterSequence: Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /** Capture the latest durable event sequence that assigned one thread's title. */
+  readonly getThreadTitleHighWaterSequence: (
+    threadId: string,
+  ) => Effect.Effect<number, OrchestrationEventStoreError>;
+
+  /**
+   * Register a domain-event subscriber before returning its stream. Transport
+   * snapshot handshakes use this exact attachment boundary to close replay gaps.
+   */
+  readonly subscribeDomainEvents: Effect.Effect<
+    Stream.Stream<OrchestrationEvent>,
+    never,
+    Scope.Scope
+  >;
 
   /**
    * Read the command-oriented in-memory model used by orchestration tests and
@@ -48,11 +129,14 @@ export interface OrchestrationEngineShape {
    * @param command - Valid orchestration command.
    * @returns Effect containing the sequence of the persisted event.
    *
-   * Dispatch is serialized through an internal queue and deduplicated via
-   * command receipts.
+   * Dispatch preserves FIFO within each thread/project/space aggregate and
+   * bounds concurrency across independent aggregates. Receipts deduplicate
+   * retries. Success follows the atomic event/receipt/hot-projection commit and
+   * ordered publication. `drain` waits for admitted command work to settle.
    */
   readonly dispatch: (
     command: OrchestrationCommand,
+    context?: OrchestrationDispatchContext,
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
 
   /**
@@ -65,6 +149,16 @@ export interface OrchestrationEngineShape {
   readonly repairState: () => Effect.Effect<
     OrchestrationReadModel,
     OrchestrationDispatchError | OrchestrationEventStoreError,
+    never
+  >;
+
+  /**
+   * Reload the command-facing read model from projection tables after
+   * maintenance code mutates projection state outside the command queue.
+   */
+  readonly refreshCommandReadModel: () => Effect.Effect<
+    OrchestrationReadModel,
+    OrchestrationDispatchError | ProjectionRepositoryError,
     never
   >;
 
@@ -83,4 +177,4 @@ export interface OrchestrationEngineShape {
 export class OrchestrationEngineService extends ServiceMap.Service<
   OrchestrationEngineService,
   OrchestrationEngineShape
->()("t3/orchestration/Services/OrchestrationEngine/OrchestrationEngineService") {}
+>()("synara/orchestration/Services/OrchestrationEngine/OrchestrationEngineService") {}

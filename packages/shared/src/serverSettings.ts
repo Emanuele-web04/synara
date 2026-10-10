@@ -1,15 +1,29 @@
 import {
+  DEFAULT_CODEX_ACCOUNT_ID,
   DEFAULT_MODEL_BY_PROVIDER,
   type ModelSelection,
+  type ProviderStartOptions,
+  type ProviderKind,
   type ServerSettings,
   type ServerSettingsPatch,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { deepMerge, type DeepPartial } from "./Struct";
+import { defaultInstanceIdForProvider, deriveProviderInstances } from "./providerInstances";
+
+function defaultModelForProvider(provider: ProviderKind): string | undefined {
+  // OMP resolves its model through role config, so a provider switch keeps the
+  // current model rather than inventing a default.
+  if (provider === "omp") return undefined;
+  return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
+}
 
 function shouldReplaceTextGenerationModelSelection(
   patch: ServerSettingsPatch["textGenerationModelSelection"] | undefined,
 ): boolean {
-  return Boolean(patch && (patch.provider !== undefined || patch.model !== undefined));
+  return Boolean(
+    patch &&
+    (patch.provider !== undefined || patch.instanceId !== undefined || patch.model !== undefined),
+  );
 }
 
 export function applyServerSettingsPatch(
@@ -17,19 +31,34 @@ export function applyServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
-  const next = deepMerge(current, patch as DeepPartial<ServerSettings>);
+  const merged = deepMerge(current, patch as DeepPartial<ServerSettings>);
+  const next: ServerSettings =
+    patch.providerInstances !== undefined
+      ? { ...merged, providerInstances: patch.providerInstances }
+      : merged;
   if (!selectionPatch) {
     return next;
   }
 
-  const provider = selectionPatch.provider ?? current.textGenerationModelSelection.provider;
+  const patchedInstanceId =
+    selectionPatch.instanceId ??
+    (selectionPatch.provider
+      ? defaultInstanceIdForProvider(selectionPatch.provider)
+      : current.textGenerationModelSelection.instanceId);
+  const patchedInstance =
+    patchedInstanceId !== undefined
+      ? deriveProviderInstances(next).find((instance) => instance.instanceId === patchedInstanceId)
+      : undefined;
+  const provider =
+    patchedInstance?.driver ??
+    selectionPatch.provider ??
+    current.textGenerationModelSelection.provider;
+  const instanceId = patchedInstance?.instanceId ?? patchedInstanceId;
+  const providerChanged = provider !== current.textGenerationModelSelection.provider;
   const model =
     selectionPatch.model ??
-    (selectionPatch.provider &&
-    selectionPatch.provider !== "pi" &&
-    selectionPatch.provider !== current.textGenerationModelSelection.provider
-      ? DEFAULT_MODEL_BY_PROVIDER[selectionPatch.provider]
-      : current.textGenerationModelSelection.model);
+    (providerChanged ? defaultModelForProvider(provider) : undefined) ??
+    current.textGenerationModelSelection.model;
   const options = shouldReplaceTextGenerationModelSelection(selectionPatch)
     ? selectionPatch.options
     : (selectionPatch.options ?? current.textGenerationModelSelection.options);
@@ -38,8 +67,71 @@ export function applyServerSettingsPatch(
     ...next,
     textGenerationModelSelection: {
       provider,
+      ...(instanceId !== undefined ? { instanceId } : {}),
       model,
       ...(options !== undefined ? { options } : {}),
     } as ModelSelection,
+  };
+}
+
+/** Server-owned launch options derived from the persisted non-secret settings snapshot. */
+export function providerStartOptionsFromServerSettings(
+  settings: ServerSettings,
+): ProviderStartOptions {
+  const { providers } = settings;
+  const selectedCodexAccount =
+    providers.codex.selectedAccountId === DEFAULT_CODEX_ACCOUNT_ID
+      ? undefined
+      : providers.codex.accounts.find(
+          (account) => account.id === providers.codex.selectedAccountId,
+        );
+  const codexBinaryPath = providers.codex.binaryPath.trim();
+  const codexHomePath = (selectedCodexAccount?.homePath || providers.codex.homePath).trim();
+  const claudeBinaryPath = providers.claudeAgent.binaryPath.trim();
+  return {
+    codex: {
+      ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
+      ...(codexHomePath ? { homePath: codexHomePath } : {}),
+      ...(selectedCodexAccount?.shadowHomePath
+        ? { shadowHomePath: selectedCodexAccount.shadowHomePath }
+        : {}),
+      ...(selectedCodexAccount ? { accountId: selectedCodexAccount.id } : {}),
+    },
+    claudeAgent: {
+      ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}),
+      ...(providers.claudeAgent.homePath.trim()
+        ? { homePath: providers.claudeAgent.homePath.trim() }
+        : {}),
+      enableArtifacts: providers.claudeAgent.enableArtifacts,
+    },
+    cursor: {
+      ...(providers.cursor.binaryPath ? { binaryPath: providers.cursor.binaryPath } : {}),
+      ...(providers.cursor.apiEndpoint ? { apiEndpoint: providers.cursor.apiEndpoint } : {}),
+    },
+    antigravity: {
+      ...(providers.antigravity.binaryPath ? { binaryPath: providers.antigravity.binaryPath } : {}),
+    },
+    grok: {
+      ...(providers.grok.binaryPath ? { binaryPath: providers.grok.binaryPath } : {}),
+    },
+    droid: {
+      ...(providers.droid.binaryPath ? { binaryPath: providers.droid.binaryPath } : {}),
+    },
+    opencode: {
+      ...(providers.opencode.binaryPath ? { binaryPath: providers.opencode.binaryPath } : {}),
+      ...(providers.opencode.serverUrl ? { serverUrl: providers.opencode.serverUrl } : {}),
+      experimentalWebSockets: providers.opencode.experimentalWebSockets,
+    },
+    pi: {
+      ...(providers.pi.binaryPath ? { binaryPath: providers.pi.binaryPath } : {}),
+      ...(providers.pi.agentDir ? { agentDir: providers.pi.agentDir } : {}),
+    },
+    devin: {
+      ...(providers.devin.binaryPath ? { binaryPath: providers.devin.binaryPath } : {}),
+    },
+    omp: {
+      ...(providers.omp.binaryPath ? { binaryPath: providers.omp.binaryPath } : {}),
+      ...(providers.omp.agentDir ? { agentDir: providers.omp.agentDir } : {}),
+    },
   };
 }

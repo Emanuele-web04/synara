@@ -15,7 +15,7 @@ export function UsageProgressTrack({
   className,
   fillClassName,
   markerClassName,
-  markerGapClassName = "bg-background",
+  markerGapClassName: markerGapClassNameProp,
 }: {
   label: string;
   remainingPercent: number;
@@ -25,6 +25,7 @@ export function UsageProgressTrack({
   markerClassName: string;
   markerGapClassName?: string | undefined;
 }) {
+  const markerGapClassName = markerGapClassNameProp ?? "bg-background";
   const clamped = clampPercent(remainingPercent);
   const marker =
     markerPercent === null || markerPercent === undefined ? null : clampPercent(markerPercent);

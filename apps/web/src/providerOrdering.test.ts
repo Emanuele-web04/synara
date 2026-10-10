@@ -3,7 +3,7 @@
 // Layer: Web settings tests
 // Depends on: provider display metadata from contracts and providerOrdering helpers.
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@t3tools/contracts";
+import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

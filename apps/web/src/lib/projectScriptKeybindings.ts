@@ -3,7 +3,7 @@ import {
   type KeybindingCommand,
   type KeybindingRule,
   type ResolvedKeybindingsConfig,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Schema } from "effect";
 
 export const PROJECT_SCRIPT_KEYBINDING_INVALID_MESSAGE = "Invalid keybinding.";
@@ -40,18 +40,15 @@ export function keybindingValueForCommand(
     const binding = keybindings[index];
     if (!binding || binding.command !== command) continue;
 
+    const shortcut = binding.shortcut;
     const parts: string[] = [];
-    if (binding.shortcut.modKey) parts.push("mod");
-    if (binding.shortcut.ctrlKey) parts.push("ctrl");
-    if (binding.shortcut.metaKey) parts.push("meta");
-    if (binding.shortcut.altKey) parts.push("alt");
-    if (binding.shortcut.shiftKey) parts.push("shift");
+    if (shortcut.modKey) parts.push("mod");
+    if (shortcut.ctrlKey) parts.push("ctrl");
+    if (shortcut.metaKey) parts.push("meta");
+    if (shortcut.altKey) parts.push("alt");
+    if (shortcut.shiftKey) parts.push("shift");
     const keyToken =
-      binding.shortcut.key === " "
-        ? "space"
-        : binding.shortcut.key === "escape"
-          ? "esc"
-          : binding.shortcut.key;
+      shortcut.key === " " ? "space" : shortcut.key === "escape" ? "esc" : shortcut.key;
     parts.push(keyToken);
     return parts.join("+");
   }

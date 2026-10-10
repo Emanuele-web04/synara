@@ -5,7 +5,11 @@ import {
   clearWorkspaceIndexCache,
   discoverProjectScripts,
   listWorkspaceDirectories,
+  prewarmWorkspaceSearchIndex,
+  resolveWorkspaceFileBySuffix,
+  resolveWorkspaceFileReferences,
   searchLocalEntries,
+  searchWorkspaceContent,
   searchWorkspaceEntries,
 } from "../../workspaceEntries";
 import { toWorkspaceEntriesError, WorkspaceEntries } from "../Services/WorkspaceEntries";
@@ -21,6 +25,12 @@ export const WorkspaceEntriesLive = Layer.succeed(WorkspaceEntries, {
       try: () => searchWorkspaceEntries(input),
       catch: (cause) => toWorkspaceEntriesError("search workspace entries", cause),
     }),
+  searchContent: (input) =>
+    Effect.tryPromise({
+      try: () => searchWorkspaceContent(input),
+      catch: (cause) => toWorkspaceEntriesError("search workspace content", cause),
+    }),
+  prewarmSearchIndex: (input) => Effect.sync(() => prewarmWorkspaceSearchIndex(input)),
   discoverScripts: (input) =>
     Effect.tryPromise({
       try: () => discoverProjectScripts(input),
@@ -35,6 +45,16 @@ export const WorkspaceEntriesLive = Layer.succeed(WorkspaceEntries, {
     Effect.tryPromise({
       try: () => searchLocalEntries(input),
       catch: (cause) => toWorkspaceEntriesError("search local entries", cause),
+    }),
+  resolveFileBySuffix: (input) =>
+    Effect.tryPromise({
+      try: () => resolveWorkspaceFileBySuffix(input),
+      catch: (cause) => toWorkspaceEntriesError("resolve workspace file by suffix", cause),
+    }),
+  resolveFileReferences: (input) =>
+    Effect.tryPromise({
+      try: () => resolveWorkspaceFileReferences(input),
+      catch: (cause) => toWorkspaceEntriesError("resolve workspace file references", cause),
     }),
   invalidate: (cwd) => Effect.sync(() => clearWorkspaceIndexCache(cwd)),
 });

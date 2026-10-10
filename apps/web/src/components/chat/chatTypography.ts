@@ -6,19 +6,55 @@
 import type { CSSProperties } from "react";
 import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../../appSettings";
 
-export const USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME = "rounded-[var(--radius-user-message)]";
-export const USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME = "py-[8px]";
+// Inline mono chip for a command quoted inside a work-row sentence ("Ran `ls`"),
+// matching inline code in chat markdown.
+export const INLINE_COMMAND_CHIP_CLASS_NAME =
+  "rounded-[0.4rem] bg-[var(--app-user-message-background)] px-[0.35rem] py-[0.05rem] font-chat-code text-chat-code text-foreground/80";
+
+// index.css shares composer corner smoothing; keep the radius as the browser fallback.
+export const USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME =
+  "chat-user-message-bubble squircle rounded-[var(--radius-user-message)]";
+export const USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME = "py-2.5";
 export const USER_MESSAGE_BUBBLE_SHELL_HORIZONTAL_PADDING_CLASS_NAME = "px-3.5";
 export const USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME = [
   USER_MESSAGE_BUBBLE_SHELL_HORIZONTAL_PADDING_CLASS_NAME,
   USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME,
 ].join(" ");
 
-const CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO = 0.48;
-const CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO = 0.52;
-// Matches Tailwind `leading-normal` (1.5). Shared by the assistant transcript text,
+// Temporary chats disappear when focus leaves them, so their bubbles wear a dashed
+// primary outline: the transcript itself says "this conversation is throwaway".
+// Non-temporary bubbles keep a transparent border of the same width so switching
+// threads never shifts the bubble geometry by a pixel.
+const USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME = "border";
+const USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME = [
+  USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
+  "border-dashed",
+  "border-[color:color-mix(in_srgb,var(--color-primary)_60%,transparent)]",
+].join(" ");
+const USER_MESSAGE_BUBBLE_PLAIN_BORDER_CLASS_NAME = [
+  USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
+  "border-transparent",
+].join(" ");
+
+// Answered agent questions wear a neutral dashed outline on both bubbles: they are
+// part of the agent's run, not ordinary chat turns. Neutral, not primary, so they
+// never read as the temporary-chat outline above.
+export const USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME = [
+  USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+  USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+  USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
+  "border-dashed border-[color:var(--color-border)]",
+  "w-max max-w-[85%] min-w-0",
+].join(" ");
+
+export function userMessageBubbleBorderClassName(isTemporaryThread: boolean): string {
+  return isTemporaryThread
+    ? USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME
+    : USER_MESSAGE_BUBBLE_PLAIN_BORDER_CLASS_NAME;
+}
+// Matches Tailwind `leading-relaxed` (1.625). Shared by the assistant transcript text,
 // user message bubbles, and the composer input so every chat surface reads at one leading.
-const CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO = 1.5;
+const CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO = 1.625;
 
 export function getChatTranscriptLineHeightPx(chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX): number {
   return normalizeChatFontSizePx(chatFontSizePx) * CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO;
@@ -28,18 +64,6 @@ export function getChatTranscriptUserMessageLineHeightPx(
   chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
 ): number {
   return getChatTranscriptLineHeightPx(chatFontSizePx);
-}
-
-export function getChatTranscriptUserCharWidthPx(
-  chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
-): number {
-  return normalizeChatFontSizePx(chatFontSizePx) * CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO;
-}
-
-export function getChatTranscriptAssistantCharWidthPx(
-  chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
-): number {
-  return normalizeChatFontSizePx(chatFontSizePx) * CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO;
 }
 
 function buildChatTextStyle(fontSizePx: number, lineHeightPx: number): CSSProperties {

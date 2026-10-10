@@ -1,3 +1,10 @@
+import {
+  isLocalAbsolutePath,
+  isWorkspaceRelativePathSafe,
+  localPathsEqual,
+  workspaceRelativePathOf,
+} from "@synara/shared/path";
+
 import { resolvePathLinkTarget } from "./terminal-links";
 
 const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
@@ -46,7 +53,7 @@ function parseFileUrlHref(
     const parsed = new URL(href);
     if (parsed.protocol.toLowerCase() !== "file:") return null;
 
-    const rawPath = parsed.pathname;
+    const rawPath = parsed.hostname ? `//${parsed.hostname}${parsed.pathname}` : parsed.pathname;
     if (rawPath.length === 0) return null;
 
     // Browser URL parser encodes "C:/foo" as "/C:/foo" for file URLs.
@@ -59,6 +66,22 @@ function parseFileUrlHref(
   } catch {
     return null;
   }
+}
+
+// Encode literal filesystem names before Markdown treats percent/hash/query
+// characters as URL syntax. File URIs also preserve Windows drive paths through
+// the renderer's existing URL sanitization boundary.
+export function markdownFilePathHref(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  const encoded = normalized
+    .split("/")
+    .map((segment, index) =>
+      index === 0 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment),
+    )
+    .join("/");
+  return encoded.startsWith("//")
+    ? `file:${encoded}`
+    : `file://${encoded.startsWith("/") ? "" : "/"}${encoded}`;
 }
 
 export function rewriteMarkdownFileUriHref(href: string | undefined): string | null {
@@ -109,6 +132,141 @@ function hasExternalScheme(path: string): boolean {
   return !POSITION_ONLY_PATTERN.test(rest);
 }
 
+function pathWithoutPositionSuffix(value: string): string {
+  return value.trim().replace(POSITION_SUFFIX_PATTERN, "");
+}
+
+const LEADING_COLLAPSED_SEGMENT_PATTERN = /^(?:\.{3}|…)\/+/;
+
+function stripCollapsedRelativePrefix(path: string): string {
+  let next = path;
+  while (LEADING_COLLAPSED_SEGMENT_PATTERN.test(next)) {
+    next = next.replace(LEADING_COLLAPSED_SEGMENT_PATTERN, "");
+  }
+  return next;
+}
+
+function pathBasename(path: string): string {
+  const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
+}
+
+function uniqueAbsolutePathEndingWith(
+  suffix: string,
+  knownAbsolutePaths: ReadonlyArray<string>,
+): string | null {
+  let match: string | null = null;
+  for (const rawPath of knownAbsolutePaths) {
+    const candidate = pathWithoutPositionSuffix(rawPath).replaceAll("\\", "/");
+    if (!isLocalAbsolutePath(candidate)) continue;
+    if (candidate !== suffix && !candidate.endsWith(`/${suffix}`)) continue;
+    if (match !== null && match !== candidate) return null;
+    match = candidate;
+  }
+  return match;
+}
+
+function looksLikeAbsoluteFilePath(path: string): boolean {
+  const basename = pathBasename(path);
+  return basename.includes(".") && RELATIVE_FILE_NAME_PATTERN.test(basename);
+}
+
+function joinAbsoluteDirectory(directory: string, relative: string): string {
+  const dir = directory.replaceAll("\\", "/").replace(/\/+$/, "");
+  const suffix = relative.replaceAll("\\", "/").replace(/^\/+/, "");
+  return `${dir}/${suffix}`;
+}
+
+const BACKTICK_SPAN_PATTERN = /`([^`]+)`/g;
+const BARE_POSIX_ABSOLUTE_PATH_PATTERN =
+  /(?:^|[\s(])(\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root)\/[^\s`'")]*)/g;
+
+/**
+ * Absolute local files and directories already written in the markdown.
+ * Used to join later relative chips (`scripts/foo.py`) onto `Dir: /abs`.
+ */
+export function extractAbsoluteFilesystemPaths(text: string): string[] {
+  const found = new Set<string>();
+  const consider = (raw: string) => {
+    const trimmed = raw.trim().replace(/[,.;]+$/, "");
+    if (trimmed.length === 0) return;
+    const candidate = pathWithoutPositionSuffix(trimmed).replace(/\/+$/, "");
+    if (candidate.length === 0 || hasExternalScheme(candidate)) return;
+    if (!isLocalAbsolutePath(candidate) && !looksLikePosixFilesystemPath(candidate)) return;
+    found.add(candidate);
+  };
+
+  for (const match of text.matchAll(BACKTICK_SPAN_PATTERN)) {
+    consider(match[1] ?? "");
+  }
+  for (const match of text.matchAll(BARE_POSIX_ABSOLUTE_PATH_PATTERN)) {
+    consider(match[1] ?? "");
+  }
+  return [...found];
+}
+
+function uniqueJoinAgainstKnownDirectories(
+  suffix: string,
+  knownAbsolutePaths: ReadonlyArray<string>,
+): string | null {
+  const matches = new Set<string>();
+  for (const rawPath of knownAbsolutePaths) {
+    const candidate = pathWithoutPositionSuffix(rawPath).replaceAll("\\", "/");
+    if (!isLocalAbsolutePath(candidate) || looksLikeAbsoluteFilePath(candidate)) continue;
+    matches.add(joinAbsoluteDirectory(candidate, suffix));
+  }
+  return matches.size === 1 ? ([...matches][0] ?? null) : null;
+}
+
+/**
+ * If exactly one known absolute path already ends with this relative
+ * reference, return that path. Zero or several matches return null so the
+ * caller can keep the workspace cwd join.
+ */
+export function resolveUniqueAbsoluteSuffixTarget(
+  reference: string,
+  knownAbsolutePaths: ReadonlyArray<string>,
+): string | null {
+  const trimmed = reference.trim();
+  if (trimmed.length === 0) return null;
+
+  const suffix = stripCollapsedRelativePrefix(
+    pathWithoutPositionSuffix(trimmed).replaceAll("\\", "/"),
+  );
+  if (
+    suffix.length === 0 ||
+    suffix.includes("\0") ||
+    !isRelativePath(suffix) ||
+    !isWorkspaceRelativePathSafe(suffix)
+  ) {
+    return null;
+  }
+
+  const match =
+    uniqueAbsolutePathEndingWith(suffix, knownAbsolutePaths) ??
+    uniqueJoinAgainstKnownDirectories(suffix, knownAbsolutePaths) ??
+    (pathBasename(suffix) === suffix
+      ? null
+      : uniqueAbsolutePathEndingWith(pathBasename(suffix), knownAbsolutePaths));
+  if (match === null) return null;
+
+  const position = POSITION_SUFFIX_PATTERN.exec(trimmed)?.[0] ?? "";
+  return `${match}${position}`;
+}
+
+export function resolveChatFileChipTarget(
+  reference: string | undefined,
+  cwd: string | undefined,
+  knownAbsolutePaths?: ReadonlyArray<string>,
+): string | null {
+  if (!reference) return null;
+  const knownTarget =
+    knownAbsolutePaths && knownAbsolutePaths.length > 0
+      ? resolveUniqueAbsoluteSuffixTarget(reference, knownAbsolutePaths)
+      : null;
+  return knownTarget ?? resolveMarkdownFileLinkTarget(reference, cwd);
+}
+
 export function resolveMarkdownFileLinkTarget(
   href: string | undefined,
   cwd?: string,
@@ -133,7 +291,24 @@ export function resolveMarkdownFileLinkTarget(
     return null;
   }
 
-  if (!isLikelyPathCandidate(decodedPath)) return null;
+  const pathWithoutPosition = decodedPath.replace(POSITION_SUFFIX_PATTERN, "");
+  const isExplicitRelativeDirectory =
+    /[\\/]$/.test(pathWithoutPosition) &&
+    isWorkspaceRelativePathSafe(pathWithoutPosition.replace(/[\\/]+$/, ""));
+  // Rewritten file URIs can contain forward-slash UNC paths. Use workspace
+  // containment to distinguish these from protocol-relative web links.
+  const isWorkspacePath =
+    cwd !== undefined &&
+    (localPathsEqual(pathWithoutPosition, cwd) ||
+      workspaceRelativePathOf(pathWithoutPosition, cwd) !== null);
+  if (
+    !fileUrlTarget &&
+    !isLikelyPathCandidate(decodedPath) &&
+    !isExplicitRelativeDirectory &&
+    !isWorkspacePath
+  ) {
+    return null;
+  }
 
   const pathWithPosition = appendLineColumnFromHash(decodedPath, decodedHash);
   if (!isRelativePath(pathWithPosition)) {

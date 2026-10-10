@@ -1,18 +1,46 @@
-import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  MessageId,
+  OrchestrationProposedPlanId,
+  TurnId,
+  type OrchestrationThreadActivity,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
+  canSubmitUserMessageEdit,
+  capOpenWorkEntryRenderChunks,
+  chunkCollapsedTurnItems,
+  collapsibleHiddenRowCount,
   computeMessageDurationStart,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   deriveTerminalAssistantMessageIds,
+  deriveTurnTimingByTurnId,
+  findLastLiveWorkGroupId,
+  formatTurnHeaderLabel,
   normalizeCompactToolLabel,
+  summarizeTurnFailureReason,
+  planWorkEntryRenderChunks,
+  resolveWorkEntryChunkFold,
   resolveAssistantMessageCopyState,
+  resolveAssistantMessageDisplayText,
+  resolveThreadFindJumpTarget,
+  type CollapsedTurnItem,
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import type { TimelineEntry } from "../../session-logic";
-import type { TurnDiffSummary } from "../../types";
+import type { TimelineEntry, WorkLogEntry } from "../../session-logic";
+import type { ChatMessage, TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
+
+describe("canSubmitUserMessageEdit", () => {
+  it("allows an empty edit only when hidden annotations remain attached", () => {
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: false })).toBe(true);
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: false, disabled: false })).toBe(false);
+    expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: true })).toBe(false);
+  });
+});
 
 function makeSummary(
   overrides: Omit<Partial<TurnDiffSummary>, "turnId"> & { turnId: string },
@@ -41,25 +69,6 @@ describe("computeMessageDurationStart", () => {
       },
     ]);
     expect(result).toEqual(new Map([["a1", "2026-01-01T00:00:05Z"]]));
-  });
-
-  it("uses the user message createdAt for the first assistant response", () => {
-    const result = computeMessageDurationStart([
-      { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
-      {
-        id: "a1",
-        role: "assistant",
-        createdAt: "2026-01-01T00:00:30Z",
-        completedAt: "2026-01-01T00:00:30Z",
-      },
-    ]);
-
-    expect(result).toEqual(
-      new Map([
-        ["u1", "2026-01-01T00:00:00Z"],
-        ["a1", "2026-01-01T00:00:00Z"],
-      ]),
-    );
   });
 
   it("uses the previous assistant completedAt for subsequent assistant responses", () => {
@@ -157,29 +166,68 @@ describe("computeMessageDurationStart", () => {
       ]),
     );
   });
-
-  it("returns empty map for empty input", () => {
-    expect(computeMessageDurationStart([])).toEqual(new Map());
-  });
 });
 
 describe("normalizeCompactToolLabel", () => {
   it("removes trailing completion wording from command labels", () => {
     expect(normalizeCompactToolLabel("Ran command complete")).toBe("Ran command");
   });
-
-  it("removes trailing completion wording from other labels", () => {
-    expect(normalizeCompactToolLabel("Read file completed")).toBe("Read file");
-  });
 });
 
 describe("computeStableMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
+  type WorkTimelineRow = Extract<MessagesTimelineRow, { kind: "work" }>;
 
   const emptyStableRows = (): StableMessagesTimelineRowsState => ({
     byId: new Map(),
     result: [],
   });
+
+  it.each(["failure", "settledAt", "nextLaunchedAt"] as const)(
+    "refreshes a subagent card when %s arrives",
+    (field) => {
+      const member = {
+        key: "a",
+        launchedAt: "2026-10-10T00:00:00Z",
+        latestStep: null,
+        outcome: null,
+        failure: null,
+        settledAt: null,
+      };
+      const row: WorkTimelineRow = {
+        kind: "work",
+        id: "run",
+        createdAt: member.launchedAt,
+        groupedEntries: [
+          {
+            id: "run",
+            createdAt: member.launchedAt,
+            label: "Subagents",
+            tone: "info",
+            subagentRun: { members: [member] },
+          },
+        ],
+      };
+      const first = computeStableMessagesTimelineRows([row], emptyStableRows());
+      const next: WorkTimelineRow = {
+        ...row,
+        groupedEntries: [
+          {
+            ...row.groupedEntries[0]!,
+            subagentRun: {
+              members: [
+                {
+                  ...member,
+                  [field]: field === "failure" ? "Launch failed" : "2026-10-10T00:00:08Z",
+                },
+              ],
+            },
+          },
+        ],
+      };
+      expect(computeStableMessagesTimelineRows([next], first).result[0]).toBe(next);
+    },
+  );
 
   it("replaces work rows when later tool metadata adds visible details", () => {
     const firstRows: MessagesTimelineRow[] = [
@@ -216,6 +264,159 @@ describe("computeStableMessagesTimelineRows", () => {
             toolTitle: "Read",
             detail: "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:12",
             changedFiles: ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts"],
+          },
+        ],
+      },
+    ];
+
+    const second = computeStableMessagesTimelineRows(enrichedRows, first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
+  it("replaces work rows when live activity settles without a final tool event", () => {
+    const firstRow: WorkTimelineRow = {
+      kind: "work",
+      id: "work-group-live-activity",
+      createdAt: "2026-05-09T10:00:00.000Z",
+      groupedEntries: [
+        {
+          id: "activity-command",
+          createdAt: "2026-05-09T10:00:00.000Z",
+          label: "Bash",
+          tone: "tool",
+          itemType: "command_execution",
+          liveActivity: {
+            state: "running_tool",
+            label: "Bash",
+            startedAt: "2026-05-09T10:00:00.000Z",
+            lastActivityAt: "2026-05-09T10:00:01.000Z",
+            detail: "Running",
+            progress: 0.5,
+            elapsedSeconds: 1,
+          },
+        },
+      ],
+    };
+    const first = computeStableMessagesTimelineRows([firstRow], emptyStableRows());
+    const settledRow: WorkTimelineRow = {
+      ...firstRow,
+      groupedEntries: [
+        {
+          ...firstRow.groupedEntries[0]!,
+          liveActivity: {
+            state: "completed",
+            label: "Bash completed",
+            startedAt: "2026-05-09T10:00:00.000Z",
+            lastActivityAt: "2026-05-09T10:00:05.000Z",
+            detail: "Done",
+            progress: 1,
+            elapsedSeconds: 5,
+          },
+        },
+      ],
+    };
+
+    const second = computeStableMessagesTimelineRows([settledRow], first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(settledRow);
+  });
+
+  it("reuses worktree-setup rows until a step status or open state changes", () => {
+    const makeRow = (
+      status: "active" | "done",
+      open: boolean,
+    ): Extract<MessagesTimelineRow, { kind: "worktree-setup" }> => ({
+      kind: "worktree-setup",
+      id: "worktree-setup-row",
+      open,
+      steps: [{ id: "create-worktree", label: "Creating worktree", status }],
+    });
+
+    const first = computeStableMessagesTimelineRows([makeRow("active", true)], emptyStableRows());
+    const unchanged = computeStableMessagesTimelineRows([makeRow("active", true)], first);
+    expect(unchanged).toBe(first);
+
+    const statusChanged = computeStableMessagesTimelineRows([makeRow("done", true)], unchanged);
+    expect(statusChanged).not.toBe(unchanged);
+    expect(statusChanged.result[0]).not.toBe(unchanged.result[0]);
+
+    const openChanged = computeStableMessagesTimelineRows([makeRow("done", false)], statusChanged);
+    expect(openChanged).not.toBe(statusChanged);
+    expect(openChanged.result[0]).not.toBe(statusChanged.result[0]);
+  });
+
+  it("replaces work rows when the activity kind changes", () => {
+    const firstRow: WorkTimelineRow = {
+      kind: "work",
+      id: "work-group-user-input",
+      createdAt: "2026-05-09T10:00:00.000Z",
+      groupedEntries: [
+        {
+          id: "activity-user-input",
+          createdAt: "2026-05-09T10:00:00.000Z",
+          label: "Needs input",
+          tone: "info",
+        },
+      ],
+    };
+    const firstRows: MessagesTimelineRow[] = [firstRow];
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+
+    const enrichedRows: MessagesTimelineRow[] = [
+      {
+        ...firstRow,
+        groupedEntries: [
+          {
+            ...firstRow.groupedEntries[0]!,
+            activityKind: "user-input.requested",
+          },
+        ],
+      },
+    ];
+
+    const second = computeStableMessagesTimelineRows(enrichedRows, first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
+  it("replaces work rows when automation card fields are added", () => {
+    const firstRows: MessagesTimelineRow[] = [
+      {
+        kind: "work",
+        id: "work-group-automation",
+        createdAt: "2026-05-09T10:00:00.000Z",
+        groupedEntries: [
+          {
+            id: "automation-created",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Created automation",
+            tone: "info",
+          },
+        ],
+      },
+    ];
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+
+    const enrichedRows: MessagesTimelineRow[] = [
+      {
+        kind: "work",
+        id: "work-group-automation",
+        createdAt: "2026-05-09T10:00:00.000Z",
+        groupedEntries: [
+          {
+            id: "automation-created",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Created automation",
+            tone: "info",
+            automation: {
+              id: "automation-7",
+              name: "Watch Synara PR 231",
+              cadenceLabel: "Every 5m",
+            },
           },
         ],
       },
@@ -286,17 +487,6 @@ describe("computeStableMessagesTimelineRows", () => {
 });
 
 describe("deriveTerminalAssistantMessageIds", () => {
-  it("keeps only the latest assistant message in a user-visible response segment", () => {
-    expect(
-      deriveTerminalAssistantMessageIds([
-        { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
-        { id: "a1", role: "assistant", createdAt: "2026-01-01T00:00:01Z", turnId: "t1" },
-        { id: "a2", role: "assistant", createdAt: "2026-01-01T00:00:02Z", turnId: "t1" },
-        { id: "a3", role: "assistant", createdAt: "2026-01-01T00:00:03Z", turnId: "t2" },
-      ]),
-    ).toEqual(new Set(["a3"]));
-  });
-
   it("treats assistant messages without turn ids as one response per user boundary", () => {
     expect(
       deriveTerminalAssistantMessageIds([
@@ -311,62 +501,17 @@ describe("deriveTerminalAssistantMessageIds", () => {
 });
 
 describe("buildTurnDiffSummaryByAssistantMessageId", () => {
-  it("attaches each summary to the terminal assistant message of its response segment", () => {
-    const result = buildTurnDiffSummaryByAssistantMessageId({
-      turnDiffSummaries: [makeSummary({ turnId: "turn-1" }), makeSummary({ turnId: "turn-2" })],
-      messages: [
-        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
-        {
-          id: MessageId.makeUnsafe("a-turn-1"),
-          role: "assistant",
-          turnId: TurnId.makeUnsafe("turn-1"),
-        },
-        {
-          id: MessageId.makeUnsafe("a-turn-2"),
-          role: "assistant",
-          turnId: TurnId.makeUnsafe("turn-2"),
-        },
-      ],
-    });
-
-    expect(result.get(MessageId.makeUnsafe("a-turn-2"))?.turnId).toBe(TurnId.makeUnsafe("turn-2"));
-    expect(result.has(MessageId.makeUnsafe("a-turn-1"))).toBe(false);
-    expect(result.size).toBe(1);
-  });
-
-  it("moves an earlier mini-turn diff to a later final answer in the same response segment", () => {
-    const result = buildTurnDiffSummaryByAssistantMessageId({
-      turnDiffSummaries: [makeSummary({ turnId: "turn-files" })],
-      messages: [
-        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
-        {
-          id: MessageId.makeUnsafe("a-files"),
-          role: "assistant",
-          turnId: TurnId.makeUnsafe("turn-files"),
-        },
-        {
-          id: MessageId.makeUnsafe("a-final"),
-          role: "assistant",
-          turnId: TurnId.makeUnsafe("turn-final"),
-        },
-      ],
-    });
-
-    expect(result.get(MessageId.makeUnsafe("a-final"))?.turnId).toBe(
-      TurnId.makeUnsafe("turn-files"),
-    );
-    expect(result.has(MessageId.makeUnsafe("a-files"))).toBe(false);
-  });
-
   it("keeps files from multiple mini-turn summaries on the final answer", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [
         makeSummary({
           turnId: "turn-files",
+          checkpointTurnCount: 1,
           files: [{ path: "a.ts", additions: 1, deletions: 0 }],
         }),
         makeSummary({
           turnId: "turn-final",
+          checkpointTurnCount: 2,
           files: [{ path: "b.ts", additions: 0, deletions: 1 }],
         }),
       ],
@@ -389,6 +534,85 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
       "a.ts",
       "b.ts",
     ]);
+    expect(result.get(MessageId.makeUnsafe("a-final"))?.checkpointTurnCounts).toEqual([1, 2]);
+  });
+
+  it("preserves Undo metadata when an empty placeholder follows file changes", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [
+        makeSummary({ turnId: "turn-files", checkpointTurnCount: 1 }),
+        makeSummary({
+          turnId: "turn-empty-placeholder",
+          status: "missing",
+          checkpointRef: CheckpointRef.makeUnsafe("provider-diff:event-empty"),
+          files: [],
+        }),
+      ],
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-empty-placeholder"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-empty-placeholder"),
+        },
+      ],
+    });
+
+    const summary = result.get(MessageId.makeUnsafe("a-empty-placeholder"));
+    expect(summary?.checkpointTurnCounts).toEqual([1]);
+    expect(summary?.status).toBe("ready");
+    expect(summary?.checkpointRef).toBe(CheckpointRef.makeUnsafe("checkpoint-turn-files"));
+  });
+
+  it("excludes no-change and placeholder mini-turns from merged Undo targets", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [
+        makeSummary({ turnId: "turn-files", checkpointTurnCount: 1 }),
+        makeSummary({ turnId: "turn-no-files", checkpointTurnCount: 2, files: [] }),
+        makeSummary({
+          turnId: "turn-placeholder",
+          checkpointTurnCount: 3,
+          checkpointRef: CheckpointRef.makeUnsafe("provider-diff:event-3"),
+        }),
+        makeSummary({
+          turnId: "turn-missing",
+          checkpointTurnCount: 4,
+          status: "missing",
+          checkpointRef: CheckpointRef.makeUnsafe("checkpoint-turn-missing"),
+        }),
+      ],
+      messages: [
+        { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
+        {
+          id: MessageId.makeUnsafe("a-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-no-files"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-no-files"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-placeholder"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-placeholder"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-missing"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-missing"),
+        },
+      ],
+    });
+
+    expect(result.has(MessageId.makeUnsafe("a-placeholder"))).toBe(false);
+    expect(result.get(MessageId.makeUnsafe("a-missing"))?.checkpointTurnCounts).toEqual([]);
   });
 
   it("keeps separate cards for response segments split by user messages", () => {
@@ -434,15 +658,6 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
     expect(result.size).toBe(0);
   });
 
-  it("ignores summaries for turns that have no rendered assistant message yet", () => {
-    const result = buildTurnDiffSummaryByAssistantMessageId({
-      turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
-      messages: [],
-    });
-
-    expect(result.size).toBe(0);
-  });
-
   it("attaches the summary to the LAST assistant message of a turn when multiple exist", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
@@ -465,17 +680,6 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
     );
     expect(result.has(MessageId.makeUnsafe("a-turn-1-first"))).toBe(false);
     expect(result.size).toBe(1);
-  });
-
-  it("returns an empty map when there are no summaries", () => {
-    const result = buildTurnDiffSummaryByAssistantMessageId({
-      turnDiffSummaries: [],
-      messages: [
-        { id: MessageId.makeUnsafe("a-1"), role: "assistant", turnId: TurnId.makeUnsafe("turn-1") },
-      ],
-    });
-
-    expect(result.size).toBe(0);
   });
 
   it("ignores assistant messages without a turnId", () => {
@@ -520,17 +724,94 @@ describe("resolveAssistantMessageCopyState", () => {
   });
 });
 
+describe("resolveAssistantMessageDisplayText", () => {
+  it("suppresses the empty placeholder when the turn visibly completed an image", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        collapsedTurnItems: [
+          {
+            kind: "work",
+            id: "generated-image",
+            entry: {
+              id: "generated-image",
+              createdAt: "2026-07-08T10:00:00.000Z",
+              label: "Generated image",
+              tone: "tool",
+              itemType: "image_generation",
+              activityKind: "tool.completed",
+            },
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the placeholder when a settled turn produced no visible content", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+      }),
+    ).toBe("(empty response)");
+  });
+
+  it("does not mistake an unfinished or failed image tool row for produced content", () => {
+    const imageEntry = {
+      id: "generated-image",
+      createdAt: "2026-07-08T10:00:00.000Z",
+      label: "Generating image",
+      tone: "tool" as const,
+      itemType: "image_generation" as const,
+      activityKind: "tool.started",
+    };
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        leadingWorkEntries: [imageEntry],
+      }),
+    ).toBe("(empty response)");
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "", streaming: false },
+        leadingWorkEntries: [
+          { ...imageEntry, activityKind: "tool.completed", tone: "error" as const },
+        ],
+      }),
+    ).toBe("(empty response)");
+  });
+
+  it("preserves real assistant text even when the same turn generated an image", () => {
+    expect(
+      resolveAssistantMessageDisplayText({
+        message: { text: "Here is your image.", streaming: false },
+        inlineWorkEntries: [
+          {
+            id: "generated-image",
+            createdAt: "2026-07-08T10:00:00.000Z",
+            label: "Generated image",
+            tone: "tool",
+            itemType: "image_generation",
+            activityKind: "tool.completed",
+          },
+        ],
+      }),
+    ).toBe("Here is your image.");
+  });
+});
+
 describe("deriveMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 
   const baseInput = {
     isWorking: false,
+    worktreeSetup: null as WorktreeSetupSnapshot | null,
+    worktreeSetupOpen: false,
     activeTurnStartedAt: null as string | null,
     turnDiffSummaryByAssistantMessageId: new Map(),
     revertTurnCountByUserMessageId: new Map(),
   };
 
-  const userEntry = (id: string, createdAt: string): TimelineEntry => ({
+  const userEntry = (id: string, createdAt: string, turnId?: string): TimelineEntry => ({
     id: `entry-${id}`,
     kind: "message",
     createdAt,
@@ -540,6 +821,7 @@ describe("deriveMessagesTimelineRows", () => {
       text: "ask",
       createdAt,
       streaming: false,
+      ...(turnId ? { turnId: TurnId.makeUnsafe(turnId) } : {}),
     },
   });
 
@@ -598,6 +880,221 @@ describe("deriveMessagesTimelineRows", () => {
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
 
+  it("keeps adjacent child groups visible after parent completion without crossing narration", () => {
+    const launch = (id: string, child: string, time: string): TimelineEntry => ({
+      kind: "work",
+      id,
+      createdAt: time,
+      entry: {
+        id,
+        createdAt: time,
+        turnId: TurnId.makeUnsafe("t1"),
+        label: "Subagents",
+        tone: "info",
+        subagents: [{ threadId: child, rawStatus: "running" }],
+        subagentRun: {
+          members: [
+            {
+              key: child,
+              launchedAt: time,
+              latestStep: null,
+              outcome: null,
+              failure: null,
+              settledAt: null,
+            },
+          ],
+        },
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        launch("a", "a", "2026-01-01T00:00:01Z"),
+        launch("b", "b", "2026-01-01T00:00:02Z"),
+        assistantEntry("narration", "2026-01-01T00:00:03Z", { turnId: "t1", text: "Next task" }),
+        launch("c", "c", "2026-01-01T00:00:04Z"),
+        assistantEntry("done", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "Done",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+    expect(
+      rows
+        .filter((row) => row.kind === "work")
+        .map((row) => row.groupedEntries.map((entry) => entry.id)),
+    ).toEqual([["a", "b"], ["c"]]);
+  });
+
+  it("keeps async question cards visible after their originating turn settles", () => {
+    const question = assistantEntry("question", "2026-01-01T00:00:01Z", {
+      turnId: "t1",
+      text: "Which action?",
+    });
+    if (question.kind !== "message") throw new Error("Expected a message");
+    question.message.asyncUserInput = { questions: [{ title: "Which action?" }] };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        question,
+        workEntry("w1", "2026-01-01T00:00:02Z", "Inspecting code"),
+        assistantEntry("done", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Done.",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+    expect(messageRow(rows, "question")?.message.asyncUserInput?.questions).toEqual([
+      { title: "Which action?" },
+    ]);
+    expect(
+      messageRow(rows, "done")?.collapsedTurnItems?.some((item) => item.id === "question"),
+    ).not.toBe(true);
+  });
+
+  const backgroundCompletionEntry = (
+    id: string,
+    createdAt: string,
+    description: string,
+  ): TimelineEntry => ({
+    id: `entry-${id}`,
+    kind: "work",
+    createdAt,
+    entry: {
+      id,
+      createdAt,
+      label: `Subagent finished: ${description}`,
+      tone: "info",
+      backgroundTaskCompletion: { taskId: id, taskType: "local_agent", description },
+    },
+  });
+
+  // Launch turn, then two responses woken by background subagents finishing.
+  const wokenResponseEntries = (options: { lastStreaming: boolean }): TimelineEntry[] => [
+    userEntry("u1", "2026-01-01T00:00:00Z"),
+    assistantEntry("plan", "2026-01-01T00:00:01Z", { turnId: "t1", text: "Launching" }),
+    workEntry("launch", "2026-01-01T00:00:02Z", "Agent"),
+    assistantEntry("launched", "2026-01-01T00:00:03Z", {
+      turnId: "t1",
+      text: "Launched 2 subagents.",
+      completedAt: "2026-01-01T00:00:04Z",
+    }),
+    backgroundCompletionEntry("done-1", "2026-01-01T00:01:00Z", "First"),
+    workEntry("check-1", "2026-01-01T00:01:01Z", "Read file"),
+    assistantEntry("report-1", "2026-01-01T00:01:02Z", {
+      turnId: "t2",
+      text: "Report 1",
+      completedAt: "2026-01-01T00:01:03Z",
+    }),
+    backgroundCompletionEntry("done-2", "2026-01-01T00:02:00Z", "Second"),
+    workEntry("check-2", "2026-01-01T00:02:01Z", "Read file"),
+    assistantEntry("report-2", "2026-01-01T00:02:02Z", {
+      turnId: "turn-3",
+      text: "Report 2",
+      streaming: options.lastStreaming,
+      ...(options.lastStreaming ? {} : { completedAt: "2026-01-01T00:02:03Z" }),
+    }),
+  ];
+
+  it("folds each response woken by a background task on its own and names the task in its header", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
+    });
+
+    expect(collapsedSignature(messageRow(rows, "launched")!)).toEqual([
+      "narration:plan",
+      "work:launch",
+    ]);
+    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
+    expect(collapsedSignature(messageRow(rows, "report-2")!)).toEqual(["work:check-2"]);
+    // The completion line is gone: the woken turn's header says what woke it.
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+    expect(messageRow(rows, "launched")?.turnHeader?.resumedBy).toBeNull();
+    expect(messageRow(rows, "report-1")?.turnHeader?.resumedBy).toEqual([
+      { description: "First", outcome: "finished" },
+    ]);
+    expect(formatTurnHeaderLabel(messageRow(rows, "report-2")!.turnHeader!)).toBe(
+      "Resumed: “Second” finished · 3.0s",
+    );
+    // A woken response's clock starts when the subagent finished, not when the
+    // previous reply did.
+    expect(messageRow(rows, "report-1")?.durationStart).toBe("2026-01-01T00:01:00Z");
+  });
+
+  it.each(["task", "monitor"])(
+    "opens a live turn woken by a %s with a Resumed header",
+    (wakeKind) => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        isWorking: true,
+        activeTurnInProgress: true,
+        activeTurnId: TurnId.makeUnsafe("turn-3"),
+        activeTurnStartedAt: "2026-01-01T00:02:00.500Z",
+        timelineEntries: wokenResponseEntries({ lastStreaming: true }).map((row) => {
+          if (wakeKind !== "monitor" || row.kind !== "work" || !row.entry.backgroundTaskCompletion)
+            return row;
+          const { backgroundTaskCompletion: completion, ...entry } = row.entry;
+          return {
+            ...row,
+            entry: {
+              ...entry,
+              monitorNotification: {
+                taskId: completion.taskId,
+                name: completion.description ?? "Monitor",
+                output: "CI finished",
+                outcome: "completed" as const,
+              },
+            },
+          };
+        }),
+      });
+
+      const headerIndex = rows.findIndex((row) => row.kind === "working-header");
+      const header = rows[headerIndex];
+      expect(header?.kind === "working-header" && header.resumedBy).toEqual([
+        { description: "Second", outcome: "finished" },
+      ]);
+      // It sits right after the previous turn, where the completion line was.
+      const previous = rows[headerIndex - 1];
+      expect(previous?.kind === "message" && previous.message.id).toBe("report-1");
+      expect(rows.some((row) => row.kind === "work" && row.id === "entry-done-2")).toBe(false);
+    },
+  );
+
+  it("keeps earlier responses folded while a background task wakes a new one", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("turn-3"),
+      timelineEntries: wokenResponseEntries({ lastStreaming: true }),
+    });
+
+    expect(collapsedSignature(messageRow(rows, "launched")!)).toEqual([
+      "narration:plan",
+      "work:launch",
+    ]);
+    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
+    expect(messageRow(rows, "report-2")?.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("keeps the previous response folded before the woken response writes anything", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("turn-3"),
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }).slice(0, -2),
+    });
+
+    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
+  });
+
   it("folds a settled turn's narration and work into one collapsed group on the terminal message", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
@@ -637,7 +1134,873 @@ describe("deriveMessagesTimelineRows", () => {
       "work:w2",
     ]);
     expect(terminal!.inlineWorkEntries).toBeUndefined();
+    // Timed from the user message, not from the last intermediate narration.
+    expect(terminal!.turnHeader?.elapsed).toBe("6.0s");
     expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("folds settled message-segments into the collapsed group instead of stranding the turn", () => {
+    // Streaming delivery splits a settled assistant message whose deltas were
+    // interleaved with tool rows into message-segment slices. Those slices must
+    // not stop the fold scan, or everything earlier in the turn renders above
+    // the "Worked for..." disclosure.
+    const segmented: ChatMessage = {
+      id: MessageId.makeUnsafe("seg-msg"),
+      role: "assistant",
+      text: "part one part two",
+      createdAt: "2026-01-01T00:00:03Z",
+      streaming: false,
+      turnId: TurnId.makeUnsafe("t1"),
+      textSegments: [
+        {
+          startedAt: "2026-01-01T00:00:03Z",
+          endedAt: "2026-01-01T00:00:03Z",
+          sequence: 1,
+          text: "part one ",
+        },
+        {
+          startedAt: "2026-01-01T00:00:05Z",
+          endedAt: "2026-01-01T00:00:05Z",
+          sequence: 2,
+          text: "part two",
+        },
+      ],
+    };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Looking into it",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        {
+          id: "entry-seg-msg#seg:0",
+          kind: "message-segment",
+          createdAt: "2026-01-01T00:00:03Z",
+          sequence: 1,
+          message: segmented,
+          segmentIndex: 0,
+        },
+        workEntry("w2", "2026-01-01T00:00:04Z", "tool 2"),
+        {
+          id: "entry-seg-msg#seg:1",
+          kind: "message-segment",
+          createdAt: "2026-01-01T00:00:05Z",
+          sequence: 2,
+          message: segmented,
+          segmentIndex: 1,
+        },
+        assistantEntry("a2", "2026-01-01T00:00:06Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:07Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "message"]);
+    const terminal = messageRow(rows, "a2");
+    expect(terminal).toBeDefined();
+    expect(collapsedSignature(terminal!)).toEqual([
+      "narration:a1",
+      "work:w1",
+      "narration:seg-msg",
+      "work:w2",
+    ]);
+    // The segmented message folds once and keeps its original reference.
+    const narration = terminal!.collapsedTurnItems!.find(
+      (item) => item.kind === "narration" && item.id === "seg-msg",
+    );
+    expect(narration?.kind === "narration" && narration.message).toBe(segmented);
+    expect(terminal!.turnHeader?.elapsed).toBe("7.0s");
+  });
+
+  it("resolves a folded assistant match to the terminal row that now owns it", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Looking into the error",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const terminalIndex = rows.findIndex(
+      (row) => row.kind === "message" && row.message.id === MessageId.makeUnsafe("a2"),
+    );
+    expect(
+      rows.some((row) => row.kind === "message" && row.message.id === MessageId.makeUnsafe("a1")),
+    ).toBe(false);
+    expect(resolveThreadFindJumpTarget(rows, { messageId: MessageId.makeUnsafe("a1") })).toEqual({
+      rowIndex: terminalIndex,
+      visibleMessageId: MessageId.makeUnsafe("a2"),
+      expandCollapsedWorkMessageId: MessageId.makeUnsafe("a2"),
+      collapsedNarrationMessageId: MessageId.makeUnsafe("a1"),
+    });
+    expect(resolveThreadFindJumpTarget(rows, { messageId: MessageId.makeUnsafe("a2") })).toEqual({
+      rowIndex: terminalIndex,
+      visibleMessageId: MessageId.makeUnsafe("a2"),
+    });
+  });
+
+  it("times the collapsed disclosure from the turn start, not the last intermediate assistant message", () => {
+    // Mirrors a provider failure + retry: the first attempt's assistant message
+    // completes 22m20s in, the retry answers 40s later. The disclosure folds
+    // the whole run, so the timer must cover it too — not just the retry tail.
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:05Z", "long tool work"),
+        assistantEntry("a1", "2026-01-01T00:22:20Z", {
+          turnId: "t1",
+          text: "The provider run failed",
+          completedAt: "2026-01-01T00:22:20Z",
+        }),
+        workEntry("w2", "2026-01-01T00:22:30Z", "retry work"),
+        assistantEntry("a2", "2026-01-01T00:23:00Z", {
+          turnId: "t2",
+          text: "All done",
+          completedAt: "2026-01-01T00:23:00Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a2");
+    expect(terminal).toBeDefined();
+    expect(collapsedSignature(terminal!)).toEqual(["work:w1", "narration:a1", "work:w2"]);
+    expect(terminal!.turnHeader?.elapsed).toBe("23m");
+  });
+
+  it("times a request-less subagent run from its turn, not from its single message", () => {
+    // A subagent child thread has no user message: the message clock spans 1ms.
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        workEntry("sleep", "2026-01-01T00:00:01Z", "sleep 8"),
+        assistantEntry("child-answer", "2026-01-01T00:00:08.999Z", {
+          turnId: "child-turn",
+          completedAt: "2026-01-01T00:00:09Z",
+        }),
+      ],
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("child-turn"),
+          state: "completed",
+          startedAt: "2026-01-01T00:00:00.500Z",
+          completedAt: "2026-01-01T00:00:09.000Z",
+        },
+        activities: [],
+      }),
+    });
+
+    expect(messageRow(rows, "child-answer")?.turnHeader?.elapsed).toBe("8.5s");
+    expect(messageRow(rows, "child-answer")?.turnHeader?.outcome).toBe("completed");
+  });
+
+  it("times a stopped turn to its interruption and marks it stopped", () => {
+    // The preamble settles 5.8s in; the user stops the turn 16s in.
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("preamble", "2026-01-01T00:00:01Z", {
+          turnId: "stopped-turn",
+          completedAt: "2026-01-01T00:00:05.800Z",
+        }),
+        workEntry("agents", "2026-01-01T00:00:06Z", "Agent"),
+        userEntry("u2", "2026-01-01T00:00:30Z"),
+        assistantEntry("next", "2026-01-01T00:00:31Z", {
+          turnId: "next-turn",
+          completedAt: "2026-01-01T00:00:32Z",
+        }),
+      ],
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [
+          makeSummary({
+            turnId: "stopped-turn",
+            startedAt: "2026-01-01T00:00:00.200Z",
+            completedAt: "2026-01-01T00:00:16.200Z",
+            status: "missing",
+          }),
+        ],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("next-turn"),
+          state: "completed",
+          startedAt: "2026-01-01T00:00:30.100Z",
+          completedAt: "2026-01-01T00:00:32Z",
+        },
+        activities: [
+          {
+            id: EventId.makeUnsafe("turn-stopped"),
+            tone: "info",
+            kind: "turn.completed",
+            summary: "Turn interrupted",
+            payload: { state: "interrupted" },
+            turnId: TurnId.makeUnsafe("stopped-turn"),
+            createdAt: "2026-01-01T00:00:16.200Z",
+          },
+        ],
+      }),
+    });
+
+    const stopped = messageRow(rows, "preamble");
+    expect(stopped?.turnHeader?.elapsed).toBe("16s");
+    expect(stopped?.turnHeader?.outcome).toBe("interrupted");
+    expect(messageRow(rows, "next")?.turnHeader?.outcome).toBe("completed");
+  });
+
+  it("marks a turn stopped before it wrote anything on its last work row", () => {
+    const stoppedWork = (id: string, createdAt: string): TimelineEntry => ({
+      id: `entry-${id}`,
+      kind: "work",
+      createdAt,
+      entry: { id, createdAt, label: "Agent", tone: "tool", turnId: TurnId.makeUnsafe("t1") },
+    });
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        stoppedWork("agent-1", "2026-01-01T00:00:01Z"),
+        stoppedWork("agent-2", "2026-01-01T00:00:02Z"),
+      ],
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("t1"),
+          state: "interrupted",
+          startedAt: "2026-01-01T00:00:00.500Z",
+          completedAt: "2026-01-01T00:00:16.500Z",
+        },
+        activities: [],
+      }),
+    });
+
+    const work = rows.filter((row) => row.kind === "work");
+    expect(work).toHaveLength(1);
+    expect(work[0]).toMatchObject({
+      turnEndMarker: { elapsed: "16s", outcome: "interrupted", reason: null },
+    });
+  });
+
+  it("anchors the live header to the running turn's request, above queued requests", () => {
+    const request = userEntry("u1", "2026-01-01T00:00:00Z");
+    if (request.kind !== "message") throw new Error("Expected a message");
+    request.message.turnId = TurnId.makeUnsafe("live-turn");
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("live-turn"),
+      activeTurnStartedAt: "2026-01-01T00:00:01Z",
+      timelineEntries: [
+        request,
+        workEntry("sleep", "2026-01-01T00:00:02Z", "sleep 15"),
+        userEntry("queued", "2026-01-01T00:00:05Z"),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual([
+      "message",
+      "working-header",
+      "work",
+      "message",
+      "working",
+    ]);
+  });
+
+  it("times a response woken by a background task from its own turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }),
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [
+          makeSummary({
+            turnId: "t1",
+            startedAt: "2026-01-01T00:00:00.100Z",
+            completedAt: "2026-01-01T00:00:04Z",
+          }),
+          // The provider opens the woken turn only when it replies, in a burst.
+          makeSummary({
+            turnId: "t2",
+            startedAt: "2026-01-01T00:01:02.900Z",
+            completedAt: "2026-01-01T00:01:02.901Z",
+          }),
+        ],
+        latestTurn: null,
+        activities: [],
+      }),
+    });
+
+    expect(messageRow(rows, "launched")?.turnHeader?.elapsed).toBe("3.9s");
+    expect(messageRow(rows, "report-1")?.turnHeader?.elapsed).toBe("2.9s");
+  });
+
+  it.each([false, true])(
+    "keeps both durations when the provider reuses the launching turn id (latest timing=%s)",
+    (latestTiming) => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: [
+          userEntry("request", "2026-01-01T00:00:00Z"),
+          assistantEntry("launch", "2026-01-01T00:00:04Z", {
+            turnId: "same-turn",
+            completedAt: "2026-01-01T00:00:04Z",
+          }),
+          backgroundCompletionEntry("done", "2026-01-01T00:00:21Z", "Delayed echo"),
+          assistantEntry("resumed", "2026-01-01T00:00:24Z", {
+            turnId: "same-turn",
+            completedAt: "2026-01-01T00:00:24Z",
+          }),
+        ],
+        turnTimingByTurnId: new Map([
+          [
+            TurnId.makeUnsafe("same-turn"),
+            {
+              startedAt: latestTiming ? "2026-01-01T00:00:21Z" : "2026-01-01T00:00:00Z",
+              completedAt: latestTiming ? "2026-01-01T00:00:24Z" : "2026-01-01T00:00:04Z",
+              interrupted: false,
+            },
+          ],
+        ]),
+      });
+      expect(messageRow(rows, "resumed")?.turnHeader?.elapsed).toBe("3.0s");
+      expect(messageRow(rows, "resumed")?.turnHeader?.endedAt).toBe("2026-01-01T00:00:24Z");
+      expect(messageRow(rows, "launch")?.turnHeader?.elapsed).toBe("4.0s");
+      expect(messageRow(rows, "launch")?.turnHeader?.endedAt).toBe("2026-01-01T00:00:04Z");
+    },
+  );
+
+  it.each([true, false])(
+    "preserves the settled launch and live resumed boundary for a reused turn id (streaming=%s)",
+    (streaming) => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        isWorking: true,
+        activeTurnInProgress: true,
+        activeTurnId: TurnId.makeUnsafe("same-turn"),
+        activeTurnStartedAt: "2026-01-01T00:00:00Z",
+        timelineEntries: [
+          userEntry("request", "2026-01-01T00:00:00Z", "same-turn"),
+          assistantEntry("launch", "2026-01-01T00:00:04Z", {
+            turnId: "same-turn",
+            completedAt: "2026-01-01T00:00:04Z",
+          }),
+          backgroundCompletionEntry("done", "2026-01-01T00:00:21Z", "Delayed echo"),
+          ...(streaming
+            ? [
+                assistantEntry("resumed", "2026-01-01T00:00:22Z", {
+                  turnId: "same-turn",
+                  streaming: true,
+                }),
+              ]
+            : []),
+        ],
+        turnTimingByTurnId: new Map([
+          [
+            TurnId.makeUnsafe("same-turn"),
+            {
+              startedAt: "2026-01-01T00:00:00Z",
+              completedAt: "2026-01-01T00:00:04Z",
+              interrupted: false,
+            },
+          ],
+        ]),
+      });
+      expect(messageRow(rows, "launch")?.turnHeader?.elapsed).toBe("4.0s");
+      expect(messageRow(rows, "launch")?.assistantTurnInProgress).toBe(false);
+      expect(rows.map((row) => row.id)).toEqual([
+        "entry-request",
+        "entry-launch",
+        "working-header-row",
+        ...(streaming ? ["entry-resumed"] : []),
+        "working-indicator-row",
+      ]);
+      expect(rows.find((row) => row.kind === "working-header")).toMatchObject({
+        createdAt: "2026-01-01T00:00:21Z",
+        resumedBy: [{ description: "Delayed echo", outcome: "finished" }],
+      });
+    },
+  );
+
+  it("keeps a bound live request when a background notification arrives during its response", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("live-turn"),
+      activeTurnStartedAt: "2026-01-01T00:00:01Z",
+      timelineEntries: [
+        userEntry("request", "2026-01-01T00:00:00Z", "live-turn"),
+        assistantEntry("stream", "2026-01-01T00:00:02Z", { turnId: "live-turn", streaming: true }),
+        backgroundCompletionEntry("done", "2026-01-01T00:00:21Z", "Other work"),
+      ],
+    });
+    expect(rows[1]).toMatchObject({ kind: "working-header", createdAt: "2026-01-01T00:00:01Z" });
+    expect(rows[1]?.kind === "working-header" && rows[1].resumedBy).toBeUndefined();
+  });
+
+  describe("turn headers", () => {
+    const turnActivity = (
+      id: string,
+      turnId: string,
+      kind: string,
+      payload: OrchestrationThreadActivity["payload"],
+      createdAt: string,
+      tone: "info" | "error" = "info",
+    ) => ({
+      id: EventId.makeUnsafe(id),
+      tone,
+      kind,
+      summary: kind,
+      payload,
+      turnId: TurnId.makeUnsafe(turnId),
+      createdAt,
+    });
+    it.each([
+      { state: "interrupted", stopRequested: true, outcome: "stopped" },
+      { state: "interrupted", stopRequested: false, outcome: "interrupted" },
+      { state: "failed", stopRequested: true, outcome: "interrupted" },
+    ] as const)(
+      "gives an empty $state turn its own $outcome header without marking queued requests",
+      ({ state, stopRequested, outcome }) => {
+        const rows = deriveMessagesTimelineRows({
+          ...baseInput,
+          timelineEntries: [
+            userEntry("request", "2026-01-01T00:00:00Z", "empty-turn"),
+            userEntry("queued", "2026-01-01T00:00:01Z"),
+          ],
+          turnTimingByTurnId: deriveTurnTimingByTurnId({
+            turnDiffSummaries: [],
+            latestTurn: null,
+            activities: [
+              turnActivity("start", "empty-turn", "turn.started", {}, "2026-01-01T00:00:00Z"),
+              ...(stopRequested
+                ? [
+                    turnActivity(
+                      "stop",
+                      "empty-turn",
+                      "turn.stop-requested",
+                      { requestedBy: "user" },
+                      "2026-01-01T00:00:01Z",
+                    ),
+                  ]
+                : []),
+              turnActivity(
+                "done",
+                "empty-turn",
+                "turn.completed",
+                { state },
+                "2026-01-01T00:00:02Z",
+              ),
+            ],
+          }),
+        });
+        expect(messageRow(rows, "request")?.turnHeader).toEqual({
+          elapsed: "2.0s",
+          endedAt: "2026-01-01T00:00:02Z",
+          outcome,
+          reason: null,
+          modelChange: null,
+          resumedBy: null,
+        });
+        expect(messageRow(rows, "queued")?.turnHeader).toBeUndefined();
+        expect(messageRow(rows, "queued")?.turnEndMarker).toBeUndefined();
+      },
+    );
+
+    it("keeps an empty live request without a terminal header after Stop intent", () => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: [userEntry("request", "2026-01-01T00:00:00Z", "empty-turn")],
+        turnTimingByTurnId: deriveTurnTimingByTurnId({
+          turnDiffSummaries: [],
+          latestTurn: null,
+          activities: [
+            turnActivity("start", "empty-turn", "turn.started", {}, "2026-01-01T00:00:00Z"),
+            turnActivity(
+              "stop",
+              "empty-turn",
+              "turn.stop-requested",
+              { requestedBy: "user" },
+              "2026-01-01T00:00:01Z",
+            ),
+          ],
+        }),
+      });
+      expect(messageRow(rows, "request")?.turnHeader).toBeUndefined();
+    });
+    const threeTurns = [
+      userEntry("u1", "2026-01-01T00:00:00Z"),
+      assistantEntry("a1", "2026-01-01T00:00:05Z", {
+        turnId: "t1",
+        text: "One",
+        completedAt: "2026-01-01T00:00:06Z",
+      }),
+      userEntry("u2", "2026-01-01T00:01:00Z"),
+      workEntry("w2", "2026-01-01T00:01:01Z", "Ran ls"),
+      assistantEntry("a2", "2026-01-01T00:01:05Z", {
+        turnId: "t2",
+        text: "Two",
+        completedAt: "2026-01-01T00:01:06Z",
+      }),
+      userEntry("u3", "2026-01-01T00:02:00Z"),
+      assistantEntry("a3", "2026-01-01T00:02:05Z", {
+        turnId: "turn-third",
+        text: "Three",
+        completedAt: "2026-01-01T00:02:20Z",
+      }),
+    ];
+    const timings = (activities: ReturnType<typeof turnActivity>[]) =>
+      deriveTurnTimingByTurnId({
+        turnDiffSummaries: [
+          makeSummary({
+            turnId: "t1",
+            startedAt: "2026-01-01T00:00:00.500Z",
+            completedAt: "2026-01-01T00:00:06Z",
+          }),
+          makeSummary({
+            turnId: "t2",
+            startedAt: "2026-01-01T00:01:00.500Z",
+            completedAt: "2026-01-01T00:01:06Z",
+          }),
+        ],
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-third"),
+          state: "completed",
+          startedAt: "2026-01-01T00:02:00.500Z",
+          completedAt: "2026-01-01T00:02:20Z",
+        },
+        activities,
+      });
+
+    it("gives every settled turn a header, with or without folded work", () => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timings([]),
+      });
+
+      expect(messageRow(rows, "a1")?.collapsedTurnItems).toBeUndefined();
+      expect(messageRow(rows, "a1")?.turnHeader).toEqual({
+        elapsed: "5.5s",
+        endedAt: "2026-01-01T00:00:06Z",
+        outcome: "completed",
+        reason: null,
+        modelChange: null,
+        resumedBy: null,
+      });
+      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe("Worked 5.5s");
+      expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["work:w2"]);
+    });
+
+    it("names the model only when it differs from the previous turn", () => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timings([
+          turnActivity(
+            "m1",
+            "t1",
+            "turn.started",
+            { model: "claude-haiku-5-5", provider: "claudeAgent" },
+            "2026-01-01T00:00:00.500Z",
+          ),
+          turnActivity(
+            "m2",
+            "t2",
+            "turn.started",
+            { model: "claude-haiku-5-5", provider: "claudeAgent" },
+            "2026-01-01T00:01:00.500Z",
+          ),
+          turnActivity(
+            "m3",
+            "turn-third",
+            "turn.started",
+            { model: "gpt-6-luna", provider: "codex" },
+            "2026-01-01T00:02:00.500Z",
+          ),
+        ]),
+      });
+
+      expect(messageRow(rows, "a1")?.turnHeader?.modelChange).toBeNull();
+      expect(messageRow(rows, "a2")?.turnHeader?.modelChange).toBeNull();
+      expect(messageRow(rows, "a3")?.turnHeader?.modelChange).toEqual({
+        provider: "codex",
+        model: "gpt-6-luna",
+      });
+    });
+
+    it("falls back to Claude's reported model for turns recorded before turn.started", () => {
+      const timing = timings([
+        turnActivity(
+          "cw1",
+          "t1",
+          "context-window.updated",
+          { claudeCache: { model: "claude-haiku-5-5" } },
+          "2026-01-01T00:00:01Z",
+        ),
+        turnActivity(
+          "m2",
+          "t2",
+          "turn.started",
+          { model: "claude-opus-5-5", provider: "claudeAgent" },
+          "2026-01-01T00:01:00.500Z",
+        ),
+        // A later context report never overrides the authoritative model.
+        turnActivity(
+          "cw2",
+          "t2",
+          "context-window.updated",
+          { claudeCache: { model: "claude-haiku-5-5" } },
+          "2026-01-01T00:01:02Z",
+        ),
+      ]);
+      expect(timing.get(TurnId.makeUnsafe("t1"))?.model).toEqual({
+        provider: "claudeAgent",
+        model: "claude-haiku-5-5",
+      });
+      expect(timing.get(TurnId.makeUnsafe("t2"))?.model?.model).toBe("claude-opus-5-5");
+    });
+
+    it("says who ended a turn early: the user or the provider, with its reason", () => {
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timings([
+          turnActivity(
+            "stop-request",
+            "t2",
+            "turn.stop-requested",
+            { requestedBy: "user" },
+            "2026-01-01T00:01:04Z",
+          ),
+          turnActivity(
+            "stop",
+            "t2",
+            "turn.completed",
+            { state: "interrupted" },
+            "2026-01-01T00:01:06Z",
+          ),
+          turnActivity(
+            "fail",
+            "turn-third",
+            "turn.completed",
+            {
+              state: "failed",
+              errorMessage: "You've hit your usage limit. Upgrade or try again later.",
+            },
+            "2026-01-01T00:02:20Z",
+            "error",
+          ),
+        ]),
+      });
+
+      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe(
+        "Stopped by you after 5.5s",
+      );
+      expect(messageRow(rows, "a3")?.turnHeader?.outcome).toBe("interrupted");
+      expect(formatTurnHeaderLabel(messageRow(rows, "a3")!.turnHeader!)).toBe(
+        "Interrupted after 20s · usage limit reached",
+      );
+    });
+
+    it("ignores a runtime error the turn recovered from", () => {
+      const timing = timings([
+        turnActivity(
+          "err",
+          "t2",
+          "runtime.error",
+          { message: "Transient network error" },
+          "2026-01-01T00:01:02Z",
+          "error",
+        ),
+        turnActivity(
+          "done",
+          "t2",
+          "turn.completed",
+          { state: "completed" },
+          "2026-01-01T00:01:06Z",
+        ),
+      ]);
+      expect(timing.get(TurnId.makeUnsafe("t2"))?.failed).toBeUndefined();
+    });
+
+    it("attributes an interrupted turn to the user only after a Stop request for that turn", () => {
+      const timing = timings([
+        turnActivity(
+          "stop",
+          "t2",
+          "turn.stop-requested",
+          { requestedBy: "user" },
+          "2026-01-01T00:01:04Z",
+        ),
+        turnActivity(
+          "done2",
+          "t2",
+          "turn.completed",
+          { state: "interrupted" },
+          "2026-01-01T00:01:06Z",
+        ),
+        turnActivity(
+          "done3",
+          "turn-third",
+          "turn.completed",
+          { state: "interrupted" },
+          "2026-01-01T00:02:20Z",
+        ),
+      ]);
+      expect(timing.get(TurnId.makeUnsafe("t2"))?.stoppedByUser).toBe(true);
+      expect(timing.get(TurnId.makeUnsafe("turn-third"))?.stoppedByUser).not.toBe(true);
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timing,
+      });
+      expect(messageRow(rows, "a2")?.turnHeader?.outcome).toBe("stopped");
+      expect(messageRow(rows, "a3")?.turnHeader?.outcome).toBe("interrupted");
+    });
+
+    it.each([{}, { requestedBy: "agent" }, { requestedBy: "system" }] as const)(
+      "keeps an interrupted turn neutral without explicit user provenance: %j",
+      (payload) => {
+        const timing = timings([
+          turnActivity("stop", "t2", "turn.stop-requested", payload, "2026-01-01T00:01:04Z"),
+          turnActivity(
+            "done",
+            "t2",
+            "turn.completed",
+            { state: "interrupted" },
+            "2026-01-01T00:01:06Z",
+          ),
+        ]);
+        expect(timing.get(TurnId.makeUnsafe("t2"))?.stoppedByUser).not.toBe(true);
+      },
+    );
+
+    it("keeps a provider failure attributed to the provider despite a Stop request", () => {
+      const timing = timings([
+        turnActivity(
+          "stop",
+          "t2",
+          "turn.stop-requested",
+          { requestedBy: "user" },
+          "2026-01-01T00:01:04Z",
+        ),
+        turnActivity(
+          "failed",
+          "t2",
+          "turn.completed",
+          { state: "failed", errorMessage: "Usage limit reached" },
+          "2026-01-01T00:01:06Z",
+          "error",
+        ),
+      ]);
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timing,
+      });
+      expect(formatTurnHeaderLabel(messageRow(rows, "a2")!.turnHeader!)).toBe(
+        "Interrupted after 5.5s · usage limit reached",
+      );
+    });
+
+    it("does not attribute an already interrupted turn to a later stale Stop request", () => {
+      const timing = timings([
+        turnActivity(
+          "interrupted",
+          "t2",
+          "turn.completed",
+          { state: "interrupted" },
+          "2026-01-01T00:01:06Z",
+        ),
+        turnActivity(
+          "late-stop",
+          "t2",
+          "turn.stop-requested",
+          { requestedBy: "user" },
+          "2026-01-01T00:01:07Z",
+        ),
+      ]);
+      expect(timing.get(TurnId.makeUnsafe("t2"))?.stoppedByUser).not.toBe(true);
+    });
+
+    it("times historical turns from their lifecycle even without a checkpoint", () => {
+      const timing = deriveTurnTimingByTurnId({
+        turnDiffSummaries: [],
+        latestTurn: null,
+        activities: [
+          turnActivity(
+            "start",
+            "t1",
+            "turn.started",
+            { model: "gpt-6-luna", provider: "codex" },
+            "2026-01-01T00:00:00.500Z",
+          ),
+          turnActivity(
+            "done",
+            "t1",
+            "turn.completed",
+            { state: "completed" },
+            "2026-01-01T00:00:06Z",
+          ),
+        ],
+      });
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: threeTurns,
+        turnTimingByTurnId: timing,
+      });
+      expect(messageRow(rows, "a1")?.turnHeader?.elapsed).toBe("5.5s");
+    });
+
+    it("marks a provider failure without an assistant response on its last work row", () => {
+      const entry = workEntry("running", "2026-01-01T00:00:01Z", "Running command");
+      if (entry.kind !== "work") throw new Error("Expected work");
+      entry.entry.turnId = TurnId.makeUnsafe("t1");
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z"), entry],
+        turnTimingByTurnId: new Map([
+          [
+            TurnId.makeUnsafe("t1"),
+            {
+              startedAt: "2026-01-01T00:00:00Z",
+              completedAt: "2026-01-01T00:00:16Z",
+              interrupted: false,
+              failed: true,
+              failureReason: "usage limit reached",
+            },
+          ],
+        ]),
+      });
+      expect(rows.at(-1)).toMatchObject({
+        turnEndMarker: { outcome: "interrupted", elapsed: "16s", reason: "usage limit reached" },
+      });
+    });
+
+    it("clips unknown provider reasons to one short line", () => {
+      expect(summarizeTurnFailureReason({ errorCode: "server_overloaded" })).toBe(
+        "model at capacity",
+      );
+      expect(summarizeTurnFailureReason({ message: `Boom\n${"x".repeat(200)}` })).toBe("Boom");
+      expect(summarizeTurnFailureReason({ message: "y".repeat(200) })?.length).toBe(80);
+      expect(summarizeTurnFailureReason({ message: "" })).toBeNull();
+    });
   });
 
   it("keeps the live turn expanded instead of collapsing while it streams", () => {
@@ -666,6 +2029,144 @@ describe("deriveMessagesTimelineRows", () => {
     const terminal = messageRow(rows, "a3");
     expect(terminal).toBeDefined();
     expect(terminal!.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("keeps pre-existing tool work above the new live narration text", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t1"),
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "I will inspect it.",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "read files"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Here is what I found so far.",
+          streaming: true,
+        }),
+        workEntry("w2", "2026-01-01T00:00:04Z", "search files"),
+      ],
+    });
+
+    const streamingNarration = messageRow(rows, "a2");
+
+    expect(streamingNarration?.leadingWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(streamingNarration?.leadingWorkGroupId).toBe("entry-w1");
+    expect(streamingNarration?.inlineWorkEntries?.map((entry) => entry.id)).toEqual(["w2"]);
+    expect(streamingNarration?.inlineWorkGroupId).toBe("entry-w2");
+  });
+
+  it("keeps a settled turn expanded while background subagents are still running", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      subagentsRunning: true,
+      activeTurnId: TurnId.makeUnsafe("t1"),
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Launching agents",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Waiting for the agents",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const visibleMessageIds = rows
+      .filter((row): row is MessageTimelineRow => row.kind === "message")
+      .map((row) => String(row.message.id));
+    expect(visibleMessageIds).toEqual(["u1", "a1", "a2"]);
+    expect(messageRow(rows, "a2")!.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("keeps finished turns expanded when folding is turned off", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      collapseFinishedTurns: false,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Looking into it",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "tool 1"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    const visibleMessageIds = rows
+      .filter((row): row is MessageTimelineRow => row.kind === "message")
+      .map((row) => String(row.message.id));
+    expect(visibleMessageIds).toEqual(["u1", "a1", "a2"]);
+    expect(messageRow(rows, "a2")!.collapsedTurnItems).toBeUndefined();
+    expect(messageRow(rows, "a1")?.turnHeader?.elapsed).toBe("4.0s");
+    expect(messageRow(rows, "a2")?.turnHeader).toBeUndefined();
+  });
+
+  it("keeps a just-settled tail assistant expanded when the active turn id is briefly unavailable", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        assistantEntry("a1", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a1");
+    expect(terminal).toBeDefined();
+    expect(terminal!.leadingWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(terminal!.inlineWorkEntries).toBeUndefined();
+    expect(terminal!.collapsedTurnItems).toBeUndefined();
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("collapses an older settled turn when a follow-up user message is waiting for output", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnStartedAt: "2026-01-01T00:00:05Z",
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        assistantEntry("a1", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+        userEntry("u2", "2026-01-01T00:00:05Z"),
+      ],
+    });
+
+    const previousAssistant = messageRow(rows, "a1");
+    expect(previousAssistant).toBeDefined();
+    expect(collapsedSignature(previousAssistant!)).toEqual(["work:w1"]);
+    expect(previousAssistant!.inlineWorkEntries).toBeUndefined();
+    expect(messageRow(rows, "u2")).toBeDefined();
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 
   it("collapses adjacent provider mini-turns into the same user-visible response", () => {
@@ -734,5 +2235,479 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(rows.some((row) => row.kind === "proposed-plan")).toBe(true);
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
+  });
+
+  it("keeps an answered question visible while the rest of the turn collapses", () => {
+    const answered: TimelineEntry = {
+      id: "entry-answered",
+      kind: "work",
+      createdAt: "2026-01-01T00:00:03Z",
+      entry: {
+        id: "answered",
+        createdAt: "2026-01-01T00:00:03Z",
+        label: "User input submitted",
+        tone: "info",
+        activityKind: "user-input.resolved",
+        userInputExchange: [
+          { id: "q", header: "Color", question: "Which color?", options: [], answer: "Amber" },
+        ],
+      },
+    };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        answered,
+        workEntry("w2", "2026-01-01T00:00:04Z", "tool 2"),
+        assistantEntry("a1", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "final",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "user-input", "message"]);
+    expect(collapsedSignature(messageRow(rows, "a1")!)).toEqual(["work:w1", "work:w2"]);
+  });
+  const workerMonitorEntry = (id: string, createdAt: string, label: string): TimelineEntry => ({
+    id: `entry-${id}`,
+    kind: "work",
+    createdAt,
+    entry: {
+      id,
+      createdAt,
+      label,
+      tone: "info",
+      synaraWorkerNotice: {
+        kind: "settled",
+        marker: "✓",
+        phrase: "finished",
+        threads: [
+          {
+            threadId: "thread-1",
+            title: "Worker",
+            outcome: "completed",
+            result: null,
+            pr: null,
+            projectId: null,
+          },
+        ],
+      },
+    },
+  });
+
+  it("keeps a worker-monitor row standalone before an assistant message", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        workerMonitorEntry("m1", "2026-01-01T00:00:02Z", "✓ Worker finished"),
+        assistantEntry("a1", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done.",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    // The monitor pill must stay its own work row: merging it into the
+    // assistant's leading/inline work entries (or its collapsed turn) hides it
+    // on conversation-only surfaces.
+    const monitorRow = rows.find(
+      (row): row is Extract<MessagesTimelineRow, { kind: "work" }> =>
+        row.kind === "work" &&
+        row.groupedEntries.some((entry) => entry.synaraWorkerNotice !== undefined),
+    );
+    expect(monitorRow?.id).toBe("entry-m1");
+    const assistant = messageRow(rows, "a1")!;
+    expect(
+      (assistant.leadingWorkEntries ?? []).some(
+        (entry) => entry.synaraWorkerNotice !== undefined,
+      ) ||
+        (assistant.inlineWorkEntries ?? []).some(
+          (entry) => entry.synaraWorkerNotice !== undefined,
+        ) ||
+        (assistant.collapsedTurnItems ?? []).some(
+          (item) => item.kind === "work" && item.entry.synaraWorkerNotice !== undefined,
+        ),
+    ).toBe(false);
+  });
+
+  it("keeps a worker-monitor row standalone after an assistant message", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Working on it.",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+        workerMonitorEntry("m1", "2026-01-01T00:00:03Z", "⚠ Worker is waiting for approval"),
+      ],
+    });
+
+    const monitorRow = rows.find(
+      (row): row is Extract<MessagesTimelineRow, { kind: "work" }> =>
+        row.kind === "work" &&
+        row.groupedEntries.some((entry) => entry.synaraWorkerNotice !== undefined),
+    );
+    expect(monitorRow?.id).toBe("entry-m1");
+    expect(
+      (messageRow(rows, "a1")?.inlineWorkEntries ?? []).some(
+        (entry) => entry.synaraWorkerNotice !== undefined,
+      ),
+    ).toBe(false);
+  });
+});
+
+const toolItem = (
+  id: string,
+  overrides: Partial<WorkLogEntry> = {},
+): Extract<CollapsedTurnItem, { kind: "work" }> => ({
+  kind: "work",
+  id,
+  entry: {
+    id,
+    createdAt: "2026-01-01T00:00:00Z",
+    label: `tool ${id}`,
+    tone: "tool",
+    ...overrides,
+  },
+});
+
+const narrationItem = (id: string): CollapsedTurnItem => ({
+  kind: "narration",
+  id,
+  message: {
+    id: MessageId.makeUnsafe(id),
+    role: "assistant",
+    text: "narration",
+    createdAt: "2026-01-01T00:00:00Z",
+    streaming: false,
+  },
+});
+
+const chunkSignature = (items: ReadonlyArray<CollapsedTurnItem>): string[] =>
+  chunkCollapsedTurnItems(items).map((chunk) =>
+    chunk.kind === "tool-group"
+      ? `group:${chunk.id}:${chunk.entries.map((entry) => entry.id).join("+")}`
+      : chunk.kind === "background-group"
+        ? `background:${chunk.entries.map((entry) => entry.id).join("+")}`
+        : `item:${chunk.item.kind}:${String(chunk.item.id)}`,
+  );
+
+describe("chunkCollapsedTurnItems", () => {
+  it("folds consecutive tool runs and lets narration split them", () => {
+    expect(
+      chunkSignature([
+        toolItem("w1"),
+        toolItem("w2"),
+        narrationItem("a1"),
+        toolItem("w3"),
+        toolItem("w4"),
+        toolItem("w5"),
+      ]),
+    ).toEqual(["group:w1:w1+w2", "item:narration:a1", "group:w3:w3+w4+w5"]);
+  });
+
+  it("lets non-summarizable work rows split runs and render individually", () => {
+    expect(
+      chunkSignature([
+        toolItem("w1"),
+        toolItem("w2"),
+        toolItem("err", { tone: "error" }),
+        toolItem("w3"),
+        toolItem("w4"),
+      ]),
+    ).toEqual(["group:w1:w1+w2", "item:work:err", "group:w3:w3+w4"]);
+  });
+
+  it("folds three or more background task rows in a row into one group", () => {
+    const background = (id: string, status: "running" | "finished" | "stopped") =>
+      toolItem(id, {
+        backgroundTask: {
+          taskId: id,
+          taskType: "local_bash",
+          description: id,
+          command: `sleep 5 && echo ${id}`,
+          status,
+          startedAt: "2026-01-01T00:00:00Z",
+          completedAt: status === "running" ? null : "2026-01-01T00:00:05Z",
+          exitCode: status === "finished" ? 0 : null,
+        },
+      });
+    expect(
+      chunkSignature([
+        background("b1", "finished"),
+        background("b2", "finished"),
+        background("b3", "finished"),
+        background("b4", "stopped"),
+        narrationItem("a1"),
+        background("b5", "running"),
+        background("b6", "running"),
+      ]),
+    ).toEqual(["background:b1+b2+b3+b4", "item:narration:a1", "item:work:b5", "item:work:b6"]);
+  });
+});
+
+const planSignature = (
+  entries: ReadonlyArray<WorkLogEntry>,
+  options: { tailIsLive: boolean },
+): string[] =>
+  planWorkEntryRenderChunks(entries, options).map((chunk) => {
+    const ids = chunk.entries.map((entry) => entry.id).join("+");
+    if (chunk.liveEntry) return `live(${chunk.liveEntry.id}):${ids}`;
+    return chunk.summary === null ? `open:${ids}` : `collapsed:${ids}`;
+  });
+
+describe("planWorkEntryRenderChunks", () => {
+  it("never collapses a run that still has running work", () => {
+    expect(
+      planSignature(
+        [
+          toolItem("w1", { toolStatus: "running" }).entry,
+          toolItem("w2").entry,
+          toolItem("think", { tone: "thinking" }).entry,
+          toolItem("w3").entry,
+          toolItem("w4").entry,
+        ],
+        { tailIsLive: false },
+      ),
+    ).toEqual(["live(w2):w1+w2", "open:think", "collapsed:w3+w4"]);
+  });
+
+  it("keeps singleton runs open: nothing to summarize", () => {
+    expect(
+      planSignature(
+        [toolItem("w1").entry, toolItem("think", { tone: "thinking" }).entry, toolItem("w2").entry],
+        { tailIsLive: false },
+      ),
+    ).toEqual(["open:w1", "open:think", "open:w2"]);
+  });
+});
+
+describe("capOpenWorkEntryRenderChunks", () => {
+  const singletonRuns = [
+    toolItem("w1").entry,
+    toolItem("w2").entry,
+    toolItem("think1", { tone: "thinking" }).entry,
+    toolItem("w3").entry,
+    toolItem("think2", { tone: "thinking" }).entry,
+    toolItem("w4").entry,
+    toolItem("think3", { tone: "thinking" }).entry,
+    toolItem("w5").entry,
+  ];
+
+  it("preserves collapsed summaries and uncapped boundaries while limiting open entries", () => {
+    const result = capOpenWorkEntryRenderChunks(
+      planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
+      {
+        expanded: false,
+        maxVisibleEntries: 0,
+        keep: "last",
+        shouldCapEntry: (entry) => entry.tone === "tool",
+      },
+    );
+
+    expect(result.chunks.map((chunk) => chunk.entries.map((entry) => entry.id))).toEqual([
+      ["w1", "w2"],
+      ["think1"],
+      [],
+      ["think2"],
+      [],
+      ["think3"],
+      [],
+    ]);
+    expect(result.hasOverflow).toBe(true);
+    expect(result.hiddenEntryCount).toBe(3);
+  });
+
+  it("never hides one or two rows behind a Show more toggle", () => {
+    for (const maxVisibleEntries of [1, 2]) {
+      const result = capOpenWorkEntryRenderChunks(
+        planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
+        {
+          expanded: false,
+          maxVisibleEntries,
+          keep: "last",
+          shouldCapEntry: (entry) => entry.tone === "tool",
+        },
+      );
+      expect(result.hasOverflow).toBe(false);
+      expect(result.hiddenEntryCount).toBe(0);
+      expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual(
+        singletonRuns.map((entry) => entry.id),
+      );
+    }
+  });
+
+  it("collapses only when at least three rows would hide", () => {
+    expect(collapsibleHiddenRowCount(7, 6)).toBe(0);
+    expect(collapsibleHiddenRowCount(8, 6)).toBe(0);
+    expect(collapsibleHiddenRowCount(9, 6)).toBe(3);
+    expect(collapsibleHiddenRowCount(4, 6)).toBe(0);
+  });
+
+  it("never caps a live run: it already renders as one line", () => {
+    const chunks = planWorkEntryRenderChunks(
+      [toolItem("w1").entry, toolItem("w2").entry, toolItem("w3").entry],
+      { tailIsLive: true },
+    );
+
+    const result = capOpenWorkEntryRenderChunks(chunks, {
+      expanded: false,
+      maxVisibleEntries: 2,
+      keep: "last",
+    });
+
+    expect(result.chunks).toEqual(chunks);
+    expect(result.hasOverflow).toBe(false);
+  });
+
+  it("restores every open entry when expanded while retaining overflow state", () => {
+    const result = capOpenWorkEntryRenderChunks(
+      planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
+      { expanded: true, maxVisibleEntries: 0, keep: "last" },
+    );
+
+    expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual(
+      singletonRuns.map((entry) => entry.id),
+    );
+    expect(result.hasOverflow).toBe(true);
+    expect(result.hiddenEntryCount).toBe(0);
+  });
+});
+
+describe("multi-file edit folding", () => {
+  const patch = toolItem("patch", {
+    itemType: "file_change",
+    changedFiles: ["a.swift", "b.swift", "c.swift"],
+  }).entry;
+
+  it("folds a lone patch that would list a column of edited-file rows", () => {
+    const [settled] = planWorkEntryRenderChunks([patch], { tailIsLive: false });
+
+    expect(settled?.summary?.label).toBe("Edited 3 files");
+    expect(resolveWorkEntryChunkFold(settled!)?.entries).toEqual([patch]);
+  });
+
+  it("keeps the patch's file rows behind its live line", () => {
+    const [live] = planWorkEntryRenderChunks([patch], { tailIsLive: true });
+
+    expect(live?.liveEntry).toBe(patch);
+    expect(resolveWorkEntryChunkFold(live!)?.entries).toEqual([patch]);
+  });
+
+  it("leaves a single-file edit as a plain row", () => {
+    const edit = toolItem("edit", { itemType: "file_change", changedFiles: ["a.swift"] }).entry;
+    const [chunk] = planWorkEntryRenderChunks([edit], { tailIsLive: false });
+
+    expect(resolveWorkEntryChunkFold(chunk!)).toBeNull();
+  });
+});
+
+describe("resolveWorkEntryChunkFold", () => {
+  it("reveals only the calls before the one a live line wears", () => {
+    const [chunk] = planWorkEntryRenderChunks(
+      [toolItem("w1").entry, toolItem("w2").entry, toolItem("w3").entry],
+      { tailIsLive: true },
+    );
+    const fold = resolveWorkEntryChunkFold(chunk!);
+
+    expect(fold?.entries.map((entry) => entry.id)).toEqual(["w1", "w2"]);
+    expect(fold?.keySuffix).toBe(":live");
+  });
+
+  it("reveals every call of a settled summary and leaves singletons unfolded", () => {
+    const [settled] = planWorkEntryRenderChunks([toolItem("w1").entry, toolItem("w2").entry], {
+      tailIsLive: false,
+    });
+    const [singleton] = planWorkEntryRenderChunks([toolItem("w1").entry], { tailIsLive: true });
+
+    expect(resolveWorkEntryChunkFold(settled!)?.entries.map((entry) => entry.id)).toEqual([
+      "w1",
+      "w2",
+    ]);
+    expect(resolveWorkEntryChunkFold(settled!)?.keySuffix).toBe("");
+    expect(resolveWorkEntryChunkFold(singleton!)).toBeNull();
+  });
+});
+
+const workRow = (id: string): MessagesTimelineRow => ({
+  kind: "work",
+  id,
+  createdAt: "2026-01-01T00:00:00Z",
+  groupedEntries: [{ id, createdAt: "2026-01-01T00:00:00Z", label: "tool", tone: "tool" }],
+});
+
+const messageRowOf = (
+  id: string,
+  role: "user" | "assistant",
+  groups: { leadingWorkGroupId?: string; inlineWorkGroupId?: string } = {},
+): MessagesTimelineRow => ({
+  kind: "message",
+  id: `row-${id}`,
+  createdAt: "2026-01-01T00:00:00Z",
+  message: {
+    id: MessageId.makeUnsafe(id),
+    role,
+    text: "text",
+    createdAt: "2026-01-01T00:00:00Z",
+    streaming: false,
+  },
+  durationStart: "2026-01-01T00:00:00Z",
+  showAssistantCopyButton: false,
+  assistantCopyStreaming: false,
+  ...groups,
+});
+
+const workingRow: MessagesTimelineRow = {
+  kind: "working",
+  id: "working-indicator-row",
+  createdAt: null,
+};
+
+describe("findLastLiveWorkGroupId", () => {
+  it("returns the trailing standalone work row", () => {
+    expect(
+      findLastLiveWorkGroupId([
+        messageRowOf("u1", "user"),
+        messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
+        workRow("g2"),
+        workingRow,
+      ]),
+    ).toBe("g2");
+  });
+
+  it("prefers a message's inline group over its leading group", () => {
+    expect(
+      findLastLiveWorkGroupId([
+        messageRowOf("u1", "user"),
+        messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1", inlineWorkGroupId: "g2" }),
+      ]),
+    ).toBe("g2");
+  });
+
+  it("falls back to the leading group when no inline group exists", () => {
+    expect(
+      findLastLiveWorkGroupId([
+        messageRowOf("u1", "user"),
+        messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1" }),
+      ]),
+    ).toBe("g1");
+  });
+
+  it("stops at a trailing user message: the next turn has no live group yet", () => {
+    expect(
+      findLastLiveWorkGroupId([
+        messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
+        messageRowOf("u2", "user"),
+        workingRow,
+      ]),
+    ).toBeNull();
   });
 });

@@ -2,19 +2,56 @@
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { ChevronRightIcon } from "~/lib/icons";
-import type * as React from "react";
+import * as React from "react";
 
 import { cn } from "~/lib/utils";
+import { observeNativeSurfaceOverlay } from "~/lib/nativeSurfaceOcclusion";
 import {
   APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
   COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
 } from "../chat/composerPickerStyles";
+import {
+  CHECKBOX_BOX_CLASS_NAME,
+  CHECKBOX_INDICATOR_CLASS_NAME,
+  CheckboxCheckGlyph,
+} from "./checkbox";
+import { ShortcutKbd } from "./kbd";
+import { SWITCH_THUMB_CLASS_NAME, SWITCH_TRACK_CLASS_NAME } from "./switch";
 
 const MenuCreateHandle = MenuPrimitive.createHandle;
 
-const Menu = MenuPrimitive.Root;
+type MenuProps = MenuPrimitive.Root.Props & {
+  /** Keep a controlled menu open while one of its portalled submenus is being entered. */
+  keepOpenOnSubmenuInteraction?: boolean;
+};
+
+function Menu({
+  keepOpenOnSubmenuInteraction: keepOpenOnSubmenuInteractionProp,
+  onOpenChange,
+  ...props
+}: MenuProps) {
+  const keepOpenOnSubmenuInteraction = keepOpenOnSubmenuInteractionProp ?? false;
+  const handleOpenChange: NonNullable<MenuPrimitive.Root.Props["onOpenChange"]> = (
+    nextOpen,
+    eventDetails,
+  ) => {
+    if (
+      !nextOpen &&
+      keepOpenOnSubmenuInteraction &&
+      (eventDetails.reason === "sibling-open" ||
+        eventDetails.reason === "trigger-hover" ||
+        eventDetails.reason === "focus-out")
+    ) {
+      eventDetails.cancel();
+      return;
+    }
+    onOpenChange?.(nextOpen, eventDetails);
+  };
+
+  return <MenuPrimitive.Root onOpenChange={handleOpenChange} {...props} />;
+}
 
 const MenuPortal = MenuPrimitive.Portal;
 
@@ -26,16 +63,18 @@ function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Pr
   );
 }
 
-function MenuPopup({
+/** Low-level popup foundation. App surfaces should use ComposerPickerMenuPopup instead. */
+function MenuPopupBase({
   children,
   className,
-  surface = "default",
+  surface: surfaceProp,
   pickerSize,
-  sideOffset = 4,
-  align = "center",
+  sideOffset: sideOffsetProp,
+  align: alignProp,
   alignOffset,
-  side = "bottom",
+  side: sideProp,
   anchor,
+  collisionAvoidance,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -43,9 +82,17 @@ function MenuPopup({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   side?: MenuPrimitive.Positioner.Props["side"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
+  /** Root menus default to flipping only along their own axis (no top/bottom fallback for
+   *  a side-placed menu); pass `{ fallbackAxisSide: "end" }` for side-placed root menus so
+   *  they drop below the anchor when neither side fits. */
+  collisionAvoidance?: MenuPrimitive.Positioner.Props["collisionAvoidance"];
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal" | undefined;
 }) {
+  const surface = surfaceProp ?? "default";
+  const sideOffset = sideOffsetProp ?? 4;
+  const align = alignProp ?? "center";
+  const side = sideProp ?? "bottom";
   const popupSurfaceClassName =
     surface === "composer"
       ? COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME
@@ -56,9 +103,11 @@ function MenuPopup({
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner
+        ref={observeNativeSurfaceOverlay}
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
+        collisionAvoidance={collisionAvoidance}
         className={cn("z-50 min-w-32", isComposerSurface ? undefined : className)}
         data-slot="menu-positioner"
         side={side}
@@ -68,8 +117,9 @@ function MenuPopup({
           className={cn(
             "relative flex origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none",
             isComposerSurface ? "min-w-0 max-w-[92vw]" : "w-full min-w-full",
-            isComposerSurface ? className : null,
             popupSurfaceClassName,
+            // Last so a caller's className can override surface tokens (e.g. a rounder radius).
+            isComposerSurface ? className : null,
           )}
           data-slot="menu-popup"
           {...props}
@@ -101,17 +151,20 @@ function MenuGroup(props: MenuPrimitive.Group.Props) {
 function MenuItem({
   className,
   inset,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: MenuPrimitive.Item.Props & {
   inset?: boolean;
   variant?: "default" | "destructive";
 }) {
+  const variant = variantProp ?? "default";
   return (
     <MenuPrimitive.Item
       className={cn(
         COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
-        "data-inset:ps-8 data-[variant=destructive]:text-destructive-foreground",
+        // text-destructive (not -foreground): these items sit on the popup surface, so they
+        // need the red accent itself — the foreground token is for text on a destructive fill.
+        "data-inset:ps-8 data-[variant=destructive]:text-destructive",
         className,
       )}
       data-inset={inset}
@@ -126,11 +179,17 @@ function MenuCheckboxItem({
   className,
   children,
   checked,
-  variant = "default",
+  variant: variantProp,
   ...props
 }: MenuPrimitive.CheckboxItem.Props & {
-  variant?: "default" | "switch";
+  /**
+   * `default`: a trailing ✓ only while checked. `switch`: a trailing toggle.
+   * `checkbox`: a visible box in the leading icon slot, empty while unchecked, so the row
+   * reads as an opt-in setting rather than a selected option.
+   */
+  variant?: "default" | "switch" | "checkbox";
 }) {
+  const variant = variantProp ?? "default";
   return (
     <MenuPrimitive.CheckboxItem
       checked={checked}
@@ -141,20 +200,40 @@ function MenuCheckboxItem({
         ),
         variant === "switch"
           ? "grid-cols-[1fr_auto] gap-4 pe-1.5"
-          : "grid-cols-[1fr_auto] gap-3 px-2.5",
+          : variant === "checkbox"
+            ? "flex gap-2 pe-2"
+            : "grid-cols-[1fr_auto] gap-3 px-2.5",
         className,
       )}
       {...props}
       data-slot="menu-checkbox-item"
     >
-      {variant === "switch" ? (
+      {variant === "checkbox" ? (
+        <>
+          {/* Sized and inset like a MenuItem's leading icon so labels stay aligned. */}
+          <span aria-hidden className={cn(CHECKBOX_BOX_CLASS_NAME, "-mx-0.5 size-3.5 sm:size-3.5")}>
+            <MenuPrimitive.CheckboxItemIndicator className={CHECKBOX_INDICATOR_CLASS_NAME}>
+              <CheckboxCheckGlyph className="size-2.5 sm:size-2.5" />
+            </MenuPrimitive.CheckboxItemIndicator>
+          </span>
+          <span className="flex min-w-0 flex-1 items-center gap-2">{children}</span>
+        </>
+      ) : variant === "switch" ? (
         <>
           <span className="col-start-1">{children}</span>
           <MenuPrimitive.CheckboxItemIndicator
-            className="inset-shadow-[0_1px_--theme(--color-black/4%)] inline-flex h-[calc(var(--thumb-size)+2px)] w-[calc(var(--thumb-size)*2-2px)] shrink-0 items-center rounded-full p-px outline-none transition-[background-color,box-shadow] duration-200 [--thumb-size:--spacing(4)] focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background data-checked:bg-primary data-unchecked:bg-input data-disabled:opacity-64 sm:[--thumb-size:--spacing(3)]"
+            className={cn(
+              SWITCH_TRACK_CLASS_NAME,
+              "inset-shadow-[0_1px_--theme(--color-black/4%)] [--thumb-size:--spacing(4)] focus-visible:ring-1 sm:[--thumb-size:--spacing(3)]",
+            )}
             keepMounted
           >
-            <span className="pointer-events-none block aspect-square h-full in-[[data-slot=menu-checkbox-item][data-checked]]:origin-[var(--thumb-size)_50%] origin-left in-[[data-slot=menu-checkbox-item][data-checked]]:translate-x-[calc(var(--thumb-size)-4px)] in-[[data-slot=menu-checkbox-item]:active]:not-data-disabled:scale-x-110 in-[[data-slot=menu-checkbox-item]:active]:rounded-[var(--thumb-size)/calc(var(--thumb-size)*1.10)] rounded-(--thumb-size) bg-background shadow-sm/5 will-change-transform [transition:translate_.15s,border-radius_.15s,scale_.1s_.1s,transform-origin_.15s]" />
+            <span
+              className={cn(
+                SWITCH_THUMB_CLASS_NAME,
+                "in-[[data-slot=menu-checkbox-item][data-checked]]:origin-[var(--thumb-size)_50%] in-[[data-slot=menu-checkbox-item][data-checked]]:translate-x-[calc(var(--thumb-size)-4px)] in-[[data-slot=menu-checkbox-item]:active]:not-data-disabled:scale-x-110 in-[[data-slot=menu-checkbox-item]:active]:rounded-[var(--thumb-size)/calc(var(--thumb-size)*1.10)]",
+              )}
+            />
           </MenuPrimitive.CheckboxItemIndicator>
         </>
       ) : (
@@ -189,13 +268,14 @@ function MenuRadioGroup(props: MenuPrimitive.RadioGroup.Props) {
 function MenuRadioItem({
   className,
   children,
-  preserveChildLayout = false,
+  preserveChildLayout: preserveChildLayoutProp,
   trailing,
   ...props
 }: MenuPrimitive.RadioItem.Props & {
   preserveChildLayout?: boolean;
   trailing?: React.ReactNode;
 }) {
+  const preserveChildLayout = preserveChildLayoutProp ?? false;
   return (
     <MenuPrimitive.RadioItem
       className={cn(
@@ -271,7 +351,7 @@ function MenuGroupLabel({
       // headers (e.g. "Effort"). Picker menus may still override padding-block
       // via the `--picker-section-py` token on `[data-slot="menu-label"]`.
       className={cn(
-        "px-2 py-1.5 font-normal text-xs text-muted-foreground/45 data-inset:ps-9 sm:data-inset:ps-8",
+        "px-2 py-1.5 font-normal text-ui leading-snug text-muted-foreground/45 data-inset:ps-9 sm:data-inset:ps-8",
         className,
       )}
       data-inset={inset}
@@ -291,21 +371,78 @@ function MenuSeparator({ className, ...props }: MenuPrimitive.Separator.Props) {
   );
 }
 
-function MenuShortcut({ className, ...props }: React.ComponentProps<"kbd">) {
+function MenuShortcut({ className, children, ...props }: React.ComponentProps<"kbd">) {
+  if (typeof children === "string") {
+    return (
+      <ShortcutKbd
+        shortcutLabel={children}
+        data-slot="menu-shortcut"
+        groupClassName={cn("ms-auto", className)}
+        {...props}
+      />
+    );
+  }
   return (
     <kbd
       className={cn(
-        "ms-auto font-medium font-sans text-muted-foreground/72 text-[length:var(--app-font-size-ui-xs,10px)] tracking-widest",
+        "ms-auto font-medium font-sans text-muted-foreground/72 text-ui-xs tracking-widest",
         className,
       )}
       data-slot="menu-shortcut"
+      {...props}
+    >
+      {children}
+    </kbd>
+  );
+}
+
+type MenuSubProps = MenuPrimitive.SubmenuRoot.Props & {
+  /** Keep a hover-open submenu mounted when focus moves into its portalled popup. */
+  keepOpenOnFocusOut?: boolean;
+};
+
+function FocusStableMenuSub({
+  defaultOpen,
+  onOpenChange,
+  open: controlledOpen,
+  ...props
+}: MenuPrimitive.SubmenuRoot.Props) {
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const handleOpenChange: NonNullable<MenuPrimitive.SubmenuRoot.Props["onOpenChange"]> = (
+    nextOpen,
+    eventDetails,
+  ) => {
+    // Base UI can report focus-out while the pointer is already inside the submenu's
+    // portalled popup. Let the parent menu's outside/sibling handling own real dismissal.
+    if (!nextOpen && eventDetails.reason === "focus-out") return;
+    if (controlledOpen === undefined) setUncontrolledOpen(nextOpen);
+    onOpenChange?.(nextOpen, eventDetails);
+  };
+
+  return (
+    <MenuPrimitive.SubmenuRoot
+      data-slot="menu-sub"
+      open={open}
+      onOpenChange={handleOpenChange}
       {...props}
     />
   );
 }
 
-function MenuSub(props: MenuPrimitive.SubmenuRoot.Props) {
-  return <MenuPrimitive.SubmenuRoot data-slot="menu-sub" {...props} />;
+function MenuSub({ keepOpenOnFocusOut: keepOpenOnFocusOutProp, ...props }: MenuSubProps) {
+  const keepOpenOnFocusOut = keepOpenOnFocusOutProp ?? false;
+  return keepOpenOnFocusOut ? (
+    <FocusStableMenuSub {...props} />
+  ) : (
+    <MenuPrimitive.SubmenuRoot data-slot="menu-sub" {...props} />
+  );
+}
+
+/** Unstyled submenu trigger for bespoke layouts (e.g. the effort slider card's stacked
+ *  model label). Prefer `MenuSubTrigger` for regular option rows. */
+function MenuSubTriggerBase(props: MenuPrimitive.SubmenuTrigger.Props) {
+  return <MenuPrimitive.SubmenuTrigger data-slot="menu-sub-trigger-base" {...props} />;
 }
 
 function MenuSubTrigger({
@@ -337,29 +474,36 @@ function MenuSubTrigger({
 
 function MenuSubPopup({
   className,
-  surface = "default",
+  surface: surfaceProp,
   pickerSize,
-  sideOffset = 0,
+  sideOffset: sideOffsetProp,
   alignOffset,
-  align = "start",
+  align: alignProp,
+  side: sideProp,
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
   sideOffset?: MenuPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
+  /** Cascade direction; `inline-start` when the parent menu already opened toward the start. */
+  side?: "inline-end" | "inline-start";
   surface?: "default" | "composer";
   pickerSize?: "small" | "normal";
 }) {
+  const surface = surfaceProp ?? "default";
+  const sideOffset = sideOffsetProp ?? 0;
+  const align = alignProp ?? "start";
+  const side = sideProp ?? "inline-end";
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
   return (
-    <MenuPopup
+    <MenuPopupBase
       align={align}
       alignOffset={alignOffset ?? defaultAlignOffset}
       className={className}
       data-slot="menu-sub-content"
       pickerSize={pickerSize}
-      side="inline-end"
+      side={side}
       sideOffset={sideOffset}
       surface={surface}
       {...props}
@@ -369,35 +513,20 @@ function MenuSubPopup({
 
 export {
   MenuCreateHandle,
-  MenuCreateHandle as DropdownMenuCreateHandle,
   Menu,
-  Menu as DropdownMenu,
   MenuPortal,
-  MenuPortal as DropdownMenuPortal,
   MenuTrigger,
-  MenuTrigger as DropdownMenuTrigger,
-  MenuPopup,
-  MenuPopup as DropdownMenuContent,
+  MenuPopupBase,
   MenuGroup,
-  MenuGroup as DropdownMenuGroup,
   MenuItem,
-  MenuItem as DropdownMenuItem,
   MenuCheckboxItem,
-  MenuCheckboxItem as DropdownMenuCheckboxItem,
   MenuRadioGroup,
-  MenuRadioGroup as DropdownMenuRadioGroup,
   MenuRadioItem,
-  MenuRadioItem as DropdownMenuRadioItem,
   MenuGroupLabel,
-  MenuGroupLabel as DropdownMenuLabel,
   MenuSeparator,
-  MenuSeparator as DropdownMenuSeparator,
   MenuShortcut,
-  MenuShortcut as DropdownMenuShortcut,
   MenuSub,
-  MenuSub as DropdownMenuSub,
   MenuSubTrigger,
-  MenuSubTrigger as DropdownMenuSubTrigger,
+  MenuSubTriggerBase,
   MenuSubPopup,
-  MenuSubPopup as DropdownMenuSubContent,
 };

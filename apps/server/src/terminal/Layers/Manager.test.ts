@@ -7,8 +7,8 @@ import {
   type TerminalEvent,
   type TerminalOpenInput,
   type TerminalRestartInput,
-} from "@t3tools/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+} from "@synara/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   PtySpawnError,
@@ -17,7 +17,18 @@ import {
   type PtyProcess,
   type PtySpawnInput,
 } from "../Services/PTY";
-import { TerminalManagerRuntime, type TerminalSubprocessActivity } from "./Manager";
+import {
+  __terminalHistorySanitizeTesting,
+  __terminalManagerShellTesting,
+  TerminalManagerRuntime,
+  type TerminalSubprocessActivity,
+} from "./Manager";
+import type { ManagedTerminalProfile } from "../managedTerminalWrappers";
+import type { ProcessTreeKiller } from "../processTreeKiller";
+import {
+  createWindowsProcessSnapshotObserver,
+  type ProcessChildrenSnapshotObserver,
+} from "../windowsProcessSnapshot";
 import { Effect, Encoding } from "effect";
 
 class FakePtyProcess implements PtyProcess {
@@ -182,9 +193,40 @@ describe("TerminalManager", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const dir of tempDirs.splice(0, tempDirs.length)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("prefers PowerShell for new Windows terminals before cmd.exe fallbacks", () => {
+    const candidates = __terminalManagerShellTesting.resolveShellCandidates(
+      () => __terminalManagerShellTesting.windowsDefaultTerminalShell,
+      {
+        envComSpec: "C:\\Windows\\System32\\cmd.exe",
+        platform: "win32",
+      },
+    );
+
+    expect(candidates.map((candidate) => candidate.shell)).toEqual([
+      "powershell.exe",
+      "C:\\Windows\\System32\\cmd.exe",
+      "cmd.exe",
+    ]);
+  });
+
+  it("keeps explicit Windows shell requests ahead of PowerShell defaults", () => {
+    const candidates = __terminalManagerShellTesting.resolveShellCandidates(() => "pwsh.exe", {
+      envComSpec: "C:\\Windows\\System32\\cmd.exe",
+      platform: "win32",
+    });
+
+    expect(candidates.map((candidate) => candidate.shell)).toEqual([
+      "pwsh.exe",
+      "C:\\Windows\\System32\\cmd.exe",
+      "powershell.exe",
+      "cmd.exe",
+    ]);
   });
 
   function makeManager(
@@ -192,14 +234,22 @@ describe("TerminalManager", () => {
     options: {
       shellResolver?: () => string;
       subprocessChecker?: (terminalPid: number) => Promise<boolean | TerminalSubprocessActivity>;
+      processSnapshotObserver?: ProcessChildrenSnapshotObserver;
+      processTreeKiller?: ProcessTreeKiller;
       subprocessPollIntervalMs?: number;
       processKillGraceMs?: number;
       maxRetainedInactiveSessions?: number;
       ptyAdapter?: FakePtyAdapter;
+      prepareLogs?: (logsDir: string) => void;
+      managedProfileResolver?: () => Promise<ReadonlyArray<ManagedTerminalProfile>>;
+      providerAuthResolver?: (
+        instanceId: string,
+      ) => Promise<import("../providerAuthentication").ProviderAuthenticationLaunch>;
     } = {},
   ) {
-    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-terminal-"));
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-terminal-"));
     tempDirs.push(logsDir);
+    options.prepareLogs?.(logsDir);
     const ptyAdapter = options.ptyAdapter ?? new FakePtyAdapter();
     const manager = new TerminalManagerRuntime({
       logsDir,
@@ -207,6 +257,10 @@ describe("TerminalManager", () => {
       historyLineLimit,
       shellResolver: options.shellResolver ?? (() => "/bin/bash"),
       ...(options.subprocessChecker ? { subprocessChecker: options.subprocessChecker } : {}),
+      ...(options.processSnapshotObserver
+        ? { processSnapshotObserver: options.processSnapshotObserver }
+        : {}),
+      ...(options.processTreeKiller ? { processTreeKiller: options.processTreeKiller } : {}),
       ...(options.subprocessPollIntervalMs
         ? { subprocessPollIntervalMs: options.subprocessPollIntervalMs }
         : {}),
@@ -214,9 +268,76 @@ describe("TerminalManager", () => {
       ...(options.maxRetainedInactiveSessions
         ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
         : {}),
+      ...(options.providerAuthResolver
+        ? { providerAuthResolver: options.providerAuthResolver }
+        : {}),
+      ...(options.managedProfileResolver
+        ? { managedProfileResolver: options.managedProfileResolver }
+        : {}),
     });
     return { logsDir, ptyAdapter, manager };
   }
+
+  it("closes an authentication attempt cancelled while its account is still being prepared", async () => {
+    let finish!: (launch: import("../providerAuthentication").ProviderAuthenticationLaunch) => void;
+    const resolver = vi.fn(
+      () =>
+        new Promise<import("../providerAuthentication").ProviderAuthenticationLaunch>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { manager, ptyAdapter, logsDir } = makeManager(5000, {
+      providerAuthResolver: resolver,
+      processTreeKiller: { capture: () => ({ descendants: [] }), signal: () => {} },
+    });
+    try {
+      const opening = manager.open(openInput({ providerAuthInstanceId: "codex_work" }));
+      await waitFor(() => resolver.mock.calls.length === 1);
+      const closing = manager.close({
+        threadId: "thread-1",
+        terminalId: "default",
+        deleteHistory: true,
+      });
+      finish({ command: process.execPath, args: ["login"], env: { HOME: logsDir }, cwd: logsDir });
+      await opening;
+      await closing;
+      expect(ptyAdapter.processes[0]?.killed).toBe(true);
+      expect(ptyAdapter.processes[0]?.killSignals).toContain("SIGTERM");
+      await expect(
+        manager.write({ threadId: "thread-1", data: "must-not-reach-closed-login" }),
+      ).rejects.toThrow(/Unknown terminal/);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not restart failed authentication or switch its account during reattach", async () => {
+    const resolver = vi.fn(async () => {
+      throw new Error("Account CLI missing");
+    });
+    const { manager, ptyAdapter } = makeManager(5000, { providerAuthResolver: resolver });
+    try {
+      const input = openInput({ providerAuthInstanceId: "codex_work" });
+      expect((await manager.open(input)).status).toBe("error");
+      expect((await manager.open(input)).status).toBe("error");
+      expect(resolver).toHaveBeenCalledOnce();
+      expect(ptyAdapter.spawnInputs).toHaveLength(0);
+      await expect(
+        manager.open({ ...input, providerAuthInstanceId: "codex_other" }),
+      ).rejects.toThrow(/cannot switch/);
+      await expect(
+        manager.restart({
+          threadId: "thread-1",
+          terminalId: "default",
+          cwd: process.cwd(),
+          cols: 80,
+          rows: 24,
+        }),
+      ).rejects.toThrow(/new sign-in attempt/);
+    } finally {
+      await manager.dispose();
+    }
+  });
 
   it("spawns lazily and reuses running terminal per thread", async () => {
     const { manager, ptyAdapter } = makeManager();
@@ -246,6 +367,38 @@ describe("TerminalManager", () => {
 
     manager.dispose();
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refreshes provider shims when Codex and Claude are both absent",
+    async () => {
+      const emptyBinDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-empty-bin-"));
+      tempDirs.push(emptyBinDir);
+      const originalPath = process.env.PATH;
+      process.env.PATH = emptyBinDir;
+      const managedProfileResolver = vi.fn(async () => [
+        {
+          commandName: "pi-work",
+          targetPath: "/bin/sh",
+          environment: { PI_CODING_AGENT_DIR: "/profiles/pi-work" },
+          isolateEnvironment: true,
+        },
+      ]);
+      try {
+        const { logsDir, manager, ptyAdapter } = makeManager(5, { managedProfileResolver });
+
+        await manager.open(openInput());
+
+        expect(managedProfileResolver).toHaveBeenCalledTimes(1);
+        expect(fs.existsSync(path.join(logsDir, "_managed-bin", "pi-work"))).toBe(true);
+        expect(ptyAdapter.spawnInputs[0]?.env.PATH?.split(path.delimiter)[0]).toBe(
+          path.join(logsDir, "_managed-bin"),
+        );
+        manager.dispose();
+      } finally {
+        process.env.PATH = originalPath;
+      }
+    },
+  );
 
   it("forwards write and resize to active pty process", async () => {
     const { manager, ptyAdapter } = makeManager();
@@ -394,6 +547,40 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it.skipIf(process.platform === "win32")(
+    "creates terminal history with private permissions",
+    async () => {
+      const { manager, ptyAdapter, logsDir } = makeManager();
+      await manager.open(openInput());
+      ptyAdapter.processes[0]?.emitData("private history\n");
+      const historyPath = historyLogPath(logsDir);
+      await waitFor(() => fs.existsSync(historyPath));
+
+      expect(fs.statSync(logsDir).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(historyPath).mode & 0o777).toBe(0o600);
+
+      manager.dispose();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "repairs existing terminal history permissions on first open",
+    async () => {
+      const { manager, logsDir } = makeManager(5, {
+        prepareLogs: (directoryPath) => {
+          fs.chmodSync(directoryPath, 0o755);
+          fs.writeFileSync(historyLogPath(directoryPath), "existing history\n", { mode: 0o644 });
+        },
+      });
+
+      expect(fs.statSync(logsDir).mode & 0o777).toBe(0o700);
+      await manager.open(openInput());
+      expect(fs.statSync(historyLogPath(logsDir)).mode & 0o777).toBe(0o600);
+
+      manager.dispose();
+    },
+  );
+
   it("keeps pty reads paused until renderer output ACKs drain", async () => {
     const { manager, ptyAdapter } = makeManager();
     const events: TerminalEvent[] = [];
@@ -478,11 +665,12 @@ describe("TerminalManager", () => {
     expect(process).toBeDefined();
     if (!process) return;
 
-    process.emitData("\u001b[?2004h\u001b[>7u");
+    process.emitData("\u001b[?2004h\u001b[?1002h\u001b[>7u");
     const snapshot = await manager.open(openInput());
 
     expect(snapshot.replayPreamble).toContain("\u001b[?2004h");
     expect(snapshot.replayPreamble).toContain("\u001b[=7;1u");
+    expect(snapshot.replayPreamble ?? "").not.toContain("?1002h");
 
     process.emitData("\u001b[?2004l\u001b[=0;1u");
     const resetSnapshot = await manager.open(openInput());
@@ -579,6 +767,108 @@ describe("TerminalManager", () => {
       1_200,
     );
 
+    manager.dispose();
+  });
+
+  it("applies one shared process snapshot to multiple terminals per poll cycle", async () => {
+    let captureCount = 0;
+    const observer: ProcessChildrenSnapshotObserver = {
+      capture: vi.fn(async () => {
+        captureCount += 1;
+        if (captureCount === 1) return new Map();
+        return new Map([
+          [9000, [{ pid: 9100, command: "node.exe serve.js" }]],
+          [9001, [{ pid: 9101, command: "node.exe build.js" }]],
+        ]);
+      }),
+      retryDelayMs: () => 0,
+      dispose: vi.fn(),
+    };
+    const { manager } = makeManager(5, {
+      processSnapshotObserver: observer,
+      subprocessPollIntervalMs: 100,
+    });
+    const events: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.open(openInput({ terminalId: "default" }));
+    await waitFor(() => captureCount === 1);
+    await manager.open(openInput({ terminalId: "sidecar" }));
+    await manager.write({ threadId: "thread-1", terminalId: "sidecar", data: "echo active\r" });
+
+    await waitFor(
+      () =>
+        events.some(
+          (event) =>
+            event.type === "activity" &&
+            event.terminalId === "default" &&
+            event.hasRunningSubprocess,
+        ) &&
+        events.some(
+          (event) =>
+            event.type === "activity" &&
+            event.terminalId === "sidecar" &&
+            event.hasRunningSubprocess,
+        ),
+      1_200,
+    );
+
+    expect(observer.capture).toHaveBeenCalledTimes(2);
+    manager.dispose();
+  });
+
+  it("honors process snapshot retry backoff instead of probing at the terminal cadence", async () => {
+    let backoffMs = 0;
+    const observer: ProcessChildrenSnapshotObserver = {
+      capture: vi.fn(async () => {
+        backoffMs = 120;
+        return null;
+      }),
+      retryDelayMs: () => backoffMs,
+      dispose: vi.fn(),
+    };
+    const { manager } = makeManager(5, {
+      processSnapshotObserver: observer,
+      subprocessPollIntervalMs: 10,
+    });
+
+    await manager.open(openInput());
+    await waitFor(() => vi.mocked(observer.capture).mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    expect(observer.capture).toHaveBeenCalledTimes(1);
+
+    await waitFor(() => vi.mocked(observer.capture).mock.calls.length === 2, 300);
+    manager.dispose();
+  });
+
+  it("preserves the last activity state while a shared snapshot is unavailable", async () => {
+    let captureCount = 0;
+    const observer: ProcessChildrenSnapshotObserver = {
+      capture: vi.fn(async () => {
+        captureCount += 1;
+        return captureCount === 1
+          ? new Map([[9000, [{ pid: 9100, command: "node.exe build.js" }]]])
+          : null;
+      }),
+      retryDelayMs: () => 0,
+      dispose: vi.fn(),
+    };
+    const { manager } = makeManager(5, {
+      processSnapshotObserver: observer,
+      subprocessPollIntervalMs: 20,
+    });
+    const activityEvents: TerminalEvent[] = [];
+    manager.on("event", (event) => {
+      if (event.type === "activity") activityEvents.push(event);
+    });
+
+    await manager.open(openInput());
+    await waitFor(() => captureCount >= 2);
+
+    expect(activityEvents).toHaveLength(1);
+    expect(activityEvents[0]).toMatchObject({ hasRunningSubprocess: true });
     manager.dispose();
   });
 
@@ -751,6 +1041,81 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("abandons a string control sequence that never terminates", () => {
+    const { sanitizeTerminalHistoryChunk, maxPendingControlSequenceLength } =
+      __terminalHistorySanitizeTesting;
+    const chunkLength = 4096;
+
+    // An OSC with no BEL/ST terminator (truncated program, crashed TUI, `cat` on a
+    // binary) used to make every later byte accumulate in the carry-over buffer
+    // forever: nothing reached scrollback and each flush rescanned the whole buffer.
+    let pending = `\u001b]0;${"a".repeat(chunkLength)}`;
+    let emitted = "";
+    let flushes = 0;
+    for (let index = 0; index < 64; index += 1) {
+      const result = sanitizeTerminalHistoryChunk(pending, "b".repeat(chunkLength));
+      pending = result.pendingControlSequence;
+      emitted += result.visibleText;
+      if (result.visibleText.length > 0) {
+        flushes += 1;
+      }
+      expect(pending.length).toBeLessThanOrEqual(maxPendingControlSequenceLength);
+    }
+
+    expect(flushes).toBeGreaterThan(0);
+    expect(emitted.length).toBeGreaterThan(maxPendingControlSequenceLength);
+    // Parser state is reset, so ordinary output flows into history again.
+    const recovered = sanitizeTerminalHistoryChunk(pending, "recovered\n");
+    expect(recovered.visibleText.endsWith("recovered\n")).toBe(true);
+    expect(recovered.pendingControlSequence).toBe("");
+  });
+
+  it("keeps recording terminal history after an unterminated control sequence", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData(
+      `\u001b]0;${"x".repeat(__terminalHistorySanitizeTesting.maxPendingControlSequenceLength + 1)}`,
+    );
+    // Let the runaway sequence flush on its own batch before the next output.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    process.emitData("visible after overflow\n");
+
+    await manager.close({ threadId: "thread-1" });
+
+    const reopened = await manager.open(openInput());
+    expect(reopened.history.endsWith("visible after overflow\n")).toBe(true);
+
+    manager.dispose();
+  });
+
+  it("releases cached history when a thread is closed without deleting history", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("archived output\n");
+    // Archiving closes terminals but keeps their transcripts on disk.
+    await manager.close({ threadId: "thread-1" });
+
+    const persistedHistoryByKey = (
+      manager as unknown as { persistedHistoryByKey: Map<string, string> }
+    ).persistedHistoryByKey;
+    expect(
+      [...persistedHistoryByKey.keys()].filter((key) => key.startsWith("thread-1\u0000")),
+    ).toEqual([]);
+
+    const reopened = await manager.open(openInput());
+    expect(reopened.history).toBe("archived output\n");
+
+    manager.dispose();
+  });
+
   it("strips replay-destructive clears while preserving style sequences", async () => {
     const { manager, ptyAdapter } = makeManager();
     await manager.open(openInput());
@@ -832,23 +1197,133 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
-  it("preserves chunk-split ESC sequences with intermediate bytes without leaking final bytes", async () => {
+  it("checks current processes before an idle-only close, even without an activity event", async () => {
+    let busy = false;
+    const { manager, ptyAdapter } = makeManager(5, {
+      subprocessChecker: async () => busy,
+      subprocessPollIntervalMs: 60_000,
+    });
+    try {
+      const opened = await manager.open(openInput());
+      busy = true;
+      const input = { threadId: "thread-1", terminalId: "default", onlyIfIdle: true };
+      await expect(manager.close(input)).rejects.toThrow(/busy/i);
+      expect(ptyAdapter.processes[0]?.killed).toBe(false);
+      expect((await manager.open(openInput())).pid).toBe(opened.pid);
+
+      busy = false;
+      await manager.close(input);
+      expect(ptyAdapter.processes[0]?.killed).toBe(true);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it.each(["unavailable", "busy", "failed"])(
+    "preserves a terminal when the process snapshot is %s during an idle-only close",
+    async (state) => {
+      let closing = false;
+      const { manager, ptyAdapter } = makeManager(5, {
+        processSnapshotObserver: {
+          capture: async () => {
+            if (!closing) return new Map();
+            if (state === "failed") throw new Error("snapshot failed");
+            return state === "unavailable"
+              ? null
+              : new Map([[9000, [{ pid: 9100, command: "node build.js" }]]]);
+          },
+          retryDelayMs: () => 60_000,
+          dispose: vi.fn(),
+        },
+      });
+      try {
+        await manager.open(openInput());
+        closing = true;
+        await expect(
+          manager.close({ threadId: "thread-1", terminalId: "default", onlyIfIdle: true }),
+        ).rejects.toThrow();
+        expect(ptyAdapter.processes[0]?.killed).toBe(false);
+        // Explicit user closes retain their existing semantics.
+        await manager.close({ threadId: "thread-1", terminalId: "default" });
+        expect(ptyAdapter.processes[0]?.killed).toBe(true);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
+  it("does not authorize close with a process snapshot started by an earlier poll", async () => {
+    let finishOldSnapshot!: (
+      snapshot: Map<number, Array<{ pid: number; command: string }>>,
+    ) => void;
+    const oldSnapshot = new Promise<Map<number, Array<{ pid: number; command: string }>>>(
+      (resolve) => {
+        finishOldSnapshot = resolve;
+      },
+    );
+    const capture = vi
+      .fn()
+      .mockReturnValueOnce(oldSnapshot)
+      .mockResolvedValue(new Map([[9000, [{ pid: 9100, command: "node.exe build.js" }]]]));
+    const observer = createWindowsProcessSnapshotObserver({
+      createWorker: () => ({ capture, dispose: () => {} }),
+    });
+    const observe = vi.spyOn(observer, "capture");
+    const { manager, ptyAdapter } = makeManager(5, {
+      processSnapshotObserver: observer,
+      subprocessPollIntervalMs: 60_000,
+    });
+    try {
+      await manager.open(openInput());
+      await waitFor(() => capture.mock.calls.length === 1);
+      const closing = manager.close({
+        threadId: "thread-1",
+        terminalId: "default",
+        onlyIfIdle: true,
+      });
+      const result = expect(closing).rejects.toThrow(/busy/i);
+      await waitFor(() => observe.mock.calls.length >= 2);
+      finishOldSnapshot(new Map());
+      await result;
+      expect(ptyAdapter.processes[0]?.killed).toBe(false);
+    } finally {
+      finishOldSnapshot(new Map());
+      manager.dispose();
+    }
+  });
+
+  it("rejects navigation writes to busy shells without sending input", async () => {
+    let busy = true;
+    const { manager, ptyAdapter } = makeManager(5, { subprocessChecker: async () => busy });
+    try {
+      await manager.open(openInput());
+      const input = {
+        threadId: "thread-1",
+        terminalId: "default",
+        data: "cd /tmp\r",
+        onlyIfIdle: true,
+      };
+      await expect(manager.write(input)).rejects.toThrow(/busy/i);
+      expect(ptyAdapter.processes[0]?.writes).toEqual([]);
+      busy = false;
+      await manager.write(input);
+      expect(ptyAdapter.processes[0]?.writes).toEqual(["cd /tmp\r"]);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("rejects idle-only closes without a specific terminal", async () => {
     const { manager, ptyAdapter } = makeManager();
-    await manager.open(openInput());
-    const process = ptyAdapter.processes[0];
-    expect(process).toBeDefined();
-    if (!process) return;
-
-    process.emitData("before ");
-    process.emitData("\u001b(");
-    process.emitData("Bafter\n");
-
-    await manager.close({ threadId: "thread-1" });
-
-    const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("before \u001b(Bafter\n");
-
-    manager.dispose();
+    try {
+      await manager.open(openInput());
+      await expect(manager.close({ threadId: "thread-1", onlyIfIdle: true })).rejects.toThrow(
+        /terminalId/,
+      );
+      expect(ptyAdapter.processes[0]?.killed).toBe(false);
+    } finally {
+      manager.dispose();
+    }
   });
 
   it("deletes history file when close(deleteHistory=true)", async () => {
@@ -891,6 +1366,33 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
+  it("keeps terminals reattached after an archive cleanup fence", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-23T20:00:00.000Z"));
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput({ terminalId: "default" }));
+    await manager.open(openInput({ terminalId: "sidecar" }));
+    const defaultProcess = ptyAdapter.processes[0];
+    const sidecarProcess = ptyAdapter.processes[1];
+    expect(defaultProcess).toBeDefined();
+    expect(sidecarProcess).toBeDefined();
+    if (!defaultProcess || !sidecarProcess) return;
+
+    const archivedAt = "2026-07-23T20:00:05.000Z";
+    vi.setSystemTime(new Date("2026-07-23T20:00:10.000Z"));
+    await manager.open(openInput({ terminalId: "sidecar" }));
+
+    await manager.closeSessionsOpenedAtOrBefore({
+      threadId: "thread-1",
+      openedAtOrBefore: archivedAt,
+    });
+
+    expect(defaultProcess.killed).toBe(true);
+    expect(sidecarProcess.killed).toBe(false);
+    await manager.close({ threadId: "thread-1" });
+    manager.dispose();
+  });
+
   it("escalates terminal shutdown to SIGKILL when process does not exit in time", async () => {
     const { manager, ptyAdapter } = makeManager(5, { processKillGraceMs: 10 });
     await manager.open(openInput());
@@ -922,6 +1424,63 @@ describe("TerminalManager", () => {
     expect(process.killSignals).not.toContain("SIGKILL");
 
     manager.dispose();
+  });
+
+  it("keeps captured-child SIGKILL escalation after root exit without re-signaling the root", async () => {
+    const treeSignals: Array<{
+      rootPid: number;
+      signal: string;
+      descendantPids: number[];
+      includeRootTree: boolean | undefined;
+    }> = [];
+    const processTreeKiller: ProcessTreeKiller = {
+      capture: () => ({
+        descendants: [{ pid: 4242, command: "tsdown --watch --clean" }],
+      }),
+      signal: ({ rootPid, signal, tree, includeRootTree }) => {
+        treeSignals.push({
+          rootPid,
+          signal,
+          descendantPids: tree.descendants.map((descendant) => descendant.pid),
+          includeRootTree,
+        });
+      },
+    };
+    const { manager, ptyAdapter } = makeManager(5, {
+      processKillGraceMs: 10,
+      processTreeKiller,
+    });
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    await manager.close({ threadId: "thread-1" });
+    process.emitExit({ exitCode: 0, signal: 15 });
+    await waitFor(() => treeSignals.some((entry) => entry.signal === "SIGKILL"));
+
+    expect(treeSignals).toContainEqual({
+      rootPid: process.pid,
+      signal: "SIGKILL",
+      descendantPids: [4242],
+      includeRootTree: false,
+    });
+    expect(process.killSignals).toEqual(["SIGTERM"]);
+
+    manager.dispose();
+  });
+
+  it("shutdown disposal waits for kill escalation before returning", async () => {
+    const { manager, ptyAdapter } = makeManager(5, { processKillGraceMs: 10 });
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    await manager.disposeForShutdown();
+
+    expect(process.killSignals[0]).toBe("SIGTERM");
+    expect(process.killSignals).toContain("SIGKILL");
   });
 
   it("evicts oldest inactive terminal sessions when retention limit is exceeded", async () => {
@@ -964,6 +1523,9 @@ describe("TerminalManager", () => {
     expect(fs.existsSync(nextPath)).toBe(true);
     expect(fs.readFileSync(nextPath, "utf8")).toBe("legacy-line\n");
     expect(fs.existsSync(legacyPath)).toBe(false);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(nextPath).mode & 0o777).toBe(0o600);
+    }
 
     manager.dispose();
   });
@@ -1042,7 +1604,7 @@ describe("TerminalManager", () => {
     };
 
     setEnv("PORT", "5173");
-    setEnv("T3CODE_PORT", "3773");
+    setEnv("SYNARA_PORT", "3773");
     setEnv("VITE_DEV_SERVER_URL", "http://localhost:5173");
     setEnv("TEST_TERMINAL_KEEP", "keep-me");
 
@@ -1054,7 +1616,7 @@ describe("TerminalManager", () => {
       if (!spawnInput) return;
 
       expect(spawnInput.env.PORT).toBeUndefined();
-      expect(spawnInput.env.T3CODE_PORT).toBeUndefined();
+      expect(spawnInput.env.SYNARA_PORT).toBeUndefined();
       expect(spawnInput.env.VITE_DEV_SERVER_URL).toBeUndefined();
       expect(spawnInput.env.TEST_TERMINAL_KEEP).toBe("keep-me");
 
@@ -1107,13 +1669,58 @@ describe("TerminalManager", () => {
     }
   });
 
+  it("pins COLORTERM and drops inherited color-control env", async () => {
+    const originalValues = new Map<string, string | undefined>();
+    const setEnv = (key: string, value: string) => {
+      if (!originalValues.has(key)) {
+        originalValues.set(key, process.env[key]);
+      }
+      process.env[key] = value;
+    };
+    const restoreEnv = () => {
+      for (const [key, value] of originalValues) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    };
+
+    setEnv("NO_COLOR", "1");
+    setEnv("FORCE_COLOR", "0");
+    setEnv("CLICOLOR", "0");
+    setEnv("CLICOLOR_FORCE", "0");
+    setEnv("COLORFGBG", "0;15");
+    setEnv("COLORTERM", "");
+
+    try {
+      const { manager, ptyAdapter } = makeManager();
+      await manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      expect(spawnInput.env.COLORTERM).toBe("truecolor");
+      expect(spawnInput.env.NO_COLOR).toBeUndefined();
+      expect(spawnInput.env.FORCE_COLOR).toBeUndefined();
+      expect(spawnInput.env.CLICOLOR).toBeUndefined();
+      expect(spawnInput.env.CLICOLOR_FORCE).toBeUndefined();
+      expect(spawnInput.env.COLORFGBG).toBeUndefined();
+
+      manager.dispose();
+    } finally {
+      restoreEnv();
+    }
+  });
+
   it("injects runtime env overrides into spawned terminals", async () => {
     const { manager, ptyAdapter } = makeManager();
     await manager.open(
       openInput({
         env: {
-          T3CODE_PROJECT_ROOT: "/repo",
-          T3CODE_WORKTREE_PATH: "/repo/worktree-a",
+          SYNARA_PROJECT_ROOT: "/repo",
+          SYNARA_WORKTREE_PATH: "/repo/worktree-a",
           CUSTOM_FLAG: "1",
         },
       }),
@@ -1122,8 +1729,8 @@ describe("TerminalManager", () => {
     expect(spawnInput).toBeDefined();
     if (!spawnInput) return;
 
-    expect(spawnInput.env.T3CODE_PROJECT_ROOT).toBe("/repo");
-    expect(spawnInput.env.T3CODE_WORKTREE_PATH).toBe("/repo/worktree-a");
+    expect(spawnInput.env.SYNARA_PROJECT_ROOT).toBe("/repo");
+    expect(spawnInput.env.SYNARA_WORKTREE_PATH).toBe("/repo/worktree-a");
     expect(spawnInput.env.CUSTOM_FLAG).toBe("1");
 
     manager.dispose();

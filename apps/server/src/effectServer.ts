@@ -1,28 +1,63 @@
+import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
 import http from "node:http";
 
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import type { ServerSettingsError } from "@t3tools/contracts";
+import type { ServerSettingsError } from "@synara/contracts";
 import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap } from "effect";
 import { HttpRouter } from "effect/unstable/http";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { agentGatewayRouteLayer } from "./agentGateway/httpRoute";
+import { AgentGatewayCredentials } from "./agentGateway/Services/AgentGatewayCredentials";
+import { AutomationRunReactor } from "./automation/Services/AutomationRunReactor";
+import { AutomationScheduler } from "./automation/Services/AutomationScheduler";
+import { AutomationService } from "./automation/Services/AutomationService";
+import { TodoService } from "./todo/Services/TodoService";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
 } from "./serverRuntimeState";
+import { remoteAccessPolicyError, ServerConfig } from "./config";
 import { resolveListeningPort } from "./startupAccess";
-import { ServerConfig } from "./config";
 import { patchBunWebSocketCloseEventCompatibility } from "./bunWebSocketCompatibility";
 import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
-import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
+import {
+  ManagedAttachmentCleanup,
+  type ManagedAttachmentCleanupShape,
+} from "./managedAttachmentCleanup";
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "./orchestration/Services/OrchestrationEngine";
+import {
+  OrchestrationReactor,
+  type OrchestrationReactorShape,
+} from "./orchestration/Services/OrchestrationReactor";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
+import {
+  claimQuitResumeRecordAtStartup,
+  resumeQuitInterruptedChats,
+} from "./orchestration/quitResume";
+import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
+import { ProviderRuntimeReconciler } from "./provider/Services/ProviderRuntimeReconciler";
+import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
+import { KeepAwakeService } from "./keepAwake";
 import { ServerSettingsService } from "./serverSettings";
 import { makeServerReadiness } from "./server/readiness";
+import { makeServerShutdownController, type ServerShutdownController } from "./serverShutdown";
+import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import { websocketRpcRouteLayer } from "./wsRpc";
+import { recoverGitHandoffOperations } from "./gitHandoffOperations";
+import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
+import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
+import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -30,20 +65,38 @@ export interface ServerShape {
     ServerLifecycleError | ServerSettingsError,
     | Scope.Scope
     | ServerConfig
+    | AgentGatewayCredentials
+    | ExternalMcpGateway
+    | ExternalMcpService
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | KeepAwakeService
+    | ManagedAttachmentCleanup
+    | AutomationRunReactor
+    | AutomationScheduler
+    | AutomationService
+    | TodoService
     | ServerLifecycleEvents
+    | OrchestrationEngineService
     | OrchestrationReactor
+    | ProjectionPendingInteractionRepository
+    | ProjectionSnapshotQuery
     | ProviderSessionReaper
+    | ProviderRuntimeReconciler
+    | ProviderService
     | ServerRuntimeStartup
     | ServerSettingsService
     | ThreadDeletionReactor
+    | ThreadSnoozeReactor
+    | SqlClient.SqlClient
   >;
   readonly stopSignal: Effect.Effect<void, never>;
 }
 
-export class Server extends ServiceMap.Service<Server, ServerShape>()("t3/effectServer/Server") {}
+export class Server extends ServiceMap.Service<Server, ServerShape>()(
+  "synara/effectServer/Server",
+) {}
 
 export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycleError>()(
   "ServerLifecycleError",
@@ -53,20 +106,97 @@ export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycl
   },
 ) {}
 
-export const createEffectServer = Effect.fn(function* () {
+export function closeServerRuntimePipeline(input: {
+  readonly orchestrationEngine: Pick<OrchestrationEngineShape, "quiesce" | "drain" | "stop">;
+  readonly providerService: Pick<ProviderServiceShape, "closeRuntimeEvents">;
+  readonly managedAttachmentCleanup: Pick<ManagedAttachmentCleanupShape, "drain">;
+  readonly subscriptionsScope: Scope.Closeable;
+}): Effect.Effect<void> {
+  return input.orchestrationEngine.quiesce.pipe(
+    // Drain already-admitted commands while every subscriber is live. Provider
+    // close then fences terminal runtime events into subscriber workers; scope
+    // close drains those workers before the engine accepts its final stop.
+    Effect.andThen(input.orchestrationEngine.drain),
+    Effect.andThen(input.providerService.closeRuntimeEvents),
+    Effect.andThen(Scope.close(input.subscriptionsScope, Exit.void)),
+    Effect.andThen(input.managedAttachmentCleanup.drain),
+    Effect.andThen(input.orchestrationEngine.stop),
+  );
+}
+
+/**
+ * Starts the subscriber pipeline in the order restart recovery depends on.
+ *
+ * The orchestration reactor starts first: runtime ingestion replays the
+ * provider events the previous process journaled but never ingested, so a turn
+ * whose terminal event reached the journal completes normally instead of being
+ * reported as interrupted. Restart reconciliation then settles the turns whose
+ * runtimes died with that process. The remaining reactors start last, because
+ * their first pass reads thread state (a heartbeat automation skips a target
+ * thread with an active turn, the runtime reconciler settles stale running
+ * turns) and a restart-orphaned turn still reads as running until
+ * reconciliation settles it.
+ */
+export function startServerRuntimePipeline<R>(input: {
+  readonly orchestrationReactor: Pick<
+    OrchestrationReactorShape,
+    "start" | "reconcileSettledOpenTurns"
+  >;
+  readonly reconcileRestartStuckTurns: Effect.Effect<void, never, R>;
+  readonly reactors: ReadonlyArray<{
+    readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+  }>;
+  readonly subscriptionsScope: Scope.Scope;
+}): Effect.Effect<void, never, R> {
+  return Effect.gen(function* () {
+    yield* Scope.provide(input.orchestrationReactor.start, input.subscriptionsScope);
+    yield* input.reconcileRestartStuckTurns;
+    // The reconciliation above terminalizes durable turn projections without a
+    // provider terminal event. Remove their replay-ledger rows now so the next
+    // process start cannot replay state-dependent commands against the terminal
+    // projection.
+    yield* input.orchestrationReactor.reconcileSettledOpenTurns;
+    for (const reactor of input.reactors) {
+      yield* Scope.provide(reactor.start(), input.subscriptionsScope);
+    }
+  });
+}
+
+export const createEffectServer = Effect.fn(function* (
+  shutdownController: ServerShutdownController,
+) {
   const config = yield* ServerConfig;
+  const remotePolicyError = remoteAccessPolicyError(config);
+  if (remotePolicyError) {
+    return yield* new ServerLifecycleError({
+      operation: "validateRemoteAccessPolicy",
+      cause: new Error(remotePolicyError),
+    });
+  }
+  const agentGatewayCredentials = yield* AgentGatewayCredentials;
+  const automationRunReactor = yield* AutomationRunReactor;
+  const automationScheduler = yield* AutomationScheduler;
   const keybindings = yield* Keybindings;
+  const managedAttachmentCleanup = yield* ManagedAttachmentCleanup;
   const lifecycleEvents = yield* ServerLifecycleEvents;
+  const orchestrationEngine = yield* OrchestrationEngineService;
   const orchestrationReactor = yield* OrchestrationReactor;
+  const providerService = yield* ProviderService;
   const providerSessionReaper = yield* ProviderSessionReaper;
+  const providerRuntimeReconciler = yield* ProviderRuntimeReconciler;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
+  const keepAwake = yield* KeepAwakeService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
+  const threadSnoozeReactor = yield* ThreadSnoozeReactor;
   const readiness = yield* makeServerReadiness;
 
-  yield* keybindings.syncDefaultKeybindingsOnStartup.pipe(
+  // Start the runtime before serving config snapshots. This both performs the
+  // startup sync and attaches the file watcher; calling only the sync helper
+  // leaves live edits invisible until the next server restart.
+  yield* keybindings.start.pipe(
     Effect.catch((error) =>
-      Effect.logWarning("failed to sync keybindings defaults on startup", {
+      Effect.logWarning("failed to start keybindings runtime on startup", {
         path: error.configPath,
         detail: error.detail,
         cause: error.cause,
@@ -79,17 +209,22 @@ export const createEffectServer = Effect.fn(function* () {
 
   let nodeServer: http.Server | null = null;
   patchBunWebSocketCloseEventCompatibility();
-  const listenOptions = config.host
-    ? { host: config.host, port: config.port }
-    : { port: config.port };
-  const httpServer = yield* NodeHttpServer.make(() => {
+  // Keep embedded/test callers safe if they construct ServerConfig without
+  // passing through the CLI's loopback-default resolution.
+  const listenOptions = { host: config.host ?? "127.0.0.1", port: config.port };
+  const httpServer = yield* makeBoundedNodeHttpServer(() => {
     nodeServer = http.createServer();
     return nodeServer;
   }, listenOptions).pipe(
     Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerListen", cause })),
   );
 
-  const routesLayer = Layer.mergeAll(makeEffectHttpRouteLayer(readiness), websocketRpcRouteLayer);
+  const routesLayer = Layer.mergeAll(
+    makeEffectHttpRouteLayer(readiness, shutdownController),
+    websocketRpcRouteLayer,
+    agentGatewayRouteLayer,
+    externalMcpRouteLayer,
+  );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer
     .serve(httpApp)
@@ -97,14 +232,16 @@ export const createEffectServer = Effect.fn(function* () {
       Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerServe", cause })),
     );
 
+  const listeningPort = resolveListeningPort(
+    (nodeServer as http.Server | null)?.address() ?? null,
+    config.port,
+  );
+  agentGatewayCredentials.setListeningPort(listeningPort);
   yield* persistServerRuntimeState({
     path: config.serverRuntimeStatePath,
     state: makePersistedServerRuntimeState({
       config,
-      port: resolveListeningPort(
-        (nodeServer as http.Server | null)?.address() ?? null,
-        config.port,
-      ),
+      port: listeningPort,
     }),
   }).pipe(
     Effect.mapError(
@@ -115,19 +252,56 @@ export const createEffectServer = Effect.fn(function* () {
   yield* readiness.markHttpListening;
 
   const subscriptionsScope = yield* Scope.make("sequential");
-  yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
-  yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
-  yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
-  yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
+  yield* Effect.addFinalizer(() =>
+    closeServerRuntimePipeline({
+      orchestrationEngine,
+      providerService,
+      managedAttachmentCleanup,
+      subscriptionsScope,
+    }),
+  );
+  yield* startServerRuntimePipeline({
+    orchestrationReactor,
+    // Heal turns orphaned by the previous process exit (their in-memory runtimes
+    // died, so they can never complete on their own) before clients can observe
+    // the stale "Working" state.
+    reconcileRestartStuckTurns: reconcileRestartStuckTurns.pipe(
+      Effect.provide(ProjectionPendingInteractionRepositoryLive),
+    ),
+    reactors: [
+      automationScheduler,
+      automationRunReactor,
+      threadDeletionReactor,
+      threadSnoozeReactor,
+      providerSessionReaper,
+      providerRuntimeReconciler,
+      { start: () => keepAwake.start },
+    ],
+    subscriptionsScope,
+  });
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
+  yield* recoverGitHandoffOperations((command) => orchestrationEngine.dispatch(command)).pipe(
+    Effect.mapError(
+      (cause) => new ServerLifecycleError({ operation: "recoverGitHandoffOperations", cause }),
+    ),
+  );
+  // Claim the previous quit's "Resume chats automatically" record while no
+  // command (and so no new quit) can run yet; a missing record costs one stat.
+  const quitResumeRecord = yield* claimQuitResumeRecordAtStartup;
   yield* runtimeStartup.markCommandReady;
+  // The recorded chats get their continuation turn now that the orphaned turns
+  // above are settled. Forked so the (rare) dispatch work never delays readiness.
+  yield* resumeQuitInterruptedChats(quitResumeRecord).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* lifecycleEvents.publish({
     type: "welcome",
     payload: {
       cwd: config.cwd,
       homeDir: config.homeDir,
+      chatWorkspaceRoot: config.chatWorkspaceRoot,
+      studioWorkspaceRoot: config.studioWorkspaceRoot,
+      groupsWorkspaceRoot: config.groupsWorkspaceRoot,
       projectName: config.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? config.cwd,
     },
   });
@@ -142,7 +316,13 @@ export const createEffectServer = Effect.fn(function* () {
   return nodeServer as http.Server;
 });
 
-export const ServerLive = Layer.succeed(Server, {
-  start: createEffectServer() as ServerShape["start"],
-  stopSignal: Effect.never,
-} satisfies ServerShape);
+export const ServerLive = Layer.effect(
+  Server,
+  Effect.gen(function* () {
+    const shutdownController = yield* makeServerShutdownController();
+    return {
+      start: createEffectServer(shutdownController) as ServerShape["start"],
+      stopSignal: shutdownController.stopSignal,
+    } satisfies ServerShape;
+  }),
+);

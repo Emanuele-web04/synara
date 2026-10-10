@@ -15,7 +15,7 @@ import {
   OrchestrationCheckpointStatus,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, ServiceMap, Schema } from "effect";
 import type { Effect } from "effect";
 
@@ -44,22 +44,10 @@ export const GetByThreadAndTurnCountInput = Schema.Struct({
 });
 export type GetByThreadAndTurnCountInput = typeof GetByThreadAndTurnCountInput.Type;
 
-export const DeleteByThreadIdInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type DeleteByThreadIdInput = typeof DeleteByThreadIdInput.Type;
-
 /**
  * ProjectionCheckpointRepositoryShape - Service API for projected checkpoints.
  */
 export interface ProjectionCheckpointRepositoryShape {
-  /**
-   * Insert or replace a projected checkpoint row.
-   *
-   * Upserts by composite key `(threadId, checkpointTurnCount)`.
-   */
-  readonly upsert: (row: ProjectionCheckpoint) => Effect.Effect<void, ProjectionRepositoryError>;
-
   /**
    * List projected checkpoints for a thread.
    *
@@ -75,13 +63,6 @@ export interface ProjectionCheckpointRepositoryShape {
   readonly getByThreadAndTurnCount: (
     input: GetByThreadAndTurnCountInput,
   ) => Effect.Effect<Option.Option<ProjectionCheckpoint>, ProjectionRepositoryError>;
-
-  /**
-   * Delete projected checkpoint rows by thread.
-   */
-  readonly deleteByThreadId: (
-    input: DeleteByThreadIdInput,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 /**
@@ -90,4 +71,4 @@ export interface ProjectionCheckpointRepositoryShape {
 export class ProjectionCheckpointRepository extends ServiceMap.Service<
   ProjectionCheckpointRepository,
   ProjectionCheckpointRepositoryShape
->()("t3/persistence/Services/ProjectionCheckpoints/ProjectionCheckpointRepository") {}
+>()("synara/persistence/Services/ProjectionCheckpoints/ProjectionCheckpointRepository") {}

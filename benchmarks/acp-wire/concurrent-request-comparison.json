@@ -1,0 +1,75 @@
+{
+  "createdAt": "2026-07-14T16:28:44.785Z",
+  "baseline": {
+    "engine": "effect-acp",
+    "commit": "5056e395ea185683ef18b86ebb12403d8d1a0a41"
+  },
+  "current": {
+    "engine": "official-sdk",
+    "commit": "9780ff8bb23e999d2bd841453c93aaa02e01f3b8"
+  },
+  "setup": {
+    "effectMs": 76.803792,
+    "officialMs": 22.929625,
+    "officialChangePercent": -70.14519152908491
+  },
+  "shutdown": {
+    "effectMs": 0.7371250000001055,
+    "officialMs": 0.8445420000000468,
+    "officialChangePercent": 14.572426657612464
+  },
+  "memory": {
+    "effectAfterSetupRssBytes": 130777088,
+    "officialAfterSetupRssBytes": 90865664,
+    "effectMaxObservedRssBytes": 236568576,
+    "officialMaxObservedRssBytes": 822886400,
+    "officialMaxRssChangePercent": 247.84264838285202
+  },
+  "comparisons": [
+    {
+      "name": "request-concurrent-32-256b",
+      "operations": 10240,
+      "effect": {
+        "name": "request-concurrent-32-256b",
+        "operations": 10240,
+        "samplesMs": [
+          123.49904200000014, 131.779041, 125.85466700000006, 124.78166600000009,
+          129.32608400000004, 129.819792, 131.8765420000002, 132.35754199999997, 134.87195900000006,
+          151.43904199999997, 137.2865829999996, 118.28395799999998, 125.91108299999996,
+          128.0231249999997, 131.42200000000003, 136.78195800000003, 139.58174999999983,
+          153.73833399999967, 153.574208, 152.04791699999987
+        ],
+        "p50Ms": 131.779041,
+        "p95Ms": 153.574208,
+        "minMs": 118.28395799999998,
+        "maxMs": 153.73833399999967,
+        "operationsPerSecond": 77705.83184013306,
+        "afterRssBytes": 236584960,
+        "afterHeapUsedBytes": 29223867,
+        "maxSampleRssBytes": 236568576
+      },
+      "official": {
+        "name": "request-concurrent-32-256b",
+        "operations": 10240,
+        "samplesMs": [
+          51.73012499999999, 54.68883299999993, 55.57654100000002, 73.123917, 60.56766700000003,
+          58.11133300000006, 62.683333999999945, 65.84995800000002, 41.80741699999999,
+          63.92395899999997, 75.67970800000012, 123.79050000000007, 131.5568340000002,
+          46.801708999999846, 74.82458300000008, 75.56045800000015, 51.97445800000014,
+          82.42133400000012, 36.910290999999916, 88.87320899999986
+        ],
+        "p50Ms": 62.683333999999945,
+        "p95Ms": 123.79050000000007,
+        "minMs": 36.910290999999916,
+        "maxMs": 131.5568340000002,
+        "operationsPerSecond": 163360.80655824734,
+        "afterRssBytes": 822902784,
+        "afterHeapUsedBytes": 155496283,
+        "maxSampleRssBytes": 822886400
+      },
+      "officialThroughputChangePercent": 110.2297893089096,
+      "officialP50LatencyChangePercent": -52.43300184587021,
+      "officialP95LatencyChangePercent": -19.39369141985087
+    }
+  ]
+}

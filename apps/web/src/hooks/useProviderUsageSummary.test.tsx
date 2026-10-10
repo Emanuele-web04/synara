@@ -2,15 +2,24 @@
 // Purpose: Verifies how the shared provider-usage summary hook arbitrates live,
 // local, OpenUsage, and thread-derived fallback usage signals.
 
-import type { ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { ProviderRateLimit } from "~/lib/rateLimits";
+import { deriveVisibleRateLimitRows, type ProviderRateLimit } from "~/lib/rateLimits";
+import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { useProviderUsageSummary } from "./useProviderUsageSummary";
+
+vi.mock("~/lib/openUsageReactQuery", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/lib/openUsageReactQuery")>();
+  return {
+    ...actual,
+    openUsageProviderSnapshotQueryOptions: vi.fn(actual.openUsageProviderSnapshotQueryOptions),
+  };
+});
 
 function snapshot(input: Partial<ServerProviderUsageSnapshot> = {}): ServerProviderUsageSnapshot {
   return {
@@ -45,8 +54,10 @@ function renderWithQueryClient(queryClient: QueryClient, node: ReactNode) {
 
 function readProviderUsageSummary(input: {
   queryClient: QueryClient;
+  instanceId?: string;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   providerSnapshot?: ServerProviderUsageSnapshot | undefined;
+  fetchOpenUsageData?: boolean;
 }) {
   // Capture into a ref-style holder: the hook only runs inside the closure, so a
   // plain `let` would narrow to `never` after the guard (TS can't see <Probe/> run).
@@ -57,9 +68,11 @@ function readProviderUsageSummary(input: {
   function Probe() {
     captured.current = useProviderUsageSummary({
       provider: "claudeAgent",
+      instanceId: input.instanceId,
       threads: [],
       threadRateLimits: input.threadRateLimits,
       providerSnapshot: input.providerSnapshot,
+      fetchOpenUsageData: input.fetchOpenUsageData,
     });
     return <span />;
   }
@@ -83,6 +96,118 @@ function createQueryClient() {
 }
 
 describe("useProviderUsageSummary", () => {
+  it("scopes a snapshot's account identity even when the caller supplies no separate id", () => {
+    const queryClient = createQueryClient();
+    const summary = readProviderUsageSummary({
+      queryClient,
+      providerSnapshot: snapshot({
+        instanceId: "claude_work",
+        limits: [{ window: "Weekly", usedPercent: 20, windowDurationMins: 10080 }],
+      }),
+      threadRateLimits: [
+        {
+          provider: "claudeAgent",
+          updatedAt: "2099-06-09T12:00:00.000Z",
+          limits: [{ window: "Weekly", usedPercent: 90, windowDurationMins: 10080 }],
+        },
+      ],
+    });
+
+    expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(20);
+  });
+
+  it("scopes the default live account without mixing newer provider-wide telemetry", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot({
+        instanceId: "claudeAgent",
+        limits: [{ window: "Weekly", usedPercent: 20, windowDurationMins: 10080 }],
+      }),
+    ]);
+    const summary = readProviderUsageSummary({
+      queryClient,
+      threadRateLimits: [
+        {
+          provider: "claudeAgent",
+          updatedAt: "2099-06-09T12:00:00.000Z",
+          limits: [{ window: "Weekly", usedPercent: 90, windowDurationMins: 10080 }],
+        },
+      ],
+    });
+
+    expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(20);
+  });
+
+  it("uses the selected account snapshot rather than another account in the batch", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot({ instanceId: "claudeAgent", ...fallbackSnapshot() }),
+      snapshot({
+        instanceId: "claude_work",
+        limits: [{ window: "Weekly", usedPercent: 20, windowDurationMins: 10080 }],
+      }),
+    ]);
+
+    const summary = readProviderUsageSummary({ queryClient, instanceId: "claude_work" });
+
+    expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(20);
+    expect(summary.usageLines).toEqual([]);
+  });
+
+  it("keeps an explicit account snapshot authoritative over the shared batch", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [fallbackSnapshot()]);
+
+    const summary = readProviderUsageSummary({
+      queryClient,
+      instanceId: "claude_work",
+      providerSnapshot: snapshot({ instanceId: "claude_work", status: "needs-auth" }),
+    });
+
+    expect(summary.rateLimits).toEqual([]);
+    expect(summary.usageLines).toEqual([]);
+  });
+
+  it.each(["claudeAgent", "claude_work"])(
+    "does not mix provider-wide fallback data into the %s account",
+    (instanceId) => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+      queryClient.setQueryData(
+        serverQueryKeys.providerUsage("claudeAgent", null),
+        fallbackSnapshot(),
+      );
+
+      const summary = readProviderUsageSummary({
+        queryClient,
+        instanceId,
+        threadRateLimits: [
+          {
+            provider: "claudeAgent",
+            updatedAt: "2026-06-09T12:00:00.000Z",
+            limits: [{ window: "5h", usedPercent: 12, windowDurationMins: 300 }],
+          },
+        ],
+      });
+
+      expect(summary.rateLimits).toEqual([]);
+      expect(summary.usageLines).toEqual([]);
+    },
+  );
+
+  it("can keep OpenUsage polling disabled while using the server batch query", () => {
+    const queryClient = createQueryClient();
+
+    readProviderUsageSummary({ queryClient, fetchOpenUsageData: false });
+
+    expect(openUsageProviderSnapshotQueryOptions).toHaveBeenCalledWith("claudeAgent", {
+      enabled: false,
+    });
+    expect(
+      queryClient.getQueryCache().find({ queryKey: serverQueryKeys.allProviderUsage() }),
+    ).toBeDefined();
+  });
+
   it("does not show local fallback rows when the live batch reports a non-ok status", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
@@ -141,6 +266,82 @@ describe("useProviderUsageSummary", () => {
     expect(summary.rateLimits).toHaveLength(1);
     expect(summary.rateLimits[0]?.limits?.[0]?.window).toBe("5h");
     expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(12);
+  });
+
+  it.each([
+    ["2099-04-08T18:05:00.000Z", 10],
+    ["2099-04-08T17:55:00.000Z", 11],
+  ])(
+    "merges Fable telemetry at %s without replacing the weekly allowance",
+    (updatedAt, remaining) => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+        snapshot({
+          updatedAt: "2099-04-08T18:00:00.000Z",
+          limits: [
+            { window: "5h", usedPercent: 0, windowDurationMins: 300 },
+            { window: "Weekly", usedPercent: 45, windowDurationMins: 10080 },
+            { window: "Fable", usedPercent: 89, windowDurationMins: 10080 },
+          ],
+        }),
+      ]);
+
+      const summary = readProviderUsageSummary({
+        queryClient,
+        threadRateLimits: [
+          {
+            provider: "claudeAgent",
+            updatedAt,
+            limits: [{ window: "seven_day_overage_included", usedPercent: 90 }],
+          },
+        ],
+      });
+
+      expect(
+        deriveVisibleRateLimitRows(summary.rateLimits).map(({ label, remainingPercent }) => ({
+          label,
+          remainingPercent,
+        })),
+      ).toEqual([
+        { label: "5h", remainingPercent: 100 },
+        { label: "Weekly", remainingPercent: 55 },
+        { label: "Fable", remainingPercent: remaining },
+      ]);
+    },
+  );
+
+  it("surfaces the throttle notice from an ok snapshot that carries a detail", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot({
+        status: "ok",
+        detail: "Anthropic is rate-limiting usage checks — showing your last values.",
+        limits: [
+          {
+            window: "Weekly",
+            usedPercent: 64,
+            resetsAt: "2026-06-15T12:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+        ],
+      }),
+    ]);
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.rateLimits).toHaveLength(1);
+    expect(summary.usageNotice).toContain("rate-limiting");
+  });
+
+  it("has no notice when the live snapshot is non-ok", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot({ status: "error", detail: "Usage is currently unavailable." }),
+    ]);
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.usageNotice).toBeUndefined();
   });
 
   it("does not show fallback rows when an explicit provider card snapshot is non-ok", () => {
