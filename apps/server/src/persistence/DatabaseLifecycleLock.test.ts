@@ -101,6 +101,97 @@ describe("database lifecycle lock", () => {
     expect(entries.some((entry) => entry.includes(".lifecycle-lock.reaper"))).toBe(false);
   });
 
+  it.each(["", ".reaper"])(
+    "recovers an ownerless lock%s directory containing Finder metadata",
+    async (suffix) => {
+      const dbPath = await makeDbPath();
+      const lockPath = `${dbPath}.lifecycle-lock`;
+      if (suffix) await writeOwnedDirectory(lockPath, 2_147_483_647);
+      const abandonedPath = `${lockPath}${suffix}`;
+      await fs.mkdir(abandonedPath, { mode: 0o700 });
+      await fs.writeFile(path.join(abandonedPath, ".DS_Store"), "Finder metadata");
+
+      await Effect.runPromise(withDatabaseLifecycleLock(dbPath, Effect.void));
+
+      expect(await fs.readdir(path.dirname(dbPath))).toEqual([]);
+    },
+  );
+
+  it("preserves a live owner even when Finder metadata is present", async () => {
+    const dbPath = await makeDbPath();
+    const acquired = await Effect.runPromise(acquireDatabaseLifecycleLock(dbPath));
+    const metadataPath = path.join(acquired.lockPath, ".DS_Store");
+    await fs.writeFile(metadataPath, "Finder metadata");
+    try {
+      await expect(
+        Effect.runPromise(withDatabaseLifecycleLock(dbPath, Effect.void)),
+      ).rejects.toThrow(`owner pid ${process.pid} is live`);
+      expect(await fs.readFile(metadataPath, "utf8")).toBe("Finder metadata");
+      expect(
+        JSON.parse(await fs.readFile(path.join(acquired.lockPath, "owner.json"), "utf8")),
+      ).toEqual(acquired.owner);
+    } finally {
+      await Effect.runPromise(releaseDatabaseLifecycleLock(acquired));
+    }
+  });
+
+  it.each(["owner.json", "unrecognized-file"])(
+    "preserves an unverifiable lock containing %s and Finder metadata",
+    async (fileName) => {
+      const dbPath = await makeDbPath();
+      const lockPath = `${dbPath}.lifecycle-lock`;
+      await fs.mkdir(lockPath, { mode: 0o700 });
+      await fs.writeFile(path.join(lockPath, ".DS_Store"), "Finder metadata");
+      await fs.writeFile(path.join(lockPath, fileName), "unrecognized contents");
+
+      await expect(
+        Effect.runPromise(withDatabaseLifecycleLock(dbPath, Effect.void)),
+      ).rejects.toBeInstanceOf(DatabaseLifecycleLockedError);
+
+      expect(await fs.readFile(path.join(lockPath, fileName), "utf8")).toBe(
+        "unrecognized contents",
+      );
+      expect(await fs.readFile(path.join(lockPath, ".DS_Store"), "utf8")).toBe("Finder metadata");
+    },
+  );
+
+  it("admits only one concurrent owner when recovering Finder metadata", async () => {
+    const dbPath = await makeDbPath();
+    const lockPath = `${dbPath}.lifecycle-lock`;
+    await fs.mkdir(lockPath, { mode: 0o700 });
+    await fs.writeFile(path.join(lockPath, ".DS_Store"), "Finder metadata");
+
+    const contenders = await Promise.allSettled(
+      Array.from({ length: 8 }, () => Effect.runPromise(acquireDatabaseLifecycleLock(dbPath))),
+    );
+    const owners = contenders.filter((result) => result.status === "fulfilled");
+    try {
+      expect(owners).toHaveLength(1);
+      expect(JSON.parse(await fs.readFile(path.join(lockPath, "owner.json"), "utf8"))).toEqual(
+        owners[0]?.value.owner,
+      );
+    } finally {
+      for (const owner of owners)
+        await Effect.runPromise(releaseDatabaseLifecycleLock(owner.value));
+    }
+  });
+
+  it("does not recover Finder metadata that is a symbolic link", async () => {
+    const dbPath = await makeDbPath();
+    const lockPath = `${dbPath}.lifecycle-lock`;
+    const outsidePath = path.join(path.dirname(dbPath), "outside-file");
+    await fs.writeFile(outsidePath, "preserved contents");
+    await fs.mkdir(lockPath, { mode: 0o700 });
+    await fs.symlink(outsidePath, path.join(lockPath, ".DS_Store"));
+
+    await expect(
+      Effect.runPromise(withDatabaseLifecycleLock(dbPath, Effect.void)),
+    ).rejects.toBeInstanceOf(DatabaseLifecycleLockedError);
+
+    expect((await fs.lstat(path.join(lockPath, ".DS_Store"))).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(outsidePath, "utf8")).toBe("preserved contents");
+  });
+
   it("does not take over a reaper guard owned by a live process", async () => {
     const dbPath = await makeDbPath();
     const lockPath = `${dbPath}.lifecycle-lock`;

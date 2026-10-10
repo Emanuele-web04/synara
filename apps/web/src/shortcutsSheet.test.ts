@@ -16,6 +16,28 @@ const PROJECT_SCRIPTS: ProjectScript[] = [
 ];
 
 describe("buildShortcutSheetSections", () => {
+  it("lists active thread actions in the reference and shortcut editor", () => {
+    const entries = buildShortcutSheetSections({
+      keybindings: [],
+      projectScripts: [],
+      platform: "MacIntel",
+      context: { terminalFocus: false, terminalOpen: false, terminalWorkspaceOpen: false },
+    }).flatMap((section) => section.entries);
+    for (const [command, label, shortcutLabel] of [
+      ["thread.archive", "Archive thread", "⌥⇧⌘A"],
+      ["thread.snooze", "Snooze thread", "⌥⇧⌘S"],
+      ["thread.markUnread", "Mark thread unread", "⌥⇧⌘U"],
+    ] as const) {
+      expect(entries.find((entry) => entry.command === command)).toMatchObject({
+        label,
+        shortcutLabel,
+      });
+      expect(
+        listShortcutEditorDefinitions().find((entry) => entry.commands.includes(command)),
+      ).toMatchObject({ label });
+    }
+  });
+
   it("exposes the composer effort shortcut for discovery and customization", () => {
     const sections = buildShortcutSheetSections({
       keybindings: [],
@@ -112,6 +134,16 @@ describe("buildShortcutSheetSections", () => {
     expect(
       sections[0]?.entries.some(
         (entry) => entry.id === "chat.find" && entry.shortcutLabel === "⌘F",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "search.files" && entry.shortcutLabel === "⌘P",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "search.content" && entry.shortcutLabel === "⇧⌘F",
       ),
     ).toBe(true);
     expect(
@@ -225,10 +257,15 @@ describe("listShortcutEditorDefinitions", () => {
     expect(unlabeledCommands).toEqual([]);
   });
 
-  it("lists every built-in command exactly once", () => {
+  it("lists every active built-in command exactly once", () => {
     const listed = listShortcutEditorDefinitions().flatMap((definition) => definition.commands);
 
-    expect(listed.toSorted()).toEqual([...STATIC_KEYBINDING_COMMANDS].toSorted());
+    expect(listed.toSorted()).toEqual(
+      STATIC_KEYBINDING_COMMANDS.filter(
+        (command) => !command.startsWith("terminal.split"),
+      ).toSorted(),
+    );
+    expect(listed.some((command) => command.startsWith("terminal.split"))).toBe(false);
   });
 
   it("gives each numbered family one member per number key", () => {

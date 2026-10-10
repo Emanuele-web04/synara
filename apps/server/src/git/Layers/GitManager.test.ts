@@ -3,11 +3,13 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Exit, FileSystem, Layer, PlatformError, Scope } from "effect";
+import { Effect, Exit, Fiber, FileSystem, Layer, PlatformError, Scope, Stream } from "effect";
 import { expect, vi } from "vitest";
+import * as betaOperationalIssue from "../../betaOperationalIssue";
 import * as processRunner from "../../processRunner";
 import { GitHubCliLive } from "./GitHubCli";
-import type { GitActionProgressEvent } from "@synara/contracts";
+import { WsRpcError, type GitActionProgressEvent } from "@synara/contracts";
+import { makeGitActionRunner } from "../gitActionRunner";
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
@@ -410,6 +412,46 @@ const GitManagerTestLayer = GitCoreLive.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("commits and pushes selected files beyond status and argument capture limits", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-many-files-");
+      yield* initRepo(repoDir);
+      const remote = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remote]);
+      const filePaths = Array.from(
+        { length: 6_000 },
+        (_, index) => `${index}-${"file".repeat(48)}.txt`,
+      );
+      yield* Effect.sync(() => {
+        for (const file of filePaths) fs.writeFileSync(path.join(repoDir, file), "content\n");
+        fs.writeFileSync(path.join(repoDir, "excluded.txt"), "keep untracked\n");
+      });
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+      expect(status.hasWorkingTreeChanges).toBe(true);
+      expect(status.workingTree.files).toHaveLength(6_001);
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push",
+        commitMessage: "Add selected files",
+        filePaths,
+      });
+      expect(result.commit.status).toBe("created");
+      expect(result.push.status).toBe("pushed");
+      const localTree = (yield* runGit(repoDir, ["rev-parse", "HEAD^{tree}"])).stdout.trim();
+      const branch = (yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim();
+      expect((yield* runGit(remote, ["rev-parse", `${branch}^{tree}`])).stdout.trim()).toBe(
+        localTree,
+      );
+      expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe(
+        "?? excluded.txt",
+      );
+      const committedCount = (yield* runGit(repoDir, ["diff", "--shortstat", "HEAD~", "HEAD"]))
+        .stdout;
+      expect(committedCount).toContain("6000 files changed");
+    }),
+  );
+
   it.effect("routes file-scoped working-tree diffs and rejects other scopes", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-file-diff-");
@@ -2824,6 +2866,63 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       }),
   );
 
+  it.effect(
+    "finishes a real push after its observer disconnects without repeating the commit",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-reconnect-");
+        yield* initRepo(repoDir);
+        const remote = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remote]);
+        fs.writeFileSync(path.join(repoDir, "reconnect.txt"), "survives disconnect\n");
+        fs.writeFileSync(
+          path.join(repoDir, ".git", "hooks", "pre-push"),
+          "#!/bin/sh\ntouch .git/push-started\nwhile [ ! -f .git/release-push ]; do sleep 0.05; done\n",
+          { mode: 0o755 },
+        );
+        const { manager } = yield* makeManager();
+        let runs = 0;
+        const observe = yield* makeGitActionRunner((input, publish) => {
+          runs++;
+          return manager
+            .runStackedAction(input, {
+              actionId: input.actionId,
+              progressReporter: { publish },
+            })
+            .pipe(Effect.mapError((error) => new WsRpcError({ message: error.message })));
+        });
+        const input = {
+          actionId: "one-commit-one-push",
+          recoverable: true,
+          cwd: repoDir,
+          action: "commit_push" as const,
+          commitMessage: "Survive reconnect",
+        };
+        const first = yield* observe(input).pipe(Stream.runDrain, Effect.forkChild);
+        yield* Effect.promise(async () => {
+          const deadline = Date.now() + 5000;
+          while (!fs.existsSync(path.join(repoDir, ".git", "push-started"))) {
+            if (Date.now() > deadline) throw new Error("Push hook did not start");
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+        });
+        yield* Fiber.interrupt(first);
+        fs.writeFileSync(path.join(repoDir, ".git", "release-push"), "ready");
+        const events = yield* observe({ ...input, resume: true }).pipe(Stream.runCollect);
+        expect(events.at(-1)).toMatchObject({
+          kind: "action_finished",
+          result: { commit: { status: "created" }, push: { status: "pushed" } },
+        });
+        const replay = yield* observe({ ...input, resume: true }).pipe(Stream.runCollect);
+        expect(replay).toEqual([events.at(-1)]);
+        expect(runs).toBe(1);
+        expect((yield* runGit(remote, ["rev-parse", "refs/heads/main"])).stdout).toBe(
+          (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout,
+        );
+        expect((yield* runGit(repoDir, ["rev-list", "--count", "HEAD"])).stdout.trim()).toBe("2");
+      }),
+  );
+
   it.effect("emits ordered progress events for commit hooks", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -2899,6 +2998,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       const { manager } = yield* makeManager();
+      const issueReport = vi
+        .spyOn(betaOperationalIssue, "reportBetaOperationalIssue")
+        .mockImplementation(() => {});
+      yield* Effect.addFinalizer(() => Effect.sync(() => issueReport.mockRestore()));
       const events: GitActionProgressEvent[] = [];
 
       const errorMessage = yield* runStackedAction(
@@ -2922,6 +3025,12 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       expect(errorMessage).toContain("hook: fail");
+      expect(issueReport).toHaveBeenCalledExactlyOnceWith({
+        code: "git.commit.failed",
+        reason: "unknown",
+        durationMs: expect.any(Number),
+      });
+      expect(JSON.stringify(issueReport.mock.calls)).not.toContain("hook: fail");
       expect(events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

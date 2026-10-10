@@ -147,3 +147,15 @@ it("does not inspect RPC arguments or attach listeners without the Beta bridge",
   ).toBeUndefined();
   expect(listen).not.toHaveBeenCalled();
 });
+
+it("keeps handled failures harmless when diagnostics are absent or IPC rejects", async () => {
+  const { reportHandledIssue } = await import("./rendererErrorDiagnostics");
+  vi.stubGlobal("window", {});
+  await expect(reportHandledIssue({ code: "voice.record.failed" })).resolves.toBeNull();
+  vi.stubGlobal("window", {
+    desktopBridge: {
+      betaDiagnostics: { reportIssue: () => Promise.reject(new Error("IPC unavailable")) },
+    },
+  });
+  await expect(reportHandledIssue({ code: "voice.record.failed" })).resolves.toBeNull();
+});

@@ -8,6 +8,7 @@ import {
 } from "@synara/contracts";
 import type { DeviceFrame } from "@synara/shared/deviceFrame";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 import type { DeviceFrameSourceOptions } from "~/lib/deviceFrameSource";
@@ -122,7 +123,7 @@ afterEach(async () => {
   useDeviceStateStore.getState().clear();
 });
 
-async function mount(initial = state()) {
+async function mount(initial = state(), onClosePanel = () => {}) {
   useDeviceStateStore.getState().upsertThreadState(initial);
   transport.getThreadState.mockResolvedValue(initial);
   const mounted = await render(
@@ -132,7 +133,7 @@ async function mount(initial = state()) {
         threadId={THREAD}
         runtimeMode="live"
         isVisible
-        onClosePanel={() => {}}
+        onClosePanel={onClosePanel}
       />
     </div>,
   );
@@ -142,6 +143,18 @@ async function mount(initial = state()) {
 }
 
 describe("simulator attach first frame", () => {
+  it("keeps the simulator picker and close action available in the shared header", async () => {
+    const onClosePanel = vi.fn();
+    const mounted = await mount(state(), onClosePanel);
+    await mounted.getByRole("button", { name: "iOS 27 Slim 2", exact: true }).click();
+    await expect
+      .element(page.getByRole("menuitem", { name: /iOS 27 Slim iOS 27\.0/ }))
+      .toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await mounted.getByRole("button", { name: "Close simulator panel" }).click();
+    expect(onClosePanel).toHaveBeenCalledOnce();
+  });
+
   it.each(["connecting"] as const)(
     "paints the first frame before %s metadata clears",
     async (phase) => {

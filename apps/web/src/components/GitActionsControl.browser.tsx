@@ -44,6 +44,57 @@ const branches: Awaited<ReturnType<NativeApi["git"]["listBranches"]>> = {
 
 afterEach(() => vi.restoreAllMocks());
 
+it.each([true, false])(
+  "opens all Git actions from the panel label without running an action (local changes: %s)",
+  async (hasWorkingTreeChanges) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const api = {
+      git: {
+        status: vi.fn(async () => ({
+          ...status,
+          hasWorkingTreeChanges,
+          workingTree: hasWorkingTreeChanges
+            ? status.workingTree
+            : { files: [], insertions: 0, deletions: 0 },
+        })),
+        listBranches: vi.fn(async () => branches),
+        onActionProgress: () => () => {},
+        runStackedAction: vi.fn(),
+      },
+    };
+    const previousApi = window.nativeApi;
+    Object.defineProperty(window, "nativeApi", { configurable: true, value: api });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      flushSync(() =>
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <GitActionsControl gitCwd="/repo/menu" activeThreadId={null} variant="panel" />
+            </ToastProvider>
+          </QueryClientProvider>,
+        ),
+      );
+      await vi.waitFor(() => expect(api.git.listBranches).toHaveBeenCalled());
+      await page.getByRole("button", { name: /^Commit (?:&|and) [Pp]ush$/ }).click();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Commit", exact: true }))
+        .toBeVisible();
+      await page.getByRole("menuitem", { name: "Create PR", exact: true }).click();
+      await expect.element(page.getByRole("textbox", { name: "Pull request title" })).toBeVisible();
+      expect(api.git.runStackedAction).not.toHaveBeenCalled();
+    } finally {
+      flushSync(() => root.unmount());
+      host.remove();
+      await queryClient.cancelQueries();
+      queryClient.clear();
+      Object.defineProperty(window, "nativeApi", { configurable: true, value: previousApi });
+    }
+  },
+);
+
 it("owns failure details per action when the retained control changes workspace", async () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const listeners = new Set<(event: GitActionProgressEvent) => void>();
@@ -66,6 +117,14 @@ it("owns failure details per action when the retained control changes workspace"
     },
   };
   const previousApi = window.nativeApi;
+  const previousBridge = window.desktopBridge;
+  const reportIssue = vi.fn(async () => "12345678-1234-4234-8234-123456789012");
+  Object.defineProperty(window, "desktopBridge", {
+    configurable: true,
+    value: {
+      betaDiagnostics: { reportIssue, getReportStatus: async () => "sent" },
+    },
+  });
   Object.defineProperty(window, "nativeApi", { configurable: true, value: api });
   const previousShell = useStore.getState().threadShellById ?? {};
   useStore.setState({ threadShellById: {} });
@@ -145,6 +204,18 @@ it("owns failure details per action when the retained control changes workspace"
     }
     pending[1]!.reject(new Error("Git action stream failed"));
     await expectFailure("Second workspace push failed", "Push failed");
+    await vi.waitFor(() =>
+      expect(reportIssue).toHaveBeenLastCalledWith(
+        expect.objectContaining({ code: "git.push.failed" }),
+      ),
+    );
+    await expect
+      .element(page.getByRole("button", { name: "Copy diagnostic ID", exact: true }).last())
+      .toBeVisible();
+    await expect.element(page.getByText("Report sent", { exact: true }).last()).toBeVisible();
+    expect(JSON.stringify(reportIssue.mock.calls)).not.toMatch(
+      /repo\/|workspace|User supplied message/,
+    );
   } finally {
     for (const action of pending) action.reject(new Error("Test finished"));
     flushSync(() => root.unmount());
@@ -152,6 +223,7 @@ it("owns failure details per action when the retained control changes workspace"
     await queryClient.cancelQueries();
     queryClient.clear();
     Object.defineProperty(window, "nativeApi", { configurable: true, value: previousApi });
+    Object.defineProperty(window, "desktopBridge", { configurable: true, value: previousBridge });
     useStore.setState({ threadShellById: previousShell });
   }
 });

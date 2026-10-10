@@ -422,7 +422,7 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
   });
 }
 
-/** Auto-fix CI switch (Beta); shared by the PR menu checkbox and the composer hint. */
+/** Auto-fix CI switch; shared by the PR menu checkbox and the composer hint. */
 export function pullRequestSetAutoFixMutationOptions(queryClient: QueryClient) {
   return mutationOptions({
     mutationFn: (input: PullRequestAutoFixSetInput) =>

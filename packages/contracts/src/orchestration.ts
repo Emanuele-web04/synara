@@ -47,6 +47,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
   getShellSnapshot: "orchestration.getShellSnapshot",
   getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
+  searchThreads: "orchestration.searchThreads",
   dispatchCommand: "orchestration.dispatchCommand",
   settleTurnDispatch: "orchestration.settleTurnDispatch",
   importThread: "orchestration.importThread",
@@ -721,6 +722,22 @@ export const OrchestrationSpaceShell = Schema.Struct({
 });
 export type OrchestrationSpaceShell = typeof OrchestrationSpaceShell.Type;
 
+/** Upper bound on extra source folders a project may list next to its primary `workspaceRoot`. */
+export const PROJECT_ADDITIONAL_FOLDERS_MAX_COUNT = 16;
+
+/**
+ * Extra source folders a project spans besides its primary `workspaceRoot`, in display
+ * order. Absolute, canonical paths. Empty for an ordinary single-folder project.
+ */
+export const ProjectAdditionalFolders = Schema.Array(TrimmedNonEmptyString).check(
+  Schema.isMaxLength(PROJECT_ADDITIONAL_FOLDERS_MAX_COUNT),
+);
+export type ProjectAdditionalFolders = typeof ProjectAdditionalFolders.Type;
+
+const ProjectAdditionalFoldersField = Schema.optional(ProjectAdditionalFolders).pipe(
+  Schema.withDecodingDefault(() => []),
+);
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
@@ -730,6 +747,7 @@ export const OrchestrationProject = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -745,6 +763,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -863,6 +882,8 @@ export const OrchestrationCheckpointSummary = Schema.Struct({
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
+  /** When the provider started the turn; lets clients report its real duration. */
+  startedAt: Schema.optional(IsoDateTime),
   completedAt: IsoDateTime,
 });
 export type OrchestrationCheckpointSummary = typeof OrchestrationCheckpointSummary.Type;
@@ -882,7 +903,14 @@ export const OrchestrationThreadActivity = Schema.Struct({
   summary: TrimmedNonEmptyString,
   payload: Schema.Json,
   turnId: Schema.NullOr(TurnId),
+  /** Provider runtime sequence, or the orchestration event sequence when `sequenceSource` says so. */
   sequence: Schema.optional(NonNegativeInt),
+  /**
+   * "orchestration" when the activity was created by the server and `sequence`
+   * fell back to the orchestration event sequence. That counter is unrelated to
+   * provider runtime sequences, so the two must not be compared for ordering.
+   */
+  sequenceSource: Schema.optional(Schema.Literal("orchestration")),
   createdAt: IsoDateTime,
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
@@ -1093,6 +1121,11 @@ export const OrchestrationThread = Schema.Struct({
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  /**
+   * Source message a fork was taken from ("Fork from this turn"). The provider
+   * fork must not carry native history past it. Null/absent = whole thread.
+   */
+  forkSourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
   sidechatSourceThreadId: SidechatSourceThreadId,
   sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
@@ -1195,6 +1228,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  forkSourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
   sidechatSourceThreadId: SidechatSourceThreadId,
   sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
@@ -1362,6 +1396,11 @@ export const ProjectCreateCommand = Schema.Struct({
    * than failing creation.
    */
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
+  /**
+   * Extra source folders for a multi-folder project; `workspaceRoot` stays the primary
+   * folder. Only ordinary projects accept them, and each one must already exist.
+   */
+  additionalFolders: Schema.optional(ProjectAdditionalFolders),
   createdAt: IsoDateTime,
 });
 
@@ -1439,6 +1478,9 @@ export const ThreadHandoffImportedMessage = Schema.Struct({
   role: Schema.Literals(["user", "assistant"]),
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  // Who wrote an imported user message. "agent" marks a subagent's brief from
+  // the agent that launched it, so it never counts as a human message.
+  dispatchOrigin: Schema.optional(MessageDispatchOrigin),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1493,6 +1535,8 @@ const ThreadForkCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(() => false),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  /** Fork from a specific turn: the source message the imported transcript ends at. */
+  throughMessageId: Schema.optional(MessageId),
   importedMessages: Schema.Array(ThreadHandoffImportedMessage),
   createdAt: IsoDateTime,
 });
@@ -1711,11 +1755,15 @@ const ThreadClaudeCacheCompactedCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const TurnInterruptRequestedBy = Schema.Literals(["user", "agent", "system"]);
+
 const ThreadTurnInterruptCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  // Explicit intent provenance. Historical/automatic requests may omit it.
+  requestedBy: Schema.optional(TurnInterruptRequestedBy),
   createdAt: IsoDateTime,
 });
 
@@ -2147,6 +2195,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -2216,6 +2265,11 @@ export const ThreadCreatedPayload = Schema.Struct({
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  /**
+   * Source message a fork was taken from ("Fork from this turn"). The provider
+   * fork must not carry native history past it. Null/absent = whole thread.
+   */
+  forkSourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
   sidechatSourceThreadId: SidechatSourceThreadId,
   sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
@@ -2413,6 +2467,7 @@ export const ThreadGoalContinuationRequestedPayload = Schema.Struct({
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  requestedBy: Schema.optional(TurnInterruptRequestedBy),
   createdAt: IsoDateTime,
 });
 
@@ -2523,6 +2578,7 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
 });
 
 export const OrchestrationEventMetadata = Schema.Struct({
+  checkpointRuntimeSequence: Schema.optional(NonNegativeInt),
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
   adapterKey: Schema.optional(TrimmedNonEmptyString),
@@ -2757,11 +2813,59 @@ export const OrchestrationEvent = Schema.Union([
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
 
+/** Stable message-order boundary; sequence is null for imported/legacy rows. */
+export const OrchestrationThreadHistoryCursor = Schema.Struct({
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+  sequence: Schema.NullOr(NonNegativeInt),
+});
+export type OrchestrationThreadHistoryCursor = typeof OrchestrationThreadHistoryCursor.Type;
+export const OrchestrationThreadActivityHistoryCursor = Schema.Struct({
+  activityId: EventId,
+  createdAt: IsoDateTime,
+});
+export type OrchestrationThreadActivityHistoryCursor =
+  typeof OrchestrationThreadActivityHistoryCursor.Type;
+export const OrchestrationThreadMessageWindow = Schema.Struct({
+  limit: NonNegativeInt.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(500)),
+  before: Schema.optional(OrchestrationThreadHistoryCursor),
+  beforeActivity: Schema.optional(OrchestrationThreadActivityHistoryCursor),
+});
+export type OrchestrationThreadMessageWindow = typeof OrchestrationThreadMessageWindow.Type;
+export const OrchestrationThreadHistory = Schema.Struct({
+  totalMessageCount: NonNegativeInt,
+  olderCursor: Schema.NullOr(OrchestrationThreadHistoryCursor),
+  olderActivityCursor: Schema.optional(Schema.NullOr(OrchestrationThreadActivityHistoryCursor)),
+  totalActivityCount: Schema.optional(NonNegativeInt),
+  /** Existing rollback/revert event fence; invalidates retained historical rows. */
+  revisionSequence: Schema.optional(NonNegativeInt),
+});
+export type OrchestrationThreadHistory = typeof OrchestrationThreadHistory.Type;
+
 export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   thread: OrchestrationThread,
+  history: Schema.optional(OrchestrationThreadHistory),
 });
 export type OrchestrationThreadDetailSnapshot = typeof OrchestrationThreadDetailSnapshot.Type;
+
+// The whole cursor-resume gap in one item, sent only when the subscriber
+// opted in with `batchReplay`. Clients apply it as one store update, so a
+// stale cached turn jumps straight to its current state instead of
+// rendering every intermediate step of the catch-up. The named interface
+// keeps declaration emit from inlining the event union into the RPC groups,
+// which otherwise exceeds the compiler's serialization limit (TS7056).
+export interface OrchestrationThreadReplayItemSchema extends Schema.Struct<{
+  readonly kind: Schema.Literal<"replay">;
+  readonly events: Schema.$Array<typeof OrchestrationEvent>;
+  readonly threadId: Schema.optional<typeof ThreadId>;
+}> {}
+export const OrchestrationThreadReplayItem: OrchestrationThreadReplayItemSchema = Schema.Struct({
+  kind: Schema.Literal("replay"),
+  events: Schema.Array(OrchestrationEvent),
+  threadId: Schema.optional(ThreadId),
+});
+export type OrchestrationThreadReplayItem = typeof OrchestrationThreadReplayItem.Type;
 
 export const OrchestrationThreadStreamItem = Schema.Union([
   Schema.Struct({
@@ -2772,6 +2876,7 @@ export const OrchestrationThreadStreamItem = Schema.Union([
     kind: Schema.Literal("event"),
     event: OrchestrationEvent,
   }),
+  OrchestrationThreadReplayItem,
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;
 
@@ -2988,11 +3093,18 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
   // skips the full-history snapshot. Optional so older clients keep the
   // snapshot-first behavior unchanged.
   afterSequence: Schema.optional(NonNegativeInt),
+  // Asks the server to deliver a cursor-resume gap as one `replay` stream item
+  // instead of one `event` item per event. Opt-in so older clients, which do
+  // not know the `replay` item, keep per-event replay.
+  batchReplay: Schema.optional(Schema.Boolean),
+  /** Opt-in bounded text history. Omission retains the legacy snapshot shape. */
+  messageWindow: Schema.optional(OrchestrationThreadMessageWindow),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 
 export const OrchestrationGetThreadDetailSnapshotInput = Schema.Struct({
   threadId: ThreadId,
+  messageWindow: Schema.optional(OrchestrationThreadMessageWindow),
 });
 export type OrchestrationGetThreadDetailSnapshotInput =
   typeof OrchestrationGetThreadDetailSnapshotInput.Type;
@@ -3002,6 +3114,35 @@ export const OrchestrationGetThreadDetailSnapshotResult = Schema.NullOr(
 );
 export type OrchestrationGetThreadDetailSnapshotResult =
   typeof OrchestrationGetThreadDetailSnapshotResult.Type;
+
+// Exported so server and web enforce the same bounds the schema validates.
+export const ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH = 2;
+export const ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT = 50;
+export const ORCHESTRATION_SEARCH_THREADS_MAX_EXCERPT_LENGTH = 320;
+
+/** Message-content search over persisted history, independent of what a client has hydrated. */
+export const OrchestrationSearchThreadsInput = Schema.Struct({
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(200)).check(
+    Schema.isMinLength(ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH),
+  ),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT)),
+  ),
+});
+export type OrchestrationSearchThreadsInput = typeof OrchestrationSearchThreadsInput.Type;
+
+export const OrchestrationThreadSearchMatch = Schema.Struct({
+  threadId: ThreadId,
+  /** Text around the first hit of the thread's best matching message. */
+  excerpt: Schema.String.check(Schema.isMaxLength(ORCHESTRATION_SEARCH_THREADS_MAX_EXCERPT_LENGTH)),
+  matchCount: PositiveInt,
+});
+export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
+
+export const OrchestrationSearchThreadsResult = Schema.Struct({
+  matches: Schema.Array(OrchestrationThreadSearchMatch),
+});
+export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
 export const OrchestrationImportThreadInput = Schema.Struct({
   threadId: ThreadId,
@@ -3047,6 +3188,10 @@ export const OrchestrationRpcSchemas = {
   getThreadDetailSnapshot: {
     input: OrchestrationGetThreadDetailSnapshotInput,
     output: OrchestrationGetThreadDetailSnapshotResult,
+  },
+  searchThreads: {
+    input: OrchestrationSearchThreadsInput,
+    output: OrchestrationSearchThreadsResult,
   },
   repairState: {
     input: OrchestrationRepairStateInput,

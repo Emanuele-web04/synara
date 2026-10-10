@@ -159,7 +159,8 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     id: "models",
     group: "coding",
     label: "Models & writing",
-    description: "Choose the model used for Git writing and add custom model slugs.",
+    description:
+      "Choose the source control writing style, Git writing model, and custom model slugs.",
     icon: "brain",
     eyebrow: "Model configuration",
   },

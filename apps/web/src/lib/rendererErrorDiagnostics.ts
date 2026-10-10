@@ -4,10 +4,22 @@ import {
   type DesktopRendererError,
   type DesktopDiagnosticActivity,
   type DesktopDiagnosticBreadcrumb,
+  type DesktopDiagnosticIssue,
   ORCHESTRATION_WS_METHODS,
   WS_METHODS,
 } from "@synara/contracts";
 import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
+
+export { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
+
+export async function reportHandledIssue(issue: DesktopDiagnosticIssue): Promise<string | null> {
+  try {
+    if (typeof window === "undefined") return null;
+    return (await window.desktopBridge?.betaDiagnostics?.reportIssue?.(issue)) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /** Only fixed categories cross IPC; RPC payloads and identifiers are never serialized. */
 export function rendererRpcActivity(

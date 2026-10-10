@@ -10,8 +10,15 @@ import { describe, expect, it, vi } from "vitest";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { ProviderUsageSettingsPanel } from "./ProviderUsageSettingsPanel";
 
+const appSettings = vi.hoisted(() => ({
+  disabledProviders: [] as string[],
+  railUsageProviders: [] as string[],
+}));
 vi.mock("~/appSettings", () => ({
-  useAppSettings: () => ({ settings: { railUsageProviders: [] }, updateSettings: vi.fn() }),
+  useAppSettings: () => ({
+    settings: appSettings,
+    updateSettings: vi.fn(),
+  }),
 }));
 
 function snapshot(input: Partial<ServerProviderUsageSnapshot>): ServerProviderUsageSnapshot {
@@ -41,7 +48,38 @@ function render(
 }
 
 describe("ProviderUsageSettingsPanel", () => {
-  it("keeps sidebar provider switches alongside account usage cards", () => {
+  it("does not let globally disabled saved accounts use the visible account limit", () => {
+    appSettings.disabledProviders = ["codex", "claudeAgent"];
+    appSettings.railUsageProviders = ["codex", "claudeAgent"];
+    try {
+      const markup = render([]);
+      const switchMarkup = markup.match(
+        /<[^>]+aria-label="Show OpenCode usage at the bottom of the sidebar"[^>]*>/u,
+      )?.[0];
+      expect(switchMarkup).toBeDefined();
+      expect(switchMarkup).not.toMatch(/\sdata-disabled=/u);
+      expect(appSettings.railUsageProviders).toEqual(["codex", "claudeAgent"]);
+    } finally {
+      appSettings.disabledProviders = [];
+      appSettings.railUsageProviders = [];
+    }
+  });
+
+  it("hides globally disabled accounts' switches and cached cards", () => {
+    appSettings.disabledProviders = ["codex"];
+    try {
+      const markup = render([
+        snapshot({ usageLines: [{ label: "Disabled usage", value: "7 credits" }] }),
+      ]);
+      expect(markup).not.toContain("Show Codex usage at the bottom of the sidebar");
+      expect(markup).not.toContain("Disabled usage");
+      expect(markup).toContain("Show Claude usage at the bottom of the sidebar");
+    } finally {
+      appSettings.disabledProviders = [];
+    }
+  });
+
+  it("keeps sidebar account switches alongside account usage cards", () => {
     const markup = render([
       snapshot({
         instanceId: "codex",
@@ -188,6 +226,8 @@ describe("ProviderUsageSettingsPanel", () => {
 
     expect(markup).toContain("Work account");
     expect(markup).toContain("Research account");
+    expect(markup).toContain("Show Claude · Default account usage at the bottom of the sidebar");
+    expect(markup).toContain("Show Claude · Research account usage at the bottom of the sidebar");
     expect(markup.indexOf("Work account")).toBeLessThan(markup.indexOf("Research account"));
     expect(markup.match(/Personal allowance/g)).toHaveLength(1);
     expect(markup.match(/Company allowance/g)).toHaveLength(1);

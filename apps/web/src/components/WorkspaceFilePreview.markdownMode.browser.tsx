@@ -115,3 +115,32 @@ it("remembers each file's markdown view mode when switching between files", asyn
     restoreNativeApi();
   }
 });
+
+it("renders interactive sanitized HTML only in the file's Markdown preview", async () => {
+  const contents =
+    '<details><summary>More info</summary><p>Hidden body</p></details>\n\n<kbd>Ctrl</kbd> H<sub>2</sub>O\n\n<script>window.__previewXss = true</script><img src="javascript:alert(1)" onerror="window.__previewXss = true">';
+  const readFile = vi.fn(async () => ({ ...loadedMarkdown(FILE_A), contents }));
+  const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
+  const queryClient = makeQueryClient();
+  const screen = await render(
+    <QueryClientProvider client={queryClient}>
+      <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_A} />
+    </QueryClientProvider>,
+  );
+  try {
+    await page.getByRole("radio", { name: "Preview" }).click();
+    await expect.element(screen.getByText("More info")).toBeVisible();
+    await expect.element(screen.getByText("Hidden body")).not.toBeVisible();
+    await screen.getByText("More info").click();
+    await expect.element(screen.getByText("Hidden body")).toBeVisible();
+    expect(document.querySelector(".editor-markdown-preview__body kbd")?.textContent).toBe("Ctrl");
+    expect(document.querySelector(".editor-markdown-preview__body sub")?.textContent).toBe("2");
+    expect(document.querySelector(".editor-markdown-preview__body script")).toBeNull();
+    expect(document.querySelector(".editor-markdown-preview__body [onerror]")).toBeNull();
+    expect(Reflect.get(window, "__previewXss")).toBeUndefined();
+  } finally {
+    await screen.unmount();
+    queryClient.clear();
+    restoreNativeApi();
+  }
+});

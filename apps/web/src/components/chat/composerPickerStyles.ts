@@ -127,13 +127,13 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
 /**
  * Frame for rows stacked above the composer (queued steer/queue rows, live file
- * changes, active task list). Sits at `w-14/15` and is centered (`mx-auto`) so the
- * stack reads as an inset rail above the full-width composer input.
+ * changes, active task list). It uses the same width contract as the composer
+ * input so the stack stays aligned at every viewport size.
  *
  * Prefer ComposerStackedPanel inside ComposerColumnFrame instead of using this
  * token directly so chrome and attached-radius behavior stay centralized.
  */
-export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-14/15 min-w-0";
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "w-full -mb-px min-w-0";
 
 /** Shell around the composer surface. Deliberately has NO background: the composer
  *  floats over the scrolling transcript (see `composerOverlay.ts`) and its frosted
@@ -265,7 +265,7 @@ export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-b
 /** Compact bordered action pill for inline composer chrome (Review changes, hint
  *  actions). One token so every trailing action in a composer strip reads alike. */
 export const COMPOSER_INLINE_ACTION_PILL_CLASS_NAME =
-  "shrink-0 rounded-md border border-[color:var(--color-border-light)] px-2.5 py-0.5 text-foreground/90 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground";
+  "shrink-0 rounded-md border border-[color:var(--color-border-light)] px-2.5 py-0.5 text-foreground/90 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background";
 
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";

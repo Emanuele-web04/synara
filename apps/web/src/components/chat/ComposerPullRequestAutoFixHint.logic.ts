@@ -1,5 +1,5 @@
 // FILE: composerPullRequestAutoFixHint.ts
-// Purpose: Visibility rule and copy for the composer tip that offers Auto-fix CI (Beta)
+// Purpose: Visibility rule and copy for the composer tip that offers Auto-fix CI
 //   on the chat's open pull request.
 // Layer: Chat composer state helpers
 // Exports: shouldShowPullRequestAutoFixHint + hint constants

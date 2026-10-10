@@ -50,7 +50,7 @@ import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import { ServerSecretStore } from "../src/auth/Services/ServerSecretStore.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
-import { StudioOutputReactorLive } from "../src/orchestration/Layers/StudioOutputReactor.ts";
+import { HubOutputReactorLive } from "../src/orchestration/Layers/HubOutputReactor.ts";
 import { SidechatExpiryReactorLive } from "../src/orchestration/Layers/SidechatExpiryReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
@@ -338,7 +338,7 @@ export const makeOrchestrationIntegrationHarness = (
     const textGenerationLayer = Layer.succeed(TextGeneration, {
       generateBranchName: () => Effect.succeed({ branch: null }),
     } as unknown as TextGenerationShape);
-    const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
+    const hubOutputReactorLayer = HubOutputReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
     );
     const providerHealthLayer = Layer.succeed(ProviderHealth, {
@@ -350,7 +350,7 @@ export const makeOrchestrationIntegrationHarness = (
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(providerHealthLayer),
-      Layer.provideMerge(studioOutputReactorLayer),
+      Layer.provideMerge(hubOutputReactorLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -370,7 +370,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
-      Layer.provideMerge(studioOutputReactorLayer),
+      Layer.provideMerge(hubOutputReactorLayer),
       Layer.provideMerge(threadGitMetadataReactorLayer),
       Layer.provideMerge(sidechatExpiryReactorLayer),
     );

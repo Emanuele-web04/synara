@@ -1,5 +1,5 @@
 // FILE: ComposerPullRequestAutoFixHint.tsx
-// Purpose: Composer tip offering Auto-fix CI (Beta) on the chat's open pull request, with
+// Purpose: Composer tip offering Auto-fix CI on the chat's open pull request, with
 // one-click "Turn on" (same switch as the PR menu checkbox) and a permanent dismiss.
 // Layer: Chat composer UI
 // Exports: ComposerPullRequestAutoFixHint

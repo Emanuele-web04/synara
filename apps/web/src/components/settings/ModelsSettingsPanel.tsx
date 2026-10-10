@@ -6,8 +6,10 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   GIT_TEXT_GENERATION_PROVIDERS,
   PROVIDER_DISPLAY_NAMES,
+  MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH,
   type GitTextGenerationProvider,
   type ProviderKind,
+  type SourceControlWritingStyle,
 } from "@synara/contracts";
 import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
 import { useQuery } from "@tanstack/react-query";
@@ -43,6 +45,30 @@ import {
   useSettingsRestoreSignal,
 } from "./SettingControls";
 import { SettingsRow, SettingsSection, SettingsSelectPopup } from "./SettingsPanelPrimitives";
+import { DebouncedSettingTextarea } from "./DebouncedSettingTextInput";
+
+const SOURCE_CONTROL_WRITING_OPTIONS: readonly {
+  value: SourceControlWritingStyle;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "repository",
+    label: "Repository conventions",
+    description: "In each project, matches recent change descriptions and change request titles.",
+  },
+  {
+    value: "conventional",
+    label: "Conventional Commits",
+    description: "Use Conventional Commit prefixes and keep change request text concise.",
+  },
+  {
+    value: "custom",
+    label: "Custom instructions",
+    description:
+      "Use your instructions for change descriptions and change requests in every project.",
+  },
+];
 
 type CustomModelValidationResult =
   | { readonly model: string; readonly error?: never }
@@ -90,6 +116,13 @@ export function ModelsSettingsPanel({
     Partial<Record<ProviderKind, string | null>>
   >({});
   const [showAllCustomModels, setShowAllCustomModels] = useState(false);
+  const enabledCustomModelProviderSettings = useMemo(
+    () =>
+      CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.filter(
+        (config) => !settings.disabledProviders.includes(config.provider),
+      ),
+    [settings.disabledProviders],
+  );
 
   useSettingsRestoreSignal(resetEpoch, () => {
     setSelectedCustomModelProvider("codex");
@@ -126,6 +159,7 @@ export function ModelsSettingsPanel({
   const gitTextGenerationPickerOptions = useMemo(
     () =>
       providerInstanceOptions.flatMap((instance) =>
+        !settings.disabledProviders.includes(instance.provider) &&
         (instance.enabled || instance.instanceId === currentGitTextGenerationInstanceId) &&
         GIT_TEXT_GENERATION_PROVIDERS.includes(instance.provider as GitTextGenerationProvider)
           ? (gitWritingCatalogOptionsByInstance[instance.instanceId] ?? []).map((option) => ({
@@ -140,6 +174,7 @@ export function ModelsSettingsPanel({
       currentGitTextGenerationInstanceId,
       gitWritingCatalogOptionsByInstance,
       providerInstanceOptions,
+      settings.disabledProviders,
     ],
   );
   const currentGitTextGenerationValue = `${currentGitTextGenerationInstanceId}:${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
@@ -164,14 +199,17 @@ export function ModelsSettingsPanel({
       PROVIDER_DISPLAY_NAMES[currentGitTextGenerationProvider]
       ? `${selectedGitTextGenerationInstanceLabel} · ${selectedGitTextGenerationModelName}`
       : selectedGitTextGenerationModelName;
-  const selectedCustomModelProviderSettings = CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.find(
-    (config) => config.provider === selectedCustomModelProvider,
-  )!;
-  const selectedCustomModelInput = customModelInputByProvider[selectedCustomModelProvider] ?? "";
-  const selectedCustomModelError = customModelErrorByProvider[selectedCustomModelProvider] ?? null;
+  const selectedCustomModelProviderSettings =
+    enabledCustomModelProviderSettings.find(
+      (config) => config.provider === selectedCustomModelProvider,
+    ) ?? enabledCustomModelProviderSettings[0];
+  const activeCustomModelProvider =
+    selectedCustomModelProviderSettings?.provider ?? selectedCustomModelProvider;
+  const selectedCustomModelInput = customModelInputByProvider[activeCustomModelProvider] ?? "";
+  const selectedCustomModelError = customModelErrorByProvider[activeCustomModelProvider] ?? null;
   const savedCustomModelRows = useMemo(
     () =>
-      CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.flatMap((config) =>
+      enabledCustomModelProviderSettings.flatMap((config) =>
         getCustomModelsForProvider(settings, config.provider).map((slug) => ({
           key: `${config.provider}:${slug}`,
           provider: config.provider,
@@ -179,7 +217,7 @@ export function ModelsSettingsPanel({
           slug,
         })),
       ),
-    [settings],
+    [enabledCustomModelProviderSettings, settings],
   );
   const visibleCustomModelRows = savedCustomModelRows.slice(0, 5);
   const overflowCustomModelRows = savedCustomModelRows.slice(5);
@@ -224,7 +262,7 @@ export function ModelsSettingsPanel({
   const resetCustomModels = useCallback(() => {
     const patch = Object.assign(
       {},
-      ...CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) =>
+      ...enabledCustomModelProviderSettings.map((config) =>
         patchCustomModels(config.provider, [
           ...getDefaultCustomModelsForProvider(defaults, config.provider),
         ]),
@@ -233,7 +271,7 @@ export function ModelsSettingsPanel({
     updateSettings(patch);
     setCustomModelErrorByProvider({});
     setShowAllCustomModels(false);
-  }, [defaults, updateSettings]);
+  }, [defaults, enabledCustomModelProviderSettings, updateSettings]);
 
   const renderCustomModelRow = (
     row: (typeof savedCustomModelRows)[number],
@@ -263,9 +301,65 @@ export function ModelsSettingsPanel({
 
   if (!active) return null;
 
+  const writingOption = SOURCE_CONTROL_WRITING_OPTIONS.find(
+    (option) => option.value === settings.sourceControlWritingStyle,
+  )!;
+  const isWritingStyleDirty =
+    settings.sourceControlWritingStyle !== defaults.sourceControlWritingStyle ||
+    settings.sourceControlCustomInstructions !== defaults.sourceControlCustomInstructions;
+
   return (
     <div className="space-y-6">
       <SettingsSection title="Generation defaults">
+        <SettingsRow
+          title="Source control writing style"
+          description={writingOption.description}
+          resetAction={
+            isWritingStyleDirty ? (
+              <SettingResetButton
+                label="source control writing style"
+                onClick={() =>
+                  updateSettings({
+                    sourceControlWritingStyle: defaults.sourceControlWritingStyle,
+                    sourceControlCustomInstructions: defaults.sourceControlCustomInstructions,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.sourceControlWritingStyle}
+              onValueChange={(value) => {
+                const option = SOURCE_CONTROL_WRITING_OPTIONS.find(
+                  (option) => option.value === value,
+                );
+                if (option) updateSettings({ sourceControlWritingStyle: option.value });
+              }}
+              ariaLabel="Source control writing style"
+              triggerClassName="w-full sm:w-60"
+              valueContent={writingOption.label}
+            >
+              {SOURCE_CONTROL_WRITING_OPTIONS.map((option) => (
+                <SelectItem hideIndicator key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SettingsSelectControl>
+          }
+        >
+          <DisclosureRegion open={settings.sourceControlWritingStyle === "custom"}>
+            <DebouncedSettingTextarea
+              key={resetEpoch}
+              className="mt-3 [&_textarea]:min-h-28 [&_textarea]:resize-y"
+              aria-label="Custom source control writing instructions"
+              placeholder="Keep titles concise. Use short bullet points in descriptions."
+              maxLength={MAX_SOURCE_CONTROL_CUSTOM_INSTRUCTIONS_LENGTH}
+              value={settings.sourceControlCustomInstructions}
+              onCommit={(value) => updateSettings({ sourceControlCustomInstructions: value })}
+            />
+          </DisclosureRegion>
+        </SettingsRow>
         <SettingsRow
           title="Git writing model"
           description="Used for generated commit messages, PR titles, and branch names."
@@ -322,65 +416,71 @@ export function ModelsSettingsPanel({
           }
         >
           <div className={cn("mt-4 pt-4", SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME)}>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <Select
-                value={selectedCustomModelProvider}
-                onValueChange={(value) => {
-                  if (isCustomModelEditorProvider(value)) {
-                    setSelectedCustomModelProvider(value);
-                  }
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  className="w-full sm:w-40"
-                  aria-label="Custom model provider"
+            {selectedCustomModelProviderSettings ? (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Select
+                  value={activeCustomModelProvider}
+                  onValueChange={(value) => {
+                    if (isCustomModelEditorProvider(value)) {
+                      setSelectedCustomModelProvider(value);
+                    }
+                  }}
                 >
-                  <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
-                </SelectTrigger>
-                <SettingsSelectPopup align="start">
-                  {CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) => (
-                    <SelectItem hideIndicator key={config.provider} value={config.provider}>
-                      {config.title}
-                    </SelectItem>
-                  ))}
-                </SettingsSelectPopup>
-              </Select>
-              <Input
-                id="custom-model-slug"
-                size="sm"
-                variant="soft"
-                value={selectedCustomModelInput}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setCustomModelInputByProvider((existing) => ({
-                    ...existing,
-                    [selectedCustomModelProvider]: value,
-                  }));
-                  if (selectedCustomModelError) {
-                    setCustomModelErrorByProvider((existing) => ({
+                  <SelectTrigger
+                    size="sm"
+                    className="w-full sm:w-40"
+                    aria-label="Custom model provider"
+                  >
+                    <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
+                  </SelectTrigger>
+                  <SettingsSelectPopup align="start">
+                    {enabledCustomModelProviderSettings.map((config) => (
+                      <SelectItem hideIndicator key={config.provider} value={config.provider}>
+                        {config.title}
+                      </SelectItem>
+                    ))}
+                  </SettingsSelectPopup>
+                </Select>
+                <Input
+                  id="custom-model-slug"
+                  size="sm"
+                  variant="soft"
+                  value={selectedCustomModelInput}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setCustomModelInputByProvider((existing) => ({
                       ...existing,
-                      [selectedCustomModelProvider]: null,
+                      [activeCustomModelProvider]: value,
                     }));
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
-                  event.preventDefault();
-                  addCustomModel(selectedCustomModelProvider);
-                }}
-                placeholder={selectedCustomModelProviderSettings.example}
-                spellCheck={false}
-              />
-              <Button
-                className="shrink-0"
-                variant="outline"
-                onClick={() => addCustomModel(selectedCustomModelProvider)}
-              >
-                <PlusIcon className="size-3.5" />
-                Add
-              </Button>
-            </div>
+                    if (selectedCustomModelError) {
+                      setCustomModelErrorByProvider((existing) => ({
+                        ...existing,
+                        [activeCustomModelProvider]: null,
+                      }));
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    addCustomModel(activeCustomModelProvider);
+                  }}
+                  placeholder={selectedCustomModelProviderSettings.example}
+                  spellCheck={false}
+                />
+                <Button
+                  className="shrink-0"
+                  variant="outline"
+                  onClick={() => addCustomModel(activeCustomModelProvider)}
+                >
+                  <PlusIcon className="size-3.5" />
+                  Add
+                </Button>
+              </div>
+            ) : (
+              <p className="text-ui text-muted-foreground">
+                Enable a provider in Settings → Providers to add custom models.
+              </p>
+            )}
 
             {selectedCustomModelError ? (
               <p className="mt-2 text-ui leading-snug text-destructive">

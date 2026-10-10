@@ -2,7 +2,7 @@
 // Purpose: Time-window recap for the Inbox from Synara's local projection DB:
 // prompts, chats, turns, agent run time and token deltas per slot, plus the
 // window's top projects and models. Shares the token SQL with profileStats.ts.
-// Layer: server stats query service (SqlClient). Beta-only ("inbox").
+// Layer: server stats query service (SqlClient). Available in Stable and Beta.
 
 import {
   type ProviderKind,
@@ -495,7 +495,7 @@ export const makeRecapStatsQuery = (
         if (!isInboxEnabled()) {
           return yield* Effect.fail(
             new WsRpcError({
-              message: "The Inbox is available in Synara Beta.",
+              message: "The Inbox is unavailable on this host.",
               code: "FEATURE_UNAVAILABLE",
               retryable: false,
             }),

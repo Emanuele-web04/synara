@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 import { APP_BASE_NAME } from "~/branding";
 import { SynaraLogo } from "~/components/SynaraLogo";
+import { useAnnouncementSheetSlot } from "~/components/announcementSheetSlot";
 import {
   Dialog,
   DialogDescription,
@@ -211,6 +212,9 @@ export function OnboardingDialog(props: {
   onOpenChange: (open: boolean) => void;
   onComplete: () => void;
 }) {
+  // The first-run gate already decides eligibility. Replays remain available after
+  // a startup handoff, but still share the slot with any surface currently showing.
+  const { open } = useAnnouncementSheetSlot(props.open, true, false);
   // Project creation cannot be aborted: closing the tour mid-create would report a skip
   // while a project still appears afterwards, so dismissal waits for it to settle.
   const [projectBusy, setProjectBusy] = useState(false);
@@ -219,10 +223,10 @@ export function OnboardingDialog(props: {
     props.onOpenChange(open);
   };
   return (
-    <Dialog open={props.open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogPopup showCloseButton className="h-[540px] max-h-full max-w-[800px]">
         {/* Remount per open so a replay from Settings starts at the first step. */}
-        {props.open ? (
+        {open ? (
           <OnboardingFlow
             onComplete={props.onComplete}
             projectBusy={projectBusy}

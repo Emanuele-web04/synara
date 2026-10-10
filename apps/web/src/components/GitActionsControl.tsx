@@ -90,7 +90,8 @@ import {
 } from "~/components/ui/menu";
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
-import { toastManager } from "~/components/ui/toast";
+import { toastManager, reportToastIssue } from "~/components/ui/toast";
+import { diagnosticIssueReason } from "~/lib/rendererErrorDiagnostics";
 import { openInPreferredEditor } from "~/editorPreferences";
 import {
   gitBranchesQueryOptions,
@@ -772,6 +773,7 @@ export default function GitActionsControl({
         shouldPushBeforePr,
       });
       const actionId = randomUUID();
+      const diagnosticStartedAt = performance.now();
       const resolvedProgressToastId =
         progressToastId ??
         toastManager.add({
@@ -941,15 +943,22 @@ export default function GitActionsControl({
         if (activeGitActionProgressRef.current === actionProgress) {
           activeGitActionProgressRef.current = null;
         }
-        toastManager.update(
+        const failureToast = buildGitActionFailureToast({
+          message:
+            actionProgress.failure?.message ??
+            (err instanceof Error ? err.message : "An error occurred."),
+          phase: actionProgress.failure?.phase ?? actionProgress.phase,
+          threadId: activeThreadId,
+        });
+        toastManager.update(resolvedProgressToastId, failureToast);
+        reportToastIssue(
           resolvedProgressToastId,
-          buildGitActionFailureToast({
-            message:
-              actionProgress.failure?.message ??
-              (err instanceof Error ? err.message : "An error occurred."),
-            phase: actionProgress.failure?.phase ?? actionProgress.phase,
-            threadId: activeThreadId,
-          }),
+          {
+            code: `git.${actionProgress.failure?.phase ?? actionProgress.phase ?? "request"}.failed`,
+            reason: diagnosticIssueReason(actionProgress.failure?.message ?? err),
+            durationMs: performance.now() - diagnosticStartedAt,
+          },
+          failureToast.data,
         );
       }
     },
@@ -1733,21 +1742,9 @@ export default function GitActionsControl({
 
   if (isPanel) {
     const showPanelPullRow = showPromotedPullAction;
-    // The panel row runs its action on click — exactly like Pull — and the chevron
-    // beside it is the only way into the git actions menu (and its dialogs).
     const panelPrimaryLabel = showPanelPullRow
       ? (promotedPull?.label ?? "Pull")
       : (runnableCommitPushMenuItem?.label ?? "Commit and Push");
-    const panelPrimaryGlyph: GitGlyphName = showPanelPullRow ? "sync" : "push";
-    const runPanelPrimaryAction = () => {
-      if (showPanelPullRow) {
-        runSyncWithRemote();
-        return;
-      }
-      if (runnableCommitPushMenuItem) {
-        openDialogForMenuItem(runnableCommitPushMenuItem);
-      }
-    };
     const panelGitActionsMenu = (
       <Menu
         onOpenChange={(open) => {
@@ -1758,13 +1755,24 @@ export default function GitActionsControl({
           render={
             <button
               type="button"
-              className={cn(ENVIRONMENT_ROW_CLASS_NAME, "w-auto shrink-0 px-1.5")}
-              aria-label="Git action options"
-              title="More Git actions"
+              className={cn(
+                ENVIRONMENT_ROW_CLASS_NAME,
+                showPanelPullRow && "w-auto shrink-0 px-1.5",
+              )}
+              aria-label={showPanelPullRow ? "Git action options" : panelPrimaryLabel}
+              title="Git actions"
             />
           }
         >
-          <EnvironmentRowChevron />
+          {showPanelPullRow ? (
+            <EnvironmentRowChevron />
+          ) : (
+            <EnvironmentRowBody
+              icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+              label={panelPrimaryLabel}
+              trailing={<EnvironmentRowChevron />}
+            />
+          )}
         </MenuTrigger>
         <ComposerPickerMenuPopup align="start" side="bottom" className="w-60 min-w-60">
           {gitMenuContent}
@@ -1781,28 +1789,25 @@ export default function GitActionsControl({
             disabled={initMutation.isPending}
             onClick={() => initMutation.mutate()}
           />
-        ) : (
+        ) : showPanelPullRow ? (
           <div className="flex w-full items-center">
             <button
               type="button"
               className={cn(ENVIRONMENT_ROW_CLASS_NAME, "min-w-0 flex-1")}
               aria-label={panelPrimaryLabel}
               title={panelPrimaryLabel}
-              disabled={isGitActionRunning || (!showPanelPullRow && !runnableCommitPushMenuItem)}
-              onClick={runPanelPrimaryAction}
+              disabled={isGitActionRunning}
+              onClick={runSyncWithRemote}
             >
               <EnvironmentRowBody
-                icon={
-                  <GitActionGlyph
-                    name={panelPrimaryGlyph}
-                    className={ENVIRONMENT_ROW_ICON_CLASS_NAME}
-                  />
-                }
+                icon={<GitActionGlyph name="sync" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
                 label={panelPrimaryLabel}
               />
             </button>
             {panelGitActionsMenu}
           </div>
+        ) : (
+          panelGitActionsMenu
         )}
         {gitActionDialogs}
       </>

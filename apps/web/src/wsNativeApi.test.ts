@@ -23,6 +23,7 @@ import {
 } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+let reportShellFailure: ((failure: { code: string | null; error: Error }) => void) | undefined;
 const requestMock = vi.fn<(...args: Array<unknown>) => Promise<unknown>>();
 const disposeMock = vi.fn();
 const unsubscribeProjectAgentEventsMock = vi.fn(async (_projectId: string) => undefined);
@@ -68,6 +69,12 @@ vi.mock("./wsTransport", () => {
       }
       onCompatibilityIssue() {
         return () => undefined;
+      }
+      onShellStreamFailure(listener: (failure: { code: string | null; error: Error }) => void) {
+        reportShellFailure = listener;
+        return () => {
+          reportShellFailure = undefined;
+        };
       }
       onThreadStreamFailure() {
         return () => undefined;
@@ -157,6 +164,23 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("forwards exhausted shell failures and removes unsubscribed listeners", async () => {
+    const { createWsNativeApi, onShellStreamFailure } = await import("./wsNativeApi");
+    createWsNativeApi();
+    const listener = vi.fn();
+    const unsubscribe = onShellStreamFailure(listener);
+    const failure = {
+      code: "ORCHESTRATION_STREAM_OVERFLOW",
+      error: new Error("overflow exhausted"),
+    };
+    expect(reportShellFailure).toBeDefined();
+    reportShellFailure!(failure);
+    expect(listener).toHaveBeenCalledWith(failure);
+    unsubscribe();
+    reportShellFailure!(failure);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   it("gives a slow provider refresh a bounded deadline beyond the generic RPC timeout", async () => {
     const { createWsNativeApi } = await import("./wsNativeApi");
     const api = createWsNativeApi();
@@ -280,10 +304,14 @@ describe("wsNativeApi", () => {
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
+        keepAwakeMode: "off",
+        lowerProviderProcessPriority: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         githubInboxIncludeUpstreams: false,
         sidechatExpiry: "1h",
+        sourceControlWritingStyle: "repository",
+        sourceControlCustomInstructions: "",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
         providers: {
           codex: {
@@ -329,6 +357,27 @@ describe("wsNativeApi", () => {
 
     const lateListener = vi.fn();
     onServerSettingsUpdated(lateListener);
+    expect(lateListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).toHaveBeenCalledWith(payload);
+  });
+
+  it("delivers and caches keep-awake updates", async () => {
+    const { createWsNativeApi, onServerKeepAwakeUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerKeepAwakeUpdated(listener);
+
+    const payload = {
+      keepAwake: { available: true, mode: "agent", active: true, error: null },
+    } as const;
+    emitPush(WS_CHANNELS.serverKeepAwakeUpdated, payload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(payload);
+
+    const lateListener = vi.fn();
+    onServerKeepAwakeUpdated(lateListener);
     expect(lateListener).toHaveBeenCalledTimes(1);
     expect(lateListener).toHaveBeenCalledWith(payload);
   });
@@ -932,6 +981,51 @@ describe("wsNativeApi", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("providerInstanceId=codex_work");
     expect(requestMock).not.toHaveBeenCalledWith(
       WS_METHODS.serverTranscribeVoice,
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    { body: '"unexpected response"', status: 200 },
+    { body: "true", status: 200 },
+    { body: "null", status: 200 },
+    { body: "[]", status: 200 },
+    { body: '{"text":null}', status: 200 },
+    { body: '{"text":42}', status: 200 },
+    { body: '{"text":""}', status: 200 },
+    { body: '{"text":"   "}', status: 200 },
+    { body: "<html>Service unavailable</html>", status: 200 },
+    { body: '"unexpected response"', status: 502 },
+    { body: '{"error":"Upload rejected"}', status: 403 },
+  ])("rejects invalid voice responses: $status $body", async ({ body, status }) => {
+    Object.defineProperty(getWindowForTest(), "desktopBridge", {
+      configurable: true,
+      writable: true,
+      value: { getWsUrl: () => "ws://127.0.0.1:3773/ws?token=desktop-secret" },
+    });
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status })));
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+
+    await expect(
+      api.server.transcribeVoice({
+        provider: "codex",
+        cwd: "/repo",
+        audioBase64: "AQID",
+        mimeType: "audio/wav",
+        sampleRateHz: 24_000,
+        durationMs: 1000,
+      }),
+    ).rejects.toThrow(
+      status === 403
+        ? "Upload rejected"
+        : status >= 400
+          ? `Voice transcription failed with status ${status}.`
+          : "The voice transcription service returned an invalid response. Please try again.",
+    );
+    expect(requestMock).not.toHaveBeenCalledWith(
+      WS_METHODS.serverTranscribeVoice,
+      expect.anything(),
       expect.anything(),
     );
   });

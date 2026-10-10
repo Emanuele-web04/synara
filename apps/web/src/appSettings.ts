@@ -20,9 +20,12 @@ import {
   type ProviderInstanceEnvironment,
   ProviderInstanceId,
   GitHubInboxSort,
+  KeepAwakeMode,
   TrimmedNonEmptyString,
   ProviderKind,
   SidechatExpiry,
+  SourceControlWritingStyle,
+  SourceControlCustomInstructions,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -156,7 +159,7 @@ function persistedKnownIdList<const Ids extends ReadonlyArray<string>>(ids: Ids)
 }
 
 const RailOrderableItemIdList = persistedKnownIdList(RAIL_ORDERABLE_ITEM_IDS);
-/** Where Beta's Tasks entry opens: the to-do list or the Kanban board of chats. */
+/** Where the Tasks entry opens: the to-do list or the Kanban board of chats. */
 export const TasksViewMode = Schema.Literals(["list", "kanban"]);
 export type TasksViewMode = typeof TasksViewMode.Type;
 export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "list";
@@ -307,6 +310,10 @@ function resolvePersistedProviderListEntry(provider: string): ProviderKind | und
 }
 
 const PersistedProviderKindList = persistedIdList(ProviderKind, resolvePersistedProviderListEntry);
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
+const PersistedProviderInstanceIdList = persistedIdList(ProviderInstanceId, (value) =>
+  isProviderInstanceId(value) ? value : undefined,
+);
 
 const PersistedHiddenModels = Schema.Array(
   Schema.Struct({
@@ -418,7 +425,7 @@ export const AppSettingsSchema = Schema.Struct({
   // Deprecated rename bridge from the Studio surface. Normalization migrates this
   // value onto `showGroupsSection` once and then omits the key.
   showStudioSection: Schema.optionalKey(Schema.Boolean),
-  // Beta-only: the view the Tasks entry opens, last picked in its List/Kanban switch.
+  // The view the Tasks entry opens, last picked in its List/Kanban switch.
   // Stable never reads it (Kanban is its only view).
   tasksViewMode: TasksViewMode.pipe(withDefaults(() => DEFAULT_TASKS_VIEW_MODE)),
   // Rail shortcuts the user added from the rail's "…" menu, in rail order:
@@ -441,10 +448,14 @@ export const AppSettingsSchema = Schema.Struct({
   // also write back here so the last explicit open/close survives reloads.
   environmentPanelDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
-  // Providers whose usage ring sits at the bottom of the app rail (see AppRailUsage.logic for
-  // the cap). A ring only draws once its provider reports usage.
+  // Legacy provider selection, retained to migrate existing sidebar preferences.
   railUsageProviders: PersistedProviderKindList.pipe(
     withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
+  ),
+  // Accounts whose usage rings sit at the bottom of the app rail. Null migrates the
+  // legacy provider ids to their default accounts; an empty list explicitly hides all rings.
+  railUsageInstanceIds: Schema.NullOr(PersistedProviderInstanceIdList).pipe(
+    withDefaults(() => null),
   ),
   railUsageWindow: RailUsageWindow.pipe(withDefaults(() => DEFAULT_RAIL_USAGE_WINDOW)),
   // Usage popovers (rail rings, chat header, branch toolbar) open on the limit rows only;
@@ -460,6 +471,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentSubagents: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
@@ -481,6 +493,8 @@ export const AppSettingsSchema = Schema.Struct({
   ),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
+  keepAwakeMode: KeepAwakeMode.pipe(withDefaults(() => "off" as const satisfies KeepAwakeMode)),
+  lowerProviderProcessPriority: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
   // Local desktop preference: frameless custom title bar on Windows/Linux.
@@ -523,7 +537,7 @@ export const AppSettingsSchema = Schema.Struct({
   // One-shot composer hint that suggests Medium effort for faster desktop actions.
   // Set when the user applies or dismisses it, so the hint never asks twice.
   dismissedComputerControlEffortHint: Schema.Boolean.pipe(withDefaults(() => false)),
-  // One-shot composer hint offering Auto-fix CI (Beta) on a chat's open PR. Set when the
+  // One-shot composer hint offering Auto-fix CI on a chat's open PR. Set when the
   // user dismisses it or turns Auto-fix CI on anywhere, so it never asks twice.
   dismissedPullRequestAutoFixHint: Schema.Boolean.pipe(withDefaults(() => false)),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
@@ -547,6 +561,10 @@ export const AppSettingsSchema = Schema.Struct({
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  sourceControlWritingStyle: SourceControlWritingStyle.pipe(
+    withDefaults(() => "repository" as const),
+  ),
+  sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
@@ -976,7 +994,8 @@ export function getProviderInstanceOptions(
   settings: Pick<
     AppSettings,
     "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
-  >,
+  > &
+    Partial<Pick<AppSettings, "disabledProviders">>,
 ): ProviderInstanceOption[] {
   const optionsById = new Map<ProviderInstanceId, ProviderInstanceOption>();
 
@@ -1034,18 +1053,23 @@ export function getProviderInstanceOptions(
     });
   }
 
-  return Array.from(optionsById.values()).toSorted((left, right) => {
-    const providerDelta =
-      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
-      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
-    if (providerDelta !== 0) {
-      return providerDelta;
-    }
-    if (left.isDefault !== right.isDefault) {
-      return left.isDefault ? -1 : 1;
-    }
-    return left.label.localeCompare(right.label);
-  });
+  return Array.from(optionsById.values())
+    .map((option) => ({
+      ...option,
+      enabled: option.enabled && !settings.disabledProviders?.includes(option.provider),
+    }))
+    .toSorted((left, right) => {
+      const providerDelta =
+        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
+        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
+      if (providerDelta !== 0) {
+        return providerDelta;
+      }
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
+      }
+      return left.label.localeCompare(right.label);
+    });
 }
 
 export function getUnsupportedProviderInstanceOptions(
@@ -1408,6 +1432,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     : DEFAULT_CODEX_ACCOUNT_ID;
   return {
     ...currentSettings,
+    railUsageInstanceIds: settings.railUsageInstanceIds ?? settings.railUsageProviders,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
     // Read the legacy Studio key once: it defaults to true, so only an explicit
     // `false` carries over onto the renamed Groups section.
@@ -1494,7 +1519,7 @@ export function didProviderCommandDiscoverySettingsChange(
   );
 }
 
-function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
+export function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     claudeEnableArtifacts: settings.providers.claudeAgent.enableArtifacts,
@@ -1511,6 +1536,8 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     sidechatExpiry: settings.sidechatExpiry,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+    keepAwakeMode: settings.keepAwakeMode,
+    lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
@@ -1537,6 +1564,8 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationProviderInstanceId: settings.textGenerationModelSelection.instanceId,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    sourceControlWritingStyle: settings.sourceControlWritingStyle,
+    sourceControlCustomInstructions: settings.sourceControlCustomInstructions,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
@@ -1644,6 +1673,16 @@ export function appSettingsPatchToServerSettingsPatch(
   if (hasOwn(patch, "enableProviderUpdateChecks")) {
     serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
   }
+  if (
+    patch.keepAwakeMode === "always" ||
+    patch.keepAwakeMode === "agent" ||
+    patch.keepAwakeMode === "off"
+  ) {
+    serverPatch.keepAwakeMode = patch.keepAwakeMode;
+  }
+  if (hasOwn(patch, "lowerProviderProcessPriority")) {
+    serverPatch.lowerProviderProcessPriority = Boolean(patch.lowerProviderProcessPriority);
+  }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
@@ -1659,6 +1698,12 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
+  }
+  if (patch.sourceControlWritingStyle !== undefined) {
+    serverPatch.sourceControlWritingStyle = patch.sourceControlWritingStyle;
+  }
+  if (patch.sourceControlCustomInstructions !== undefined) {
+    serverPatch.sourceControlCustomInstructions = patch.sourceControlCustomInstructions;
   }
   if (
     hasOwn(patch, "textGenerationModel") ||
@@ -1862,6 +1907,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
     "devinBinaryPath",
+    "keepAwakeMode",
     "antigravityBinaryPath",
     "grokBinaryPath",
     "droidBinaryPath",
@@ -1876,6 +1922,8 @@ export function buildInitialServerSettingsMigrationPatch(
     "textGenerationModel",
     "textGenerationProvider",
     "textGenerationProviderInstanceId",
+    "sourceControlWritingStyle",
+    "sourceControlCustomInstructions",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
       patch[key] = normalizedSettings[key] as never;

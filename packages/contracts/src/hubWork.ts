@@ -10,7 +10,7 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas";
-import { ChatAttachment } from "./orchestration";
+import { ChatAttachment, RuntimeMode } from "./orchestration";
 
 export const NEW_HUB_MAX_CONCURRENT_WORKERS = 3;
 
@@ -76,7 +76,12 @@ export const HubWorkRecord = Schema.Struct({
   scopeKey: TrimmedNonEmptyString,
   fingerprint: TrimmedNonEmptyString,
   taskIndex: NonNegativeInt,
-  creationSpec: SynaraCreateThreadSpec,
+  creationSpec: Schema.Struct({
+    ...SynaraCreateThreadSpec.fields,
+    // Snapshot the coordinator mode at submission, including Auto, without
+    // exposing additional explicit modes on the MCP creation input.
+    inheritedRuntimeMode: Schema.optional(RuntimeMode),
+  }),
   sourceMessages: Schema.Array(HubWorkSourceMessage),
   slotHeld: Schema.Boolean,
   admittedAt: Schema.NullOr(IsoDateTime),

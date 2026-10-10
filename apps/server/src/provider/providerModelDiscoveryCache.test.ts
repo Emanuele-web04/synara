@@ -157,8 +157,8 @@ describe("makeProviderModelDiscoveryCache", () => {
         concurrency: "unbounded",
       }),
     );
-    await flush();
-    expect(calls).toBe(1);
+    // Detached discovery may start after the next timer tick on a busy runner.
+    await expect.poll(() => calls).toBe(1);
     expect((await Effect.runPromise(cache.lookup(KEY, discover))).models).toEqual(CATALOG.models);
     Deferred.doneUnsafe(gate, Effect.void);
     expect((await requests).map((result) => result.models)).toEqual([

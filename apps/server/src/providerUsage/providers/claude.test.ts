@@ -119,6 +119,48 @@ afterEach(() => {
 });
 
 describe("claudeUsageFetcher", () => {
+  it("does not show stored-account usage for an account using an environment token", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "different-account-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    const fetchMock = vi.fn(async () => jsonResponse({ five_hour: { utilization: 80 } }));
+    stubOutboundFetch(fetchMock);
+    const context = {
+      homeDir,
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "setup-token" },
+      platform: "linux" as const,
+      nowMs: NOW_MS,
+    };
+    const snapshot = await claudeUsageFetcher.fetch(context);
+    expect(snapshot.status).toBe("unsupported");
+    expect(snapshot.detail).toContain("environment-token");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readKeychainPasswordMock).not.toHaveBeenCalled();
+    expect(await claudeUsageFetcher.cacheKey!(context)).not.toBe(
+      await claudeUsageFetcher.cacheKey!({ ...context, env: {} }),
+    );
+  });
+
+  it("explains why inference-only credentials cannot report usage", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "inference-token",
+      scopes: ["user:inference"],
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    const fetchMock = vi.fn();
+    stubOutboundFetch(fetchMock);
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("unsupported");
+    expect(snapshot.detail).toContain("user:profile");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("honors an inherited secure-storage directory before default file credentials", async () => {
     const { homeDir } = makeClaudeHome({
       accessToken: "personal-token",

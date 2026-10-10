@@ -20,7 +20,7 @@ describe("shouldShowPullRequestAutoFixHint", () => {
     expect(shouldShowPullRequestAutoFixHint(visible)).toBe(true);
   });
 
-  it("stays hidden without an open PR, on a draft, mid-turn, once dismissed, or on Stable", () => {
+  it("stays hidden without an open PR, on a draft, mid-turn, once dismissed, or when unavailable", () => {
     const hidden: Partial<PullRequestAutoFixHintInput>[] = [
       { pullRequestState: null },
       { pullRequestState: "merged" },

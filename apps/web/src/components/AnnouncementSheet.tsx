@@ -35,6 +35,8 @@ export function AnnouncementSheet(props: {
   navigationEnd?: ReactNode;
   handOffOnConfirm?: boolean;
   allowAfterHandOff?: boolean;
+  // Beta welcome runs before the first-run gate; ordinary announcements wait for it.
+  waitForOnboarding?: boolean;
   // Decorative hero rendered above the title; the sheet owns the spacing below it.
   hero: ReactNode;
   title: ReactNode;
@@ -55,7 +57,11 @@ export function AnnouncementSheet(props: {
   // Announcements probe independently at startup; only the slot holder is shown so two
   // sheets never stack. The other opens once this one is dismissed, but not after a
   // confirm, whose follow-on flow it would cover.
-  const { open, handOff } = useAnnouncementSheetSlot(props.open, props.allowAfterHandOff);
+  const { open, handOff } = useAnnouncementSheetSlot(
+    props.open,
+    props.allowAfterHandOff,
+    props.waitForOnboarding,
+  );
   return (
     <Dialog
       open={open}

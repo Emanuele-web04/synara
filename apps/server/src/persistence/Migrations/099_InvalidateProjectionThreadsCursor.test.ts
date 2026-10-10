@@ -37,6 +37,9 @@ import workerMonitoringLivenessSchema from "./117_WorkerMonitoringLiveness.ts";
 import providerInstanceSessionSchema from "./118_ProjectionThreadSessionProviderInstance.ts";
 import sidechatContextSchema from "./126_ProjectionThreadsSidechatContext.ts";
 import threadSnoozeSchema from "./129_ProjectionThreadsSnooze.ts";
+import projectSourceFoldersSchema from "./131_ProjectSourceFolders.ts";
+import projectionTurnsWorkspaceInitializationSchema from "./133_ProjectionTurnsWorkspaceInitialization.ts";
+import forkSourceMessageSchema from "./134_ProjectionThreadsForkSourceMessage.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),
@@ -81,6 +84,9 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         yield* providerInstanceSessionSchema;
         yield* sidechatContextSchema;
         yield* threadSnoozeSchema;
+        yield* projectSourceFoldersSchema;
+        yield* projectionTurnsWorkspaceInitializationSchema;
+        yield* forkSourceMessageSchema;
 
         const threadId = ThreadId.makeUnsafe("thread-099");
         const projectId = ProjectId.makeUnsafe("project-099");

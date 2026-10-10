@@ -33,6 +33,8 @@ export const TextGenerationLayerLive = ProviderTextGenerationLive.pipe(
   Layer.provide(DroidTextGenerationServiceLive),
   Layer.provide(textGenerationProviderLayers),
   Layer.provide(ServerSettingsLive),
+  Layer.provide(GitCoreLive),
+  Layer.provide(GitHubCliLive),
 );
 
 export const GitManagerLayerLive = GitManagerLive.pipe(

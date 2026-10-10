@@ -6,6 +6,16 @@ changes run typechecking, five unit partitions, six stable browser partitions,
 desktop build, native Windows regression and migration lineage. Docs-only
 detection and nightly geometry ownership are unchanged.
 
+After workspace setup and CI contract validation, `static-fast` uses GitHub
+Actions' native `parallel` group for identity, Windows boundary, formatting,
+lint and release smoke. These checks read the installed workspace; release
+smoke writes only to its own temporary fixture directory. Each check retains
+separate step logs, and the group waits for all checks and fails the lane if any
+check fails. Installation stays sequential, including the shared lifecycle
+patches. This overlaps work on one runner; it does not add runner capacity or
+establish an overall CI speedup without hosted measurements. See the
+[workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsparallel).
+
 The Linux PTY dependency smoke runs once, on the first server shard; the Windows
 PTY smoke remains a separate native check. The desktop lifecycle smoke exercises
 the real Electron browser integration. The synthetic Energy Cloud A/B benchmark
@@ -47,7 +57,11 @@ install cache lives under `RUNNER_TEMP`, on the hosted checkout's drive, matchin
 the measured install layout and allowing Bun to hardlink package files. Full
 Linux installs retain their modules cache; the Bun package archive is restored
 only when modules are not an exact hit. Frozen installation and lifecycle patches
-still run on cache hits. Turbo persistence is opt-in for unit/build consumers.
+still run on cache hits. Lifecycle scripts use `--concurrent-scripts=1` in every
+scope: multiple workspace `prepare` hooks patch the same TypeScript files, and
+parallel hooks can read a partially written compiler file. Scripts and dependency
+patches remain enabled. The September measurements below predate this serialization.
+Turbo persistence is opt-in for unit/build consumers.
 OS, architecture and lockfile boundaries prevent incompatible archive reuse.
 Test and typecheck task results remain uncached.
 

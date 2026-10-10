@@ -10,6 +10,7 @@
 import type { ProjectId, ResolvedKeybindingsConfig, ThreadId } from "@synara/contracts";
 import { useEffect, useState } from "react";
 
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import {
   useActivateThreadTab,
@@ -110,8 +111,16 @@ export function OpenThreadTabStrip(props: {
         openTab: activateThreadTab,
         replaceLastTab: replaceLastTabWithFreshChat(() => {
           const project = projects.find((candidate) => candidate.id === projectId);
+          // An unsent draft hidden from the strip is still open: go back to it with its
+          // text instead of minting a fresh chat that would discard it.
+          const openDraft = useComposerDraftStore
+            .getState()
+            .getDraftThreadByProjectId(projectId, "chat");
+          const reuseOpenDraft =
+            openDraft !== null &&
+            useOpenThreadTabsStore.getState().threadIds.includes(openDraft.threadId);
           return handleNewThread(projectId, {
-            fresh: true,
+            fresh: !reuseOpenDraft,
             // Home and Hubs use their container workspace; ordinary projects keep
             // their chosen local/worktree default through handleNewThread.
             ...(project && project.kind !== "project"

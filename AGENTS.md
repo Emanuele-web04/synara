@@ -31,7 +31,7 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 
 ## Transcript and UI safeguards
 
-- Auto-follow represents real assistant text streaming, not generic work, buffering, reconnecting, pending approvals, or tool-only activity. Tool/work rows must not retrigger message-arrival auto-stick behavior.
+- Keep end-follow while the reader remains at the bottom, including tool/work growth between assistant messages and the final settled layout. User navigation away from the bottom releases follow. Generic work, buffering, reconnecting, pending approvals, and tool-only activity must not rearm a detached reader or retrigger message-arrival auto-stick behavior.
 - Keep the common transcript path simple. Introduce virtualization only with measured need; never couple virtualizer measurement to a bottom-stick/height-follow feedback loop. Cover scrolling and measurement changes with focused transcript tests.
 - Reuse [disclosureMotion.ts](apps/web/src/lib/disclosureMotion.ts) and its existing disclosure components for open/close transitions, including reduced-motion behavior. Do not duplicate timing constants or bespoke toggle animations.
 - Reuse before you build. Before adding a dialog, sheet, input, button, row, hook, store, or helper function, search the codebase for one that already does the job and use it, extending it with a prop or variant when it almost fits. When a second surface needs the same shape as an existing one, extract the shared piece (as [AnnouncementSheet.tsx](apps/web/src/components/AnnouncementSheet.tsx) does for one-time announcements) and switch both to it instead of copying markup or logic. Write something from scratch only when nothing comparable exists, and say so in the completion report.
@@ -49,6 +49,8 @@ For browser development, an inherited `SYNARA_AUTH_TOKEN` must match the client 
 Write replies and completion reports as a TL;DR: the result first, then only what the reader needs to act. Prefer dense information over prose: use tables for measurements, comparisons, and per-case results, and short bullets for findings and open decisions. Cut narration of steps taken, restated requests, and closing recaps. Keep failures, unverified behavior, and required decisions; shorten the wording, never the facts.
 
 ## Verification and completion
+
+Keep unrelated formatter changes out of logic commits. If those formatting changes are necessary, place them in a separate format-only commit.
 
 Use the smallest relevant checks while iterating. For code changes, finish with `bun run fmt:check`, `bun run lint`, `bun run typecheck`, and affected Vitest tests. Use `bun run test`, never `bun test`, which selects a different runner. Cross-package or lifecycle changes warrant the broader repository test suite.
 

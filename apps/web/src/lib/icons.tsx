@@ -28,6 +28,7 @@ import {
   IconChevronRight,
   IconChevronUp,
   IconCircleCheck,
+  IconCoffee,
   IconColumns2,
   IconDots,
   IconDownload,
@@ -146,6 +147,7 @@ export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questio
 export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
+export const CoffeeIcon = adaptIcon(IconCoffee);
 export const ChangesIcon = centralIconWrapper("changes");
 /** The one "Keybindings" glyph: the Help menu row, the feature tour, and (by basename) the
  *  Settings nav entry, so the three always match. */
@@ -318,6 +320,11 @@ export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 // pointer), the one terminal glyph, open-outside-the-app, and the schedule clock that doubles as the automation glyph everywhere it appears (meta chip,
 // Automations nav, slash command, created card, environment section) (Hugeicons, inlined).
 export {
+  AiBrain01Icon as ThinkingIcon,
+  HammerIcon as WorkingIcon,
+  Loading03Icon as ActivityLoadingIcon,
+  MessageSearch01Icon as MessageDeliveryCheckIcon,
+  BookOpen01Icon as WorkDetailsIcon,
   AppleReminderIcon as TasksIcon,
   ArrowDataTransferHorizontalIcon as HandoffIcon,
   CheckmarkSquare02Icon as CheckboxCheckedIcon,

@@ -7,15 +7,15 @@
 
 import type { KeybindingShortcut, KeybindingWhenNode } from "@synara/contracts";
 
-import { matchesShortcut, type ShortcutEventLike } from "./keybindings";
+import {
+  evaluateWhenNode,
+  matchesShortcut,
+  type ShortcutEventLike,
+  type ShortcutMatchContext,
+} from "./keybindings";
 import { isMacPlatform } from "./lib/utils";
 
-export type FixedShortcutId =
-  | "navigation.back"
-  | "navigation.forward"
-  | "search.files"
-  | "search.content"
-  | "terminal.search";
+export type FixedShortcutId = "navigation.back" | "navigation.forward" | "terminal.search";
 
 export interface FixedShortcut {
   readonly id?: FixedShortcutId;
@@ -92,12 +92,6 @@ export const FIXED_SHORTCUTS: readonly FixedShortcut[] = [
     reason: "always goes forward in the desktop app",
     platform: "other",
   },
-  { id: "search.files", shortcut: chord("p"), reason: "always opens file search" },
-  {
-    id: "search.content",
-    shortcut: chord("f", { shiftKey: true }),
-    reason: "always opens search in files",
-  },
   {
     id: "terminal.search",
     shortcut: chord("f"),
@@ -119,8 +113,18 @@ export function matchesFixedShortcut(
   event: ShortcutEventLike,
   id: FixedShortcutId,
   platform = navigator.platform,
+  context?: Partial<ShortcutMatchContext>,
 ): boolean {
+  const whenContext: ShortcutMatchContext = {
+    terminalFocus: false,
+    terminalOpen: false,
+    isMac: isMacPlatform(platform),
+    ...context,
+  };
   return fixedShortcutsForPlatform(platform).some(
-    (entry) => entry.id === id && matchesShortcut(event, entry.shortcut, platform),
+    (entry) =>
+      entry.id === id &&
+      matchesShortcut(event, entry.shortcut, platform) &&
+      (!entry.whenAst || evaluateWhenNode(entry.whenAst, whenContext)),
   );
 }

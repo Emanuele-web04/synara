@@ -48,6 +48,31 @@ describe("editable keybinding resolution", () => {
   });
 });
 
+describe("active thread action shortcuts", () => {
+  for (const [key, command] of [
+    ["a", "thread.archive"],
+    ["s", "thread.snooze"],
+    ["u", "thread.markUnread"],
+  ] as const) {
+    it(`resolves ${command} on both platforms and yields to non-Mac terminals`, () => {
+      for (const platform of ["MacIntel", "Win32", "Linux"]) {
+        const press = event({
+          key,
+          metaKey: platform === "MacIntel",
+          ctrlKey: platform !== "MacIntel",
+          altKey: true,
+          shiftKey: true,
+        });
+        assert.equal(resolveShortcutCommand(press, [], { platform }), command);
+        assert.equal(
+          resolveShortcutCommand(press, [], { platform, context: { terminalFocus: true } }),
+          platform === "MacIntel" ? command : null,
+        );
+      }
+    });
+  }
+});
+
 describe("layout-aware matching", () => {
   const rules = (...entries: Array<[KeybindingCommand, string]>): ResolvedKeybindingsConfig =>
     entries.map(([command, key]) => ({
@@ -231,7 +256,7 @@ const DEFAULT_BINDINGS = compile([
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
     shortcut: modShortcut("d"),
-    command: "terminal.split",
+    command: "terminal.workspace.terminal",
     whenAst: whenIdentifier("terminalFocus"),
   },
   {
@@ -306,6 +331,16 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("f"),
     command: "chat.find",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("p"),
+    command: "search.files",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("f", { shiftKey: true }),
+    command: "search.content",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
@@ -405,12 +440,23 @@ const DEFAULT_BINDINGS = compile([
   },
 ]);
 
-describe("split/new/close terminal shortcuts", () => {
+describe("terminal shortcuts", () => {
+  it("ignores retired split shortcuts so they cannot consume shell keys", () => {
+    const keybindings = compile([{ shortcut: modShortcut("d"), command: "terminal.split" }]);
+    assert.equal(
+      resolveShortcutCommand(event({ key: "d", ctrlKey: true }), keybindings, {
+        platform: "Win32",
+        context: { terminalOpen: true, terminalFocus: true },
+      }),
+      null,
+    );
+  });
+
   it("supports when expressions", () => {
     const keybindings = compile([
       {
         shortcut: modShortcut("\\"),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenAnd(whenIdentifier("terminalOpen"), whenNot(whenIdentifier("terminalFocus"))),
       },
       {
@@ -425,14 +471,14 @@ describe("split/new/close terminal shortcuts", () => {
         platform: "Win32",
         context: { terminalOpen: true, terminalFocus: false },
       }),
-      "terminal.split",
+      "terminal.workspace.terminal",
     );
     assert.notEqual(
       resolveShortcutCommand(event({ key: "\\", ctrlKey: true }), keybindings, {
         platform: "Win32",
         context: { terminalOpen: false, terminalFocus: false },
       }),
-      "terminal.split",
+      "terminal.workspace.terminal",
     );
     assert.equal(
       resolveShortcutCommand(event({ key: "n", ctrlKey: true, shiftKey: true }), keybindings, {
@@ -505,6 +551,86 @@ describe("split/new/close terminal shortcuts", () => {
         platform: "Linux",
       }),
       "terminal.new",
+    );
+  });
+});
+
+describe("workspace search shortcuts", () => {
+  it.each([
+    ["server config", DEFAULT_BINDINGS],
+    ["fallback config", []],
+  ] as const)(
+    "resolves file and snippet search outside terminal focus using %s",
+    (_name, bindings) => {
+      assert.equal(
+        resolveShortcutCommand(event({ key: "p", metaKey: true }), bindings, {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        }),
+        "search.files",
+      );
+      assert.equal(
+        resolveShortcutCommand(event({ key: "f", metaKey: true, shiftKey: true }), bindings, {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        }),
+        "search.content",
+      );
+    },
+  );
+
+  it.each([
+    ["server config", DEFAULT_BINDINGS],
+    ["fallback config", []],
+  ] as const)(
+    "keeps the shipped search chords in a focused terminal using %s",
+    (_name, bindings) => {
+      assert.isNull(
+        resolveShortcutCommand(event({ key: "p", ctrlKey: true }), bindings, {
+          platform: "Win32",
+          context: { terminalFocus: true },
+        }),
+      );
+      assert.isNull(
+        resolveShortcutCommand(event({ key: "f", ctrlKey: true, shiftKey: true }), bindings, {
+          platform: "Win32",
+          context: { terminalFocus: true },
+        }),
+      );
+    },
+  );
+
+  it("honors a remapped search command and an explicit unassignment", () => {
+    const remapped = compile([
+      {
+        shortcut: modShortcut("g"),
+        command: "search.files",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+      {
+        shortcut: { ...modShortcut("unassigned"), modKey: false },
+        command: "search.content",
+      },
+    ]);
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "g", metaKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "search.files",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "p", metaKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "f", metaKey: true, shiftKey: true }), remapped, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
     );
   });
 });
@@ -738,17 +864,17 @@ describe("shortcutLabelForCommand", () => {
     const bindings = compile([
       {
         shortcut: modShortcut("\\"),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenIdentifier("terminalFocus"),
       },
       {
         shortcut: modShortcut("\\", { shiftKey: true }),
-        command: "terminal.split",
+        command: "terminal.workspace.terminal",
         whenAst: whenNot(whenIdentifier("terminalFocus")),
       },
     ]);
     assert.strictEqual(
-      shortcutLabelForCommand(bindings, "terminal.split", "Linux"),
+      shortcutLabelForCommand(bindings, "terminal.workspace.terminal", "Linux"),
       "Ctrl+Shift+\\",
     );
   });

@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DiffStat } from "~/components/ui/diff-stat";
-import { SubmitShortcutKbd } from "~/components/ui/kbd";
+import { getSubmitShortcutKeyShortcuts, SubmitShortcutKbd } from "~/components/ui/kbd";
 import {
   type CreatePrBrowserPreparation,
   type GitDialogContext,
@@ -150,6 +150,7 @@ export function GitCreatePrDialog({
           icon={<CreatePullRequestIcon />}
           label="Create PR"
           trailing={<SubmitShortcutKbd />}
+          aria-keyshortcuts={getSubmitShortcutKeyShortcuts()}
           onClick={() => submit(false)}
         />
         <GitDialogActionRow

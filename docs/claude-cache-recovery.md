@@ -53,6 +53,25 @@ Waiting for a choice releases the delivery lock. Other tasks continue normally; 
 the affected task waits. A response identifies the review and message, and stale or duplicate
 responses cannot authorize a different send. Relevant session, model, or context changes require
 revalidation. Archive, stop, and delete revoke pending authorization.
+Accepted choices also release the ordered delivery source after acquiring a durable claim. A scoped
+worker owns compaction preparation and the subsequent send, without the ordinary two-minute command
+deadline. Slow compaction or a slow follow-up therefore does not become an uncertain delivery merely
+because time elapsed, and other tasks can still send. Advancing the source cursor is only admission;
+the delivery stays inflight until its actual result is persisted. Startup recovers unfinished cache
+responses even when their sequence is behind that cursor, without replaying an ambiguous send.
+Recovery registers the same cancellation state while awaiting an earlier owner's inflight claim,
+so a claim that becomes safely retryable still observes later cancellation. Lease expiry alone
+continues to leave ambiguous saved-message delivery uncertain; cancellation does not prove rejection.
+Stop and other cancellation commands can interrupt a pending follow-up; an interrupted send whose
+acceptance cannot be proven still requires reconciliation rather than automatic replay.
+Continue checks the cancellation journal before starting its worker and immediately before enqueue,
+including interrupts, rollback, and edited resends that arrived before live cancellation registration.
+Same-thread model and runtime changes remain projected but defer session reconfiguration while the
+cache worker owns it. An explicit handoff reports failure until that saved operation finishes or is
+cancelled, preserving its reviewed session and providing a settled handoff outcome.
+An operator-authorized safe retry uses the same reactor-owned worker. Reconciliation waits for its
+receipt outside the ordered source lock, so a slow retry does not block other tasks or inherit the
+ordinary command deadline.
 Installing a hold and marking the session ready happen in one command. Admission checks the
 conversation journal for cancellation after the source request, including cancellation during a
 cache observation, so a delayed hold cannot revive a stopped task.

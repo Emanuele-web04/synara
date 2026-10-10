@@ -10,11 +10,15 @@ import type { OrchestrationEvent } from "@synara/contracts";
 
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
-/** Concatenate incremental text while retaining the message's original timeline position. */
+/**
+ * Concatenate incremental text while retaining the message's original timeline
+ * position. A merged run keeps the text-segment boundary its first delta opened.
+ */
 function mergeThreadMessageSentEvents(
   previous: ThreadMessageSentEvent,
   event: ThreadMessageSentEvent,
 ): ThreadMessageSentEvent {
+  const { segmentStartedAt, segmentSequence } = previous.payload;
   return {
     ...event,
     payload: {
@@ -22,6 +26,8 @@ function mergeThreadMessageSentEvents(
       attachments: event.payload.attachments ?? previous.payload.attachments,
       skills: event.payload.skills ?? previous.payload.skills,
       mentions: event.payload.mentions ?? previous.payload.mentions,
+      ...(segmentStartedAt !== undefined ? { segmentStartedAt } : {}),
+      ...(segmentSequence !== undefined ? { segmentSequence } : {}),
       createdAt: previous.payload.createdAt,
       text: previous.payload.text + event.payload.text,
     },
@@ -52,7 +58,10 @@ export function coalesceOrchestrationUiEvents(
         previous.payload.turnId === event.payload.turnId &&
         previous.payload.role === event.payload.role &&
         previous.payload.streaming &&
-        event.payload.streaming
+        event.payload.streaming &&
+        // A delta that opens a new text segment must stay its own event, or its
+        // text would be filed under the previous segment.
+        event.payload.segmentStartedAt === undefined
       ) {
         coalesced[slot!] = mergeThreadMessageSentEvents(previous, event);
         continue;

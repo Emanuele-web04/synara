@@ -174,6 +174,23 @@ beforeEach(() => {
 });
 
 describe("useKanbanCardContextMenu", () => {
+  it("groups board move actions and delegates the selected target to the board", async () => {
+    harness.clicked = "move-to-inProgress";
+    const move = vi.fn();
+    const draftCard = { ...CARD, column: "draft", draftPrompt: "Start this task" } as KanbanCard;
+
+    useKanbanCardContextMenu().onCardContextMenu(draftCard, EVENT, [
+      { column: "inProgress", onMove: move },
+    ]);
+    await vi.waitFor(() => expect(move).toHaveBeenCalledOnce());
+
+    const menu = harness.showContextMenu.mock.calls[0]?.[0];
+    expect(menu).toContainEqual(
+      expect.objectContaining({ id: "move-to-inProgress", label: "Move to In Progress" }),
+    );
+    expect(harness.sendAsGoal).not.toHaveBeenCalled();
+  });
+
   it("delegates server-backed deletion and preserves Kanban-local cleanup", async () => {
     useKanbanCardContextMenu().onCardContextMenu(CARD, EVENT);
     await vi.waitFor(() => expect(harness.deleteActiveThread).toHaveBeenCalled());

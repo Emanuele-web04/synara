@@ -1,3 +1,5 @@
+import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
+import { BackendIssueDetector } from "./backendIssueDetector";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
@@ -48,6 +50,7 @@ import type {
   FileFilter,
   IpcMainEvent,
   MenuItemConstructorOptions,
+  MessageBoxOptions,
 } from "electron";
 import * as Effect from "effect/Effect";
 import type {
@@ -117,7 +120,7 @@ import {
   type BetaDiagnosticsEventName,
 } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
-import { showDesktopConfirmDialog } from "./confirmDialog";
+import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
@@ -155,6 +158,7 @@ import {
   quitConfirmationPresentationForPlatform,
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
+import { installShutdownSignalHandlers } from "./shutdownSignals";
 import {
   hasVerifiedDesktopMigrationRestore,
   hasPendingDesktopMigrationRecovery,
@@ -281,6 +285,7 @@ import { BrowserVault } from "./browserAutomation/browserVault";
 import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
 import { registerBrowserVaultIpc } from "./browserVaultIpc";
 import { registerSafariAccessIpc } from "./safariAccessIpc";
+import { showInFileManager } from "./showInFileManager";
 import { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
 import { shutdownBrowserServices } from "./browserAutomation/browserShutdown";
 import {
@@ -568,6 +573,7 @@ let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 const runningChatsQuitGuard = makeRunningChatsQuitGuard();
+let nativeQuitConfirmationPromise: Promise<boolean> | null = null;
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForDatabaseRestore = false;
 const migrationConsentHandoff = new MigrationConsentHandoff();
@@ -4226,6 +4232,7 @@ function schemaTooNewRestoreDetail(
 
 async function handleDesktopSchemaTooNewRecovery(
   block: MigrationSchemaTooNewStartupBlock,
+  diagnosticId: string | null = null,
 ): Promise<void> {
   const paths = desktopMigrationRecoveryPaths();
   const restoreCandidate = resolveDesktopMigrationRestoreCandidate(paths, block);
@@ -4262,29 +4269,33 @@ async function handleDesktopSchemaTooNewRecovery(
         { label: "Quit", decision: "quit" },
       );
 
-      const result = await dialog.showMessageBox({
-        type: previousFailure === null ? "warning" : "error",
-        title:
-          previousFailure === null
-            ? "This database is newer than Synara"
-            : restoreFailed
-              ? "Database restore failed"
-              : "Synara could not update itself",
-        message:
-          previousFailure === null
-            ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
-            : restoreFailed
-              ? "The verified database backup could not be restored."
-              : "The newest Synara release could not be installed.",
-        detail:
-          `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
-          `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
-          "The backend and provider processes will remain stopped until you update, restore, or quit.",
-        buttons: choices.map((choice) => choice.label),
-        defaultId: 0,
-        cancelId: choices.length - 1,
-        noLink: true,
-      });
+      const result = await showDiagnosticStartupDialog(
+        {
+          type: previousFailure === null ? "warning" : "error",
+          title:
+            previousFailure === null
+              ? "This database is newer than Synara"
+              : restoreFailed
+                ? "Database restore failed"
+                : "Synara could not update itself",
+          message:
+            previousFailure === null
+              ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
+              : restoreFailed
+                ? "The verified database backup could not be restored."
+                : "The newest Synara release could not be installed.",
+          detail:
+            `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
+            `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
+            "The backend and provider processes will remain stopped until you update, restore, or quit.",
+          buttons: choices.map((choice) => choice.label),
+          defaultId: 0,
+          cancelId: choices.length - 1,
+          noLink: true,
+        },
+        diagnosticId,
+        betaDiagnostics,
+      );
       return choices[result.response]?.decision ?? "quit";
     },
     installUpdate: installLatestUpdateForMigrationRecovery,
@@ -4320,9 +4331,18 @@ async function handleDesktopSchemaTooNewRecovery(
 function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
 
+  const diagnosticId =
+    betaDiagnostics?.trackIssue("main", {
+      code: `startup.${block.kind}`,
+      ...(block.kind === "database-locked"
+        ? { reason: block.ownerPid === null ? "unknown-owner" : "live-owner" }
+        : {}),
+    }) ?? null;
+  const showBlockDialog = (options: MessageBoxOptions) =>
+    showDiagnosticStartupDialog(options, diagnosticId, betaDiagnostics);
   const task = (async () => {
     if (block.kind === "migration-schema-too-new") {
-      await handleDesktopSchemaTooNewRecovery(block.block);
+      await handleDesktopSchemaTooNewRecovery(block.block, diagnosticId);
       return;
     }
 
@@ -4337,7 +4357,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
             canInstallUpdate: canInstallUpdateFromRecovery(),
             canOpenReleasePage: releaseUrl !== null,
           });
-          const result = await dialog.showMessageBox({
+          const result = await showBlockDialog({
             type: "error",
             title:
               previousFailure === null
@@ -4376,7 +4396,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
 
     if (block.kind === "migration-divergence-consent-required") {
       const challenge = block.challenge;
-      const result = await dialog.showMessageBox({
+      const result = await showBlockDialog({
         type: "warning",
         title: "Synara found a different database migration history",
         message: `Migration ${challenge.firstDivergedId} does not match this build.`,
@@ -4402,7 +4422,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
     }
 
     if (block.kind === "migration-runtime-identity-mismatch") {
-      await dialog.showMessageBox({
+      await showBlockDialog({
         type: "error",
         title: "Synara's server build does not match",
         message: "The desktop and server migration code came from different builds.",
@@ -4418,7 +4438,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
     }
 
     if (block.kind === "migration-recovery-required") {
-      const result = await dialog.showMessageBox({
+      const result = await showBlockDialog({
         type: "warning",
         title: "Synara needs to recover its database",
         message: "A database migration did not finish safely.",
@@ -4440,25 +4460,41 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
 
     const processDetail =
       block.ownerPid === null
-        ? "Another Synara server is already using this database."
+        ? "Synara could not verify the database lock. The lock may be left over from an interrupted startup, or another server may still be using it."
         : `Another Synara server (process ${block.ownerPid}) is already using this database.`;
-    const result = await dialog.showMessageBox({
-      type: "warning",
-      title: "Synara is already running elsewhere",
-      message: "Your local Synara data is in use by another process.",
-      detail: `${processDetail}\n\nStop the other Synara app or development server, then try again. Your data has not been changed.`,
-      buttons: ["Try again", "Quit"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (result.response === 0) {
-      // Let a fast failed retry present the block again instead of racing this
-      // dialog task's finalizer and leaving the window inert.
-      backendLifecycleDialogInFlight = null;
-      await restartBackendAfterCrash("database lifecycle lock retry", "lifecycle");
-    } else {
-      requestGracefulAppQuit("database lifecycle lock");
+    for (;;) {
+      const result = await showBlockDialog({
+        type: "warning",
+        title:
+          block.ownerPid === null
+            ? "Synara could not verify database ownership"
+            : "Synara is already running elsewhere",
+        message:
+          block.ownerPid === null
+            ? "Synara could not safely open your local data."
+            : "Your local Synara data is in use by another process.",
+        detail:
+          `${processDetail}\n\nClose any other Synara app or development server using this data, then try again. ` +
+          "If this keeps happening, open the logs to see the underlying lock error. Your data has not been changed.\n\n" +
+          `Log file:\n${Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME)}`,
+        buttons: ["Try again", "Open logs", "Quit"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+      if (result.response === 1) {
+        await openDesktopLogDirectory();
+        continue;
+      }
+      if (result.response === 0) {
+        // Let a fast failed retry present the block again instead of racing this
+        // dialog task's finalizer and leaving the window inert.
+        backendLifecycleDialogInFlight = null;
+        await restartBackendAfterCrash("database lifecycle lock retry", "lifecycle");
+      } else {
+        requestGracefulAppQuit("database lifecycle lock");
+      }
+      return;
     }
   })().finally(() => {
     if (backendLifecycleDialogInFlight === task) {
@@ -4605,7 +4641,18 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     writeStderr: (chunk) => {
       process.stderr.write(chunk);
     },
-    detectors: [listeningDetector, startupBlockDetector, outputTailDetector],
+    detectors: [
+      listeningDetector,
+      startupBlockDetector,
+      outputTailDetector,
+      ...(betaDiagnostics
+        ? [
+            new BackendIssueDetector((issue) => {
+              betaDiagnostics.trackIssue("main", issue);
+            }),
+          ]
+        : []),
+    ],
   });
 
   // Readiness is authoritative even when the optional log marker is delayed or
@@ -4844,6 +4891,18 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
   }
 
   const window = mainWindow;
+  if (!isMainRendererAvailable()) {
+    nativeQuitConfirmationPromise ??= showDesktopConfirmDialog(`Quit ${APP_DISPLAY_NAME}?`, null)
+      .catch((error) => {
+        console.warn("[desktop] Failed to confirm app quit", error);
+        return false;
+      })
+      .finally(() => {
+        nativeQuitConfirmationPromise = null;
+      });
+    if (await nativeQuitConfirmationPromise) requestGracefulAppQuit(reason);
+    return;
+  }
   const presentation = quitConfirmationPresentationForPlatform();
   const allowed = await runningChatsQuitGuard.askRenderer({
     send: (request) => {
@@ -5167,15 +5226,7 @@ function registerIpcHandlers(): void {
       throw new Error(`Folder not found: ${resolvedPath}`);
     }
 
-    if (stats.isDirectory()) {
-      const errorMessage = await shell.openPath(resolvedPath);
-      if (errorMessage.trim().length > 0) {
-        throw new Error(errorMessage);
-      }
-      return;
-    }
-
-    shell.showItemInFolder(resolvedPath);
+    await showInFileManager(resolvedPath, stats.isDirectory(), process.platform, shell);
   });
 
   ipcMain.removeHandler(IPC.windowMinimize);
@@ -5694,6 +5745,17 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
+  if (process.platform === "darwin") {
+    guardDesktopWindowClose(
+      window,
+      `Close the ${APP_DISPLAY_NAME} window?`,
+      () =>
+        !isQuitting &&
+        !desktopShutdownComplete &&
+        !isUpdaterQuitAndInstallInFlight &&
+        !isUpdaterInstallPreparing,
+    );
+  }
   window.on("close", (event) => {
     try {
       writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
@@ -6273,15 +6335,9 @@ if (process.platform !== "win32") {
     requestGracefulAppQuit("EPIPE");
   });
 
-  process.on("SIGINT", () => {
+  installShutdownSignalHandlers(app.whenReady(), (signal) => {
     if (desktopShutdownPromise) return;
-    writeDesktopLogHeader("SIGINT received");
-    requestGracefulAppQuit("SIGINT");
-  });
-
-  process.on("SIGTERM", () => {
-    if (desktopShutdownPromise) return;
-    writeDesktopLogHeader("SIGTERM received");
-    requestGracefulAppQuit("SIGTERM");
+    writeDesktopLogHeader(`${signal} received`);
+    requestGracefulAppQuit(signal);
   });
 }

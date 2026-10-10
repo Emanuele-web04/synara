@@ -31,6 +31,8 @@ function getBetaDiagnosticsBridge(): DesktopBridge["betaDiagnostics"] {
     return {
       rendererReady: () => ipcRenderer.send(IPC.betaDiagnostics.rendererReady),
       reportError: (error) => ipcRenderer.send(IPC.betaDiagnostics.reportError, error),
+      reportIssue: (issue) => ipcRenderer.invoke(IPC.betaDiagnostics.reportIssue, issue),
+      getReportStatus: (id) => ipcRenderer.invoke(IPC.betaDiagnostics.getReportStatus, id),
       recordActivity: (breadcrumb) =>
         ipcRenderer.send(IPC.betaDiagnostics.recordActivity, breadcrumb),
     };

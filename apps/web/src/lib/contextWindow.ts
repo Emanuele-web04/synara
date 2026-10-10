@@ -159,6 +159,71 @@ export function deriveLatestContextWindowState(
   return { snapshot: null, invalidatedByCompaction: false };
 }
 
+export interface ObservedClaudeContextBudget {
+  readonly model: string;
+  readonly maxTokens: number;
+}
+
+/** The context window a configuration activity applies: "auto" when cleared, else its size. */
+function configuredContextWindowKey(activity: OrchestrationThreadActivity): string {
+  const payload = asRecord(activity.payload);
+  if (payload?.cleared === true) return "auto";
+  return String(asFiniteNumber(payload?.maxTokens) ?? "unknown");
+}
+
+/**
+ * The context budget the runtime reported for the newest observed Claude model, held at
+ * the largest value seen while the configured context window stays the same.
+ *
+ * Every session start reconfigures the window, and each turn first reports a provisional
+ * budget from the model catalog (e.g. 200k) that the live session corrects at the end of
+ * the turn (e.g. 1M); usage without a cache observation (task usage) carries no model.
+ * Reading each snapshot on its own made the composer label flip between "(200k)", nothing,
+ * and "(1M)" for the same model while a turn ran. The server only ever raises its
+ * corrected window, so the largest report for one model under one configuration is the
+ * stable answer. Compaction shrinks usage, not the window, so it does not reset this.
+ */
+export function deriveObservedClaudeContextBudget(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ObservedClaudeContextBudget | null {
+  // Walking back, reports gather until the configuration they ran under is reached; they
+  // count only if that configuration matches the newest one.
+  const counted: Array<{ model: string; maxTokens: number }> = [];
+  let pending: Array<{ model: string; maxTokens: number }> = [];
+  let newestConfiguredKey: string | null = null;
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (!activity) continue;
+    // A completed handoff can change accounts even with the same model and Auto
+    // configuration. Its previous runtime budget is no longer evidence.
+    if (activity.kind === "provider.handoff") break;
+    if (activity.kind === "context-window.configured") {
+      const key = configuredContextWindowKey(activity);
+      newestConfiguredKey ??= key;
+      if (key !== newestConfiguredKey) break;
+      counted.push(...pending);
+      pending = [];
+      continue;
+    }
+    if (activity.kind !== "context-window.updated") continue;
+    const payload = asRecord(activity.payload);
+    const model = readClaudeCacheObservation(payload?.claudeCache)?.model;
+    const maxTokens = asFiniteNumber(payload?.maxTokens);
+    if (!model || maxTokens === null || maxTokens <= 0) continue;
+    pending.push({ model, maxTokens });
+  }
+  // A history that never recorded its configuration still has one running session.
+  if (newestConfiguredKey === null) counted.push(...pending);
+  const newestModel = counted[0]?.model;
+  if (newestModel === undefined) return null;
+  return {
+    model: newestModel,
+    maxTokens: Math.max(
+      ...counted.filter((entry) => entry.model === newestModel).map((entry) => entry.maxTokens),
+    ),
+  };
+}
+
 // Configuration identifies the applied target, never the runtime denominator.
 export function deriveAppliedContextWindowSelection(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
@@ -243,6 +308,33 @@ export function deriveContextWindowMeterDisplay(
       ? `Context window ${usedPercentageLabel} used`
       : `Context window ${tokenUsageLabel} tokens used`,
   };
+}
+
+/** 16-unit meter glyph: a pie inside an outline ring (1.5 stroke) with a one-unit gap. */
+export const CONTEXT_WINDOW_METER_GEOMETRY = {
+  center: 8,
+  pieRadius: 5.25,
+  outlineRadius: 7,
+} as const;
+
+/**
+ * Filled pie sector for a usage percentage, starting at 12 o'clock and running clockwise.
+ * A filled sector inside a closed outline reads as a gauge; the open stroked arc it replaces
+ * looked like a loading spinner.
+ */
+export function contextWindowMeterSectorPath(percentage: number): string | null {
+  const fraction = Math.max(0, Math.min(100, percentage)) / 100;
+  if (fraction <= 0) return null;
+  const c = CONTEXT_WINDOW_METER_GEOMETRY.center;
+  const r = CONTEXT_WINDOW_METER_GEOMETRY.pieRadius;
+  if (fraction >= 1) {
+    return `M ${c} ${c - r} A ${r} ${r} 0 1 1 ${c} ${c + r} A ${r} ${r} 0 1 1 ${c} ${c - r} Z`;
+  }
+  const angle = fraction * 2 * Math.PI;
+  const x = c + r * Math.sin(angle);
+  const y = c - r * Math.cos(angle);
+  const largeArc = fraction > 0.5 ? 1 : 0;
+  return `M ${c} ${c} L ${c} ${c - r} A ${r} ${r} 0 ${largeArc} 1 ${x.toFixed(3)} ${y.toFixed(3)} Z`;
 }
 
 export function deriveCumulativeCostUsd(
@@ -341,15 +433,24 @@ export function deriveComposerContextWindowLabel(input: {
   model: string;
   snapshot: ContextWindowSnapshot | null;
   status: ContextWindowSelectionStatus;
+  /** Stable budget from `deriveObservedClaudeContextBudget`; preferred over the snapshot's. */
+  observedBudget?: ObservedClaudeContextBudget | null;
 }): string | null {
   if (input.provider !== "claudeAgent") return null;
-  const observedModel = input.snapshot?.claudeCache?.model;
+  const observedModel =
+    input.observedBudget === undefined
+      ? input.snapshot?.claudeCache?.model
+      : input.observedBudget?.model;
+  const observedMaxTokens =
+    input.observedBudget === undefined
+      ? input.snapshot?.maxTokens
+      : input.observedBudget?.maxTokens;
   const sameModel =
     observedModel !== undefined &&
     stripClaudeContextWindowSuffix(normalizeModelSlug(observedModel, "claudeAgent") ?? "") ===
       stripClaudeContextWindowSuffix(normalizeModelSlug(input.model, "claudeAgent") ?? "");
   const budget = sameModel
-    ? formatContextWindowSelectionLabel(inferContextWindowSelectionValue(input.snapshot?.maxTokens))
+    ? formatContextWindowSelectionLabel(inferContextWindowSelectionValue(observedMaxTokens))
     : null;
   const { selectedLabel, activeLabel, pendingSelectedLabel } = input.status;
   const pending = pendingSelectedLabel ?? (!sameModel ? selectedLabel : null);
