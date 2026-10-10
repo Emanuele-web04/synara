@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   clampFloatingBrowserPanelRect,
+  floatingBrowserComposerClearancePx,
   moveFloatingBrowserPanelRect,
   resizeFloatingBrowserPanelRect,
   shouldRenderFloatingBrowserPanel,
@@ -82,5 +83,14 @@ describe("floating browser drag gesture", () => {
   it("ignores small pointer jitter and treats larger movement as a drag", () => {
     expect(isFloatingBrowserDragGesture({ x: 2, y: 2 })).toBe(false);
     expect(isFloatingBrowserDragGesture({ x: 4, y: 0 })).toBe(true);
+  });
+});
+
+describe("floating browser composer clearance", () => {
+  it("reserves the pane band from the composer top down, and nothing without a composer", () => {
+    expect(floatingBrowserComposerClearancePx({ paneBottom: 900, composerTop: 760.4 })).toBe(140);
+    expect(floatingBrowserComposerClearancePx({ paneBottom: 900, composerTop: null })).toBe(0);
+    // A composer laid out below the pane never yields a negative inset.
+    expect(floatingBrowserComposerClearancePx({ paneBottom: 900, composerTop: 950 })).toBe(0);
   });
 });
