@@ -113,6 +113,7 @@ import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { trackWsTurnSettlement } from "../wsTransportEvents";
+import { hasActiveComposerSend } from "../lib/composerSendOwnership";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
 import { hasUnseenSnoozeReturn } from "./Sidebar.logic";
@@ -11343,6 +11344,147 @@ describe("ChatView transcript geometry (full app)", () => {
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
+    }
+  });
+
+  it("keeps a sent draft prompt out of the composer once the server recorded it", async () => {
+    const turnStartCommand = () =>
+      wsRequests
+        .map(readDispatchedCommand)
+        .find((command) => command?.type === "thread.turn.start");
+    // The server records the first message, then the acknowledgement fails.
+    const restoreNativeApi = installDeterministicSendNativeApi({
+      rejectTurnStart: true,
+      beforeTurnStart: async () => {
+        const command = turnStartCommand()!;
+        const message = command.message as { messageId: MessageId; text: string };
+        const createdSnapshot = addThreadToSnapshot(fixture.snapshot, THREAD_ID);
+        const startedThread = {
+          ...createdSnapshot.threads[0]!,
+          session: null,
+          messages: [
+            {
+              ...createUserMessage({ id: message.messageId, text: message.text, offsetSeconds: 1 }),
+              createdAt: command.createdAt as string,
+              updatedAt: command.createdAt as string,
+            },
+          ],
+        };
+        fixture.snapshot = { ...createdSnapshot, threads: [startedThread] };
+        useStore
+          .getState()
+          .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
+        useStore.getState().syncServerThreadDetailHotPath(startedThread);
+      },
+    });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Send this only once");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+      sendButton.click();
+      await vi.waitFor(() => expect(turnStartCommand()).toBeDefined());
+      await vi.waitFor(() => expect(hasActiveComposerSend(THREAD_ID)).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      await waitForLayout();
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt ?? "").toBe("");
+      expect(
+        wsRequests.map(readDispatchedCommand).some((command) => command?.type === "thread.delete"),
+      ).toBe(false);
+    } finally {
+      restoreNativeApi();
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps composer edits made while New thread reopens a stored draft", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("stored-draft-reopen"),
+        targetText: "Stored draft reopen",
+      }),
+    });
+
+    try {
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID);
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Older stored draft");
+      const newThreadButton = page.getByLabelText("Create new thread in Project").element();
+      (newThreadButton as HTMLElement).click();
+      // Type into the reopened draft as soon as its route is active, while the
+      // New thread navigation is still settling.
+      await new Promise<void>((resolve) => {
+        let microtaskChecks = 0;
+        const editWhenRouted = () => {
+          if (mounted.router.state.location.pathname === `/${OTHER_THREAD_ID}`) {
+            useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Newer typed text");
+            resolve();
+            return;
+          }
+          microtaskChecks += 1;
+          if (microtaskChecks < 10_000) queueMicrotask(editWhenRouted);
+          else window.setTimeout(editWhenRouted, 0);
+        };
+        editWhenRouted();
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull(),
+      );
+      await waitForLayout();
+
+      expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+        "Newer typed text",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("explains a second send instead of ignoring it while the first is in flight", async () => {
+    let releaseTurnStart!: () => void;
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurnStart = resolve;
+    });
+    const restoreNativeApi = installDeterministicSendNativeApi({
+      beforeTurnStart: () => turnGate,
+    });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+    const turnCommands = () =>
+      wsRequests
+        .map(readDispatchedCommand)
+        .filter((command) => command?.type === "thread.turn.start");
+
+    try {
+      await page.getByTestId("composer-editor").fill("First message");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+      sendButton.click();
+      await vi.waitFor(() => expect(turnCommands()).toHaveLength(1));
+
+      await page.getByTestId("composer-editor").fill("Second message");
+      await userEvent.keyboard("{Enter}");
+
+      await expect.element(page.getByText("Still sending your last message")).toBeInTheDocument();
+      expect(turnCommands()).toHaveLength(1);
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+        "Second message",
+      );
+    } finally {
+      releaseTurnStart();
+      restoreNativeApi();
+      await mounted.cleanup();
     }
   });
 
