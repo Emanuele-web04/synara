@@ -7,6 +7,14 @@ export const MAX_WHEN_EXPRESSION_DEPTH = 64;
 export const MAX_SCRIPT_ID_LENGTH = 24;
 export const MAX_KEYBINDINGS_COUNT = 256;
 
+/**
+ * Key value marking a command as intentionally left without a shortcut. A rule carrying
+ * it keeps the command "configured", so neither the server's default backfill nor the
+ * web fallback table re-adds a binding the user removed, and it can never match a key
+ * event because no key reports this name.
+ */
+export const UNASSIGNED_KEYBINDING_KEY = "unassigned";
+
 export const STATIC_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
   "sidebar.search",
@@ -46,6 +54,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "modelPicker.toggle",
   "model.next",
   "model.previous",
+  "model.effort.next",
   "traitsPicker.toggle",
   "settings.usage",
   "chat.new",
@@ -70,11 +79,18 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "thread.jump.8",
   "thread.jump.9",
   "thread.copyId",
+  "thread.archive",
+  "thread.snooze",
+  "thread.markUnread",
   "chat.visible.next",
   "chat.visible.previous",
+  "threadTab.next",
+  "threadTab.previous",
   "editor.openFavorite",
   "editor.file.save",
   "git.commitAndPush",
+  "search.files",
+  "search.content",
 ] as const;
 
 // Shared list of numbered thread-jump commands used by the web shortcut UI.
@@ -152,24 +168,24 @@ export const KeybindingShortcut = Schema.Struct({
 });
 export type KeybindingShortcut = typeof KeybindingShortcut.Type;
 
-export const KeybindingWhenNode: Schema.Schema<KeybindingWhenNode> = Schema.Union([
+export const KeybindingWhenNode: Schema.Codec<KeybindingWhenNode> = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("identifier"),
     name: Schema.NonEmptyString,
   }),
   Schema.Struct({
     type: Schema.Literal("not"),
-    node: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
+    node: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
   }),
   Schema.Struct({
     type: Schema.Literal("and"),
-    left: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
-    right: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
+    left: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
+    right: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
   }),
   Schema.Struct({
     type: Schema.Literal("or"),
-    left: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
-    right: Schema.suspend((): Schema.Schema<KeybindingWhenNode> => KeybindingWhenNode),
+    left: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
+    right: Schema.suspend((): Schema.Codec<KeybindingWhenNode> => KeybindingWhenNode),
   }),
 ]);
 export type KeybindingWhenNode =
@@ -185,7 +201,13 @@ export const ResolvedKeybindingRule = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: "ignore" } });
 export type ResolvedKeybindingRule = typeof ResolvedKeybindingRule.Type;
 
+// Runtime snapshots include missing shipped defaults alongside the persisted rules.
+// Reserve the built-in inventory's space without lowering the 256-rule user budget; a
+// command may ship one rule per platform (macOS and the rest), so allow two each.
+export const MAX_RESOLVED_KEYBINDINGS_COUNT =
+  MAX_KEYBINDINGS_COUNT + 2 * STATIC_KEYBINDING_COMMANDS.length;
+
 export const ResolvedKeybindingsConfig = Schema.Array(ResolvedKeybindingRule).check(
-  Schema.isMaxLength(MAX_KEYBINDINGS_COUNT),
+  Schema.isMaxLength(MAX_RESOLVED_KEYBINDINGS_COUNT),
 );
 export type ResolvedKeybindingsConfig = typeof ResolvedKeybindingsConfig.Type;

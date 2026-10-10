@@ -94,5 +94,7 @@ describe("GitHubInboxListInput", () => {
       forceRefresh: true,
     });
     expect(() => decode({ state: "merged" })).toThrow();
+    expect(decode({ state: "open", sort: "created" })).toEqual({ state: "open", sort: "created" });
+    expect(() => decode({ state: "open", sort: "invalid" })).toThrow();
   });
 });

@@ -75,7 +75,14 @@ it("scopes environment-only Claude imports to the selected provider instance", (
     },
   );
 
-  assert.equal(environment?.HOME, claudeIsolatedHomePath({ isolationRootDir, providerInstanceId }));
+  const accountHome = claudeIsolatedHomePath({ isolationRootDir, providerInstanceId });
+  if (process.platform === "darwin") {
+    assert.equal(environment?.HOME, "/synara/home");
+    assert.equal(environment?.CLAUDE_CONFIG_DIR, path.join(accountHome, ".claude"));
+    assert.equal(environment?.CLAUDE_SECURESTORAGE_CONFIG_DIR, environment?.CLAUDE_CONFIG_DIR);
+  } else {
+    assert.equal(environment?.HOME, accountHome);
+  }
   assert.equal(environment?.ANTHROPIC_AUTH_TOKEN, "work-token");
 });
 

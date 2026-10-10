@@ -151,7 +151,7 @@ import {
   type DevinAcpRuntimeSettings,
 } from "../acp/DevinAcpSupport.ts";
 import { createDevinSessionConfig, type DevinSessionConfig } from "../acp/DevinSessionConfig.ts";
-import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
+import { isAcpStartupTimeoutError, type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import { makeEventNdjsonLogger, type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
@@ -2332,18 +2332,33 @@ export function makeDevinAdapter(
             );
 
             return yield* acp.start().pipe(
-              Effect.mapError((cause) =>
-                resumeSessionId !== undefined &&
-                cause instanceof AcpRequestError &&
-                cause.errorMessage.trim().toLowerCase() === "failed to load session data"
-                  ? new ProviderAdapterProcessError({
+              Effect.catch((cause) =>
+                Effect.gen(function* () {
+                  if (isAcpStartupTimeoutError(cause)) {
+                    // No prompt has been submitted. Only declare rejection after
+                    // the scoped ACP finalizer proves its process tree stopped.
+                    // A cleanup defect must propagate as an uncertain delivery.
+                    yield* Scope.close(sessionScope, Exit.void);
+                    return yield* new ProviderAdapterProcessError({
                       provider: PROVIDER,
                       threadId: input.threadId,
                       detail: cause.message,
-                      reason: "resume-state-unavailable",
+                      reason: "startup-failed",
                       cause,
-                    })
-                  : acpToAdapterError(input.threadId)(cause),
+                    });
+                  }
+                  return yield* resumeSessionId !== undefined &&
+                  cause instanceof AcpRequestError &&
+                  cause.errorMessage.trim().toLowerCase() === "failed to load session data"
+                    ? new ProviderAdapterProcessError({
+                        provider: PROVIDER,
+                        threadId: input.threadId,
+                        detail: cause.message,
+                        reason: "resume-state-unavailable",
+                        cause,
+                      })
+                    : acpToAdapterError(input.threadId)(cause);
+                }),
               ),
             );
           });

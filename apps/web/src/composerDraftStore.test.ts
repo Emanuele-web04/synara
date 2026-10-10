@@ -1,6 +1,7 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectComposerThreadDraft } from "./composerDraftDomain";
+import { runComposerSendOnce } from "./lib/composerSendOwnership";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
@@ -276,6 +277,48 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
 
+  it("keeps a promoted task's retry prompt when another draft takes its project slot", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "retry failed preparation");
+    store.markDraftThreadPromoting(threadId);
+    store.setProjectDraftThreadId(projectId, otherThreadId);
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+      "retry failed preparation",
+    );
+    store.finalizePromotedDraftThread(threadId);
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+  });
+
+  it("keeps a sending draft and its attachments when a new draft takes the project slot", async () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "retryable prompt");
+    store.enqueueQueuedTurn(
+      threadId,
+      makeQueuedChatTurn(
+        "sending-kept-thread",
+        makeImage({ id: "sending-image", previewUrl: "blob:sending" }),
+      ),
+    );
+    await runComposerSendOnce(threadId, async () => {
+      store.setProjectDraftThreadId(projectId, otherThreadId);
+      expect(useComposerDraftStore.getState().getDraftThread(threadId)).not.toBeNull();
+      expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+        "retryable prompt",
+      );
+      expect(revokeSpy).not.toHaveBeenCalledWith("blob:sending");
+      expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)?.threadId).toBe(
+        otherThreadId,
+      );
+      return false;
+    });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).not.toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns).toHaveLength(
+      1,
+    );
+  });
+
   it("keeps composer drafts when the thread is still mapped by another project", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId);
@@ -312,7 +355,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
 
-  it("marks promoted drafts without deleting composer state until finalization", () => {
+  it("retires promoted draft registration without discarding newer composer content", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId);
     store.setPrompt(threadId, "keep me while server thread hydrates");
@@ -325,10 +368,26 @@ describe("composerDraftStore project draft thread mapping", () => {
       "keep me while server thread hydrates",
     );
 
-    useComposerDraftStore.getState().finalizePromotedDraftThread(threadId);
+    // The send owner consumes the captured prompt; subsequent edits belong to the server task.
+    store.clearComposerContent(threadId);
+    store.setPrompt(threadId, "newer unsent edit");
+    store.addImage(threadId, makeImage({ id: "newer-image", previewUrl: "blob:newer" }));
+    store.enqueueQueuedTurn(threadId, makeQueuedChatTurn("newer-queued-turn"));
+    const currentDraft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+
+    finalizePromotedDraftThreads(new Set([threadId]));
 
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+    expect(
+      useComposerDraftStore.getState().projectDraftThreadIdByProjectId[projectId],
+    ).toBeUndefined();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBe(currentDraft);
+    expect(revokeSpy).not.toHaveBeenCalledWith("blob:newer");
+    store.finalizePromotedDraftThread(threadId);
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBe(currentDraft);
+    store.clearDraftThread(threadId);
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:newer");
   });
 
   it.each([true, false])(
@@ -338,6 +397,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       store.setProjectDraftThreadId(projectId, threadId);
       store.setPrompt(threadId, "already sent");
       store.setEnableComputerControl(threadId, enabled);
+      store.clearComposerContent(threadId);
 
       markPromotedDraftThreads(new Set([threadId]));
       finalizePromotedDraftThreads(new Set([threadId]));

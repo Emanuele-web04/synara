@@ -82,8 +82,11 @@ list of suggested threads (title, repository, one-line brief) and waits for your
 Tell it once if you always want this, and it will remember.
 
 The coordinator's own Synara tools (starting threads, saving memory, adding Library files, linking
-repositories) run without asking for approval while the hub is active. File edits, shell
-commands, and every other tool still ask. In a paused or archived hub, every tool asks again.
+repositories) run without asking for approval while the hub is active, including with Codex.
+File edits, shell commands, and other tools follow the thread's access mode. Full Access also
+allows workers to use their authorized Synara tools without an extra provider approval.
+In a paused or archived hub, the coordinator's automatic Synara tool grant ends and its
+tools follow the thread's access mode again. Gateway permissions still apply to every call.
 
 After it starts threads, Synara watches them for you (see
 [How monitoring works](#how-monitoring-works)). Status updates appear in the coordinator
@@ -92,6 +95,13 @@ conversation as part of its reply, each with a link to the thread.
 Inside a thread the coordinator started, the task is labelled with the hub, for example **Sent by
 the Release Synara coordinator**.
 Click it to go back to the coordinator conversation.
+
+Pending approvals from hub threads also appear above the coordinator's composer. Each card
+names the thread (click to open it), shows the command or tool request, and offers the same
+choices as the thread: **Approve once**, **Always allow this session** when available,
+**Decline**, and **Cancel turn**. You can answer several threads from here. Answering in either
+conversation clears the request in both. These choices are human interface actions; the
+coordinator and other agents have no approval tool.
 
 Useful requests:
 
@@ -108,6 +118,34 @@ hub's **Thread model** and **Thread effort** are only the starting default for e
 Pick any other model in the composer for that chat. If the default provider is not installed or
 signed in, the composer keeps a model that works, so sending is never blocked. The chat still
 receives the hub's instructions and memory.
+
+## Delegated requests and the work queue
+
+A delegated task stores the original human text and attachment references alongside the coordinator's
+brief. The server resolves those originals from the conversation. Workers receive the Hub's shared
+instructions and memory; the Playbook and monitoring reports belong to the coordinator. Keep source
+messages with files until queued tasks start: deleting or reverting a source message can remove an
+attachment before it is copied to the worker, causing that task to fail explicitly.
+
+Task cards appear below the original request. They show queued, starting, working, waiting, idle,
+completed, failed, or cancelled work and open the worker conversation once it exists. A worker can
+publish a checklist that survives reloads and restarts. Checking every step does not by itself mark
+the task complete. Queued and starting tasks also appear in the Hubs panel.
+
+New Hubs run **3 workers at once**. Change **Parallel threads** in Hub settings → **General** to
+choose a limit from 1 to 8. Existing Hubs retain their saved limit, with an effective ceiling of 8. Excess new tasks wait in a
+persistent queue and start as slots become available. Pausing or archiving a Hub stops new queue
+starts. Cancelling queued work through the coordinator prevents it from starting.
+
+Repository tasks default to isolated worktrees; general Hub work and non-Git folders use the local
+workspace. An explicit environment choice still applies. Repeating the same delegation after a
+coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
+a failed creation remains visible instead of silently spawning a replacement. If cleanup cannot
+finish, the task retains its reserved slot until startup recovery confirms cleanup.
+
+The sidebar's attention indicator includes the Hub's owned workers in linked repositories and
+workers whose recovery needs your help. For a closed Hub, recovery attention refreshes on return
+to the window and within 30 seconds while the window is visible.
 
 ## How monitoring works
 

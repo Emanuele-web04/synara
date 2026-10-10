@@ -31,8 +31,11 @@ enum AppSnapMode {
     case shield
     /// Long-running reader of how loud the Mac's audio output and/or the
     /// microphone are. Emits `ready`, `audio-level`, and `error`; the parent
-    /// stops it by terminating it.
-    case audioLevel(sources: Set<AudioLevelSource>)
+    /// stops it by terminating it. `inputDeviceUID` picks the microphone;
+    /// `nil` follows the Mac's default input.
+    case audioLevel(sources: Set<AudioLevelSource>, inputDeviceUID: String?)
+    /// One-shot list of the Mac's audio input devices (`audio-inputs`).
+    case listAudioInputs
 }
 
 struct AppSnapOptions {
@@ -51,6 +54,7 @@ struct AppSnapOptions {
         var frameSocketPath: String?
         var frameOwnerPID: String?
         var audioSources = Set<AudioLevelSource>()
+        var inputDeviceUID: String?
         var index = 0
 
         // Consumes the value token after a flag, keeping the "--flag requires
@@ -79,7 +83,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--prepare-permission-setup", "--release-held-input", "--watch", "--permission-guide", "--computer-frames", "--escape-monitor", "--shield", "--audio-level":
+            case "--check-permissions", "--request-permissions", "--prepare-permission-setup", "--release-held-input", "--watch", "--permission-guide", "--computer-frames", "--escape-monitor", "--shield", "--audio-level", "--list-audio-inputs":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -121,6 +125,12 @@ struct AppSnapOptions {
                     )
                 }
                 audioSources.insert(source)
+            case "--input-device":
+                let value = try readValue("--input-device", "a device UID")
+                guard !value.isEmpty, value.count <= 512 else {
+                    throw AppSnapFailure(code: "invalid_arguments", message: "--input-device requires a device UID.")
+                }
+                inputDeviceUID = value
             case "--pid":
                 frameOwnerPID = try readValue("--pid", "a process identifier")
             default:
@@ -143,6 +153,9 @@ struct AppSnapOptions {
         }
         if requestedMode != "--audio-level", !audioSources.isEmpty {
             throw AppSnapFailure(code: "invalid_arguments", message: "--source is only used by the audio level mode.")
+        }
+        if inputDeviceUID != nil, requestedMode != "--audio-level" || !audioSources.contains(.microphone) {
+            throw AppSnapFailure(code: "invalid_arguments", message: "--input-device is only used with --audio-level --source microphone.")
         }
         switch requestedMode {
         case "--permission-guide":
@@ -287,11 +300,20 @@ struct AppSnapOptions {
                     message: "--audio-level requires at least one --source system or microphone."
                 )
             }
-            return AppSnapOptions(mode: .audioLevel(sources: audioSources))
+            return AppSnapOptions(mode: .audioLevel(sources: audioSources, inputDeviceUID: inputDeviceUID))
+        case "--list-audio-inputs":
+            try rejectWatchArguments("The audio input list does not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--list-audio-inputs does not accept permission selectors."
+                )
+            }
+            return AppSnapOptions(mode: .listAudioInputs)
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --prepare-permission-setup, --release-held-input, --watch, --permission-guide, --computer-frames, --escape-monitor, --shield, or --audio-level."
+                message: "Expected --check-permissions, --request-permissions, --prepare-permission-setup, --release-held-input, --watch, --permission-guide, --computer-frames, --escape-monitor, --shield, --audio-level, or --list-audio-inputs."
             )
         }
     }

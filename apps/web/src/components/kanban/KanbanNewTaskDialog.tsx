@@ -59,8 +59,8 @@ import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { type ComposerFileAttachment, type DraftThreadEnvMode } from "../../composerDraftStore";
-import { type ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { ExpandedImageOverlay } from "../chat/ExpandedImageOverlay";
+import { useExpandedImagePreview } from "../chat/useExpandedImagePreview";
 import { useStore } from "../../store";
 import { DEFAULT_INTERACTION_MODE } from "../../types";
 import { appendKanbanTaskTranscript, buildKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
@@ -156,8 +156,13 @@ export function KanbanNewTaskDialog({
   // fresh chat). The Draft column's "+" opens the dialog with the toggle on, so
   // the task parks in Draft — matching where the user clicked.
   const [sendAsDraft, setSendAsDraft] = useState(initialSendAsDraft);
+  // Off by default: create-and-send starts the task with its prompt as the
+  // agent goal. Disabled while "Send as draft" is on (a parked draft has no
+  // turn to carry a goal).
+  const [sendAsGoal, setSendAsGoal] = useState(false);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
-  const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const { expandedImage, setExpandedImage, closeExpandedImage, navigateExpandedImage } =
+    useExpandedImagePreview();
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
@@ -220,6 +225,7 @@ export function KanbanNewTaskDialog({
     interactionMode,
     envMode,
     sendAsDraft,
+    sendAsGoal,
     defaultProvider: settings.defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
@@ -362,21 +368,6 @@ export function KanbanNewTaskDialog({
     },
     [addComposerImages, scheduleComposerFocus],
   );
-  const closeExpandedImage = useCallback(() => {
-    setExpandedImage(null);
-  }, []);
-  const navigateExpandedImage = useCallback((direction: -1 | 1) => {
-    setExpandedImage((existing) => {
-      if (!existing || existing.images.length <= 1) {
-        return existing;
-      }
-      return {
-        ...existing,
-        index: (existing.index + direction + existing.images.length) % existing.images.length,
-      };
-    });
-  }, []);
-
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-3xl rounded-3xl" onKeyDown={handleSubmitShortcut}>
@@ -560,6 +551,17 @@ export function KanbanNewTaskDialog({
                   onCheckedChange={(checked) => setSendAsDraft(checked === true)}
                 />
                 Send as draft
+              </label>
+              <label
+                className="flex cursor-pointer items-center gap-2 text-ui-xs text-muted-foreground"
+                title={sendAsDraft ? "Turn off Send as draft to send as goal." : undefined}
+              >
+                <Switch
+                  checked={sendAsGoal && !sendAsDraft}
+                  disabled={sendAsDraft}
+                  onCheckedChange={(checked) => setSendAsGoal(checked === true)}
+                />
+                Send as goal
               </label>
               <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
                 {isCreating ? "Creating..." : isPreparingImages ? "Optimizing..." : "Create task"}

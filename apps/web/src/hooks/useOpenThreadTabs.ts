@@ -1,23 +1,22 @@
 // FILE: useOpenThreadTabs.ts
 // Purpose: Connect the open-thread tab store to the app: derive display tabs from live
-//          thread/draft state, record the thread on screen as open, and switch threads
+//          saved thread state, record the thread on screen as open, and switch threads
 //          from a tab the same way the sidebar and Ctrl+Tab switcher do.
 // Layer: UI hooks
 // Exports: useOpenThreadTabs, useRecordOpenThreadTab, useActivateThreadTab,
 //          useReadRouteThreadId
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
-import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { getProviderInstanceOptions, useAppSettings } from "../appSettings";
-import { resolveDraftFallbackModelSelection } from "../components/ChatView.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { stripDiffSearchParams } from "../diffRouteSearch";
-import { resolveUnsentComposerProvider } from "../lib/providerAvailability";
-import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
+import {
+  getActiveComposerSendThreadIds,
+  subscribeComposerSends,
+} from "../lib/composerSendOwnership";
 import {
   buildOpenThreadTabs,
   canKeepOpenThreadTab,
@@ -29,7 +28,6 @@ import { useStore } from "../store";
 import { selectThreadActivities } from "../threadDerivation";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
-import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
 
 /**
  * Open threads as display tabs, in tab order. `projectId` scopes them to one project
@@ -41,11 +39,14 @@ export function useOpenThreadTabs(input: {
   projectId?: ProjectId | null | undefined;
 }): OpenThreadTab[] {
   const { activeThreadId } = input;
-  const { settings } = useAppSettings();
-  const providerInstances = getProviderInstanceOptions(settings);
   const threadIds = useOpenThreadTabsStore((state) => state.threadIds);
   const pruneThreadTabs = useOpenThreadTabsStore((state) => state.pruneThreadTabs);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
+  const activeComposerSendThreadIds = useSyncExternalStore(
+    subscribeComposerSends,
+    getActiveComposerSendThreadIds,
+    getActiveComposerSendThreadIds,
+  );
   // Per-id slices compared element-wise, so unrelated thread or composer churn (streaming,
   // typing) does not re-render the strip.
   const summaries = useStore(
@@ -62,22 +63,6 @@ export function useOpenThreadTabs(input: {
       }),
     ),
   );
-  const drafts = useComposerDraftStore(
-    useShallow((state) => threadIds.map((threadId) => state.draftThreadsByThreadId[threadId])),
-  );
-  const draftExplicitProviders = useComposerDraftStore(
-    useShallow((state) =>
-      threadIds.map((threadId) => {
-        const composerState = state.draftsByThreadId[threadId];
-        const instanceId = composerState?.activeProvider;
-        return instanceId
-          ? (composerState?.modelSelectionByProvider[instanceId]?.provider ??
-              providerInstances.find((instance) => instance.instanceId === instanceId)?.provider ??
-              null)
-          : null;
-      }),
-    ),
-  );
   const terminalEntryPoints = useTerminalStateStore(
     useShallow((state) =>
       threadIds.map(
@@ -87,11 +72,6 @@ export function useOpenThreadTabs(input: {
       ),
     ),
   );
-  const projects = useStore((state) => state.projects);
-  const queryClient = useQueryClient();
-  const providerStatuses = useProviderStatusesForLocalConfig();
-  const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
-
   // Once per mount after hydration: pruning on every thread change would also drop tabs
   // for threads that only disappear transiently (a draft promoting to a server thread).
   // Between prunes, tab derivation already hides ids that cannot keep a tab.
@@ -112,10 +92,8 @@ export function useOpenThreadTabs(input: {
   }, [activeThreadId, pruneThreadTabs, threadsHydrated]);
 
   const sources = threadIds.map((threadId, index): OpenThreadTabSource => {
-    const draft = drafts[index];
     const summary = summaries[index];
     const activities = parentActivities[index];
-    const project = draft ? projects.find((candidate) => candidate.id === draft.projectId) : null;
     return {
       threadId,
       summary,
@@ -123,25 +101,12 @@ export function useOpenThreadTabs(input: {
         summary?.parentThreadId && activities
           ? { id: summary.parentThreadId, activities }
           : undefined,
-      draft: draft
-        ? {
-            projectId: draft.projectId,
-            entryPoint: draft.entryPoint,
-            // Same rule the draft's composer uses to pick its provider.
-            provider: resolveUnsentComposerProvider({
-              explicitProvider: draftExplicitProviders[index] ?? null,
-              threadProvider: resolveDraftFallbackModelSelection({
-                projectDefault: project?.defaultModelSelection,
-                settingsDefaultProvider: settings.defaultProvider,
-              }).provider,
-              defaultProvider: settings.defaultProvider,
-              statuses: providerStatusesReconciled ? providerStatuses : [],
-              providerOrder: settings.providerOrder,
-              hiddenProviders: settings.hiddenProviders,
-            }),
-          }
-        : undefined,
       terminalEntryPoint: terminalEntryPoints[index] ?? false,
+      isPreparingWorktree:
+        activeComposerSendThreadIds.has(threadId) &&
+        summary?.envMode === "worktree" &&
+        summary.latestTurn === null &&
+        summary.session === null,
     };
   });
 
@@ -149,7 +114,8 @@ export function useOpenThreadTabs(input: {
 }
 
 /**
- * Marks the thread a chat surface is showing as open. A layout effect so a newly opened
+ * Registers the thread a chat surface is showing, including drafts so they appear on
+ * promotion. Unsent drafts remain hidden. A layout effect so a newly opened
  * thread's tab paints in the same frame as the thread itself.
  */
 export function useRecordOpenThreadTab(threadId: ThreadId | null): void {

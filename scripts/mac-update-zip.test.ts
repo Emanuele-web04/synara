@@ -13,7 +13,6 @@ import {
   resolveSingleMacUpdateZipFileName,
   resolveSingleTopLevelMacAppBundle,
   updateMacUpdateManifestZipEntry,
-  validateMacUpdateManifestZipMetadata,
 } from "./lib/mac-update-zip.ts";
 
 describe("mac-update-zip", () => {
@@ -114,28 +113,30 @@ describe("mac-update-zip", () => {
     );
   });
 
-  it("updates the macOS zip file entry and matching top-level sha", () => {
-    const manifest = `version: 0.1.4
+  it.each([false, true])(
+    "updates zip metadata and preserves dmg fields (blockmaps: %s)",
+    (withBlockmaps) => {
+      const manifest = `version: 0.1.4
 files:
   - url: Synara-0.1.4-arm64.zip
     sha512: oldzip
     size: 100
-  - url: Synara-0.1.4-arm64.dmg
+${withBlockmaps ? "    blockMapSize: 50\n" : ""}  - url: Synara-0.1.4-arm64.dmg
     sha512: olddmg
     size: 200
-path: 'Synara-0.1.4-arm64.zip'
+${withBlockmaps ? "    blockMapSize: 75\n" : ""}path: 'Synara-0.1.4-arm64.zip'
 sha512: oldzip
 releaseDate: '2026-06-07T12:00:00.000Z'
 `;
 
-    const updated = updateMacUpdateManifestZipEntry(manifest, "Synara-0.1.4-arm64.zip", {
-      sha512: "newzip",
-      size: 12345,
-    });
+      const updated = updateMacUpdateManifestZipEntry(manifest, "Synara-0.1.4-arm64.zip", {
+        sha512: "newzip",
+        size: 12345,
+      });
 
-    assert.equal(
-      updated,
-      `version: 0.1.4
+      assert.equal(
+        updated,
+        `version: 0.1.4
 files:
   - url: Synara-0.1.4-arm64.zip
     sha512: newzip
@@ -143,51 +144,13 @@ files:
   - url: Synara-0.1.4-arm64.dmg
     sha512: olddmg
     size: 200
-path: 'Synara-0.1.4-arm64.zip'
+${withBlockmaps ? "    blockMapSize: 75\n" : ""}path: 'Synara-0.1.4-arm64.zip'
 sha512: newzip
 releaseDate: '2026-06-07T12:00:00.000Z'
 `,
-    );
-  });
-
-  it("drops the stale blockMapSize from the repacked zip entry but keeps the dmg blockMapSize", () => {
-    const manifest = `version: 0.1.4
-files:
-  - url: Synara-0.1.4-arm64.zip
-    sha512: oldzip
-    size: 100
-    blockMapSize: 50
-  - url: Synara-0.1.4-arm64.dmg
-    sha512: olddmg
-    size: 200
-    blockMapSize: 75
-path: 'Synara-0.1.4-arm64.zip'
-sha512: oldzip
-releaseDate: '2026-06-07T12:00:00.000Z'
-`;
-
-    const updated = updateMacUpdateManifestZipEntry(manifest, "Synara-0.1.4-arm64.zip", {
-      sha512: "newzip",
-      size: 12345,
-    });
-
-    assert.equal(
-      updated,
-      `version: 0.1.4
-files:
-  - url: Synara-0.1.4-arm64.zip
-    sha512: newzip
-    size: 12345
-  - url: Synara-0.1.4-arm64.dmg
-    sha512: olddmg
-    size: 200
-    blockMapSize: 75
-path: 'Synara-0.1.4-arm64.zip'
-sha512: newzip
-releaseDate: '2026-06-07T12:00:00.000Z'
-`,
-    );
-  });
+      );
+    },
+  );
 
   it("rejects manifests missing the target zip entry", () => {
     assert.throws(
@@ -222,14 +185,6 @@ releaseDate: '2026-06-07T12:00:00.000Z'
 `;
     const metadata = { sha512: "newzip", size: 12345 };
 
-    assert.deepStrictEqual(
-      validateMacUpdateManifestZipMetadata(manifest, "Synara-0.1.5-arm64.zip", metadata),
-      {
-        manifestHasZipPath: true,
-        manifestHasZipSha: true,
-        manifestHasZipSize: true,
-      },
-    );
     assert.deepStrictEqual(
       assertMacUpdateManifestZipMetadata(manifest, "Synara-0.1.5-arm64.zip", metadata),
       {

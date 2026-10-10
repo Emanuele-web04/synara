@@ -36,6 +36,8 @@ import {
 type ThemeSnapshot = {
   state: ThemeState;
   systemDark: boolean;
+  /** The desktop refused the last custom blur and fell back to vibrancy. */
+  desktopBlurUnavailable: boolean;
 };
 
 const STORAGE_KEY = "synara:theme";
@@ -51,6 +53,7 @@ let listeners: Array<() => void> = [];
 let currentSnapshot: ThemeSnapshot | null = null;
 let lastDesktopTheme: ThemeMode | null = null;
 let lastDesktopWindowMaterial: string | null = null;
+let desktopBlurUnavailable = false;
 
 // ─── Store wiring ─────────────────────────────────────────────────────────
 
@@ -92,7 +95,7 @@ function writeStoredThemeState(state: ThemeState) {
 function computeSnapshot(): ThemeSnapshot {
   const state = readStoredThemeState();
   const systemDark = state.mode === "system" ? getSystemDark() : false;
-  return { state, systemDark };
+  return { state, systemDark, desktopBlurUnavailable };
 }
 
 function refreshSnapshot(): ThemeSnapshot {
@@ -102,6 +105,7 @@ function refreshSnapshot(): ThemeSnapshot {
   if (
     currentSnapshot &&
     currentSnapshot.systemDark === next.systemDark &&
+    currentSnapshot.desktopBlurUnavailable === next.desktopBlurUnavailable &&
     serializeThemeState(currentSnapshot.state) === serializeThemeState(next.state)
   ) {
     return currentSnapshot;
@@ -245,11 +249,20 @@ function syncDesktopWindowMaterial(cssMaterial: WindowMaterial, blur: number | n
   }
 
   lastDesktopWindowMaterial = key;
-  void setWindowMaterial({ material, blurRadius }).catch(() => {
-    if (lastDesktopWindowMaterial === key) {
-      lastDesktopWindowMaterial = null;
-    }
-  });
+  void setWindowMaterial({ material, blurRadius }).then(
+    (applied) => {
+      // Vibrancy always applies; only a custom blur can be refused by the window server.
+      const unavailable = material === "translucent" && !applied;
+      if (lastDesktopWindowMaterial !== key || desktopBlurUnavailable === unavailable) return;
+      desktopBlurUnavailable = unavailable;
+      emitChange();
+    },
+    () => {
+      if (lastDesktopWindowMaterial === key) {
+        lastDesktopWindowMaterial = null;
+      }
+    },
+  );
 }
 
 // Apply immediately on module load to minimize flash before React mounts.
@@ -301,6 +314,7 @@ export function useTheme() {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => ({
     state: DEFAULT_THEME_STATE,
     systemDark: false,
+    desktopBlurUnavailable: false,
   }));
   const theme = snapshot.state.mode;
   const resolvedTheme = resolveThemeVariant(theme, snapshot.systemDark);
@@ -351,6 +365,7 @@ export function useTheme() {
     setSystemUiFont,
     darkTheme,
     defaultActiveTheme,
+    desktopBlurUnavailable: snapshot.desktopBlurUnavailable,
     exportThemeString,
     importThemeString,
     isDefaultActiveTheme,

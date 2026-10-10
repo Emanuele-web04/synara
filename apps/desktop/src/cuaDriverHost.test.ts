@@ -16,6 +16,22 @@ const capability = "isolated-fixture-authority-00000000000000";
 const cuaRequest: typeof rawCuaRequest = (path, request, options) =>
   rawCuaRequest(path, { ...(request as object), capability }, options);
 const cleanups: Array<() => Promise<unknown>> = [];
+const realDateNow = Date.now;
+let cooldownClockOffsetMs = 0;
+let restoreCooldownClock: (() => void) | undefined;
+
+function elapseInputCooldown(): void {
+  cooldownClockOffsetMs += ESCAPE_INPUT_COOLDOWN_MS + 50;
+  if (!restoreCooldownClock) {
+    // Advance host admission time while child processes, sockets and their
+    // cleanup/observation barriers continue to use real timers.
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => realDateNow() + cooldownClockOffsetMs);
+    restoreCooldownClock = () => clock.mockRestore();
+  }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((complete) => {
@@ -24,7 +40,13 @@ function deferred<T>() {
   return { promise, resolve };
 }
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  try {
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  } finally {
+    restoreCooldownClock?.();
+    restoreCooldownClock = undefined;
+    cooldownClockOffsetMs = 0;
+  }
 });
 async function fixture(
   authority = capability,
@@ -2360,7 +2382,7 @@ describe("physical Escape interrupt", () => {
 
     // Time alone cannot make the model's old target state fresh. A preview
     // or target-readiness probe cannot clear the model-observation gate.
-    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+    elapseInputCooldown();
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({
       result: { structuredContent: { code: "computer_input_paused" } },
       desktopInterruptions: 0,
@@ -2446,7 +2468,7 @@ describe("physical Escape interrupt", () => {
     await f.host.stop();
     // The replacement generation still needs a fresh model observation;
     // successful crash cleanup does not validate the interrupted model state.
-    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+    elapseInputCooldown();
     await cuaRequest(f.endpoint, {
       method: "call",
       name: "get_window_state",
@@ -2571,7 +2593,7 @@ describe("physical Escape interrupt", () => {
       expect(physicalInput()).toBe(true);
       await expect(typing).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
       await waitForEvent(f, "interrupt-ack");
-      await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+      elapseInputCooldown();
 
       const observe = () =>
         cuaRequest(f.endpoint, {
@@ -2602,7 +2624,7 @@ describe("physical Escape interrupt", () => {
       await observe();
       expect(physicalInput()).toBe(true);
       expect((await f.events()).filter((event) => event.event === "interrupt")).toHaveLength(1);
-      await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+      elapseInputCooldown();
       await expect(act()).resolves.toMatchObject({
         result: { structuredContent: { code: "computer_input_paused" } },
       });
@@ -2890,7 +2912,7 @@ describe("physical Escape interrupt", () => {
       modelObservation: true,
       task: taskB,
     });
-    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+    elapseInputCooldown();
     await expect(click(taskA, windowA)).resolves.toMatchObject({ ok: true, result: {} });
     await expect(click(taskB, windowB)).resolves.toMatchObject({
       result: { structuredContent: { code: "computer_input_paused" } },
@@ -2956,7 +2978,7 @@ describe("physical Escape interrupt", () => {
     const cooldown = await act();
     expect(cooldown.result?.structuredContent?.wait_seconds).toBeGreaterThan(0);
     expect(cooldown.result?.structuredContent?.requery_hint).toBeTypeOf("string");
-    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+    elapseInputCooldown();
     for (const extra of [
       {},
       { fixture_usable: true, fixture_degraded: "ax_window_unresolved" },
@@ -3012,7 +3034,7 @@ describe("physical Escape interrupt", () => {
         modelObservation: true,
         task,
       });
-      await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+      elapseInputCooldown();
       await expect(action()).resolves.toMatchObject({
         result: { structuredContent: { code: "computer_input_paused" } },
         desktopInterruptions: 0,
@@ -3058,7 +3080,7 @@ describe("physical Escape interrupt", () => {
     await expect(reading).resolves.toMatchObject({
       result: { structuredContent: { code: "computer_input_paused" } },
     });
-    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+    elapseInputCooldown();
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "browser_navigate", args: browser, task }),
     ).resolves.toMatchObject({ result: { isError: true } });

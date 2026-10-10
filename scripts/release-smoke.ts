@@ -617,7 +617,7 @@ function verifyDesktopStageLockAuthority(): void {
   );
   assertContains(
     buildScript,
-    ")`npm rebuild node-pty --foreground-scripts`,",
+    'npm rebuild node-pty --foreground-scripts --prefix ${path.join(stageAppDir, "node_modules", "node-pty")}',
     "Expected Linux desktop staging to build only node-pty after the script-free frozen install.",
   );
   assertNotContains(

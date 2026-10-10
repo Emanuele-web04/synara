@@ -13,6 +13,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import { decodeOutboundJson, outboundHttp } from "./outboundHttp";
+import { OutboundPolicyError } from "./outboundHttpPolicy";
 
 /**
  * A port nothing is listening on, so every connection attempt is refused.
@@ -166,18 +167,61 @@ console.log("survived");
       }),
     ).rejects.toThrow(/Outbound request failed/u);
   });
+});
 
-  it("stays usable for the next caller after a connection failure", async () => {
-    const port = await refusedPort();
+// A literal 198.18.x.x URL exercises the pinned-address check without DNS:
+// literal hosts go through the same assertion as resolved answers.
+const benchmarkPolicyFor = (origin: string) => ({
+  service: "benchmark-test",
+  allowedOrigins: [origin],
+  timeoutMs: 2_000,
+  maxRequestBytes: 0,
+  maxResponseBytes: 1024,
+  maxRedirects: 0,
+  maxConcurrent: 1,
+  maxQueued: 1,
+  requirePublicAddress: true,
+});
 
+describe("benchmark-range opt-in", () => {
+  it("rejects a 198.18.0.0/15 destination by default", async () => {
     await expect(
       outboundHttp.request({
-        policy: policyFor(port),
-        url: `https://127.0.0.1:${port}/again.ico`,
-        headers: { Accept: "image/*" },
+        policy: benchmarkPolicyFor("https://198.18.0.1"),
+        url: "https://198.18.0.1/",
       }),
-    ).rejects.toThrow(/Outbound request failed/u);
+    ).rejects.toMatchObject({ code: "private-address" });
   });
+
+  it("lets an opted-in request past the address check", async () => {
+    // Nothing answers on the benchmark range here, so the request still fails at
+    // the socket — the assertion is that policy stopped rejecting it.
+    const failure = await outboundHttp
+      .request({
+        policy: {
+          ...benchmarkPolicyFor("https://198.18.0.1"),
+          allowBenchmarkAddressRange: true,
+        },
+        url: "https://198.18.0.1/",
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).not.toBeInstanceOf(OutboundPolicyError);
+  });
+
+  it.each(["https://10.0.0.1", "https://127.0.0.1", "https://169.254.169.254"])(
+    "still rejects other blocked ranges with the opt-in: %s",
+    async (origin) => {
+      await expect(
+        outboundHttp.request({
+          policy: { ...benchmarkPolicyFor(origin), allowBenchmarkAddressRange: true },
+          url: `${origin}/`,
+        }),
+      ).rejects.toMatchObject({ code: "private-address" });
+    },
+  );
 });
 
 describe("loopback HTTP transport", () => {

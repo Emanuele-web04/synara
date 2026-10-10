@@ -45,6 +45,7 @@ export function gateProjectAgentServiceForStable(
   service: ProjectAgentServiceShape,
 ): ProjectAgentServiceShape {
   return {
+    notifyWorkItemChanged: () => Effect.void,
     getOverview: refuse,
     listSummaries: () => Effect.succeed({ summaries: [] }),
     configure: refuse,

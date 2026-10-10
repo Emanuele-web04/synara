@@ -1,5 +1,5 @@
 // FILE: useSidebarThreadActions.ts
-// Purpose: Owns Sidebar thread pinning, archive/undo, deletion, and project-batch actions.
+// Purpose: Owns Sidebar thread pinning, Done/undo, snooze, archive/undo, deletion, and project-batch actions.
 // Layer: Web Sidebar controller hook
 // Exports: useSidebarThreadActions
 
@@ -14,10 +14,15 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import {
   getFallbackThreadIdAfterDelete,
+  getFallbackThreadIdAfterSnooze,
   derivePinnedThreadIdsForSidebar,
   excludeHiddenProjectAgentCoordinatorThreads,
   isLatestPinnedThreadMutation,
 } from "../components/Sidebar.logic";
+import {
+  isThreadSettledForActivity,
+  resolveActivityRecencyMs,
+} from "../components/SidebarActivityView.logic";
 import {
   coordinatorThreadIdSet,
   useProjectAgentSummariesStore,
@@ -32,6 +37,12 @@ import {
   isThreadAlreadyUnarchivedError,
   unarchiveThreadFromClient,
 } from "../lib/threadArchive";
+import {
+  dispatchThreadSnoozedUntil,
+  formatSnoozeDeadline,
+  resolveSnoozeDeadline,
+  type SnoozeDuration,
+} from "../lib/threadSnooze";
 import {
   createOptimisticSettledMutation,
   recordOptimisticSettledMutationSequence,
@@ -99,6 +110,10 @@ export function useSidebarThreadActions(input: {
     | "sidebarThreadSortOrder"
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
+  /** Limits the post-snooze focus fallback to chats reachable from the active Space. */
+  readonly filterThreadsToActiveSpace?: (
+    threads: readonly SidebarThreadSummary[],
+  ) => readonly SidebarThreadSummary[];
   readonly handleNewChat: (options?: { fresh?: boolean }) => Promise<unknown>;
   readonly projectById: ReadonlyMap<ProjectId, Project>;
   readonly routeSplitViewId: string | null;
@@ -112,6 +127,7 @@ export function useSidebarThreadActions(input: {
     activeSplitView,
     appSettings,
     clearTerminalState,
+    filterThreadsToActiveSpace,
     handleNewChat,
     projectById,
     routeSplitViewId,
@@ -141,6 +157,7 @@ export function useSidebarThreadActions(input: {
   const archivePendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
   const archiveUndoPendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
   const archiveCleanupSequenceByThreadIdRef = useRef<Map<ThreadId, number>>(new Map());
+  const acceptedArchiveSequenceByThreadIdRef = useRef<Map<ThreadId, number>>(new Map());
   const legacyPinMigrationThreadIdsRef = useRef(new Set<ThreadId>());
   const optimisticPinnedStateByThreadIdRef = useRef(new Map<ThreadId, boolean>());
   const latestPinnedMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
@@ -257,6 +274,99 @@ export function useSidebarThreadActions(input: {
     ReadonlyMap<ThreadId, OptimisticSettledMutation>
   >(() => new Map());
 
+  const optimisticSettledStateByThreadId = useMemo(
+    () =>
+      new Map(
+        Array.from(
+          optimisticSettledMutationByThreadId,
+          ([threadId, mutation]) => [threadId, mutation.desiredSettled] as const,
+        ),
+      ),
+    [optimisticSettledMutationByThreadId],
+  );
+  const closeNavigationInputRef = useRef({
+    routeThreadId,
+    routeSplitViewId,
+    routeVersion: 0,
+    sidebarTreeThreads,
+    optimisticSettledStateByThreadId,
+    handleNewChat,
+  });
+  useEffect(() => {
+    const shellSnapshotSequence = useStore.getState().shellSnapshotSequence ?? 0;
+    for (const [threadId, sequence] of acceptedArchiveSequenceByThreadIdRef.current) {
+      if (shellSnapshotSequence >= sequence) {
+        acceptedArchiveSequenceByThreadIdRef.current.delete(threadId);
+      }
+    }
+    closeNavigationInputRef.current = {
+      routeThreadId,
+      routeSplitViewId,
+      routeVersion:
+        closeNavigationInputRef.current.routeVersion +
+        Number(
+          closeNavigationInputRef.current.routeThreadId !== routeThreadId ||
+            closeNavigationInputRef.current.routeSplitViewId !== routeSplitViewId,
+        ),
+      sidebarTreeThreads,
+      optimisticSettledStateByThreadId,
+      handleNewChat,
+    };
+  }, [
+    routeThreadId,
+    routeSplitViewId,
+    sidebarTreeThreads,
+    optimisticSettledStateByThreadId,
+    handleNewChat,
+  ]);
+
+  const navigateAfterThreadClosed = useCallback(
+    async (
+      threadId: ThreadId,
+      routeVersionAtDispatch: number | null,
+      excludedThreadIds?: ReadonlySet<ThreadId>,
+    ) => {
+      // Read after the command is accepted: a newer route or thread list wins.
+      const current = closeNavigationInputRef.current;
+      if (current.routeThreadId !== threadId || current.routeVersion !== routeVersionAtDispatch)
+        return;
+      const shellSnapshotSequence = useStore.getState().shellSnapshotSequence ?? 0;
+      const fallbackThread = excludeHiddenProjectAgentCoordinatorThreads(
+        current.sidebarTreeThreads,
+        hiddenCoordinatorThreadIds(),
+      )
+        .filter((thread) => {
+          const archiveSequence = acceptedArchiveSequenceByThreadIdRef.current.get(thread.id);
+          // A receipt can arrive before the archive disappears from the sidebar.
+          return (
+            thread.id !== threadId &&
+            thread.archivedAt == null &&
+            !thread.parentThreadId &&
+            !excludedThreadIds?.has(thread.id) &&
+            !archivePendingThreadIdsRef.current.has(thread.id) &&
+            (archiveSequence === undefined || shellSnapshotSequence >= archiveSequence) &&
+            !isThreadSettledForActivity(thread, current.optimisticSettledStateByThreadId)
+          );
+        })
+        .toSorted(
+          (left, right) =>
+            resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
+            left.id.localeCompare(right.id),
+        )[0];
+      if (fallbackThread) {
+        await navigate({
+          to: "/$threadId",
+          params: { threadId: fallbackThread.id },
+          replace: true,
+          search: () => ({}),
+        });
+      } else {
+        await current.handleNewChat();
+      }
+    },
+    [navigate],
+  );
+
   const clearOptimisticThreadSettled = useCallback((threadId: ThreadId) => {
     setOptimisticSettledMutationByThreadId((current) => {
       if (!current.has(threadId)) return current;
@@ -270,6 +380,10 @@ export function useSidebarThreadActions(input: {
     async (threadId: ThreadId, isSettled: boolean) => {
       const api = readNativeApi();
       if (!api) throw new Error("Unable to connect to the app server.");
+      const routeVersionAtDispatch =
+        closeNavigationInputRef.current.routeThreadId === threadId
+          ? closeNavigationInputRef.current.routeVersion
+          : null;
       const requestVersion =
         (latestSettledMutationVersionByThreadIdRef.current.get(threadId) ?? 0) + 1;
       latestSettledMutationVersionByThreadIdRef.current.set(threadId, requestVersion);
@@ -318,27 +432,123 @@ export function useSidebarThreadActions(input: {
       // The command is durable, so the override only bridges the gap until the
       // projection push lands. Expiring it keeps a lost or reordered push from
       // pinning the row to a stale state forever.
-      if (!isLatestRequest()) return;
+      if (!isLatestRequest()) return false;
       const expiry = window.setTimeout(() => {
         settleOverrideExpiryTimeoutsRef.current.delete(threadId);
         if (isLatestRequest()) clearOptimisticThreadSettled(threadId);
       }, SETTLE_OVERRIDE_MAX_LIFETIME_MS);
       settleOverrideExpiryTimeoutsRef.current.set(threadId, expiry);
+      if (isSettled) await navigateAfterThreadClosed(threadId, routeVersionAtDispatch);
+      return isLatestRequest();
     },
-    [clearOptimisticThreadSettled],
+    [clearOptimisticThreadSettled, navigateAfterThreadClosed],
   );
 
   const setThreadSettledWithToast = useCallback(
     (threadId: ThreadId, isSettled: boolean) => {
-      void setThreadSettled(threadId, isSettled).catch((error) => {
-        console.error("Failed to update settled thread state", { threadId, error });
+      const returnToThreadOnUndo = routeThreadId === threadId;
+      const updateSettled = (settled: boolean) =>
+        setThreadSettled(threadId, settled).catch((error) => {
+          console.error("Failed to update settled thread state", { threadId, error });
+          toastManager.add({
+            type: "error",
+            title: settled ? "Unable to mark thread as done" : "Unable to undo done",
+          });
+          return false;
+        });
+      void updateSettled(isSettled).then((confirmed) => {
+        if (!confirmed || !isSettled) return;
         toastManager.add({
-          type: "error",
-          title: isSettled ? "Unable to mark thread as done" : "Unable to undo done",
+          id: `done-undo:${threadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+            archiveUndo: {
+              message: "Marked as done",
+              onUndo: async () => {
+                const restored = await updateSettled(false);
+                if (restored && returnToThreadOnUndo) {
+                  void navigate({
+                    to: "/$threadId",
+                    params: { threadId },
+                    replace: true,
+                  });
+                }
+                return restored;
+              },
+            },
+          },
         });
       });
     },
-    [setThreadSettled],
+    [navigate, routeThreadId, setThreadSettled],
+  );
+
+  const setThreadSnoozedUntil = dispatchThreadSnoozedUntil;
+
+  // Snooze confirms asynchronously; these refs let the confirmation see the
+  // route and thread list as they are then, not as they were when it started.
+  const snoozeFallbackThreadsRef = useRef(sidebarTreeThreads);
+  useEffect(() => {
+    snoozeFallbackThreadsRef.current = filterThreadsToActiveSpace
+      ? filterThreadsToActiveSpace(sidebarTreeThreads)
+      : sidebarTreeThreads;
+  }, [filterThreadsToActiveSpace, sidebarTreeThreads]);
+
+  const snoozeThread = useCallback(
+    (threadId: ThreadId, duration: SnoozeDuration) => {
+      const deadline = resolveSnoozeDeadline(duration, Date.now());
+      const previousSnoozedUntil = sidebarThreadSummaryById[threadId]?.snoozedUntil ?? null;
+      const navigationAtDispatch = closeNavigationInputRef.current;
+      const routeVersionAtDispatch =
+        navigationAtDispatch.routeThreadId === threadId &&
+        navigationAtDispatch.routeSplitViewId === null
+          ? navigationAtDispatch.routeVersion
+          : null;
+      void setThreadSnoozedUntil(threadId, deadline.toISOString()).then((confirmed) => {
+        if (!confirmed) return;
+        // Same compact Undo toast as archive, so chat-level undo reads alike.
+        toastManager.add({
+          id: `snooze-undo:${threadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+            archiveUndo: {
+              message: `Snoozed until ${formatSnoozeDeadline(deadline.toISOString())}`,
+              onUndo: () => setThreadSnoozedUntil(threadId, previousSnoozedUntil),
+            },
+          },
+        });
+        // A split opening or an away-and-back visit is newer navigation too.
+        const currentNavigation = closeNavigationInputRef.current;
+        if (
+          routeVersionAtDispatch === null ||
+          currentNavigation.routeVersion !== routeVersionAtDispatch ||
+          currentNavigation.routeThreadId !== threadId ||
+          currentNavigation.routeSplitViewId !== null
+        )
+          return;
+        const fallbackThreadId = getFallbackThreadIdAfterSnooze({
+          threads: excludeHiddenProjectAgentCoordinatorThreads(
+            snoozeFallbackThreadsRef.current,
+            hiddenCoordinatorThreadIds(),
+          ).filter((thread) => !thread.parentThreadId),
+          snoozedThreadId: threadId,
+        });
+        if (fallbackThreadId) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: fallbackThreadId },
+            replace: true,
+          });
+        } else {
+          void handleNewChat();
+        }
+      });
+    },
+    [handleNewChat, navigate, setThreadSnoozedUntil, sidebarThreadSummaryById],
   );
 
   // Drop optimistic settle entries once the server-confirmed state agrees, so
@@ -391,17 +601,6 @@ export function useSidebarThreadActions(input: {
       if (settle !== undefined) window.clearTimeout(settle);
     };
   }, [sidebarThreads, optimisticSettledMutationByThreadId]);
-
-  const optimisticSettledStateByThreadId = useMemo(
-    () =>
-      new Map(
-        Array.from(
-          optimisticSettledMutationByThreadId,
-          ([threadId, mutation]) => [threadId, mutation.desiredSettled] as const,
-        ),
-      ),
-    [optimisticSettledMutationByThreadId],
-  );
 
   useEffect(() => {
     const expiryTimeouts = settleOverrideExpiryTimeoutsRef.current;
@@ -590,18 +789,26 @@ export function useSidebarThreadActions(input: {
   );
 
   const archiveThread = useCallback(
-    async (threadId: ThreadId, options?: { waitForUndo?: boolean }): Promise<boolean> => {
+    async (
+      threadId: ThreadId,
+      options?: { waitForUndo?: boolean; excludedThreadIds?: ReadonlySet<ThreadId> },
+    ): Promise<boolean> => {
       const api = readNativeApi();
       if (!api) return false;
       const thread = getThreadFromState(useStore.getState(), threadId);
       if (!thread) return false;
       const pendingThreadIds = archivePendingThreadIdsRef.current;
       if (pendingThreadIds.has(threadId)) return false;
+      const routeVersionAtDispatch =
+        closeNavigationInputRef.current.routeThreadId === threadId
+          ? closeNavigationInputRef.current.routeVersion
+          : null;
 
       pendingThreadIds.add(threadId);
       const runArchive = async (): Promise<boolean> => {
         const archiveSequence = await archiveThreadFromClient(api.orchestration, threadId);
         archiveCleanupSequenceByThreadIdRef.current.set(threadId, archiveSequence);
+        acceptedArchiveSequenceByThreadIdRef.current.set(threadId, archiveSequence);
         // Undo owns its visible lifetime. Other archive entry points get the
         // same grace period, allowing provider and terminal cleanup to settle.
         if (appSettings.archiveDeletesOrphanedWorktree && !options?.waitForUndo) {
@@ -610,23 +817,11 @@ export function useSidebarThreadActions(input: {
             ARCHIVE_UNDO_TOAST_DURATION_MS,
           );
         }
-        if (routeThreadId === threadId) {
-          const fallbackThreadId = getFallbackThreadIdAfterDelete({
-            threads: sidebarThreads,
-            deletedThreadId: threadId,
-            deletedThreadIds: new Set<ThreadId>(),
-            sortOrder: appSettings.sidebarThreadSortOrder,
-          });
-          if (fallbackThreadId) {
-            await navigate({
-              to: "/$threadId",
-              params: { threadId: fallbackThreadId },
-              replace: true,
-            });
-          } else {
-            await handleNewChat();
-          }
-        }
+        await navigateAfterThreadClosed(
+          threadId,
+          routeVersionAtDispatch,
+          options?.excludedThreadIds,
+        );
         return true;
       };
       return runArchive().finally(() => {
@@ -635,12 +830,8 @@ export function useSidebarThreadActions(input: {
     },
     [
       appSettings.archiveDeletesOrphanedWorktree,
-      appSettings.sidebarThreadSortOrder,
-      handleNewChat,
       releaseArchivedWorktree,
-      routeThreadId,
-      sidebarThreads,
-      navigate,
+      navigateAfterThreadClosed,
     ],
   );
 
@@ -665,6 +856,7 @@ export function useSidebarThreadActions(input: {
           }
           await unarchiveThreadIgnoringAlreadyRestored(restoreInput.threadId);
           archiveCleanupSequenceByThreadIdRef.current.delete(restoreInput.threadId);
+          acceptedArchiveSequenceByThreadIdRef.current.delete(restoreInput.threadId);
           if (restoreInput.returnToThreadOnUndo) {
             void navigate({
               to: "/$threadId",
@@ -792,9 +984,10 @@ export function useSidebarThreadActions(input: {
 
       let archivedCount = 0;
       let failureCount = 0;
+      const excludedThreadIds = new Set(projectThreads.map((thread) => thread.id));
       for (const thread of projectThreads) {
         try {
-          if (await archiveThread(thread.id)) archivedCount += 1;
+          if (await archiveThread(thread.id, { excludedThreadIds })) archivedCount += 1;
           else failureCount += 1;
         } catch (error) {
           failureCount += 1;
@@ -930,6 +1123,8 @@ export function useSidebarThreadActions(input: {
     pinnedThreadIdSet,
     toggleThreadPinned,
     setThreadSettledWithToast,
+    setThreadSnoozedUntil,
+    snoozeThread,
     settledOverrideByThreadId: optimisticSettledStateByThreadId,
     deleteThread,
     confirmAndDeleteThread,

@@ -174,7 +174,8 @@ layer("ProjectionPendingInteractionRepository", (it) => {
           requestedAt: "2026-09-10T10:02:00.000Z",
         };
         assert.isFalse(yield* repository.claimResponse(claim));
-        assert.deepEqual(yield* repository.listUnsettled({ threadId }), []);
+        // Explicit invalidations still need durable terminal settlement at boot.
+        assert.deepEqual(yield* repository.listUnsettled({ threadId }), [row]);
         yield* repository.upsert({ ...row, lifecycleGeneration: "new", status: "pending" });
         assert.equal((yield* repository.listUnsettled({ threadId })).length, 1);
         assert.isTrue(yield* repository.claimResponse({ ...claim, lifecycleGeneration: "new" }));

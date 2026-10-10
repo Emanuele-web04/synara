@@ -26,6 +26,7 @@ import { useChatWorkLog } from "./useChatWorkLog";
 import { useComposerVoiceController } from "./useComposerVoiceController";
 import { toastManager } from "../ui/toast";
 import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
+import { MODEL_PICKER_POPUP_ATTRIBUTE } from "./ComposerModelPicker.logic";
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -43,6 +44,7 @@ function canHandleComposerPickerShortcut(
   if (eventTargetsComposer(event, composerForm)) return true;
   const target = event.target;
   return (
+    (target instanceof Element && target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null) ||
     target === document.body ||
     target === document.documentElement ||
     document.activeElement === document.body ||
@@ -92,14 +94,11 @@ interface ChatKeyboardShortcutsInput {
     selectionOptions?: ComposerModelSelectionOptions,
   ) => Promise<void>;
   handleTraitsPickerOpenChange: (open: boolean) => void;
+  cycleEffort: () => boolean;
   toggleTerminalVisibility: ReturnType<
     typeof useChatTerminalController
   >["toggleTerminalVisibility"];
   setTerminalOpen: ReturnType<typeof useChatTerminalController>["setTerminalOpen"];
-  splitTerminalRight: ReturnType<typeof useChatTerminalController>["splitTerminalRight"];
-  splitTerminalLeft: ReturnType<typeof useChatTerminalController>["splitTerminalLeft"];
-  splitTerminalDown: ReturnType<typeof useChatTerminalController>["splitTerminalDown"];
-  splitTerminalUp: ReturnType<typeof useChatTerminalController>["splitTerminalUp"];
   closeTerminal: ReturnType<typeof useChatTerminalController>["closeTerminal"];
   createTerminalFromShortcut: ReturnType<
     typeof useChatTerminalController
@@ -155,12 +154,9 @@ export function useChatKeyboardShortcuts({
   selectedModel,
   onProviderModelSelect,
   handleTraitsPickerOpenChange,
+  cycleEffort,
   toggleTerminalVisibility,
   setTerminalOpen,
-  splitTerminalRight,
-  splitTerminalLeft,
-  splitTerminalDown,
-  splitTerminalUp,
   closeTerminal,
   createTerminalFromShortcut,
   openNewFullWidthTerminal,
@@ -246,6 +242,10 @@ export function useChatKeyboardShortcuts({
         !isComposerApprovalState &&
         canHandleComposerPickerShortcut(event, composerFormRef.current);
       const shortcutContext = {
+        composerFocus:
+          eventTargetsComposer(event, composerFormRef.current) ||
+          (event.target instanceof Element &&
+            event.target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null),
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
         terminalWorkspaceOpen,
@@ -258,6 +258,22 @@ export function useChatKeyboardShortcuts({
         context: shortcutContext,
       });
       if (!command) return;
+
+      if (command === "model.effort.next") {
+        if (
+          !shortcutContext.composerFocus ||
+          isTerminalFocused() ||
+          isVoiceRecording ||
+          isVoiceTranscribing ||
+          isComposerApprovalState ||
+          event.isComposing
+        )
+          return;
+        if (!cycleEffort()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       if (command === "composer.focus.toggle") {
         if (isComposerApprovalState || isVoiceRecording || isVoiceTranscribing) return;
@@ -328,46 +344,6 @@ export function useChatKeyboardShortcuts({
         event.preventDefault();
         event.stopPropagation();
         toggleTerminalVisibility();
-        return;
-      }
-
-      if (command === "terminal.split" || command === "terminal.splitRight") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalRight();
-        return;
-      }
-
-      if (command === "terminal.splitLeft") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalLeft();
-        return;
-      }
-
-      if (command === "terminal.splitDown") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalDown();
-        return;
-      }
-
-      if (command === "terminal.splitUp") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        splitTerminalUp();
         return;
       }
 
@@ -507,10 +483,6 @@ export function useChatKeyboardShortcuts({
     openNewFullWidthTerminal,
     runProjectScript,
     keybindings,
-    splitTerminalDown,
-    splitTerminalLeft,
-    splitTerminalRight,
-    splitTerminalUp,
     terminalWorkspaceChatTabActive,
     terminalWorkspaceOpen,
     terminalWorkspaceTerminalTabActive,
@@ -527,6 +499,7 @@ export function useChatKeyboardShortcuts({
     hasLiveTurn,
     handleModelPickerOpenChange,
     handleTraitsPickerOpenChange,
+    cycleEffort,
     shouldRenderChatPaneContent,
     isComposerApprovalState,
     isVoiceRecording,

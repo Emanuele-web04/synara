@@ -6,7 +6,18 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ThreadId, TurnId } from "@synara/contracts";
-import { Deferred, Effect, Exit, Fiber, Layer, Queue, Scope, Semaphore, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Queue,
+  Scope,
+  Semaphore,
+  Stream,
+} from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AcpRequestError, AcpTransportError } from "../acp/AcpErrors.ts";
@@ -1854,6 +1865,70 @@ describe("closeDevinSessionResources", () => {
     expect(calls).toEqual(["scope", "config"]);
     expect(await Effect.runPromise(Scope.close(scope, Exit.void))).toBeUndefined();
   });
+});
+
+describe("Devin startup timeout recovery", () => {
+  it.each([false, true])(
+    "requires successful cleanup before rejecting startup (cleanup fails: %s)",
+    async (cleanupFails) => {
+      const timeout = new AcpRequestError({
+        code: -32001,
+        errorMessage: "ACP agent did not respond to initialize within 20s.",
+        data: { reason: "acp-startup-timeout", step: "initialize", timeoutMs: 20_000 },
+      });
+      let cleanedUp = false;
+      const cleanupError = new Error("process exit unproven");
+      const runtime = { ...makeLifecycleAcpRuntime(), start: () => Effect.fail(timeout) };
+      const layer = makeDevinAdapterLive(
+        {},
+        {
+          makeAcpRuntime: () =>
+            Effect.gen(function* () {
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  if (cleanupFails) throw cleanupError;
+                  cleanedUp = true;
+                }),
+              );
+              return runtime;
+            }),
+        },
+      ).pipe(
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), { prefix: "devin-startup-test-" }),
+        ),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* DevinAdapter;
+          const threadId = ThreadId.makeUnsafe("devin-startup-timeout");
+          const exit = yield* adapter
+            .startSession({
+              provider: "devin",
+              threadId,
+              runtimeMode: "full-access",
+              cwd: process.cwd(),
+            })
+            .pipe(Effect.exit);
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            if (cleanupFails) {
+              expect(Cause.pretty(exit.cause)).toContain("process exit unproven");
+            } else {
+              expect(Cause.squash(exit.cause)).toMatchObject({
+                _tag: "ProviderAdapterProcessError",
+                reason: "startup-failed",
+                cause: timeout,
+              });
+            }
+          }
+          expect(cleanedUp).toBe(!cleanupFails);
+          expect(yield* adapter.hasSession(threadId)).toBe(false);
+        }).pipe(Effect.provide(layer)),
+      );
+    },
+  );
 });
 
 describe("Devin stale resume classification", () => {

@@ -1,7 +1,7 @@
 // FILE: threadUnblock.ts
 // Purpose: Abandons the provider delivery blockers that quarantine a thread.
 // Layer: Web orchestration helper
-// Exports: unblockThreadFromClient, describeThreadUnblockResult, isProviderDeliveryReconciliationConflict, type ThreadUnblockResult
+// Exports: unblockThreadFromClient, describeThreadUnblockResult, isProviderDeliveryReconciliationConflict, resolveThreadUnblockTarget, type ThreadUnblockResult
 
 import type { NativeApi, ThreadId } from "@synara/contracts";
 
@@ -74,6 +74,20 @@ export async function unblockThreadFromClient(
 
   if (reconciledCount > 0) return { kind: "unblocked", reconciledCount };
   return conflictCount > 0 ? { kind: "resolved-elsewhere" } : { kind: "already-clear" };
+}
+
+/**
+ * Resolves the thread the unblock action should reconcile. The action reaches
+ * `onClick` through `() => void` props, which TypeScript lets a later refactor
+ * wire straight into a DOM handler; a click event then arrives where the
+ * thread id was meant. Anything that is not a thread-id string falls back to
+ * the thread the surface is bound to.
+ */
+export function resolveThreadUnblockTarget(
+  targetThreadId: unknown,
+  fallbackThreadId: ThreadId | null,
+): ThreadId | null {
+  return typeof targetThreadId === "string" ? (targetThreadId as ThreadId) : fallbackThreadId;
 }
 
 export type ThreadUnblockNotice = {

@@ -7,7 +7,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { ThreadId, type ResolvedKeybindingsConfig, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import * as Schema from "effect/Schema";
-import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon, XIcon } from "~/lib/icons";
+import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon } from "~/lib/icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   gitBranchesQueryOptions,
@@ -59,7 +59,7 @@ import { createProjectSelector } from "../storeSelectors";
 import { inferCheckpointTurnCountByTurnId } from "../session-logic";
 import { type TimestampFormat, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
-import { DOCK_HEADER_ICON_BUTTON_CLASS, type DiffRenderMode } from "./chat/chatHeaderControls";
+import type { DiffRenderMode } from "./chat/chatHeaderControls";
 import {
   areAllRenderableFilesCollapsed,
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
@@ -94,7 +94,7 @@ import {
 import { DiffLineBlamePopover, type DiffLineBlameTarget } from "./DiffLineBlamePopover";
 import { DiffPanelCompareRefMenuSection } from "./DiffPanelCompareRefMenuSection";
 import { DiffPanelPatchViewport } from "./DiffPanelPatchViewport";
-import { DiffPanelToolbar } from "./DiffPanelToolbar";
+import { DiffPanelCloseButton, DiffPanelToolbar } from "./DiffPanelToolbar";
 import { DiffTruncationWarning } from "./DiffTruncationWarning";
 import { ReviewFileTreePanel } from "./ReviewFileTreePanel";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
@@ -109,6 +109,7 @@ import {
   type DiffPanelThreadCatalog,
 } from "./diffPanelSelectors";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import { TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME } from "./ui/button-group";
 import { IconButton } from "./ui/icon-button";
 import {
   Menu,
@@ -180,7 +181,8 @@ function EditorDiffOptionsMenu(props: {
           <IconButton
             variant="ghost"
             size="icon-xs"
-            className="text-muted-foreground hover:text-foreground"
+            shape="capsule"
+            className={TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME}
             label="Diff options"
             title="Diff options"
             onClick={() => {
@@ -379,7 +381,7 @@ function EditorDiffControls(props: {
     <div className="flex items-center gap-1">
       <DiffPanelChangeNavigationButtons
         navigation={props.changeNavigation}
-        className="text-muted-foreground hover:text-foreground"
+        className={TOOLBAR_ICON_BUTTON_TONE_CLASS_NAME}
       />
       <EditorDiffOptionsMenu
         scopePickerValue={props.scopePickerValue}
@@ -1410,18 +1412,7 @@ export default function DiffPanel({
         />
       ) : onClosePanel ? (
         <div className="flex h-full w-full items-center justify-end px-3 [-webkit-app-region:no-drag]">
-          <IconButton
-            variant="chrome"
-            size="icon-xs"
-            label="Close file view"
-            className={DOCK_HEADER_ICON_BUTTON_CLASS}
-            onClick={(event) => {
-              event.stopPropagation();
-              onClosePanel();
-            }}
-          >
-            <XIcon className="size-3.5" />
-          </IconButton>
+          <DiffPanelCloseButton onClose={onClosePanel} />
         </div>
       ) : null,
     [

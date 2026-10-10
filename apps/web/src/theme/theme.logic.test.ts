@@ -26,11 +26,61 @@ const PROVIDED_THEME_STRING =
   'codex-theme-v1:{"codeThemeId":"linear","theme":{"accent":"#606acc","contrast":30,"fonts":{"code":"\\"Jetbrains Mono\\"","ui":"Inter"},"ink":"#e3e4e6","opaqueWindows":true,"semanticColors":{"diffAdded":"#69c967","diffRemoved":"#ff7e78","skill":"#c2a1ff"},"surface":"#0f0f11"},"variant":"dark"}';
 
 describe("parseStoredThemeState", () => {
-  it("migrates the legacy mode-only value into the new theme store", () => {
-    expect(parseStoredThemeState("dark")).toEqual({
-      ...DEFAULT_THEME_STATE,
-      mode: "dark",
-    });
+  it.each([null, undefined, ""])("uses Synara for an absent stored theme (%j)", (raw) => {
+    const state = parseStoredThemeState(raw);
+    expect(state.codeThemeIds).toEqual({ dark: "synara", light: "synara" });
+    expect(state.chromeThemes.dark.accent).toBe("#f2612d");
+    expect(state.chromeThemes.light.accent).toBe("#c74614");
+    expect(state.mode).toBe("system");
+  });
+
+  it.each(["dark", "light", "system"] as const)(
+    "preserves Codex for a legacy mode-only value (%s)",
+    (mode) => {
+      for (const raw of [mode, JSON.stringify({ mode })]) {
+        const state = parseStoredThemeState(raw);
+        expect(state.mode).toBe(mode);
+        expect(state.codeThemeIds).toEqual({ dark: "codex", light: "codex" });
+        expect(state.chromeThemes.dark.accent).toBe("#0169cc");
+        expect(state.chromeThemes.light.accent).toBe("#0169cc");
+      }
+    },
+  );
+
+  it.each(["codex", "linear", "synara"])(
+    "preserves saved %s colors and preferences without reapplying the preset",
+    (codeThemeId) => {
+      const saved = {
+        ...DEFAULT_THEME_STATE,
+        mode: "dark",
+        codeThemeIds: { dark: codeThemeId, light: "codex" },
+        chromeThemes: {
+          dark: {
+            ...getCodeThemeSeed(codeThemeId, "dark"),
+            accent: "#6073cc",
+            contrast: 22,
+            fonts: { code: "Menlo", ui: "Inter" },
+            opaqueWindows: true,
+          },
+          light: getCodeThemeSeed("codex", "light"),
+        },
+        systemUiFont: false,
+        translucency: {
+          dark: { opacity: 72, blur: null, sidebarOnly: true },
+          light: { opacity: 38, blur: 64, sidebarOnly: false },
+        },
+      };
+      expect(parseStoredThemeState(JSON.stringify(saved))).toEqual(saved);
+    },
+  );
+
+  it("resets only the selected variant to Synara when explicitly requested", () => {
+    const saved = parseStoredThemeState("dark");
+    const reset = resetThemeVariant(saved, "dark");
+    expect(reset.codeThemeIds).toEqual({ dark: "synara", light: "codex" });
+    expect(reset.chromeThemes.dark.accent).toBe("#f2612d");
+    expect(reset.chromeThemes.light).toEqual(saved.chromeThemes.light);
+    expect(reset.mode).toBe("dark");
   });
 
   it("normalizes partial stored packs against the per-variant defaults", () => {
@@ -52,11 +102,11 @@ describe("parseStoredThemeState", () => {
           accent: "#606acc",
           contrast: 0,
         },
-        light: DEFAULT_THEME_STATE.chromeThemes.light,
+        light: getCodeThemeSeed("codex", "light"),
       },
       codeThemeIds: {
         dark: "linear",
-        light: DEFAULT_THEME_STATE.codeThemeIds.light,
+        light: "codex",
       },
       mode: "light",
     });
@@ -119,7 +169,7 @@ describe("theme share strings", () => {
     );
 
     expect(parseThemeShareString(shareString)).toEqual({
-      codeThemeId: "codex",
+      codeThemeId: "synara",
       theme: resolveThemePack(DEFAULT_THEME_STATE, "dark").theme,
       variant: "dark",
     });
@@ -300,7 +350,7 @@ describe("buildThemeCssVariables", () => {
       const state = setThemeCodeThemeId(DEFAULT_THEME_STATE, "light", "vercel");
       const vercel = buildThemeCssVariables(resolveThemePack(state, "light"), "light", platform);
       const codex = buildThemeCssVariables(
-        resolveThemePack(DEFAULT_THEME_STATE, "light"),
+        { codeThemeId: "codex", theme: getCodeThemeSeed("codex", "light") },
         "light",
         platform,
       );
@@ -361,9 +411,12 @@ describe("window translucency", () => {
     translucency: { opacity, blur: 0, sidebarOnly: true },
   });
 
-  it("limits the glass to the sidebar by default", () => {
-    expect(DEFAULT_THEME_STATE.translucency.dark.sidebarOnly).toBe(true);
-    expect(DEFAULT_THEME_STATE.translucency.light.sidebarOnly).toBe(true);
+  it("defaults both themes to full-window glass with 90% opacity and 64 blur", () => {
+    const state = normalizeThemeState({});
+    expect(state.translucency).toEqual({
+      dark: { opacity: 90, blur: 64, sidebarOnly: false },
+      light: { opacity: 90, blur: 64, sidebarOnly: false },
+    });
   });
 
   it("makes the whole window one translucent coat when not limited to the sidebar", () => {
@@ -379,10 +432,25 @@ describe("window translucency", () => {
     expect(dark.variables["--app-content-surface"]).toBe("transparent");
     expect(dark.variables["--app-settings-surface"]).toBe("transparent");
     expect(dark.variables["--app-sidebar-surface"]).toBe("transparent");
-    expect(dark.variables["--app-sidebar-backdrop-filter"]).toBe("none");
     expect(dark.variables["--app-rail-shell-opacity"]).toBe("0%");
     expect(dark.variables["--app-sidebar-chip-surface"]).toBe(
       dark.variables["--app-window-background"],
+    );
+    // Raised chrome is a denser pane of the elevated tone, tracking the coat's opacity.
+    expect(dark.variables["--app-glass-raised-surface"]).toBe(
+      "color-mix(in srgb, var(--popover) 46%, transparent)",
+    );
+    // Overlays share that tint, and the body already paints the coat behind them.
+    expect(dark.variables["--app-overlay-surface"]).toBe(
+      dark.variables["--app-glass-raised-surface"],
+    );
+    expect(dark.variables["--app-overlay-backing"]).toBe("");
+    const light = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "light"), "light", {
+      ...macDesktop,
+      translucency: { opacity: 38, blur: null, sidebarOnly: false },
+    });
+    expect(light.variables["--app-glass-raised-surface"]).toBe(
+      "color-mix(in srgb, var(--popover) 15%, transparent)",
     );
   });
 
@@ -415,6 +483,12 @@ describe("window translucency", () => {
     expect(dark.material).toBe("translucent");
     expect(dark.translucencyScope).toBe("sidebar");
     expect(dark.variables["--app-window-background"]).toBe("transparent");
+    expect(dark.variables["--app-glass-raised-surface"]).toBe("");
+    // Off whole-window glass, overlays take the composer's fill and carry the coat themselves.
+    expect(dark.variables["--app-overlay-surface"]).toBe(
+      "color-mix(in srgb, var(--popover) 55%, transparent)",
+    );
+    expect(dark.variables["--app-overlay-backing"]).toBe(dark.variables["--app-sidebar-surface"]);
     expect(dark.variables["--app-content-surface"]).toBe(
       dark.variables["--color-background-surface"],
     );
@@ -439,19 +513,26 @@ describe("window translucency", () => {
   it("gives stored states without translucency the defaults and clamps edits", () => {
     const legacy = normalizeThemeState({ mode: "dark" });
     expect(legacy.translucency).toEqual(DEFAULT_THEME_STATE.translucency);
-    expect(legacy.translucency.dark.blur).toBeNull();
+    expect(legacy.translucency.dark.blur).toBe(64);
 
-    // States saved before the scope existed keep the sidebar-only glass they had.
+    // Missing scope uses the default while preserving explicit opacity and blur.
     expect(
       normalizeThemeState({ translucency: { dark: { opacity: 50, blur: 10 } } }).translucency.dark,
-    ).toEqual({ opacity: 50, blur: 10, sidebarOnly: true });
+    ).toEqual({ opacity: 50, blur: 10, sidebarOnly: false });
 
     const edited = setWindowTranslucency(legacy, "dark", {
       opacity: 140,
       blur: -3,
       sidebarOnly: false,
     });
-    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 0, sidebarOnly: false });
+    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 1, sidebarOnly: false });
+    // A stored see-through window (no fill, no blur) is repaired to the floors on load.
+    expect(
+      normalizeThemeState({ translucency: { dark: { opacity: 0, blur: 0, sidebarOnly: false } } })
+        .translucency.dark,
+    ).toEqual({ opacity: 15, blur: 1, sidebarOnly: false });
+    // Clearing the blur returns to the vibrancy material.
+    expect(setWindowTranslucency(edited, "dark", { blur: null }).translucency.dark.blur).toBeNull();
     expect(edited.translucency.light).toEqual(DEFAULT_THEME_STATE.translucency.light);
     expect(resetThemeVariant(edited, "dark").translucency.dark).toEqual(
       DEFAULT_THEME_STATE.translucency.dark,

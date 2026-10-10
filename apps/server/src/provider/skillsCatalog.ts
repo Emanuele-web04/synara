@@ -12,6 +12,7 @@ import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
 import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
+import YAML from "yaml";
 import { discoverClaudePluginSkillRoots } from "./claudePluginSkills.ts";
 
 type FrontmatterValue = string | boolean;
@@ -47,16 +48,51 @@ function parseYamlScalar(value: string): FrontmatterValue {
   return unquoted;
 }
 
-// Parses the small scalar frontmatter subset used by Agent Skills without pulling in YAML.
+// Some skills keep their short description under `metadata:`, which the line reader used to pick up.
+function readMetadataShortDescription(parsed: object): string | undefined {
+  const metadata = (parsed as { metadata?: unknown }).metadata;
+  if (typeof metadata !== "object" || metadata === null) {
+    return undefined;
+  }
+  const value = (metadata as Record<string, unknown>)["short-description"];
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+// Reads Agent Skills frontmatter as YAML so block scalars (`description: >-`) and nested maps
+// parse correctly. Frontmatter that is not valid YAML falls back to the lenient line reader.
 export function parseSkillFrontmatter(markdown: string): Record<string, FrontmatterValue> {
   const normalized = markdown.replace(/\r\n/g, "\n");
   const match = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/.exec(normalized);
   if (!match) {
     return {};
   }
+  const block = match[1] ?? "";
+
+  try {
+    // Skill files can come from untrusted repositories: `uniqueKeys: false` skips the quadratic
+    // duplicate-key check, and `logLevel: "error"` keeps unusual tags from printing process warnings.
+    const parsed: unknown = YAML.parse(block, { uniqueKeys: false, logLevel: "error" });
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      const record: Record<string, FrontmatterValue> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === "string") {
+          record[key] = value.trim();
+        } else if (typeof value === "boolean") {
+          record[key] = value;
+        }
+      }
+      const shortDescription = readMetadataShortDescription(parsed);
+      if (shortDescription !== undefined && record["short-description"] === undefined) {
+        record["short-description"] = shortDescription;
+      }
+      return record;
+    }
+  } catch {
+    // Not valid YAML: use the line reader below.
+  }
 
   const record: Record<string, FrontmatterValue> = {};
-  for (const line of (match[1] ?? "").split("\n")) {
+  for (const line of block.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) {
       continue;

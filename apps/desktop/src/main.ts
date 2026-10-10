@@ -1,3 +1,5 @@
+import { showDiagnosticStartupDialog } from "./startupDiagnosticDialog";
+import { BackendIssueDetector } from "./backendIssueDetector";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
@@ -48,6 +50,7 @@ import type {
   FileFilter,
   IpcMainEvent,
   MenuItemConstructorOptions,
+  MessageBoxOptions,
 } from "electron";
 import * as Effect from "effect/Effect";
 import type {
@@ -63,7 +66,7 @@ import {
   type UpdateDownloadedEvent,
 } from "electron-updater";
 
-import type { DesktopContextMenuItem } from "@synara/contracts";
+import { buildContextMenuTemplate } from "./contextMenuTemplate";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
@@ -117,7 +120,7 @@ import {
   type BetaDiagnosticsEventName,
 } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
-import { showDesktopConfirmDialog } from "./confirmDialog";
+import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
@@ -155,6 +158,7 @@ import {
   quitConfirmationPresentationForPlatform,
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
+import { installShutdownSignalHandlers } from "./shutdownSignals";
 import {
   hasVerifiedDesktopMigrationRestore,
   hasPendingDesktopMigrationRecovery,
@@ -226,10 +230,14 @@ import {
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
   applyDesktopPhysicalZoomAction,
+  DEFAULT_DESKTOP_MENU_ACCELERATORS,
+  type DesktopMenuAccelerators,
   resolveDesktopMenuAccelerator,
   resolveDesktopPhysicalZoomAction,
   resolveDesktopZoomShortcutAction,
   resolveKeyboardShortcutsMenuAccelerator,
+  resolveReportedMenuAccelerators,
+  sameDesktopMenuAccelerators,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
 import {
@@ -277,6 +285,7 @@ import { BrowserVault } from "./browserAutomation/browserVault";
 import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
 import { registerBrowserVaultIpc } from "./browserVaultIpc";
 import { registerSafariAccessIpc } from "./safariAccessIpc";
+import { showInFileManager } from "./showInFileManager";
 import { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
 import { shutdownBrowserServices } from "./browserAutomation/browserShutdown";
 import {
@@ -296,7 +305,7 @@ import {
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
 } from "./desktopUserDataProfile";
-import { isBrokenPipeError } from "./desktopProcessErrors";
+import { handleDesktopStdioError, isBrokenPipeError } from "./desktopProcessErrors";
 import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
   readCustomTitleBarPreference,
@@ -323,7 +332,11 @@ import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
 import { notifyBackendComputerEmergencyStop } from "./computerEmergencyStopNotice";
 import { EscapeKillSwitchMonitor } from "./escapeKillSwitchMonitor";
-import { AudioLevelMonitor } from "./audioLevelMonitor";
+import {
+  AudioLevelMonitor,
+  listAudioInputDevices,
+  MAX_MICROPHONE_ID_LENGTH,
+} from "./audioLevelMonitor";
 import { AUDIO_TRAIL_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
@@ -430,6 +443,27 @@ const betaDiagnostics =
         appVersion: app.getVersion(),
         platform: process.platform,
         arch: process.arch,
+        sampleMemory: () => {
+          const counters = { mainRssMb: 0, rendererRssMb: 0, gpuRssMb: 0, utilityRssMb: 0 };
+          for (const metric of app.getAppMetrics()) {
+            const mib = metric.memory.workingSetSize / 1024;
+            switch (metric.type) {
+              case "Browser":
+                counters.mainRssMb += mib;
+                break;
+              case "Tab":
+                counters.rendererRssMb += mib;
+                break;
+              case "GPU":
+                counters.gpuRssMb += mib;
+                break;
+              case "Utility":
+                counters.utilityRssMb += mib;
+                break;
+            }
+          }
+          return counters;
+        },
       })
     : null;
 
@@ -454,6 +488,11 @@ const trackBetaDiagnostics = (
 ): void => {
   betaDiagnostics?.track(event, payload);
 };
+
+// Handle launcher pipe failures at their source. The file log remains available
+// after stdout/stderr closes; unrelated stream/process errors still propagate.
+process.stdout.on("error", handleDesktopStdioError);
+process.stderr.on("error", handleDesktopStdioError);
 
 // Monitor-only: observes uncaught exceptions for diagnostics without changing
 // Node's exit behavior — the POSIX EPIPE filter and the default crash path
@@ -497,6 +536,9 @@ const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as co
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = desktopFlavor === "beta";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
+// User keybindings mirrored onto View menu items. Every window reports the same
+// server-owned keybindings, so the latest report wins.
+let desktopMenuAccelerators: DesktopMenuAccelerators = DEFAULT_DESKTOP_MENU_ACCELERATORS;
 const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
 const DESKTOP_MENU_MAX_ZOOM_FACTOR = 5;
 const SYNARA_BROWSER_LABEL = "Synara browser";
@@ -531,6 +573,7 @@ let isUpdaterQuitAndInstallInFlight = false;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 const runningChatsQuitGuard = makeRunningChatsQuitGuard();
+let nativeQuitConfirmationPromise: Promise<boolean> | null = null;
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForDatabaseRestore = false;
 const migrationConsentHandoff = new MigrationConsentHandoff();
@@ -1845,8 +1888,9 @@ function configureApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [];
   const keyboardShortcutsAccelerator = resolveKeyboardShortcutsMenuAccelerator(process.platform);
   const acceleratorProps = (
-    accelerator: MenuItemConstructorOptions["accelerator"],
+    accelerator: MenuItemConstructorOptions["accelerator"] | null,
   ): Pick<MenuItemConstructorOptions, "accelerator"> => {
+    if (!accelerator) return {};
     const resolved = resolveDesktopMenuAccelerator(process.platform, accelerator);
     return resolved ? { accelerator: resolved } : {};
   };
@@ -1919,18 +1963,18 @@ function configureApplicationMenu(): void {
       submenu: [
         {
           label: "New Terminal Tab",
-          ...acceleratorProps("CmdOrCtrl+T"),
+          ...acceleratorProps(desktopMenuAccelerators["terminal.new"]),
           click: () => dispatchMenuAction("new-terminal-tab"),
         },
         { type: "separator" },
         {
           label: "Toggle Sidebar",
-          ...acceleratorProps("CmdOrCtrl+B"),
+          ...acceleratorProps(desktopMenuAccelerators["sidebar.toggle"]),
           click: () => dispatchMenuAction("toggle-sidebar"),
         },
         {
           label: "Toggle Browser",
-          ...acceleratorProps("CmdOrCtrl+Shift+B"),
+          ...acceleratorProps(desktopMenuAccelerators["browser.toggle"]),
           click: () => dispatchMenuAction("toggle-browser"),
         },
         { type: "separator" },
@@ -4188,6 +4232,7 @@ function schemaTooNewRestoreDetail(
 
 async function handleDesktopSchemaTooNewRecovery(
   block: MigrationSchemaTooNewStartupBlock,
+  diagnosticId: string | null = null,
 ): Promise<void> {
   const paths = desktopMigrationRecoveryPaths();
   const restoreCandidate = resolveDesktopMigrationRestoreCandidate(paths, block);
@@ -4224,29 +4269,33 @@ async function handleDesktopSchemaTooNewRecovery(
         { label: "Quit", decision: "quit" },
       );
 
-      const result = await dialog.showMessageBox({
-        type: previousFailure === null ? "warning" : "error",
-        title:
-          previousFailure === null
-            ? "This database is newer than Synara"
-            : restoreFailed
-              ? "Database restore failed"
-              : "Synara could not update itself",
-        message:
-          previousFailure === null
-            ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
-            : restoreFailed
-              ? "The verified database backup could not be restored."
-              : "The newest Synara release could not be installed.",
-        detail:
-          `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
-          `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
-          "The backend and provider processes will remain stopped until you update, restore, or quit.",
-        buttons: choices.map((choice) => choice.label),
-        defaultId: 0,
-        cancelId: choices.length - 1,
-        noLink: true,
-      });
+      const result = await showDiagnosticStartupDialog(
+        {
+          type: previousFailure === null ? "warning" : "error",
+          title:
+            previousFailure === null
+              ? "This database is newer than Synara"
+              : restoreFailed
+                ? "Database restore failed"
+                : "Synara could not update itself",
+          message:
+            previousFailure === null
+              ? `Database migration ${block.databaseMigrationId} is newer than this build supports (${block.latestSupportedMigrationId}).`
+              : restoreFailed
+                ? "The verified database backup could not be restored."
+                : "The newest Synara release could not be installed.",
+          detail:
+            `${previousFailure === null ? "" : `${previousFailure.message}\n\n`}` +
+            `${schemaTooNewRestoreDetail(block, restoreCandidate)}\n\n` +
+            "The backend and provider processes will remain stopped until you update, restore, or quit.",
+          buttons: choices.map((choice) => choice.label),
+          defaultId: 0,
+          cancelId: choices.length - 1,
+          noLink: true,
+        },
+        diagnosticId,
+        betaDiagnostics,
+      );
       return choices[result.response]?.decision ?? "quit";
     },
     installUpdate: installLatestUpdateForMigrationRecovery,
@@ -4282,9 +4331,18 @@ async function handleDesktopSchemaTooNewRecovery(
 function handleBackendStartupBlock(block: BackendStartupBlock): void {
   if (isQuitting || backendLifecycleDialogInFlight) return;
 
+  const diagnosticId =
+    betaDiagnostics?.trackIssue("main", {
+      code: `startup.${block.kind}`,
+      ...(block.kind === "database-locked"
+        ? { reason: block.ownerPid === null ? "unknown-owner" : "live-owner" }
+        : {}),
+    }) ?? null;
+  const showBlockDialog = (options: MessageBoxOptions) =>
+    showDiagnosticStartupDialog(options, diagnosticId, betaDiagnostics);
   const task = (async () => {
     if (block.kind === "migration-schema-too-new") {
-      await handleDesktopSchemaTooNewRecovery(block.block);
+      await handleDesktopSchemaTooNewRecovery(block.block, diagnosticId);
       return;
     }
 
@@ -4299,7 +4357,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
             canInstallUpdate: canInstallUpdateFromRecovery(),
             canOpenReleasePage: releaseUrl !== null,
           });
-          const result = await dialog.showMessageBox({
+          const result = await showBlockDialog({
             type: "error",
             title:
               previousFailure === null
@@ -4338,7 +4396,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
 
     if (block.kind === "migration-divergence-consent-required") {
       const challenge = block.challenge;
-      const result = await dialog.showMessageBox({
+      const result = await showBlockDialog({
         type: "warning",
         title: "Synara found a different database migration history",
         message: `Migration ${challenge.firstDivergedId} does not match this build.`,
@@ -4364,7 +4422,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
     }
 
     if (block.kind === "migration-runtime-identity-mismatch") {
-      await dialog.showMessageBox({
+      await showBlockDialog({
         type: "error",
         title: "Synara's server build does not match",
         message: "The desktop and server migration code came from different builds.",
@@ -4380,7 +4438,7 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
     }
 
     if (block.kind === "migration-recovery-required") {
-      const result = await dialog.showMessageBox({
+      const result = await showBlockDialog({
         type: "warning",
         title: "Synara needs to recover its database",
         message: "A database migration did not finish safely.",
@@ -4402,25 +4460,41 @@ function handleBackendStartupBlock(block: BackendStartupBlock): void {
 
     const processDetail =
       block.ownerPid === null
-        ? "Another Synara server is already using this database."
+        ? "Synara could not verify the database lock. The lock may be left over from an interrupted startup, or another server may still be using it."
         : `Another Synara server (process ${block.ownerPid}) is already using this database.`;
-    const result = await dialog.showMessageBox({
-      type: "warning",
-      title: "Synara is already running elsewhere",
-      message: "Your local Synara data is in use by another process.",
-      detail: `${processDetail}\n\nStop the other Synara app or development server, then try again. Your data has not been changed.`,
-      buttons: ["Try again", "Quit"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (result.response === 0) {
-      // Let a fast failed retry present the block again instead of racing this
-      // dialog task's finalizer and leaving the window inert.
-      backendLifecycleDialogInFlight = null;
-      await restartBackendAfterCrash("database lifecycle lock retry", "lifecycle");
-    } else {
-      requestGracefulAppQuit("database lifecycle lock");
+    for (;;) {
+      const result = await showBlockDialog({
+        type: "warning",
+        title:
+          block.ownerPid === null
+            ? "Synara could not verify database ownership"
+            : "Synara is already running elsewhere",
+        message:
+          block.ownerPid === null
+            ? "Synara could not safely open your local data."
+            : "Your local Synara data is in use by another process.",
+        detail:
+          `${processDetail}\n\nClose any other Synara app or development server using this data, then try again. ` +
+          "If this keeps happening, open the logs to see the underlying lock error. Your data has not been changed.\n\n" +
+          `Log file:\n${Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME)}`,
+        buttons: ["Try again", "Open logs", "Quit"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      });
+      if (result.response === 1) {
+        await openDesktopLogDirectory();
+        continue;
+      }
+      if (result.response === 0) {
+        // Let a fast failed retry present the block again instead of racing this
+        // dialog task's finalizer and leaving the window inert.
+        backendLifecycleDialogInFlight = null;
+        await restartBackendAfterCrash("database lifecycle lock retry", "lifecycle");
+      } else {
+        requestGracefulAppQuit("database lifecycle lock");
+      }
+      return;
     }
   })().finally(() => {
     if (backendLifecycleDialogInFlight === task) {
@@ -4567,7 +4641,18 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     writeStderr: (chunk) => {
       process.stderr.write(chunk);
     },
-    detectors: [listeningDetector, startupBlockDetector, outputTailDetector],
+    detectors: [
+      listeningDetector,
+      startupBlockDetector,
+      outputTailDetector,
+      ...(betaDiagnostics
+        ? [
+            new BackendIssueDetector((issue) => {
+              betaDiagnostics.trackIssue("main", issue);
+            }),
+          ]
+        : []),
+    ],
   });
 
   // Readiness is authoritative even when the optional log marker is delayed or
@@ -4806,6 +4891,18 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
   }
 
   const window = mainWindow;
+  if (!isMainRendererAvailable()) {
+    nativeQuitConfirmationPromise ??= showDesktopConfirmDialog(`Quit ${APP_DISPLAY_NAME}?`, null)
+      .catch((error) => {
+        console.warn("[desktop] Failed to confirm app quit", error);
+        return false;
+      })
+      .finally(() => {
+        nativeQuitConfirmationPromise = null;
+      });
+    if (await nativeQuitConfirmationPromise) requestGracefulAppQuit(reason);
+    return;
+  }
   const presentation = quitConfirmationPresentationForPlatform();
   const allowed = await runningChatsQuitGuard.askRenderer({
     send: (request) => {
@@ -4979,6 +5076,14 @@ function registerIpcHandlers(): void {
     runningChatsQuitGuard.receiveResponse(payload);
   });
 
+  ipcMain.removeHandler(IPC.setMenuShortcuts);
+  ipcMain.handle(IPC.setMenuShortcuts, (_event, rawShortcuts: unknown) => {
+    const accelerators = resolveReportedMenuAccelerators(rawShortcuts, process.platform);
+    if (!accelerators || sameDesktopMenuAccelerators(accelerators, desktopMenuAccelerators)) return;
+    desktopMenuAccelerators = accelerators;
+    if (app.isReady()) configureApplicationMenu();
+  });
+
   ipcMain.removeHandler(IPC.setTheme);
   ipcMain.handle(IPC.setTheme, async (_event, rawTheme: unknown) => {
     const theme = getSafeTheme(rawTheme);
@@ -5017,20 +5122,7 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.contextMenu);
   ipcMain.handle(
     IPC.contextMenu,
-    async (_event, items: DesktopContextMenuItem[], position?: { x: number; y: number }) => {
-      const normalizedItems = items
-        .filter((item) => typeof item.id === "string" && typeof item.label === "string")
-        .map((item) => ({
-          id: item.id,
-          label: item.label,
-          separatorBefore: item.separatorBefore === true,
-          destructive: item.destructive === true,
-          icon: createContextMenuIcon(item.iconDataUrl),
-        }));
-      if (normalizedItems.length === 0) {
-        return null;
-      }
-
+    async (_event, items: unknown, position?: { x: number; y: number }) => {
       const popupPosition =
         position &&
         Number.isFinite(position.x) &&
@@ -5047,30 +5139,19 @@ function registerIpcHandlers(): void {
       if (!window) return null;
 
       return new Promise<string | null>((resolve) => {
-        const template: MenuItemConstructorOptions[] = [];
-        let hasInsertedDestructiveSeparator = false;
-        for (const item of normalizedItems) {
-          const shouldInsertSeparator =
-            item.separatorBefore ||
-            (item.destructive && !hasInsertedDestructiveSeparator && template.length > 0);
-          if (shouldInsertSeparator && template.length > 0) {
-            template.push({ type: "separator" });
-          }
-          if (item.destructive) {
-            hasInsertedDestructiveSeparator = true;
-          }
-          const itemOption: MenuItemConstructorOptions = {
-            label:
-              process.platform === "darwin"
-                ? `${item.label}${MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING}`
-                : item.label,
-            click: () => resolve(item.id),
-          };
-          const icon = item.icon ?? (item.destructive ? getDestructiveMenuIcon() : undefined);
-          if (icon) {
-            itemOption.icon = icon;
-          }
-          template.push(itemOption);
+        const template = buildContextMenuTemplate(items, {
+          decorateLabel: (label) =>
+            process.platform === "darwin"
+              ? `${label}${MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING}`
+              : label,
+          resolveIcon: (item) =>
+            createContextMenuIcon(item.iconDataUrl) ??
+            (item.destructive === true ? getDestructiveMenuIcon() : undefined),
+          onSelect: resolve,
+        });
+        if (template.length === 0) {
+          resolve(null);
+          return;
         }
 
         const menu = Menu.buildFromTemplate(template);
@@ -5145,15 +5226,7 @@ function registerIpcHandlers(): void {
       throw new Error(`Folder not found: ${resolvedPath}`);
     }
 
-    if (stats.isDirectory()) {
-      const errorMessage = await shell.openPath(resolvedPath);
-      if (errorMessage.trim().length > 0) {
-        throw new Error(errorMessage);
-      }
-      return;
-    }
-
-    shell.showItemInFolder(resolvedPath);
+    await showInFileManager(resolvedPath, stats.isDirectory(), process.platform, shell);
   });
 
   ipcMain.removeHandler(IPC.windowMinimize);
@@ -5227,43 +5300,63 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.removeHandler(IPC.audioLevel.setSource);
-  ipcMain.handle(IPC.audioLevel.setSource, async (event, rawSource: unknown) => {
-    // Authoritative gate: macOS only, and kept out of Stable while Beta-only.
+  ipcMain.handle(
+    IPC.audioLevel.setSource,
+    async (event, rawSource: unknown, rawMicrophoneId: unknown) => {
+      // Authoritative gate: macOS only; channel availability follows the shared feature list.
+      if (
+        process.platform !== "darwin" ||
+        !isBetaFeatureEnabled(AUDIO_TRAIL_BETA_FEATURE, desktopFlavor)
+      ) {
+        return "unsupported";
+      }
+      const sender = event.sender;
+      const source =
+        rawSource === "system" || rawSource === "microphone" || rawSource === "both"
+          ? rawSource
+          : null;
+      const microphoneId =
+        typeof rawMicrophoneId === "string" &&
+        rawMicrophoneId.length > 0 &&
+        rawMicrophoneId.length <= MAX_MICROPHONE_ID_LENGTH
+          ? rawMicrophoneId
+          : null;
+      audioLevelMonitor ??= new AudioLevelMonitor({
+        helperPath: resolveAppSnapHelperPath(),
+        onLevel: (level) => {
+          for (const { contents } of audioLevelSubscribers.values()) {
+            if (!contents.isDestroyed()) contents.send(IPC.audioLevel.level, level);
+          }
+        },
+        onError: (message) => safeConsoleError(`[desktop] Audio level: ${message}`),
+      });
+      if (source && !audioLevelSubscribers.has(sender.id)) {
+        // A closed or reloaded window must not keep the audio tap or microphone alive.
+        const release = () => {
+          sender.off("destroyed", release);
+          sender.off("did-navigate", release);
+          audioLevelSubscribers.delete(sender.id);
+          audioLevelMonitor?.setSubscription(sender.id, null);
+        };
+        sender.once("destroyed", release);
+        sender.once("did-navigate", release);
+        audioLevelSubscribers.set(sender.id, { contents: sender, release });
+      } else if (!source) {
+        audioLevelSubscribers.get(sender.id)?.release();
+      }
+      return audioLevelMonitor.setSubscription(sender.id, source, microphoneId);
+    },
+  );
+
+  ipcMain.removeHandler(IPC.audioLevel.listMicrophones);
+  ipcMain.handle(IPC.audioLevel.listMicrophones, async () => {
     if (
       process.platform !== "darwin" ||
       !isBetaFeatureEnabled(AUDIO_TRAIL_BETA_FEATURE, desktopFlavor)
     ) {
-      return "unsupported";
+      return [];
     }
-    const sender = event.sender;
-    const source =
-      rawSource === "system" || rawSource === "microphone" || rawSource === "both"
-        ? rawSource
-        : null;
-    audioLevelMonitor ??= new AudioLevelMonitor({
-      helperPath: resolveAppSnapHelperPath(),
-      onLevel: (level) => {
-        for (const { contents } of audioLevelSubscribers.values()) {
-          if (!contents.isDestroyed()) contents.send(IPC.audioLevel.level, level);
-        }
-      },
-      onError: (message) => safeConsoleError(`[desktop] Audio level: ${message}`),
-    });
-    if (source && !audioLevelSubscribers.has(sender.id)) {
-      // A closed or reloaded window must not keep the audio tap or microphone alive.
-      const release = () => {
-        sender.off("destroyed", release);
-        sender.off("did-navigate", release);
-        audioLevelSubscribers.delete(sender.id);
-        audioLevelMonitor?.setSubscription(sender.id, null);
-      };
-      sender.once("destroyed", release);
-      sender.once("did-navigate", release);
-      audioLevelSubscribers.set(sender.id, { contents: sender, release });
-    } else if (!source) {
-      audioLevelSubscribers.get(sender.id)?.release();
-    }
-    return audioLevelMonitor.setSubscription(sender.id, source);
+    return listAudioInputDevices(resolveAppSnapHelperPath());
   });
 
   const betaChannel = new DesktopBetaChannel({
@@ -5652,6 +5745,17 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
+  if (process.platform === "darwin") {
+    guardDesktopWindowClose(
+      window,
+      `Close the ${APP_DISPLAY_NAME} window?`,
+      () =>
+        !isQuitting &&
+        !desktopShutdownComplete &&
+        !isUpdaterQuitAndInstallInFlight &&
+        !isUpdaterInstallPreparing,
+    );
+  }
   window.on("close", (event) => {
     try {
       writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
@@ -5727,6 +5831,9 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   };
 
   window.webContents.on("render-process-gone", (_event, details) => {
+    const description = `reason=${details.reason} exitCode=${details.exitCode}`;
+    writeDesktopLogHeader(`renderer process gone ${description}`);
+    safeConsoleError(`[desktop] renderer process gone (${description})`);
     // A renderer that dies while hosting the quit-confirmation ask can never
     // answer it — declining would abandon a requested quit and (worse) show
     // the recovery prompt below, leaving a dead-UI app alive forever. Allow
@@ -5746,9 +5853,6 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
           ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME))
           : undefined,
       });
-    const description = `reason=${details.reason} exitCode=${details.exitCode}`;
-    writeDesktopLogHeader(`renderer process gone ${description}`);
-    safeConsoleError(`[desktop] renderer process gone (${description})`);
 
     const response = rendererCrashPolicy.respondToCrash({
       reason: details.reason,
@@ -6231,15 +6335,9 @@ if (process.platform !== "win32") {
     requestGracefulAppQuit("EPIPE");
   });
 
-  process.on("SIGINT", () => {
+  installShutdownSignalHandlers(app.whenReady(), (signal) => {
     if (desktopShutdownPromise) return;
-    writeDesktopLogHeader("SIGINT received");
-    requestGracefulAppQuit("SIGINT");
-  });
-
-  process.on("SIGTERM", () => {
-    if (desktopShutdownPromise) return;
-    writeDesktopLogHeader("SIGTERM received");
-    requestGracefulAppQuit("SIGTERM");
+    writeDesktopLogHeader(`${signal} received`);
+    requestGracefulAppQuit(signal);
   });
 }

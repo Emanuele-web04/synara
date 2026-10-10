@@ -6,6 +6,7 @@ import {
   createDefaultRightDockState,
   findMissingSidechatPaneIds,
   isRightDockPaneKind,
+  movePaneInState,
   openPaneInState,
   resolveVisibleDockSidechatThreadIds,
   sanitizeRightDockStateByThreadId,
@@ -373,6 +374,26 @@ describe("file panes", () => {
   });
 });
 
+describe("movePaneInState", () => {
+  it("moves a dragged tab into the slot of the tab it is dropped on", () => {
+    const state = ["a.md", "b.md", "c.md"].reduce(
+      (current, filePath) => openPaneInState(current, { paneId: filePath, kind: "file", filePath }),
+      createDefaultRightDockState(),
+    );
+    const moved = movePaneInState(state, "a.md", "c.md");
+    expect(moved.panes.map((pane) => pane.id)).toEqual(["b.md", "c.md", "a.md"]);
+    // Reordering is not a selection: the active pane stays the one last opened.
+    expect(moved.activePaneId).toBe("c.md");
+    expect(movePaneInState(state, "c.md", "a.md").panes.map((pane) => pane.id)).toEqual([
+      "c.md",
+      "a.md",
+      "b.md",
+    ]);
+    expect(movePaneInState(state, "b.md", "b.md")).toBe(state);
+    expect(movePaneInState(state, "b.md", "missing")).toBe(state);
+  });
+});
+
 describe("sanitizeRightDockStateByThreadId", () => {
   it("sanitizes every thread entry and skips undefined values", () => {
     const result = sanitizeRightDockStateByThreadId({
@@ -428,5 +449,26 @@ describe("setSidechatPaneThreadInState", () => {
     expect(next).toMatchObject({ open: true, panes: [], activePaneId: null });
     const empty = createDefaultRightDockState();
     expect(setSidechatPaneThreadInState(empty, { paneId: "p", threadId: null })).toBe(empty);
+  });
+});
+
+describe("terminal panes", () => {
+  it("adds and activates a new tab on every open", () => {
+    let state = createDefaultRightDockState();
+    for (const paneId of ["terminal-a", "terminal-b", "terminal-c"]) {
+      state = openPaneInState(state, { paneId, kind: "terminal" });
+      expect(state.activePaneId).toBe(paneId);
+    }
+    expect(state.panes.map((pane) => pane.id)).toEqual(["terminal-a", "terminal-b", "terminal-c"]);
+  });
+
+  it("preserves every terminal tab and the selection when restoring the dock", () => {
+    const state = sanitizeRightDockThreadState({
+      open: true,
+      activePaneId: "terminal-b",
+      panes: ["terminal-a", "terminal-b", "terminal-c"].map((id) => ({ id, kind: "terminal" })),
+    });
+    expect(state.panes.map((pane) => pane.id)).toEqual(["terminal-a", "terminal-b", "terminal-c"]);
+    expect(state.activePaneId).toBe("terminal-b");
   });
 });

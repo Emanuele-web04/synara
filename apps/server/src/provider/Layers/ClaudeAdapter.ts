@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import { claudeTurnResultUsage, type ClaudeResultUsageBaseline } from "../claudeResultUsage.ts";
 import { restoreClaudeImportedCopyDates } from "../claudeImportedCopyDates.ts";
 /**
@@ -83,6 +84,7 @@ import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
 import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { approvalRequestKindFromRequestType } from "@synara/shared/threadSummary";
+import { nonEmptyTrimmed } from "@synara/shared/text";
 import {
   claudeCacheContextTokens,
   claudeCacheFromRequest,
@@ -90,6 +92,7 @@ import {
   claudeCacheForModel,
 } from "../claudeCacheObservation.ts";
 import { compareSemverVersions } from "../providerMaintenance.ts";
+import { isImageGenerationToolName } from "../imageGenerationTool.ts";
 import { redactSensitiveJsonFields } from "../../sensitiveKeys.ts";
 import {
   Cause,
@@ -197,7 +200,6 @@ export { claudeHomeEnvironment } from "../claudeEnvironment.ts";
 
 const PROVIDER = "claudeAgent" as const;
 const CLAUDE_DISCOVERY_THREAD_ID = ThreadId.makeUnsafe("claude:discovery");
-type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
   "command_output" | "file_change_output"
@@ -237,6 +239,11 @@ interface ClaudeTurnState {
   compactionInProgress?: boolean;
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
+  readonly reasoningBlocks: Map<
+    string,
+    { itemId: string; text: string; completed: boolean; snapshotReceived?: boolean }
+  >;
+  reasoningMessageId?: string;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
@@ -425,6 +432,9 @@ interface ClaudeSessionContext {
   processedTokenBaselineKnown: boolean;
   readonly requestUsage: ClaudeRequestUsage;
   lastResultUuid: string | undefined;
+  // Last effective fast-mode state Claude Code reported, as `state:reason`.
+  // `currentFastMode` is only what was requested; the account can still refuse it.
+  lastFastModeSignature: string | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   // Original API model id the runtime rerouted away from (safeguard refusal
@@ -516,19 +526,24 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly close: () => void;
 }
 
-function prestartClaudeMessageStream(queryRuntime: ClaudeQueryRuntime): AsyncIterable<SDKMessage> {
-  // SDK discovery waits for a handshake that only starts on the first iterator read.
-  // Keep that read for the real stream consumer, while making cancellation win the
-  // race so session teardown never waits on an unread first message.
+function cancellableClaudeMessageStream(
+  queryRuntime: AsyncIterable<SDKMessage>,
+  options: { readonly prestart: boolean },
+): AsyncIterable<SDKMessage> {
+  // Stream interruption awaits the iterator's `return()`, and an SDK query is an async
+  // generator: its `return()` queues behind the pending `next()`, which never settles
+  // while Claude sits idle. Cancellation must win that race, or stopping an idle session
+  // hangs before the process tree is torn down, and quit leaves Claude running.
+  // SDK discovery (Auto mode) waits for a handshake that only starts on the first
+  // iterator read, so `prestart` issues that read now and keeps it for the consumer.
   const iterator = queryRuntime[Symbol.asyncIterator]();
-  const firstResult = iterator.next();
-  void firstResult.catch(() => undefined);
+  let firstResult = options.prestart ? iterator.next() : undefined;
+  void firstResult?.catch(() => undefined);
   const doneResult: IteratorResult<SDKMessage> = { done: true, value: undefined };
   let resolveClosed!: (result: IteratorResult<SDKMessage>) => void;
   const closedResult = new Promise<IteratorResult<SDKMessage>>((resolve) => {
     resolveClosed = resolve;
   });
-  let firstResultPending = true;
   let closed = false;
 
   const raceWithClose = (
@@ -543,8 +558,8 @@ function prestartClaudeMessageStream(queryRuntime: ClaudeQueryRuntime): AsyncIte
       if (closed) {
         return Promise.resolve(doneResult);
       }
-      const result = firstResultPending ? firstResult : iterator.next();
-      firstResultPending = false;
+      const result = firstResult ?? iterator.next();
+      firstResult = undefined;
       return raceWithClose(result);
     },
     return: async () => {
@@ -571,8 +586,12 @@ interface ClaudeProcessOwner {
   process?: ClaudeOwnedProcess;
 }
 
-function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedProcess {
+function spawnOwnedClaudeCodeProcess(
+  options: ClaudeSpawnOptions,
+  lowerPriority: boolean,
+): ClaudeOwnedProcess {
   return spawnProcess(options.command, options.args, {
+    lowerPriority,
     requireExecutable: true,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     env: options.env,
@@ -1168,6 +1187,14 @@ function hasActiveClaudeCompactionWork(context: ClaudeSessionContext): boolean {
 
 function classifyToolItemType(toolName: string): CanonicalItemType {
   const normalized = toolName.toLowerCase();
+  // Claude SDK qualifies MCP tools as mcp__<server>__<tool>. Match the exact
+  // terminal tool name before server names and broad edit/image checks interfere.
+  const mcpSeparator = toolName.startsWith("mcp__") ? toolName.indexOf("__", "mcp__".length) : -1;
+  const nativeToolName =
+    mcpSeparator > "mcp__".length ? toolName.slice(mcpSeparator + 2) : toolName;
+  if (isImageGenerationToolName(nativeToolName)) {
+    return "image_generation";
+  }
   if (
     normalized === "todowrite" ||
     normalized.includes("todo") ||
@@ -1339,6 +1366,8 @@ function titleForTool(itemType: CanonicalItemType): string {
       return "Web search";
     case "image_view":
       return "Image view";
+    case "image_generation":
+      return "Image generation";
     case "dynamic_tool_call":
       return "Tool call";
     default:
@@ -1588,8 +1617,13 @@ function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStat
   return "failed";
 }
 
-function streamKindFromDeltaType(deltaType: string): ClaudeTextStreamKind {
-  return deltaType.includes("thinking") ? "reasoning_text" : "assistant_text";
+function claudeFastModeSignature(message: {
+  readonly fast_mode_state?: string | undefined;
+  readonly fast_mode_disabled_reason?: string | undefined;
+}): string | undefined {
+  return message.fast_mode_state === undefined
+    ? undefined
+    : `${message.fast_mode_state}:${message.fast_mode_disabled_reason ?? ""}`;
 }
 
 function nativeProviderRefs(
@@ -2098,7 +2132,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       const { forkSession } = await loadClaudeAgentSdk();
       return forkSession(sessionId, forkOptions);
     };
-    const spawnClaudeProcess = options?.spawnClaudeCodeProcess ?? spawnOwnedClaudeCodeProcess;
     const teardownProcessTree = options?.teardownProcessTree ?? teardownProviderProcessTree;
     const readClaudeCliVersion = options?.readClaudeCliVersion ?? readInstalledClaudeCliVersion;
 
@@ -2194,9 +2227,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       );
 
     const bindClaudeProcessOwner =
-      (owner: ClaudeProcessOwner) =>
+      (owner: ClaudeProcessOwner, lowerPriority: boolean) =>
       (spawnOptions: ClaudeSpawnOptions): ClaudeSpawnedProcess => {
-        const process = spawnClaudeProcess(spawnOptions);
+        const process = options?.spawnClaudeCodeProcess
+          ? options.spawnClaudeCodeProcess(spawnOptions)
+          : spawnOwnedClaudeCodeProcess(spawnOptions, lowerPriority);
         owner.process = process;
         return process;
       };
@@ -3556,6 +3591,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           processedTokenBaselineKnown: true,
           requestUsage: new ClaudeRequestUsage(),
           lastResultUuid: undefined,
+          lastFastModeSignature: undefined,
           lastAssistantUuid: undefined,
           lastThreadStartedId: undefined,
           rerouteOriginalApiModelId: undefined,
@@ -3655,6 +3691,86 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
       });
 
+    // A turn contains several API messages, each of which reuses block indices.
+    const emitReasoning = (
+      context: ClaudeSessionContext,
+      index: number,
+      text: string,
+      complete: boolean,
+      snapshot?: { key: string },
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const turn = context.turnState;
+        if (!turn) return;
+        const key = snapshot?.key ?? `${turn.reasoningMessageId ?? "partial"}:${index}`;
+        let block = turn.reasoningBlocks.get(key);
+        if ((!snapshot && block?.completed) || (!block && text.length === 0)) return;
+        if (snapshot && block) {
+          block.snapshotReceived = true;
+          if (block.completed && block.text === text.slice(0, 8_000)) return;
+        }
+        if (!block) {
+          block = { itemId: yield* Random.nextUUIDv4, text: "", completed: false };
+          turn.reasoningBlocks.set(key, block);
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "item.started",
+            ...stamp,
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            turnId: turn.turnId,
+            itemId: asRuntimeItemId(block.itemId),
+            payload: { itemType: "reasoning", status: "inProgress", title: "Thinking" },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+        const snapshotText = snapshot ? text.slice(0, 8_000) : undefined;
+        const delta =
+          snapshotText !== undefined
+            ? snapshotText.startsWith(block.text)
+              ? snapshotText.slice(block.text.length)
+              : ""
+            : text.slice(0, Math.max(0, 8_000 - block.text.length));
+        if (snapshotText !== undefined) {
+          block.text = snapshotText;
+          block.snapshotReceived = true;
+        } else {
+          block.text += delta;
+        }
+        if (delta.length > 0) {
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "content.delta",
+            ...stamp,
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            turnId: turn.turnId,
+            itemId: asRuntimeItemId(block.itemId),
+            payload: { streamKind: "reasoning_text", delta },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+        if (complete) {
+          block.completed = true;
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "item.completed",
+            ...stamp,
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            turnId: turn.turnId,
+            itemId: asRuntimeItemId(block.itemId),
+            payload: {
+              itemType: "reasoning",
+              status: "completed",
+              title: "Thinking",
+              detail: block.text,
+            },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+      });
+
     const handleStreamEvent = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -3665,38 +3781,32 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         const { event } = message;
+        if (event.type === "message_start" && context.turnState) {
+          context.turnState.reasoningMessageId = event.message.id;
+        }
+        if (event.type === "content_block_start" && event.content_block.type === "thinking") {
+          yield* emitReasoning(context, event.index, event.content_block.thinking, false);
+          return;
+        }
+        if (event.type === "content_block_delta" && event.delta.type === "thinking_delta") {
+          yield* emitReasoning(context, event.index, event.delta.thinking ?? "", false);
+          return;
+        }
+        if (event.type === "content_block_stop") {
+          yield* emitReasoning(context, event.index, "", true);
+        }
 
         if (event.type === "message_start" && !context.subagentRefs) {
           context.cacheRequestStartedAt = { messageId: event.message.id, at: yield* nowIso };
         }
 
         if (event.type === "content_block_delta") {
-          if (
-            (event.delta.type === "text_delta" || event.delta.type === "thinking_delta") &&
-            context.turnState
-          ) {
-            const deltaText =
-              event.delta.type === "text_delta"
-                ? event.delta.text
-                : typeof event.delta.thinking === "string"
-                  ? event.delta.thinking
-                  : "";
-            if (deltaText.length === 0) {
-              return;
-            }
-            const streamKind = streamKindFromDeltaType(event.delta.type);
-            const assistantBlockEntry =
-              event.delta.type === "text_delta"
-                ? yield* ensureAssistantTextBlock(context, event.index)
-                : context.turnState.assistantTextBlocks.get(event.index)
-                  ? {
-                      blockIndex: event.index,
-                      block: context.turnState.assistantTextBlocks.get(
-                        event.index,
-                      ) as AssistantTextBlockState,
-                    }
-                  : undefined;
-            if (assistantBlockEntry?.block && event.delta.type === "text_delta") {
+          if (event.delta.type === "text_delta" && context.turnState) {
+            const deltaText = event.delta.text;
+            if (deltaText.length === 0) return;
+            const streamKind = "assistant_text" as const;
+            const assistantBlockEntry = yield* ensureAssistantTextBlock(context, event.index);
+            if (assistantBlockEntry?.block) {
               assistantBlockEntry.block.emittedTextDelta = true;
             }
             const stamp = yield* makeEventStamp();
@@ -4048,6 +4158,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           synthetic: true,
           items: [],
           assistantTextBlocks: new Map(),
+          reasoningBlocks: new Map(),
           assistantTextBlockOrder: [],
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
@@ -4221,6 +4332,32 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         if (context.turnState) {
           context.turnState.items.push(stripDiagnosticImages(message.message));
+          if (Array.isArray(content)) {
+            for (const [index, block] of content.entries()) {
+              if (block.type !== "thinking" || typeof block.thinking !== "string") continue;
+              const messageId = message.message.id ?? message.uuid;
+              // Singleton snapshots omit the stream index. Reconcile them in
+              // streamed block order, including blocks that have already stopped.
+              // A repeated snapshot then matches its already-reconciled text.
+              const candidates = Array.from(context.turnState.reasoningBlocks.entries()).filter(
+                ([key]) => key.startsWith(`${messageId}:`),
+              );
+              const exact =
+                candidates.find(
+                  ([, value]) =>
+                    !value.snapshotReceived && value.text === block.thinking.slice(0, 8_000),
+                ) ?? candidates.find(([, value]) => value.text === block.thinking.slice(0, 8_000));
+              const streamed = candidates.find(([, value]) => !value.snapshotReceived);
+              yield* emitReasoning(context, index, block.thinking, true, {
+                key:
+                  content.length > 1
+                    ? `${messageId}:${index}`
+                    : (exact?.[0] ??
+                      streamed?.[0] ??
+                      `${messageId}:snapshot:${message.uuid}:${index}`),
+              });
+            }
+          }
           yield* backfillAssistantTextBlocksFromSnapshot(context, message);
         }
 
@@ -4334,6 +4471,34 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         yield* completeTurn(context, status, errorMessage, message);
+
+        // Results carry the fast-mode state that actually served the turn. Publish
+        // it when it moves (cooldown after a rate limit, a toggle between turns) so
+        // the composer stops showing a requested speed the account did not get.
+        const fastModeSignature = claudeFastModeSignature(message);
+        if (
+          fastModeSignature !== undefined &&
+          fastModeSignature !== context.lastFastModeSignature
+        ) {
+          context.lastFastModeSignature = fastModeSignature;
+          const fastModeStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "session.configured",
+            eventId: fastModeStamp.eventId,
+            provider: PROVIDER,
+            createdAt: fastModeStamp.createdAt,
+            threadId: context.session.threadId,
+            payload: {
+              config: {
+                fast_mode_state: message.fast_mode_state,
+                ...(message.fast_mode_disabled_reason !== undefined
+                  ? { fast_mode_disabled_reason: message.fast_mode_disabled_reason }
+                  : {}),
+              },
+            },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
 
         // Claude Code caches account credentials in the live SDK process. An
         // auth/account failure cannot be recovered by reusing that query after
@@ -4549,6 +4714,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
           const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
           const run = subagentRunForTask(context, undefined, message.task_id);
+          const error = nonEmptyTrimmed(patch?.error);
           const raw = {
             source: "claude.sdk.message" as const,
             method: sdkNativeMethod(message),
@@ -4566,7 +4732,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             payload: {
               taskId: RuntimeTaskId.makeUnsafe(message.task_id),
               ...(status !== undefined ? { status } : {}),
-              ...(patch?.error ? { error: patch.error } : {}),
+              ...(error ? { error } : {}),
               ...(isBackgrounded !== undefined ? { isBackgrounded } : {}),
               ...(run ? { toolUseId: run.toolUseId } : {}),
               ...(workflowTaskId
@@ -4681,6 +4847,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (Array.isArray(message.tools)) {
               context.initToolNames = new Set(message.tools);
             }
+            context.lastFastModeSignature = claudeFastModeSignature(message);
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "session.configured",
@@ -4689,6 +4856,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
+          case "api_retry": {
+            const delaySeconds = Math.ceil(message.retry_delay_ms / 1000);
+            const reason =
+              message.error_status === null ? "connection error" : `HTTP ${message.error_status}`;
+            yield* emitRuntimeWarning(
+              context,
+              `Request retry ${message.attempt}/${message.max_retries} in ${delaySeconds}s (${reason}).`,
+              message,
+            );
+            return;
+          }
           case "permission_denied": {
             const reason =
               message.decision_reason?.trim() ||
@@ -4823,15 +5001,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             const workflowAgentPlans = workflowScript
               ? extractClaudeWorkflowAgentPlans(workflowScript)
               : undefined;
-            const workflowName = message.workflow_name ?? workflowMeta?.name;
+            // The journal rejects untrimmed strings, and SDK task descriptions
+            // (often a raw Bash command) can end in a newline or space.
+            const description = nonEmptyTrimmed(message.description);
+            const taskType = nonEmptyTrimmed(message.task_type);
+            const subagentType = nonEmptyTrimmed(message.subagent_type);
+            const workflowName = nonEmptyTrimmed(message.workflow_name ?? workflowMeta?.name);
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "task.started",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
-                description: message.description,
-                ...(message.task_type ? { taskType: message.task_type } : {}),
-                ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
+                ...(description ? { description } : {}),
+                ...(taskType ? { taskType } : {}),
+                ...(subagentType ? { subagentType } : {}),
                 ...(workflowName ? { workflowName } : {}),
                 ...(workflowTaskId
                   ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
@@ -4863,15 +5046,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               }
             }
             const workflowTaskId = context.workflowTaskIdByMemberTaskId.get(message.task_id);
+            const lastToolName = nonEmptyTrimmed(message.last_tool_name);
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "task.progress",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
-                description: message.description,
-                ...(message.summary ? { summary: message.summary } : {}),
+                description: nonEmptyTrimmed(message.description) ?? "Task",
+                ...(message.summary?.trim() ? { summary: message.summary.trim() } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
-                ...(message.last_tool_name ? { lastToolName: message.last_tool_name } : {}),
+                ...(lastToolName ? { lastToolName } : {}),
                 ...(workflowTaskId
                   ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
                   : {}),
@@ -4916,7 +5100,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
                 status: message.status,
-                ...(message.summary ? { summary: message.summary } : {}),
+                ...(message.summary?.trim() ? { summary: message.summary.trim() } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
                 ...(workflowTaskId
                   ? { workflowTaskId: RuntimeTaskId.makeUnsafe(workflowTaskId) }
@@ -5033,11 +5217,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (message.type === "tool_use_summary") {
+          const summary = message.summary.trim();
+          if (!summary) return;
           yield* offerRuntimeEvent(context, {
             ...base,
             type: "tool.summary",
             payload: {
-              summary: message.summary,
+              summary,
               ...(message.preceding_tool_use_ids.length > 0
                 ? { precedingToolUseIds: message.preceding_tool_use_ids }
                 : {}),
@@ -5286,6 +5472,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // process tree exited. The stopped context remains non-routable and
         // prevents a replacement process from being spawned concurrently.
         yield* teardownClaudeProcess(context.session.threadId, context.processOwner);
+
+        // Retired background tasks cannot report their own SDK notification.
+        // Publish terminal evidence only after the owned process has exited so
+        // replaying this thread in a replacement session cannot resurrect them.
+        for (const taskId of context.knownBackgroundTaskIds) {
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "task.completed",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: context.session.threadId,
+            payload: { taskId: RuntimeTaskId.makeUnsafe(taskId), status: "stopped" },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+        context.knownBackgroundTaskIds.clear();
 
         const updatedAt = yield* nowIso;
         context.session = {
@@ -6075,8 +6278,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           },
           canUseTool,
           env: withClaudeArtifactOptIn(claudeSdkEnv, providerOptions?.enableArtifacts),
-          spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
-          ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+          spawnClaudeCodeProcess: bindClaudeProcessOwner(
+            processOwner,
+            yield* providerProcessPriorityEnabled,
+          ),
+          ...(input.cwd || input.additionalDirectories?.length
+            ? {
+                additionalDirectories: [
+                  ...(input.cwd ? [input.cwd] : []),
+                  ...(input.additionalDirectories ?? []),
+                ],
+              }
+            : {}),
           ...(agentGatewayCredentials
             ? {
                 mcpServers: buildClaudeMcpServers(gatewaySessionLease!.connection),
@@ -6120,8 +6333,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ]).pipe(Effect.asVoid),
           ),
         );
-        const messageStream =
-          input.runtimeMode === "auto" ? prestartClaudeMessageStream(queryRuntime) : undefined;
+        const messageStream = cancellableClaudeMessageStream(queryRuntime, {
+          prestart: input.runtimeMode === "auto",
+        });
 
         let installationContext: ClaudeSessionContext | undefined;
         let installationComplete = false;
@@ -6184,7 +6398,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             resumeCursor: {
               ...(initialCacheObservation ? { claudeCache: initialCacheObservation } : {}),
               ...(threadId ? { threadId } : {}),
-              ...(sessionId ? { resume: sessionId } : {}),
+              ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
               ...(resumeState?.resumeSessionAt
                 ? { resumeSessionAt: resumeState.resumeSessionAt }
                 : {}),
@@ -6213,7 +6427,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             query: queryRuntime,
             commandDiscoveryKey,
             accountDiscoveryKey,
-            ...(messageStream ? { messageStream } : {}),
+            messageStream,
             processOwner,
             stoppedSignal: Deferred.makeUnsafe<void>(),
             pendingCompactionPreparations: new Set(),
@@ -6226,7 +6440,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             firstTurnSpawnModeAuthoritative: true,
             lastInteractionMode: undefined,
             currentApiModelId: apiModelId,
-            resumeSessionId: sessionId,
+            // A generated id is only a launch option until Claude emits conversation output.
+            resumeSessionId: existingResumeSessionId,
             pendingApprovals,
             approvalsAlwaysAllowedForSession: false,
             pendingUserInputs,
@@ -6255,6 +6470,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             processedTokenBaselineKnown,
             requestUsage: new ClaudeRequestUsage(),
             lastResultUuid: undefined,
+            lastFastModeSignature: undefined,
             lastAssistantUuid: resumeState?.resumeSessionAt,
             lastThreadStartedId: undefined,
             rerouteOriginalApiModelId: undefined,
@@ -6706,6 +6922,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : {}),
           items: [],
           assistantTextBlocks: new Map(),
+          reasoningBlocks: new Map(),
           assistantTextBlockOrder: [],
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
@@ -7413,7 +7630,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             permissionMode: "plan" as PermissionMode,
             persistSession: false,
             env,
-            spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
+            spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner, false),
           },
         });
         const queryRuntime = tempQuery;
@@ -7685,6 +7902,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return { agents: [], source: "pending", cached: false };
       });
 
+    const didResumeSession: NonNullable<ClaudeAdapterShape["didResumeSession"]> = (
+      input,
+      session,
+    ) => {
+      const requestedSessionId = readClaudeResumeState(input.resumeCursor)?.resume;
+      return (
+        requestedSessionId !== undefined &&
+        readClaudeResumeState(session.resumeCursor)?.resume === requestedSessionId
+      );
+    };
+
     return {
       provider: PROVIDER,
       capabilities: {
@@ -7700,6 +7928,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         supportsLiveTurnDiffPatch: false,
       },
       startSession,
+      didResumeSession,
       prepareSessionReplacement,
       getClaudeCacheObservation,
       startClaudeCompaction,

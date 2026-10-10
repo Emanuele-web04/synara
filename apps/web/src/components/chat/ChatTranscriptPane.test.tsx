@@ -53,7 +53,7 @@ function renderTranscriptPaneMarkup(
 }
 
 describe("ChatTranscriptPane", () => {
-  it("renders agent activity detail in place of the message timeline", () => {
+  it("renders agent activity detail over the message timeline, which stays mounted", () => {
     const markup = renderTranscriptPaneMarkup({
       agentActivityDetail: {
         id: "agent-task-1",
@@ -85,6 +85,19 @@ describe("ChatTranscriptPane", () => {
     expect(markup).toContain("Back");
     expect(markup).toContain("Checked the sidebar issue.");
     expect(markup).not.toContain("Scroll to bottom");
+    // The timeline is hidden and inert rather than unmounted, so Back does not rebuild it.
+    expect(markup).toContain('aria-hidden="true" inert=""');
+    expect(markup).not.toContain('inert=""><div data-agent-activity-detail');
+  });
+  it("leaves the message timeline interactive when no agent detail is open", () => {
+    expect(renderTranscriptPaneMarkup({})).not.toContain("inert");
+  });
+  it("makes the pane inert, not aria-hidden, behind the terminal workspace tab", () => {
+    // aria-hidden over a still-focused descendant is blocked by the browser; inert also
+    // releases that focus.
+    const markup = renderTranscriptPaneMarkup({ terminalWorkspaceTerminalTabActive: true });
+    expect(markup).toMatch(/^<div data-chat-transcript-pane="true" inert=""/);
+    expect(markup).not.toMatch(/^<div[^>]*aria-hidden/);
   });
   it("renders a stored thread error in flow above the transcript, never as an overlay", () => {
     const markup = renderTranscriptPaneMarkup({

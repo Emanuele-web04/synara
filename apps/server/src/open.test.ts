@@ -348,6 +348,34 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     }),
   );
 
+  it.effect("reveals macOS app bundles instead of launching them", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parentPath = yield* fs.makeTempDirectoryScoped({
+        prefix: "synara-file-manager-",
+      });
+      // An empty .app folder still classifies as a bundle without an Info.plist.
+      // This checks the chosen arguments, not that the bundle launches.
+      const bundlePath = path.join(parentPath, "Bare.app");
+      const dottedFolderPath = path.join(parentPath, "next.js");
+      yield* fs.makeDirectory(bundlePath);
+      yield* fs.makeDirectory(dottedFolderPath);
+
+      const bundleLaunch = yield* resolveEditorLaunch(
+        { cwd: bundlePath, editor: "file-manager" },
+        "darwin",
+      );
+      assert.deepEqual(bundleLaunch, { command: "open", args: ["-R", bundlePath] });
+
+      const folderLaunch = yield* resolveEditorLaunch(
+        { cwd: dottedFolderPath, editor: "file-manager" },
+        "darwin",
+      );
+      assert.deepEqual(folderLaunch, { command: "open", args: [dottedFolderPath] });
+    }),
+  );
+
   it.effect("falls back to opening macOS targets when metadata lookup fails", () =>
     Effect.gen(function* () {
       const targetPath = `/${"unavailable".repeat(500)}`;

@@ -126,6 +126,7 @@ export function BetaWelcomeDialog() {
   return (
     <AnnouncementSheet
       open={open && !storage.acknowledged}
+      waitForOnboarding={false}
       hero={<img src="/app-icons/beta.png" alt="" className="size-16 rounded-2xl" />}
       title="Welcome to Synara Beta"
       description="New features land here first, before they reach Synara."
@@ -154,6 +155,7 @@ export function BetaWelcomeDialog() {
           ) : null}
         </div>
       }
+      handOffOnConfirm={false}
       confirmLabel="Get started"
       onDismiss={acknowledge}
       onConfirm={acknowledge}

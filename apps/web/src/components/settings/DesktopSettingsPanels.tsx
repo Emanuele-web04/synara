@@ -216,6 +216,32 @@ export function NotificationsSettingsPanel({
             </div>
           }
         />
+
+        <SettingsRow
+          title="Wait for subagents"
+          description="Alert once the agent and all of its background subagents have finished. Turn this off to be alerted each time the agent or one of its subagents stops."
+          resetAction={
+            settings.notifyAfterSubagentsFinish !== defaults.notifyAfterSubagentsFinish ? (
+              <SettingResetButton
+                label="wait for subagents"
+                onClick={() =>
+                  updateSettings({
+                    notifyAfterSubagentsFinish: defaults.notifyAfterSubagentsFinish,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.notifyAfterSubagentsFinish}
+              onCheckedChange={(checked) =>
+                updateSettings({ notifyAfterSubagentsFinish: Boolean(checked) })
+              }
+              aria-label="Wait for subagents before alerting"
+            />
+          }
+        />
       </SettingsSection>
     </div>
   );

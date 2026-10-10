@@ -47,6 +47,16 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./t
 import { applyOrchestrationEvents } from "./storeEventReducer";
 
 describe("store projection", () => {
+  it("retains project-import provenance through shell hydration, detail updates, and eviction", () => {
+    const thread = makeReadModelThread({ isProjectImport: true });
+    let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(thread));
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+    state = syncServerReadModel(state, makeReadModel(thread));
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+    state = evictThreadDetailFromClientState(state, thread.id);
+    expect(getThreadFromState(state, thread.id)?.isProjectImport).toBe(true);
+  });
+
   it("retains an active resend timestamp through binding updates and rollback", () => {
     const at = (minute: number) => `2026-09-17T10:0${minute}:00.000Z`;
     const messageId = MessageId.makeUnsafe("resent");
@@ -1103,6 +1113,89 @@ describe("store projection", () => {
     expect(nextThread?.latestTurn?.completedAt).toBeNull();
     expect(nextThread?.session?.orchestrationStatus).toBe("running");
     expect(nextThread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("does not pair retained live message text with a snapshot's shorter text segments", () => {
+    const threadId = ThreadId.makeUnsafe("thread-live-segments");
+    const assistantId = MessageId.makeUnsafe("assistant-live-segments");
+    const turnId = TurnId.makeUnsafe("turn-live-segments");
+    const finalText = "Reading files. Found it. Fixed.";
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        latestTurn: {
+          turnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: "2026-02-27T00:00:09.000Z",
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: finalText,
+            turnId,
+            createdAt: "2026-02-27T00:00:01.000Z",
+            updatedAt: "2026-02-27T00:00:09.000Z",
+            completedAt: "2026-02-27T00:00:09.000Z",
+            streaming: false,
+            source: "native",
+          },
+        ],
+      }),
+    );
+
+    // A lagging snapshot still has the message mid-stream with two segments.
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "Reading files. Found it.",
+            textSegments: [
+              {
+                sequence: 10,
+                startedAt: "2026-02-27T00:00:01.000Z",
+                endedAt: "2026-02-27T00:00:02.000Z",
+                text: "Reading files.",
+              },
+              {
+                sequence: 20,
+                startedAt: "2026-02-27T00:00:03.000Z",
+                endedAt: "2026-02-27T00:00:04.000Z",
+                text: " Found it.",
+              },
+            ],
+            turnId,
+            streaming: true,
+            source: "native",
+            createdAt: "2026-02-27T00:00:01.000Z",
+            updatedAt: "2026-02-27T00:00:04.000Z",
+          },
+        ],
+      }),
+    );
+
+    const message = threadsOf(next)
+      .find((thread) => thread.id === threadId)
+      ?.messages.find((entry) => entry.id === assistantId);
+    expect(message?.text).toBe(finalText);
+    expect(message?.streaming).toBe(false);
+    // Segments that cover only part of the retained text would hide its tail.
+    expect(message?.textSegments).toBeUndefined();
   });
 
   it("applies incoming dispatch origin corrections while retaining live message text", () => {

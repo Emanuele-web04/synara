@@ -62,7 +62,7 @@ const OAUTH_HOST_PATTERNS: readonly RegExp[] = [
   /(^|\.)okta\.com$/i,
 ];
 
-export function isLikelyOAuthHost(host: string): boolean {
+function isLikelyOAuthHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
   if (normalized.length === 0) {
     return false;

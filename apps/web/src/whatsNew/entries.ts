@@ -22,6 +22,646 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.0.1",
+    date: "Oct 8",
+    features: [
+      {
+        id: "opencode-v2",
+        title: "OpenCode v2",
+        description:
+          "Connect the new OpenCode v2 runtime while retaining support for existing v1 servers.",
+        details:
+          "Synara detects the server API before sending work and uses the v2 client for models, agents, sessions, streaming, approvals, attachments, forks, rollback and compaction. Keep your OpenCode account and data when migrating. Standard questions appear in Synara; complex forms must be completed in OpenCode. Task-scoped MCP readiness is checked after registration.",
+      },
+      {
+        id: "multiple-projects",
+        title: "Multiple folders in one project",
+        description:
+          "Bring a frontend, API and shared package together under one project and let the agent work across them.",
+        details:
+          "Choose Source folders when creating a project, mark one as Primary and remove folders you do not need. Multi-folder chats currently require Local mode and Codex or Claude. The folder set is fixed at creation; Git actions, checkpoints and file undo cover the primary folder only. Review and recover extra-folder edits separately.",
+      },
+      {
+        id: "tasks-stable",
+        title: "Tasks comes to Stable",
+        description:
+          "Keep to-dos in one list, plan your day in Inbox and hand a task to an agent when you are ready.",
+        details:
+          "Edit notes, due dates, priority and project, then choose a provider, model, effort and a new or existing chat. Task cards show activity, questions, approvals and the reply to review. The List / Kanban switch keeps the board accessible, and a one-time navigation tip introduces Tasks. Older servers without Tasks fall back to Kanban. Hubs remain Beta-only.",
+      },
+      {
+        id: "workspace-search",
+        title: "Find more with workspace search",
+        description:
+          "Find conversations by their saved message text and use the palette to navigate or open settings.",
+        details:
+          "Search reaches persisted messages beyond recently opened chats. File results resolve safely in the active workspace, including registered dot-folder projects. Workspace search can be remapped; shortcuts update without restarting and respect focused terminals.",
+      },
+      {
+        id: "chat-actions",
+        title: "Faster chat actions",
+        description:
+          "Archive, snooze or mark the active chat unread with configurable shortcuts, and undo marking a chat done.",
+        details:
+          "Thread hovers preview unsent drafts and show current effort and Fast status. Mark all read includes chats returned from snooze. New threads created from older drafts receive their creation time instead of the draft’s old timestamp.",
+      },
+      {
+        id: "answered-questions",
+        title: "Keep answered questions in view",
+        description:
+          "Review the agent’s questions and your answers directly in the conversation after responding.",
+        details:
+          "Press Enter to submit async answers. Stale provider questions settle durably so they do not keep chats waiting. Queued follow-ups explain their available actions, and a Claude tip explains model changes and provider handoffs during active work.",
+      },
+      {
+        id: "failure-details",
+        title: "Understand interrupted work",
+        description:
+          "Open and copy thread error details, with failed-turn feedback preserved after recovery.",
+        details:
+          "Reconnecting and busy waits use clearer shared status messages. Server stalls are monitored, buffering stays enabled during turns longer than an hour, and uncertain side effects are not silently replayed as successes.",
+      },
+      {
+        id: "account-rings",
+        title: "Choose accounts for usage rings",
+        description: "Pick the individual provider accounts shown in your sidebar usage rings.",
+        details:
+          "Saved account-ring choices survive temporarily disabling an account. Disabled providers disappear from selectable surfaces; existing conversations remain readable. Provider sign-in actions open the appropriate settings, and OMP’s internal roles stay out of the model picker.",
+      },
+      {
+        id: "keep-awake",
+        title: "Keep macOS awake during agent work",
+        description:
+          "Choose whether to keep your Mac awake during agent work, all the time, or let it sleep normally.",
+        details:
+          "Settings → System → Keep computer awake offers On, Agent and Off, defaulting to Off. Agent mode releases its assertion when work settles, its owner exits or the thread is deleted; On mode lasts while the server runs. This macOS feature does not promise uninterrupted work with the lid closed.",
+      },
+      {
+        id: "files-and-tabs",
+        title: "Keep your place in files and tabs",
+        description:
+          "File tabs remember scroll positions, the dock Explorer keeps its open file across chat switches, and horizontal tabs scroll with the mouse wheel.",
+        details:
+          "Markdown file previews render sanitized HTML, assistant line breaks display correctly, and Markdown follows the selected typography. Project actions open in right-side terminals; independent right-dock terminal tabs are restored.",
+      },
+      {
+        id: "git-workflow",
+        title: "Clearer Git and Kanban actions",
+        description:
+          "Move Kanban cards from their context menu and use the full commit-and-push row to open Git actions.",
+        details:
+          "Git dialogs expose their submit shortcuts. Branch creation avoids namespace conflicts, and checkpoint scheduling reserves capacity for reads and checkpoint work so unrelated workspaces can advance.",
+      },
+      {
+        id: "synara-appearance",
+        title: "Synara is the default theme",
+        description:
+          "New installations start with the complete Synara theme, including the matching controls and workspace styling.",
+        details:
+          "Sidebar text stays sharp after display changes, metadata glyphs align consistently, and the chat header remains draggable. Embedded browser pages retain an opaque backdrop and remain visible behind toolbar overlays.",
+      },
+      {
+        id: "runtime-reliability",
+        title: "Smoother streaming and recovery",
+        description:
+          "Reduce idle chat repaints, reopen flicker and repeated provider work while keeping cancellation and recovery predictable.",
+        details:
+          "Codex reuses its app-server between completed turns. Independent sessions and workspaces no longer share avoidable delivery bottlenecks; replaceable progress is coalesced. Transcript follow survives turn updates, detached readers keep their place, and Pi assistant messages split at message_end.",
+      },
+      {
+        id: "provider-reliability",
+        title: "More reliable provider setup",
+        description:
+          "Provider discovery checks executable candidates and uses the selected account’s environment.",
+        details:
+          "Claude accounts remain isolated without breaking macOS Keychain, idle Claude sessions stop without waiting for the SDK stream, and Computer-off restarts wait for background work. Codex continuation imports retain verified generation, managed MCP names avoid collisions, and provider usage works with compatible fake-IP DNS responses. Health probes do not auto-update Antigravity.",
+      },
+      {
+        id: "desktop-and-startup",
+        title: "More predictable startup and shutdown",
+        description:
+          "Startup announcements appear one at a time, application bundles reveal in Finder, and signal-driven shutdown skips the interactive quit confirmation.",
+        details:
+          "Keybindings load and watch at startup, with recovery after transient filesystem failures. Skills read YAML frontmatter correctly. Beta upload diagnostics and writable-failure handling are hardened with privacy redaction; Stable does not send Beta diagnostics.",
+      },
+    ],
+  },
+  {
+    version: "1.0.0",
+    date: "Oct 5",
+    features: [
+      {
+        id: "terminal-pane",
+        title: "One terminal pane per chat",
+        description:
+          "Use a single terminal in the main workspace or right dock, with no nested terminal tabs, groups, splits or bottom drawer.",
+        details:
+          "Opening it again focuses the existing session. Project actions reuse an idle terminal; busy or unverifiable sessions are protected. Upgrading keeps the last active session and retires old nested sessions only after an idle check. Failed closes leave the terminal usable.",
+      },
+      {
+        id: "omp-stable",
+        title: "Oh My Pi comes to Stable",
+        description:
+          "Use Oh My Pi alongside the other supported coding providers in the Stable app.",
+        details:
+          "Configure the OMP executable and account, sign in from provider settings, and choose models and thinking levels advertised by its runtime.",
+      },
+      {
+        id: "inbox",
+        title: "Inbox: today’s work in one place",
+        description:
+          "See running work, chats needing attention, review requests and a daily activity recap together in Stable.",
+        details:
+          "Recaps use recorded local activity and provider-attributed usage; missing token data is not invented. The separate Tasks to-do list and its Inbox task cards remain Beta-only.",
+      },
+      {
+        id: "accounts",
+        title: "Multiple accounts, clearly separated",
+        description:
+          "Name and configure several accounts for the same provider, then choose their models from separate account tabs.",
+        details:
+          "Provider account identity follows supported sessions, favorites, imports, forks and handoffs. Account-specific executable paths and environments keep the selected runtime and credentials together.",
+      },
+      {
+        id: "signin",
+        title: "Sign in from provider settings",
+        description:
+          "Open the provider’s native sign-in flow in a managed terminal using the selected account’s environment.",
+        details:
+          "Check authentication before starting work. Pi and Oh My Pi offer their native login choices; external OpenCode servers must be authenticated on that server. Closing sign-in stops its terminal; credentials already saved by the provider remain.",
+      },
+      {
+        id: "account-usage",
+        title: "Usage for each account",
+        description:
+          "Inspect usage for the active provider’s enabled accounts separately, and choose which provider rings appear in the rail.",
+        details:
+          "Expandable details keep the compact view readable. Codex credits are shown as a count, not a dollar amount; missing account telemetry is not replaced with another account’s figures.",
+      },
+      {
+        id: "same-thread-handoff",
+        title: "Change providers in the same conversation",
+        description:
+          "Use the model picker to hand work to another supported provider while keeping the same chat and workspace context.",
+        details:
+          "A divider marks the handoff. Available targets respect account availability, and a failed transition is not reported as successful. Separate-thread handoff remains available.",
+      },
+      {
+        id: "rail",
+        title: "A new workspace rail",
+        description:
+          "Reach chats, projects and tools from a compact rail with independently customizable destinations.",
+        details:
+          "Show, hide and reorder rail items; Customize also works on narrow screens. The update action shows download progress, and project icons make recent work easier to recognize.",
+      },
+      {
+        id: "chat-tabs",
+        title: "Keep open chats within reach",
+        description:
+          "Move between open-chat tabs with provider icons, running indicators, context menus and keyboard navigation.",
+        details:
+          "Tabs remain scrollable while chats stream. Unsent new-chat drafts stay out of the strip. Use Cmd+Ctrl+Left/Right on macOS, or Ctrl+PageUp/PageDown on other platforms outside terminal focus. Small vertical trackpad movements no longer reorder tabs.",
+      },
+      {
+        id: "glass",
+        title: "Make the workspace yours",
+        description:
+          "Choose full-window or sidebar-only translucency, adjust blur and opacity, and customize project names, icons and colors.",
+        details:
+          "Supported desktop materials extend through editors, panes, menus and dialogs. The new appearance default uses full-window glass, blur 64 and 90% opacity. Native glass availability depends on platform.",
+      },
+      {
+        id: "review",
+        title: "Code review, issues and agents together",
+        description:
+          "Browse pull requests and issues in a redesigned list, inspect details, and discuss the item in a side chat.",
+        details:
+          "Remember filters and sorting, include merged PRs, preview images fullscreen, and send an item to an agent in the correct project and environment. GitHub links have configurable destinations and their own context menu.",
+      },
+      {
+        id: "auto-fix",
+        title: "Auto-fix CI",
+        description:
+          "Enable Auto-fix CI on an open pull request to ask its chat to address failing checks.",
+        details:
+          "This opt-in feature waits for active work, approvals and questions, respects chat permissions, and limits retries. Uncertain dispatch or lack of progress pauses the watcher with an explanation. It does not automatically merge.",
+      },
+      {
+        id: "kanban",
+        title: "A more actionable Kanban board",
+        description:
+          "Choose an Attention board with Draft, In Progress, Awaiting you and Done columns, or retain Classic.",
+        details:
+          "See failed, stuck, approval, input and review attention; reorder drafts and send work as a persistent goal. Agents gain eight scoped board tools for durable chat cards. These tools do not expose unsent local drafts or manipulate Tasks to-do records.",
+      },
+      {
+        id: "goals",
+        title: "Send work as a goal",
+        description:
+          "Start a Kanban task as a persistent goal or set a goal on an existing chat card.",
+        details:
+          "Long goals are delivered through managed file references instead of being silently truncated. Shared send ownership preserves account choice, attachments and edits when work is dispatched.",
+      },
+      {
+        id: "snooze",
+        title: "Snooze a chat until you need it",
+        description:
+          "Hide a chat from ordinary activity until a preset or custom reminder time, then bring it back automatically.",
+        details:
+          "Choose 30 minutes, one hour, two hours, tomorrow at 9am or a custom time. Reminders persist across restart; Return now cancels the snooze. Running work continues. Snoozed chats are excluded from inactivity cleanup and are marked seen when opened after returning.",
+      },
+      {
+        id: "splits",
+        title: "Smoother split-pane work",
+        description:
+          "Resize panes continuously, close each pane directly, and spot the focused composer at a glance.",
+        details:
+          "Chats stay mounted across single/split transitions and rearrangements, preserving the split tree, focus and conversation state. Closing a split keeps the surviving chat; closing the last open tab returns to the unsent draft.",
+      },
+      {
+        id: "sidechats",
+        title: "Side chats that keep their context",
+        description:
+          "Side chats inherit the primary workspace, and GitHub discussions stay discoverable across checkouts.",
+        details:
+          "Choose an inactivity expiry of one hour, 24 hours or never. Idle expired side chats become read-only and release their provider session. Cmd+Option+S toggles Side chat on macOS.",
+      },
+      {
+        id: "shortcuts",
+        title: "Edit shortcuts individually",
+        description:
+          "Record and edit shortcuts in a searchable command list with conflict handling.",
+        details:
+          "Shift+Tab cycles the selected model’s supported reasoning effort. Thread menus group related handoff, fork and copy actions into compact submenus.",
+      },
+      {
+        id: "dictation",
+        title: "Dictation that fits the conversation",
+        description:
+          "Use Enter to stop/transcribe or stop/send, and dictate while an agent is working.",
+        details:
+          "Capture waits for real microphone audio before proceeding. ChatGPT login detection accepts Codex plain-text status; invalid transcription responses produce a useful error.",
+      },
+      {
+        id: "audio-trail",
+        title: "Let the message trail follow sound",
+        description:
+          "On supported macOS desktops, animate the trail from system audio, a selected microphone, or both.",
+        details:
+          "The opt-in feature uses loudness levels rather than recording audio. System-audio levels require macOS 14.2+; microphone access requires permission. Choose a built-in microphone while using Bluetooth headphones; an unavailable selected device does not silently switch to another input.",
+      },
+      {
+        id: "transcript",
+        title: "Clearer long-running conversations",
+        description:
+          "Keep background subagent replies visible and wait for all workers before showing completion.",
+        details:
+          "Choose whether finished turns fold and whether sending anchors the new message at the top. Wide code blocks scroll horizontally without widening the transcript. Full error, approval, progress and warning details remain available. Clearer thinking and startup icons distinguish activity states. Message navigation stays clear of the text, and batched updates no longer leave overlapping rows.",
+      },
+      {
+        id: "claude",
+        title: "More useful Claude progress",
+        description:
+          "See provider-supplied reasoning, tool summaries and execution status in the transcript.",
+        details:
+          "Native compaction waits for initialization; prompt-cache warnings avoid false expiry reports. Account-specific CLI paths are retained when Artifacts is enabled. Cache-recovery answers remain pending through slow compaction, with visible delivery status and retry after failure.",
+      },
+      {
+        id: "catalogs",
+        title: "Current models without disruptive refreshes",
+        description:
+          "Model catalogs refresh on demand for the account you are viewing while keeping usable choices visible.",
+        details:
+          "Interactive requests take priority, actionable failures offer retry, Claude catalog changes follow CLI updates, and OpenCode custom-provider models remain selectable.",
+      },
+      {
+        id: "imports",
+        title: "Better import recovery and history browsing",
+        description:
+          "Import conversations from supported Codex and Claude accounts with clearer diagnostics, bounded history pages and recovery for interrupted work.",
+        details:
+          "Original provider context remains in independent session copies. Earlier text loads on demand; historical tools, reasoning and attachments are not reconstructed as live messages. New ordinary chats skip imported-history requests.",
+      },
+      {
+        id: "delivery",
+        title: "Recover message delivery after disconnects",
+        description:
+          "Synara checks whether an interrupted send was accepted before deciding what happens next.",
+        details:
+          "Accepted commands are not blindly resent; rejected commands restore the draft. Delivery settlement requires a compatible server. HTTP fallback failures now settle and surface useful errors. Blocked provider delivery now includes the reason when a chat is quarantined, and its unblock action works reliably.",
+      },
+      {
+        id: "providers",
+        title: "More dependable provider sessions",
+        description:
+          "Recover Codex gateway sessions after watchdog aborts, support current Codex rewind, and retain OpenCode background work.",
+        details:
+          "Cursor and Droid avoid repeated OAuth prompts, cached Grok login is recognized, and desktop ACP tool proxies start in the correct runtime mode.",
+      },
+      {
+        id: "responsive",
+        title: "Less repeated rendering and fetching",
+        description:
+          "Streaming and typing avoid repeated shell, header and composer work; GitHub reads share a queue and rate-limit pause.",
+        details:
+          "These are targeted changes, not a universal speed or battery-life claim. PR preparation retains the intended environment and unrelated worktrees; Git failures identify the action that failed.",
+      },
+      {
+        id: "everyday",
+        title: "Small fixes throughout the workspace",
+        description:
+          "Keep unread chats unread across reloads, preserve drafts while browsing history, and remember Markdown preview per file.",
+        details:
+          "Browser tabs support middle-click close, address suggestions stay visible and navigation preserves composer focus. Unicode image downloads, deleted-file search results, profile dates, notification clicks and app-icon persistence are corrected. Sidebar hover flicker, native sidebar-toggle hit testing and overflowing side-panel content are fixed.",
+      },
+      {
+        id: "windows",
+        title: "Quieter Windows sessions",
+        description:
+          "Provider updates handle Windows PATH and stdin correctly, and process cleanup avoids flashing command windows.",
+        details:
+          "Capture fallback produces valid JSON. Release installers must pass the new Defender scan as well as packaging, provenance and startup checks; Windows installers remain unsigned under the version-scoped release policy.",
+      },
+      {
+        id: "tour",
+        title: "A tour of what changed",
+        description:
+          "A feature tour introduces the new workspace, provider accounts and review workflow.",
+        details:
+          "Synara 1.0.0 is a Stable release. Hubs and the Tasks to-do list remain exclusive to Synara Beta, with separate data and update feeds. Stable does not send Beta diagnostics.",
+      },
+      {
+        id: "git-writing",
+        title: "Choose how Git changes are written",
+        description:
+          "Use repository conventions, Conventional Commits or your own instructions for generated commit messages and pull requests.",
+        details:
+          "Set Source control writing style in Settings → Models & writing. The preference applies across projects and retains your custom instructions when switching styles.",
+      },
+      {
+        id: "git-recovery",
+        title: "Large Git actions survive reconnects",
+        description:
+          "Keep long pushes and other Git actions running while Synara reconnects, then resume their progress without launching them twice.",
+        details:
+          "Git transfer progress remains visible. Recovery requires the same running server; if the result is unavailable after a restart, Synara asks you to check the repository before retrying.",
+      },
+      {
+        id: "desktop-close",
+        title: "Clearer close and quit confirmation",
+        description:
+          "Confirm closing the desktop window or quitting Synara, with running work shown before you leave.",
+        details:
+          "Startup also recovers stale database lock directories that contain only Finder metadata; a live database owner is still protected.",
+      },
+    ],
+  },
+  {
+    version: "1.0.0-beta.1",
+    date: "Oct 4",
+    features: [
+      {
+        id: "hubs",
+        title: "Hubs: give larger work a team",
+        description:
+          "Bring a coordinator and worker agents together around shared instructions, linked projects and a versioned Library in Synara Beta.",
+        details:
+          "Delegate independent work, preserve the original request and attachments, follow durable work cards and checklists, and receive a combined completion summary. The queue supports 1–8 parallel workers (3 by default), with visible waiting, failure and recovery states. New repository work defaults to isolated worktrees; explicit environment choices are respected.",
+      },
+      {
+        id: "tasks",
+        title: "Tasks: a backlog you can hand to an agent",
+        description:
+          "Create to-dos with notes, priority, project and due date, then start work in a new or existing chat from the task card.",
+        details:
+          "Choose the Tasks list or Kanban. Follow running, needs-you, review and failed work beside the list. Saved ownership and reconnect reconciliation keep pending edits and uncertain delegation visible.",
+      },
+      {
+        id: "inbox",
+        title: "Inbox: today’s work in one place",
+        description:
+          "See today’s tasks, work needing attention, review requests and an activity recap together.",
+        details:
+          "Create a task due today, open its card, or return to the full backlog. Recaps use recorded local activity and provider-attributed usage; they do not invent missing token data.",
+      },
+      {
+        id: "accounts",
+        title: "Multiple accounts, clearly separated",
+        description:
+          "Name and configure several accounts for the same provider, then choose their models from separate account tabs.",
+        details:
+          "Provider account identity follows supported sessions, favorites, imports, forks and handoffs. Account-specific executable paths and environments keep the selected runtime and credentials together.",
+      },
+      {
+        id: "signin",
+        title: "Sign in from provider settings",
+        description:
+          "Open the provider’s native sign-in flow in a managed terminal using the selected account’s environment.",
+        details:
+          "Check authentication before starting work. Pi and Oh My Pi offer their native login choices; external OpenCode servers must be authenticated on that server. Closing sign-in stops its terminal; credentials already saved by the provider remain.",
+      },
+      {
+        id: "account-usage",
+        title: "Usage for each account",
+        description:
+          "Inspect usage for the active provider’s enabled accounts separately, and choose which provider rings appear in the rail.",
+        details:
+          "Expandable details keep the compact view readable. Codex credits are shown as a count, not a dollar amount; missing account telemetry is not replaced with another account’s figures.",
+      },
+      {
+        id: "same-thread-handoff",
+        title: "Change providers in the same conversation",
+        description:
+          "Use the model picker to hand work to another supported provider while keeping the same chat and workspace context.",
+        details:
+          "A divider marks the handoff. Available targets respect account availability, and a failed transition is not reported as successful. Separate-thread handoff remains available.",
+      },
+      {
+        id: "rail",
+        title: "A new workspace rail",
+        description:
+          "Reach chats, projects and tools from a compact rail with independently customizable destinations.",
+        details:
+          "Show, hide and reorder rail items; Customize also works on narrow screens. The update action shows download progress, and project icons make recent work easier to recognize.",
+      },
+      {
+        id: "chat-tabs",
+        title: "Keep open chats within reach",
+        description:
+          "Move between open-chat tabs with provider icons, running indicators, context menus and keyboard navigation.",
+        details:
+          "Tabs remain scrollable while chats stream. Unsent new-chat drafts stay out of the strip. Use Cmd+Ctrl+Left/Right on macOS, or Ctrl+PageUp/PageDown on other platforms outside terminal focus.",
+      },
+      {
+        id: "glass",
+        title: "Make the workspace yours",
+        description:
+          "Choose full-window or sidebar-only translucency, adjust blur and opacity, and customize project names, icons and colors.",
+        details:
+          "Supported desktop materials extend through editors, panes, menus and dialogs. The new appearance default uses full-window glass, blur 64 and 90% opacity. Native glass availability depends on platform.",
+      },
+      {
+        id: "review",
+        title: "Code review, issues and agents together",
+        description:
+          "Browse pull requests and issues in a redesigned list, inspect details, and discuss the item in a side chat.",
+        details:
+          "Remember filters and sorting, include merged PRs, preview images fullscreen, and send an item to an agent in the correct project and environment. GitHub links have configurable destinations and their own context menu.",
+      },
+      {
+        id: "auto-fix",
+        title: "Auto-fix CI",
+        description:
+          "Enable Auto-fix CI on an open pull request to ask its chat to address failing checks.",
+        details:
+          "This opt-in Beta feature waits for active work, approvals and questions, respects chat permissions, and limits retries. Uncertain dispatch or lack of progress pauses the watcher with an explanation. It does not automatically merge.",
+      },
+      {
+        id: "kanban",
+        title: "A more actionable Kanban board",
+        description:
+          "Choose an Attention board with Draft, In Progress, Awaiting you and Done columns, or retain Classic.",
+        details:
+          "See failed, stuck, approval, input and review attention; reorder drafts and send work as a persistent goal. Agents gain eight scoped board tools for durable chat cards. These tools do not expose unsent local drafts or manipulate Tasks to-do records.",
+      },
+      {
+        id: "goals",
+        title: "Send work as a goal",
+        description:
+          "Start a Kanban task as a persistent goal or set a goal on an existing chat card.",
+        details:
+          "Long goals are delivered through managed file references instead of being silently truncated. Shared send ownership preserves account choice, attachments and edits when work is dispatched.",
+      },
+      {
+        id: "snooze",
+        title: "Snooze a chat until you need it",
+        description:
+          "Hide a chat from ordinary activity until a preset or custom reminder time, then bring it back automatically.",
+        details:
+          "Choose 30 minutes, one hour, two hours, tomorrow at 9am or a custom time. Reminders persist across restart; Return now cancels the snooze. Running work continues.",
+      },
+      {
+        id: "splits",
+        title: "Smoother split-pane work",
+        description:
+          "Resize panes continuously, close each pane directly, and spot the focused composer at a glance.",
+        details:
+          "Chats stay mounted across single/split transitions and rearrangements, preserving the split tree, focus and conversation state.",
+      },
+      {
+        id: "sidechats",
+        title: "Side chats that keep their context",
+        description:
+          "Side chats inherit the primary workspace, and GitHub discussions stay discoverable across checkouts.",
+        details:
+          "Choose an inactivity expiry of one hour, 24 hours or never. Idle expired side chats become read-only and release their provider session. Cmd+Option+S toggles Side chat on macOS.",
+      },
+      {
+        id: "shortcuts",
+        title: "Edit shortcuts individually",
+        description:
+          "Record and edit shortcuts in a searchable command list with conflict handling.",
+        details:
+          "Shift+Tab cycles the selected model’s supported reasoning effort. Thread menus group related handoff, fork and copy actions into compact submenus.",
+      },
+      {
+        id: "dictation",
+        title: "Dictation that fits the conversation",
+        description:
+          "Use Enter to stop/transcribe or stop/send, and dictate while an agent is working.",
+        details: "Capture waits for real microphone audio before proceeding.",
+      },
+      {
+        id: "audio-trail",
+        title: "Let the message trail follow sound",
+        description:
+          "On supported macOS desktops, animate the trail from system audio, a selected microphone, or both.",
+        details:
+          "The opt-in feature uses loudness levels rather than recording audio. System-audio levels require macOS 14.2+; microphone access requires permission. Choose a built-in microphone while using Bluetooth headphones; an unavailable selected device does not silently switch to another input.",
+      },
+      {
+        id: "transcript",
+        title: "Clearer long-running conversations",
+        description:
+          "Keep background subagent replies visible and wait for all workers before showing completion.",
+        details:
+          "Choose whether finished turns fold and whether sending anchors the new message at the top. Wide code blocks scroll horizontally without widening the transcript. Full error, approval, progress and warning details remain available.",
+      },
+      {
+        id: "claude",
+        title: "More useful Claude progress",
+        description:
+          "See provider-supplied reasoning, tool summaries and execution status in the transcript.",
+        details:
+          "Native compaction waits for initialization; prompt-cache warnings avoid false expiry reports. Account-specific CLI paths are retained when Artifacts is enabled.",
+      },
+      {
+        id: "catalogs",
+        title: "Current models without disruptive refreshes",
+        description:
+          "Model catalogs refresh on demand for the account you are viewing while keeping usable choices visible.",
+        details:
+          "Interactive requests take priority, actionable failures offer retry, Claude catalog changes follow CLI updates, and OpenCode custom-provider models remain selectable.",
+      },
+      {
+        id: "imports",
+        title: "Better import recovery and history browsing",
+        description:
+          "Import conversations from supported Codex and Claude accounts with clearer diagnostics, bounded history pages and recovery for interrupted work.",
+        details:
+          "Original provider context remains in independent session copies. Earlier text loads on demand; historical tools, reasoning and attachments are not reconstructed as live messages. New ordinary chats skip imported-history requests.",
+      },
+      {
+        id: "delivery",
+        title: "Recover message delivery after disconnects",
+        description:
+          "Synara checks whether an interrupted send was accepted before deciding what happens next.",
+        details:
+          "Accepted commands are not blindly resent; rejected commands restore the draft. Delivery settlement requires a compatible server. HTTP fallback failures now settle and surface useful errors.",
+      },
+      {
+        id: "providers",
+        title: "More dependable provider sessions",
+        description:
+          "Recover Codex gateway sessions after watchdog aborts, support current Codex rewind, and retain OpenCode background work.",
+        details:
+          "Cursor and Droid avoid repeated OAuth prompts, cached Grok login is recognized, and desktop ACP tool proxies start in the correct runtime mode.",
+      },
+      {
+        id: "responsive",
+        title: "Less repeated rendering and fetching",
+        description:
+          "Streaming and typing avoid repeated shell, header and composer work; GitHub reads share a queue and rate-limit pause.",
+        details:
+          "These are targeted changes, not a universal speed or battery-life claim. PR preparation retains the intended environment and unrelated worktrees; Git failures identify the action that failed.",
+      },
+      {
+        id: "everyday",
+        title: "Small fixes throughout the workspace",
+        description:
+          "Keep unread chats unread across reloads, preserve drafts while browsing history, and remember Markdown preview per file.",
+        details:
+          "Browser tabs support middle-click close, address suggestions stay visible and navigation preserves composer focus. Unicode image downloads, deleted-file search results, profile dates, notification clicks and app-icon persistence are corrected.",
+      },
+      {
+        id: "windows",
+        title: "Quieter Windows sessions",
+        description:
+          "Provider updates handle Windows PATH and stdin correctly, and process cleanup avoids flashing command windows.",
+        details:
+          "Capture fallback produces valid JSON. Release installers must pass the new Defender scan as well as packaging, provenance and startup checks; Windows installers remain unsigned under the version-scoped release policy.",
+      },
+      {
+        id: "tour",
+        title: "A tour of what changed",
+        description:
+          "A feature tour introduces the new workspace, accounts, review workflow and Beta Hubs.",
+        details:
+          "This release is Synara Beta only. Stable remains at 0.9.2 with its existing features and separate data and update feed.",
+      },
+    ],
+  },
+  {
     version: "0.9.2",
     date: "Sep 25",
     features: [

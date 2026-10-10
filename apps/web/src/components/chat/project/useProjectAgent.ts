@@ -1,4 +1,5 @@
 import {
+  type HubWorkItem,
   type ModelSelection,
   type ProjectActivity,
   type ProjectAgentDeleteGroupResult,
@@ -15,6 +16,7 @@ import {
 } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { mergeHubWorkItems } from "./hubWorkItems";
 import { readNativeApi } from "~/nativeApi";
 import {
   projectAgentOverviewWithConfig,
@@ -27,6 +29,25 @@ export function useProjectAgent(input: {
   readonly enabled: boolean;
 }) {
   const [overview, setOverview] = useState<ProjectAgentOverview | null>(null);
+  const workItemsRef = useRef<{ projectId: ProjectId | null; items: readonly HubWorkItem[] }>({
+    projectId: null,
+    items: [],
+  });
+  const mergeWorkItems = useCallback((projectId: ProjectId, items: readonly HubWorkItem[]) => {
+    const previous = workItemsRef.current;
+    const merged = mergeHubWorkItems(previous.projectId === projectId ? previous.items : [], items);
+    workItemsRef.current = { projectId, items: merged };
+    return merged;
+  }, []);
+  const applyOverview = useCallback(
+    (next: ProjectAgentOverview) => {
+      setOverview({
+        ...next,
+        hubWorkItems: mergeWorkItems(next.projectId, next.hubWorkItems ?? []),
+      });
+    },
+    [mergeWorkItems],
+  );
   const [tasks, setTasks] = useState<ReadonlyArray<ProjectTask>>([]);
   const [activity, setActivity] = useState<ReadonlyArray<ProjectActivity>>([]);
   const [activityCursor, setActivityCursor] = useState<string | null>(null);
@@ -68,7 +89,7 @@ export function useProjectAgent(input: {
     try {
       const next = await api.projectAgent.getOverview({ projectId });
       if (!stillCurrent(projectId, generation)) return;
-      setOverview(next);
+      applyOverview(next);
       if (next.configured) {
         const [listed, activityPage, docs, index] = await Promise.all([
           api.projectAgent.listTasks({ projectId, includeArchived: true }),
@@ -93,7 +114,7 @@ export function useProjectAgent(input: {
       if (!stillCurrent(projectId, generation)) return;
       reportError(cause instanceof Error ? cause.message : "Failed to load project coordinator.");
     }
-  }, [reportError]);
+  }, [reportError, applyOverview]);
 
   // `thread-index-upserted` events patch membership directly; a full re-list
   // still runs when config links/unlinks or task upserts could change it.
@@ -146,7 +167,21 @@ export function useProjectAgent(input: {
       // Events stream for every subscribed project on the client — apply only this
       // project's events and only the slice each event actually changed.
       if (event.type === "snapshot") {
-        if (event.overview.projectId === current) setOverview(event.overview);
+        if (event.overview.projectId === current) applyOverview(event.overview);
+        return;
+      }
+      if (event.type === "work-item-upserted") {
+        if (event.projectId === current) {
+          const items = mergeWorkItems(current, [event.workItem]);
+          setOverview((overview) =>
+            overview?.projectId === current
+              ? {
+                  ...overview,
+                  hubWorkItems: items,
+                }
+              : overview,
+          );
+        }
         return;
       }
       if (event.type === "config-upserted") {
@@ -249,7 +284,7 @@ export function useProjectAgent(input: {
       unsubscribeEvents();
       void api.projectAgent.unsubscribe({ projectId: subscribedProjectId }).catch(() => undefined);
     };
-  }, [input.enabled, input.projectId, load, refreshThreadIndex]);
+  }, [input.enabled, input.projectId, load, refreshThreadIndex, applyOverview, mergeWorkItems]);
 
   const runMutation = useCallback(
     async (

@@ -1,5 +1,7 @@
 import { Effect, Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
 import {
+  LoadProjectImportHistoryInput,
+  LoadProjectImportHistoryResult,
   ImportProjectInput,
   ImportProjectResult,
   ListProjectImportsInput,
@@ -45,10 +47,13 @@ export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
   getShellSnapshot: "orchestration.getShellSnapshot",
   getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
+  searchThreads: "orchestration.searchThreads",
   dispatchCommand: "orchestration.dispatchCommand",
+  settleTurnDispatch: "orchestration.settleTurnDispatch",
   importThread: "orchestration.importThread",
   listProjectImports: "orchestration.listProjectImports",
   importProject: "orchestration.importProject",
+  loadProjectImportHistory: "orchestration.loadProjectImportHistory",
   regenerateThreadTitle: "orchestration.regenerateThreadTitle",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
@@ -564,7 +569,12 @@ export const MAX_PINNED_PROJECTS = 3;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 export const CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS = 4_000;
 export const THREAD_NOTES_MAX_CHARS = 16_384;
-export const THREAD_GOAL_MAX_CHARS = 4_096;
+// Goals travel the same transport budget as turn input; anything longer than
+// THREAD_GOAL_INLINE_MAX_CHARS is materialized to an on-disk file server-side
+// and persisted as a "read this file" reference (Codex-style large-input
+// handling), so the cap exists only to bound the wire payload.
+export const THREAD_GOAL_MAX_CHARS = PROVIDER_SEND_TURN_MAX_INPUT_CHARS;
+export const THREAD_GOAL_INLINE_MAX_CHARS = 1_000;
 export const PINNED_MESSAGES_MAX_COUNT = 100;
 export const PINNED_MESSAGE_LABEL_MAX_CHARS = 60;
 // Correlation id is command id by design in this model.
@@ -712,6 +722,22 @@ export const OrchestrationSpaceShell = Schema.Struct({
 });
 export type OrchestrationSpaceShell = typeof OrchestrationSpaceShell.Type;
 
+/** Upper bound on extra source folders a project may list next to its primary `workspaceRoot`. */
+export const PROJECT_ADDITIONAL_FOLDERS_MAX_COUNT = 16;
+
+/**
+ * Extra source folders a project spans besides its primary `workspaceRoot`, in display
+ * order. Absolute, canonical paths. Empty for an ordinary single-folder project.
+ */
+export const ProjectAdditionalFolders = Schema.Array(TrimmedNonEmptyString).check(
+  Schema.isMaxLength(PROJECT_ADDITIONAL_FOLDERS_MAX_COUNT),
+);
+export type ProjectAdditionalFolders = typeof ProjectAdditionalFolders.Type;
+
+const ProjectAdditionalFoldersField = Schema.optional(ProjectAdditionalFolders).pipe(
+  Schema.withDecodingDefault(() => []),
+);
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
@@ -721,6 +747,7 @@ export const OrchestrationProject = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -736,6 +763,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1026,6 +1054,8 @@ export const PendingClaudeCacheReview = Schema.Struct({
 export type PendingClaudeCacheReview = typeof PendingClaudeCacheReview.Type;
 
 export const OrchestrationThread = Schema.Struct({
+  /** Durable project-import provenance; ordinary chats never request imported history. */
+  isProjectImport: Schema.optional(Schema.Boolean),
   claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   id: ThreadId,
   projectId: ProjectId,
@@ -1101,6 +1131,12 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   settledAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  snoozeReminderAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -1120,6 +1156,8 @@ export const OrchestrationThread = Schema.Struct({
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
 export const OrchestrationThreadShell = Schema.Struct({
+  /** Durable project-import provenance; ordinary chats never request imported history. */
+  isProjectImport: Schema.optional(Schema.Boolean),
   claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   id: ThreadId,
   projectId: ProjectId,
@@ -1195,6 +1233,12 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   settledAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  snoozeReminderAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   handoff: Schema.NullOr(ThreadHandoff).pipe(Schema.withDecodingDefault(() => null)),
@@ -1337,6 +1381,11 @@ export const ProjectCreateCommand = Schema.Struct({
    * than failing creation.
    */
   spaceId: Schema.optional(Schema.NullOr(SpaceId)),
+  /**
+   * Extra source folders for a multi-folder project; `workspaceRoot` stays the primary
+   * folder. Only ordinary projects accept them, and each one must already exist.
+   */
+  additionalFolders: Schema.optional(ProjectAdditionalFolders),
   createdAt: IsoDateTime,
 });
 
@@ -1509,6 +1558,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   isPinned: Schema.optional(Schema.Boolean),
   // Desired settled state; the decider stamps the authoritative settledAt timestamp.
   isSettled: Schema.optional(Schema.Boolean),
+  snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** A matching due deadline authorizes the server to deliver the reminder. */
+  expectedSnoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   subagentNickname: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1524,6 +1576,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   // Marks the active goal accomplished: the decider records a ThreadGoalAchievement
   // (with pause-adjusted elapsed time) and clears the goal in the same event.
   goalAchieved: Schema.optional(Schema.Boolean),
+  // Applies `modelSelection` as a same-thread provider handoff: the server starts
+  // the target session now and records the handoff (or reverts) in the timeline.
+  providerHandoff: Schema.optional(Schema.Boolean),
 });
 
 const ThreadPinnedMessageAddCommand = Schema.Struct({
@@ -2116,6 +2171,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
+  additionalFolders: ProjectAdditionalFoldersField,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -2228,6 +2284,11 @@ export const ThreadUnarchivedPayload = Schema.Struct({
   updatedAt: Schema.optional(IsoDateTime),
 });
 
+export const ThreadProviderHandoff = Schema.Struct({
+  sourceModelSelection: ModelSelection,
+});
+export type ThreadProviderHandoff = typeof ThreadProviderHandoff.Type;
+
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
   title: Schema.optional(TrimmedNonEmptyString),
@@ -2242,6 +2303,8 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   createBranchFlowCompleted: Schema.optional(Schema.Boolean),
   isPinned: Schema.optional(Schema.Boolean),
   settledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
+  snoozeReminderAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   subagentNickname: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -2255,6 +2318,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalAchievements: Schema.optional(ThreadGoalAchievements),
+  providerHandoff: Schema.optional(ThreadProviderHandoff),
   updatedAt: IsoDateTime,
 });
 
@@ -2484,6 +2548,7 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
 });
 
 export const OrchestrationEventMetadata = Schema.Struct({
+  checkpointRuntimeSequence: Schema.optional(NonNegativeInt),
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
   adapterKey: Schema.optional(TrimmedNonEmptyString),
@@ -2724,6 +2789,22 @@ export const OrchestrationThreadDetailSnapshot = Schema.Struct({
 });
 export type OrchestrationThreadDetailSnapshot = typeof OrchestrationThreadDetailSnapshot.Type;
 
+// The whole cursor-resume gap in one item, sent only when the subscriber
+// opted in with `batchReplay`. Clients apply it as one store update, so a
+// stale cached turn jumps straight to its current state instead of
+// rendering every intermediate step of the catch-up. The named interface
+// keeps declaration emit from inlining the event union into the RPC groups,
+// which otherwise exceeds the compiler's serialization limit (TS7056).
+export interface OrchestrationThreadReplayItemSchema extends Schema.Struct<{
+  readonly kind: Schema.Literal<"replay">;
+  readonly events: Schema.$Array<typeof OrchestrationEvent>;
+}> {}
+export const OrchestrationThreadReplayItem: OrchestrationThreadReplayItemSchema = Schema.Struct({
+  kind: Schema.Literal("replay"),
+  events: Schema.Array(OrchestrationEvent),
+});
+export type OrchestrationThreadReplayItem = typeof OrchestrationThreadReplayItem.Type;
+
 export const OrchestrationThreadStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("snapshot"),
@@ -2733,6 +2814,7 @@ export const OrchestrationThreadStreamItem = Schema.Union([
     kind: Schema.Literal("event"),
     event: OrchestrationEvent,
   }),
+  OrchestrationThreadReplayItem,
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;
 
@@ -2793,6 +2875,18 @@ export const DispatchResult = Schema.Struct({
   sequence: NonNegativeInt,
 });
 export type DispatchResult = typeof DispatchResult.Type;
+
+// Resolves a lost turn-start acknowledgement without starting a new turn. If
+// the command was never accepted, the server durably rejects late arrivals.
+export const OrchestrationSettleTurnDispatchInput = Schema.Struct({
+  command: ClientThreadTurnStartCommand,
+});
+export const OrchestrationSettleTurnDispatchResult = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("accepted"), sequence: NonNegativeInt }),
+  Schema.Struct({ status: Schema.Literal("rejected"), message: Schema.String }),
+]);
+export type OrchestrationSettleTurnDispatchResult =
+  typeof OrchestrationSettleTurnDispatchResult.Type;
 
 export const OrchestrationGetSnapshotInput = Schema.Struct({});
 export type OrchestrationGetSnapshotInput = typeof OrchestrationGetSnapshotInput.Type;
@@ -2937,6 +3031,10 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
   // skips the full-history snapshot. Optional so older clients keep the
   // snapshot-first behavior unchanged.
   afterSequence: Schema.optional(NonNegativeInt),
+  // Asks the server to deliver a cursor-resume gap as one `replay` stream item
+  // instead of one `event` item per event. Opt-in so older clients, which do
+  // not know the `replay` item, keep per-event replay.
+  batchReplay: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 
@@ -2951,6 +3049,35 @@ export const OrchestrationGetThreadDetailSnapshotResult = Schema.NullOr(
 );
 export type OrchestrationGetThreadDetailSnapshotResult =
   typeof OrchestrationGetThreadDetailSnapshotResult.Type;
+
+// Exported so server and web enforce the same bounds the schema validates.
+export const ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH = 2;
+export const ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT = 50;
+export const ORCHESTRATION_SEARCH_THREADS_MAX_EXCERPT_LENGTH = 320;
+
+/** Message-content search over persisted history, independent of what a client has hydrated. */
+export const OrchestrationSearchThreadsInput = Schema.Struct({
+  query: TrimmedNonEmptyString.check(Schema.isMaxLength(200)).check(
+    Schema.isMinLength(ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH),
+  ),
+  limit: Schema.optional(
+    PositiveInt.check(Schema.isLessThanOrEqualTo(ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT)),
+  ),
+});
+export type OrchestrationSearchThreadsInput = typeof OrchestrationSearchThreadsInput.Type;
+
+export const OrchestrationThreadSearchMatch = Schema.Struct({
+  threadId: ThreadId,
+  /** Text around the first hit of the thread's best matching message. */
+  excerpt: Schema.String.check(Schema.isMaxLength(ORCHESTRATION_SEARCH_THREADS_MAX_EXCERPT_LENGTH)),
+  matchCount: PositiveInt,
+});
+export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
+
+export const OrchestrationSearchThreadsResult = Schema.Struct({
+  matches: Schema.Array(OrchestrationThreadSearchMatch),
+});
+export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
 export const OrchestrationImportThreadInput = Schema.Struct({
   threadId: ThreadId,
@@ -2997,6 +3124,10 @@ export const OrchestrationRpcSchemas = {
     input: OrchestrationGetThreadDetailSnapshotInput,
     output: OrchestrationGetThreadDetailSnapshotResult,
   },
+  searchThreads: {
+    input: OrchestrationSearchThreadsInput,
+    output: OrchestrationSearchThreadsResult,
+  },
   repairState: {
     input: OrchestrationRepairStateInput,
     output: OrchestrationRepairStateResult,
@@ -3005,12 +3136,20 @@ export const OrchestrationRpcSchemas = {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
   },
+  settleTurnDispatch: {
+    input: OrchestrationSettleTurnDispatchInput,
+    output: OrchestrationSettleTurnDispatchResult,
+  },
   importThread: {
     input: OrchestrationImportThreadInput,
     output: OrchestrationImportThreadResult,
   },
   listProjectImports: { input: ListProjectImportsInput, output: ListProjectImportsResult },
   importProject: { input: ImportProjectInput, output: ImportProjectResult },
+  loadProjectImportHistory: {
+    input: LoadProjectImportHistoryInput,
+    output: LoadProjectImportHistoryResult,
+  },
   regenerateThreadTitle: {
     input: OrchestrationRegenerateThreadTitleInput,
     output: OrchestrationRegenerateThreadTitleResult,

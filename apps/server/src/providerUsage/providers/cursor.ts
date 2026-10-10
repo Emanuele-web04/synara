@@ -62,6 +62,9 @@ async function resolveCursorAuth(ctx: ProviderUsageContext): Promise<CursorAuth 
     }
   }
 
+  if (ctx.isolateCredentials) {
+    return null;
+  }
   const keychain = await readKeychainPassword({
     service: KEYCHAIN_SERVICE,
     platform: ctx.platform,

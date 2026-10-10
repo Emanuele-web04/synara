@@ -87,6 +87,8 @@ function toThreadShell(thread: Thread): ThreadShell {
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
     settledAt: thread.settledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozeReminderAt: thread.snoozeReminderAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
     envMode: thread.envMode,
@@ -110,7 +112,9 @@ function toThreadShell(thread: Thread): ThreadShell {
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
+    ...(thread.isProjectImport ? { isProjectImport: true } : {}),
     claudeCacheReview: thread.claudeCacheReview ?? null,
+    ...(thread.snoozeSequence !== undefined ? { snoozeSequence: thread.snoozeSequence } : {}),
     ...(thread.claudeCacheReviewSequence !== undefined
       ? { claudeCacheReviewSequence: thread.claudeCacheReviewSequence }
       : {}),
@@ -347,6 +351,8 @@ function sidebarThreadSummariesEqual(
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
     (left.settledAt ?? null) === (right.settledAt ?? null) &&
+    (left.snoozedUntil ?? null) === (right.snoozedUntil ?? null) &&
+    (left.snoozeReminderAt ?? null) === (right.snoozeReminderAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     (left.isPinned ?? false) === (right.isPinned ?? false) &&
     left.latestTurn === right.latestTurn &&
@@ -396,6 +402,8 @@ function buildSidebarThreadSummary(
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
     settledAt: thread.settledAt ?? null,
+    snoozedUntil: thread.snoozedUntil ?? null,
+    snoozeReminderAt: thread.snoozeReminderAt ?? null,
     updatedAt: thread.updatedAt,
     isPinned: thread.isPinned ?? false,
     latestTurn: thread.latestTurn,
@@ -613,7 +621,11 @@ function rebuildThreadShellRecords(
     const next = normalizeThreadShellSnapshot(
       thread,
       previousThread,
-      thread.claudeCacheReview != null || previousThread?.claudeCacheReviewSequence !== undefined
+      thread.claudeCacheReview != null ||
+        previousThread?.claudeCacheReviewSequence !== undefined ||
+        thread.snoozedUntil != null ||
+        thread.snoozeReminderAt != null ||
+        previousThread?.snoozeSequence !== undefined
         ? snapshotSequence
         : undefined,
       { restoringSession: true },
@@ -1491,7 +1503,11 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       return normalizeThreadFromReadModel(
         thread,
         existing,
-        thread.claudeCacheReview != null || existing?.claudeCacheReviewSequence !== undefined
+        thread.claudeCacheReview != null ||
+          existing?.claudeCacheReviewSequence !== undefined ||
+          thread.snoozedUntil != null ||
+          thread.snoozeReminderAt != null ||
+          existing?.snoozeSequence !== undefined
           ? readModel.snapshotSequence
           : undefined,
         { restoringSession: true },

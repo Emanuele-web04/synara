@@ -1,10 +1,14 @@
 import type {
   GitHubInboxState,
+  GitHubInboxSort,
   PullRequestActionInput,
+  PullRequestAutoFixListResult,
+  PullRequestAutoFixSetInput,
   PullRequestCommentInput,
   PullRequestSetPinnedInput,
   PullRequestState,
 } from "@synara/contracts";
+import { normalizeGitHubPullRequestUrl } from "@synara/shared/githubRepository";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 
 import { ensureNativeApi } from "~/nativeApi";
@@ -375,13 +379,17 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
     // merged field-by-field through the retained identity protection below.
     scope: { id: PULL_REQUEST_ACTION_REFRESH_SCOPE_ID },
     networkMode: "always",
-    mutationFn: (input: { state: GitHubInboxState }) =>
-      ensureNativeApi().githubInbox.list({ state: input.state, forceRefresh: true }),
+    mutationFn: (input: { state: GitHubInboxState; sort?: GitHubInboxSort }) =>
+      ensureNativeApi().githubInbox.list({
+        state: input.state,
+        sort: input.sort ?? "created",
+        forceRefresh: true,
+      }),
     onMutate: async (input) => {
       const context = beginPullRequestRefresh(queryClient);
       try {
         await queryClient.cancelQueries({
-          queryKey: githubInboxQueryKeys.list(input.state),
+          queryKey: githubInboxQueryKeys.list(input.state, input.sort),
           exact: true,
         });
         return context;
@@ -391,7 +399,7 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
       }
     },
     onSuccess: (result, input, context) => {
-      const refreshedQueryKey = githubInboxQueryKeys.list(input.state);
+      const refreshedQueryKey = githubInboxQueryKeys.list(input.state, input.sort);
       const protectedIdentities = context
         ? protectedPinIdentitiesForRefresh(queryClient, context)
         : new Set<string>();
@@ -410,6 +418,33 @@ export function pullRequestsForceRefreshMutationOptions(queryClient: QueryClient
     },
     onSettled: (_result, _error, _input, context) => {
       finishPullRequestRefresh(queryClient, context);
+    },
+  });
+}
+
+/** Auto-fix CI switch; shared by the PR menu checkbox and the composer hint. */
+export function pullRequestSetAutoFixMutationOptions(queryClient: QueryClient) {
+  return mutationOptions({
+    mutationFn: (input: PullRequestAutoFixSetInput) =>
+      ensureNativeApi().pullRequests.setAutoFix(input),
+    // Swap this PR's entry in the chat's list so every row and the composer tip update at once.
+    onSuccess: (result, input) => {
+      queryClient.setQueryData<PullRequestAutoFixListResult>(
+        pullRequestQueryKeys.autoFix(input.threadId),
+        (current) => ({
+          states: [
+            ...(current?.states ?? []).filter(
+              (state) =>
+                normalizeGitHubPullRequestUrl(state.pullRequestUrl) !==
+                  normalizeGitHubPullRequestUrl(input.pullRequestUrl) &&
+                normalizeGitHubPullRequestUrl(state.requestedPullRequestUrl) !==
+                  normalizeGitHubPullRequestUrl(input.pullRequestUrl) &&
+                state.pullRequestUrl !== result.state?.pullRequestUrl,
+            ),
+            ...(result.state ? [result.state] : []),
+          ],
+        }),
+      );
     },
   });
 }

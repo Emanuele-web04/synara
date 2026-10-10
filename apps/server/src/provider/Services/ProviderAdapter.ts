@@ -119,6 +119,10 @@ export interface ProviderThreadSnapshot {
   readonly lastUsedModel?: { readonly model: string; readonly thinkingLevel?: string };
 }
 
+export interface ProviderThreadHistoryPage extends ProviderThreadSnapshot {
+  readonly nextCursor: string | null;
+}
+
 export interface ProviderGeneratedImageHomePathsInput {
   /** When present, live sessions outside this current settings scope are ignored. */
   readonly enabledProviderInstanceIds?: ReadonlySet<ProviderInstanceId>;
@@ -239,6 +243,13 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
+  /**
+   * Renew retired tool authority after all native background work has settled.
+   * True keeps the current session/generation; false requires full replacement.
+   * The adapter must keep admission fenced until renewal is proven complete.
+   */
+  readonly renewAgentGatewayCredential?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
+
   /** Validate and retire before generation rotation; the returned start retains per-attempt preflight. */
   readonly prepareSessionReplacement?: (input: ProviderSessionStartInput) => Effect.Effect<
     | {
@@ -280,6 +291,15 @@ export interface ProviderAdapterShape<TError> {
     readonly providerInstanceId?: ProviderInstanceId;
     readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /** Display history only; never used to reconstruct native model context. */
+  readonly readExternalThreadPage?: (input: {
+    readonly externalThreadId: string;
+    readonly cursor?: string;
+    readonly cwd?: string;
+    readonly providerOptions?: ProviderStartOptions;
+    readonly providerInstanceId?: ProviderInstanceId;
+  }) => Effect.Effect<ProviderThreadHistoryPage, TError>;
 
   /**
    * Roll back a provider thread by N turns.

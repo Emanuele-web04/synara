@@ -91,7 +91,7 @@ import {
   automationFailurePolicyOptions,
   type AutomationFailurePolicyValue,
 } from "~/lib/automationFailurePolicy";
-import { SkillCubeIcon, WorktreeIcon } from "~/lib/icons";
+import { ClockIcon, FolderIcon, SkillCubeIcon, WorktreeIcon } from "~/lib/icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCapabilities";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
@@ -1199,7 +1199,7 @@ export function AutomationDialog({
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
-                <CentralIcon name="folder-2" className="size-4" />
+                <FolderIcon className="size-4" />
                 <span className="max-w-[10rem] truncate">
                   {selectedProject?.name ?? "Select project"}
                 </span>
@@ -1231,7 +1231,7 @@ export function AutomationDialog({
 
             <Menu>
               <MenuTrigger render={<Button variant="ghost" size="sm" className={CHIP_CLASS} />}>
-                <CentralIcon name="clock" className="size-4" />
+                <ClockIcon className="size-4" />
                 <span>{formatCadence(schedule)}</span>
                 <CentralIcon name="chevron-down-small" className="size-3.5 opacity-60" />
               </MenuTrigger>

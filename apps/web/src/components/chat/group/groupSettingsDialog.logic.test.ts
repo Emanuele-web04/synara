@@ -61,6 +61,7 @@ function makeDraft(overrides: Partial<GroupSettingsDraft> = {}): GroupSettingsDr
     coordinatorModelSelection: codexSelection,
     workerModelSelection: codexSelection,
     workerEnvironment: "local",
+    maxConcurrentWorkers: 4,
     autoMemoryEnabled: true,
     libraryPath: "",
     libraryRemoteUrl: "",
@@ -97,6 +98,7 @@ describe("buildGroupSettingsDraft", () => {
     expect(draft.coordinatorModelSelection).toEqual(codexSelection);
     expect(draft.workerModelSelection).toEqual(claudeSelection);
     expect(draft.workerEnvironment).toBe("worktree");
+    expect(draft.maxConcurrentWorkers).toBe(4);
     expect(draft.autoMemoryEnabled).toBe(false);
     expect(draft.libraryPath).toBe("/tmp/lib");
     expect(draft.libraryRemoteUrl).toBe("https://example.com/lib.git");
@@ -111,6 +113,7 @@ describe("buildGroupSettingsDraft", () => {
     });
     expect(withDefault.coordinatorModelSelection).toEqual(claudeSelection);
     expect(withDefault.workerModelSelection).toEqual(claudeSelection);
+    expect(withDefault.maxConcurrentWorkers).toBe(3);
 
     const noDefault = buildGroupSettingsDraft({
       config: null,
@@ -141,6 +144,9 @@ describe("groupSettingsDirtySections", () => {
   });
 
   it("marks general for name, icon, goal, and either model selection", () => {
+    expect(groupSettingsDirtySections(makeDraft({ maxConcurrentWorkers: 2 }), baseline)).toEqual(
+      new Set(["general"]),
+    );
     expect(groupSettingsDirtySections(makeDraft({ name: "beta" }), baseline)).toEqual(
       new Set(["general"]),
     );

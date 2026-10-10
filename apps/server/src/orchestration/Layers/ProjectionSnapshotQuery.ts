@@ -22,6 +22,7 @@ import {
   ThreadSidechatContext,
   ThreadGoalAchievements,
   ProjectScript,
+  ProjectAdditionalFolders,
   ProjectId,
   ProjectKind,
   SpaceId,
@@ -106,12 +107,14 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    additionalFolders: Schema.fromJsonString(ProjectAdditionalFolders),
     isPinned: Schema.Number,
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
+    isProjectImport: Schema.Number,
     createBranchFlowCompleted: Schema.Number,
     isPinned: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
@@ -135,6 +138,7 @@ const {
 } = ProjectionThread.fields;
 const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFields).mapFields(
   Struct.assign({
+    isProjectImport: Schema.Number,
     createBranchFlowCompleted: Schema.Number,
     isPinned: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
@@ -484,6 +488,7 @@ function toProjectedProject(row: ProjectionProjectDbRow): OrchestrationProject {
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
     spaceId: row.spaceId,
+    additionalFolders: row.additionalFolders,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -673,6 +678,7 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
     spaceId: row.spaceId,
+    additionalFolders: row.additionalFolders,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -725,7 +731,10 @@ function toProjectedThreadShellFromStoredSummary(input: {
     updatedAt: threadRow.updatedAt,
     archivedAt: threadRow.archivedAt ?? null,
     settledAt: threadRow.settledAt ?? null,
+    snoozedUntil: threadRow.snoozedUntil ?? null,
+    snoozeReminderAt: threadRow.snoozeReminderAt ?? null,
     handoff: threadRow.handoff,
+    ...(threadRow.isProjectImport > 0 ? { isProjectImport: true } : {}),
     ...(threadRow.claudeCacheReview != null
       ? { claudeCacheReview: threadRow.claudeCacheReview }
       : {}),
@@ -784,8 +793,11 @@ function toProjectedThread(input: {
     updatedAt: threadRow.updatedAt,
     archivedAt: threadRow.archivedAt ?? null,
     settledAt: threadRow.settledAt ?? null,
+    snoozedUntil: threadRow.snoozedUntil ?? null,
+    snoozeReminderAt: threadRow.snoozeReminderAt ?? null,
     deletedAt: threadRow.deletedAt,
     handoff: threadRow.handoff,
+    ...(threadRow.isProjectImport > 0 ? { isProjectImport: true } : {}),
     ...(threadRow.claudeCacheReview != null
       ? { claudeCacheReview: threadRow.claudeCacheReview }
       : {}),
@@ -951,6 +963,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -958,6 +971,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ORDER BY created_at ASC, project_id ASC
       `,
   });
+
+  const projectImportProvenance = sql`EXISTS (
+    SELECT 1 FROM project_import_origins
+    WHERE project_import_origins.thread_id = projection_threads.thread_id
+      AND project_import_origins.status = 'completed'
+  )`;
 
   const listThreadRows = SqlSchema.findAll({
     Request: Schema.Void,
@@ -1003,6 +1022,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
           latest_user_message_at AS "latestUserMessageAt",
           latest_human_message_at AS "latestHumanMessageAt",
@@ -1013,6 +1033,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -1057,6 +1079,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
           goal,
           goal_started_at AS "goalStartedAt",
@@ -1070,6 +1093,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -1241,11 +1266,33 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // Tool activity is capped, but a failed turn's outcome is transcript history.
+  // Keep its terminal events too, so cancellation/success can supersede errors.
+  const turnFailureActivityPredicate = sql.literal(`
+    kind = 'runtime.error'
+    OR (kind = 'turn.completed' AND (
+      tone = 'error' OR json_extract(payload_json, '$.state') = 'failed'
+    ))
+  `);
+  const durableTurnFailureActivityScope = sql.literal(`
+    kind IN ('runtime.error', 'turn.completed', 'turn.aborted')
+    AND (ranked.thread_id, ranked.turn_id) IN (
+      SELECT thread_id, turn_id FROM failure_turns
+    )
+  `);
+
   const listThreadActivityRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadActivityDbRowSchema,
     execute: () =>
       sql`
+        WITH failure_turns AS MATERIALIZED (
+          SELECT DISTINCT thread_id, turn_id
+          FROM projection_thread_activities
+          WHERE ${liveThreadScope}
+            AND turn_id IS NOT NULL
+            AND (${turnFailureActivityPredicate})
+        )
         SELECT
           activity_id AS "activityId",
           thread_id AS "threadId",
@@ -1295,6 +1342,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ) AS ranks
         JOIN projection_thread_activities AS ranked USING (thread_id, activity_id)
         WHERE activity_rank <= ${MAX_SNAPSHOT_THREAD_ACTIVITIES}
+          OR (${durableTurnFailureActivityScope})
           OR (
             kind IN ('approval.requested', 'user-input.requested')
             AND json_extract(payload_json, '$.requestId') IS NOT NULL
@@ -1571,6 +1619,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1631,6 +1680,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1655,6 +1705,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
           space_id AS "spaceId",
+          additional_folders_json AS "additionalFolders",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1726,6 +1777,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
           latest_user_message_at AS "latestUserMessageAt",
           latest_human_message_at AS "latestHumanMessageAt",
@@ -1736,6 +1788,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -1788,6 +1842,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
           latest_user_message_at AS "latestUserMessageAt",
           latest_human_message_at AS "latestHumanMessageAt",
@@ -1798,6 +1853,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE ${threadId} LIKE ('subagent:' || thread_id || ':%')
@@ -1883,7 +1940,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Result: ProjectionThreadActivityDbRowSchema,
     execute: ({ threadId }) =>
       sql`
-        WITH ranked AS (
+        WITH failure_turns AS MATERIALIZED (
+          SELECT DISTINCT thread_id, turn_id
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+            AND turn_id IS NOT NULL
+            AND (${turnFailureActivityPredicate})
+        ),
+        ranked AS (
           SELECT
             thread_id,
             activity_id,
@@ -1957,6 +2021,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         JOIN projection_thread_activities AS activity USING (thread_id, activity_id)
         WHERE thread_id = ${threadId}
           AND (
+            (${durableTurnFailureActivityScope})
+            OR
             (
               activity_rank <= ${MAX_THREAD_DETAIL_ACTIVITIES}
               -- Drop a split oldest turn instead of extending the query beyond
@@ -2119,6 +2185,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
+          ${projectImportProvenance} AS "isProjectImport",
           claude_cache_review_json AS "claudeCacheReview",
           latest_user_message_at AS "latestUserMessageAt",
           latest_human_message_at AS "latestHumanMessageAt",
@@ -2129,6 +2196,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id IN ${sql.in(threadIds)}
@@ -2146,6 +2215,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           status,
           provider_name AS "providerName",
+          provider_instance_id AS "providerInstanceId",
           provider_session_id AS "providerSessionId",
           provider_thread_id AS "providerThreadId",
           runtime_mode AS "runtimeMode",
@@ -2926,6 +2996,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               scripts: row.scripts,
               isPinned: row.isPinned > 0,
               spaceId: row.spaceId,
+              additionalFolders: row.additionalFolders,
               createdAt: row.createdAt,
               updatedAt: row.updatedAt,
               deletedAt: row.deletedAt,

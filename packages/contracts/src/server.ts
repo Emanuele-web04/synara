@@ -7,11 +7,11 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas";
-import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
+import { KeybindingCommand, KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
-import { ServerSettingsPatch, ServerSettingsView } from "./settings";
+import { KeepAwakeMode, ServerSettingsPatch, ServerSettingsView } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
 import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
@@ -218,6 +218,9 @@ export const ServerConfig = Schema.Struct({
   worktreesDir: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
+  // The shipped bindings, so the shortcut editor can tell customized commands from
+  // untouched ones and give a new binding its command's default condition.
+  defaultKeybindings: Schema.optional(ResolvedKeybindingsConfig),
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
   availableEditors: Schema.Array(EditorId),
@@ -309,6 +312,8 @@ export type ServerConsumeCodexResetCreditResult = typeof ServerConsumeCodexReset
 
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
+  // Stable provider-account route. Omitted by legacy local/provider-only snapshots.
+  instanceId: Schema.optional(ProviderInstanceId),
   updatedAt: IsoDateTime,
   limits: Schema.Array(ServerProviderUsageLimit),
   usageLines: Schema.Array(ServerProviderUsageLine),
@@ -333,7 +338,7 @@ export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProvider
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
 
 // Batch live-usage fetch for supported providers, powering the Settings → Usage section and
-// provider-scoped usage chips. Unfiltered requests return one entry per supported provider
+// provider-scoped usage chips. Unfiltered requests return one entry per enabled supported instance
 // (including needs-auth/error) so the UI can render a row each.
 export const ServerListProviderUsageInput = Schema.Struct({
   forceRefresh: Schema.optional(Schema.Boolean),
@@ -534,6 +539,37 @@ export const ServerUpsertKeybindingResult = Schema.Struct({
 });
 export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.Type;
 
+export const MAX_KEYBINDING_EDITS = 64;
+
+/**
+ * One step of a shortcut-editor change. `set` adds a binding (replacing exactly
+ * `replacing` when given, leaving the command's other bindings alone), `remove` drops
+ * one binding and leaves the command unassigned when it was the last, and `reset`
+ * restores the shipped bindings for one command or, without `command`, for every
+ * built-in command.
+ */
+export const ServerKeybindingEdit = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("set"),
+    rule: KeybindingRule,
+    replacing: Schema.optional(KeybindingRule),
+  }),
+  Schema.Struct({ type: Schema.Literal("remove"), rule: KeybindingRule }),
+  Schema.Struct({ type: Schema.Literal("reset"), command: Schema.optional(KeybindingCommand) }),
+]);
+export type ServerKeybindingEdit = typeof ServerKeybindingEdit.Type;
+
+export const ServerEditKeybindingsInput = Schema.Struct({
+  edits: Schema.Array(ServerKeybindingEdit).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(MAX_KEYBINDING_EDITS),
+  ),
+});
+export type ServerEditKeybindingsInput = typeof ServerEditKeybindingsInput.Type;
+
+export const ServerEditKeybindingsResult = ServerUpsertKeybindingResult;
+export type ServerEditKeybindingsResult = typeof ServerEditKeybindingsResult.Type;
+
 export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
@@ -549,6 +585,19 @@ export const ServerSettingsUpdatedPayload = Schema.Struct({
   settings: ServerSettingsView,
 });
 export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.Type;
+
+export const ServerKeepAwakeState = Schema.Struct({
+  available: Schema.Boolean,
+  mode: KeepAwakeMode,
+  active: Schema.Boolean,
+  error: Schema.NullOr(Schema.String),
+});
+export type ServerKeepAwakeState = typeof ServerKeepAwakeState.Type;
+
+export const ServerKeepAwakeUpdatedPayload = Schema.Struct({
+  keepAwake: ServerKeepAwakeState,
+});
+export type ServerKeepAwakeUpdatedPayload = typeof ServerKeepAwakeUpdatedPayload.Type;
 
 export const ServerLifecycleWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
@@ -645,3 +694,24 @@ export type ServerUpdateSettingsInput = typeof ServerUpdateSettingsInput.Type;
 
 export const ServerUpdateSettingsResult = ServerSettingsView;
 export type ServerUpdateSettingsResult = typeof ServerUpdateSettingsResult.Type;
+
+/** Aggregate runtime counters only: safe for the unauthenticated health route. */
+const RuntimeMilliseconds = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+export const ServerRuntimeStatus = Schema.Struct({
+  available: Schema.Boolean,
+  sampleWindowMs: RuntimeMilliseconds,
+  sampleCount: NonNegativeInt,
+  delayP50Ms: RuntimeMilliseconds,
+  delayP99Ms: RuntimeMilliseconds,
+  delayMaxMs: RuntimeMilliseconds,
+  utilization: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  stallWindowCount: NonNegativeInt,
+  maxStallMs: RuntimeMilliseconds,
+  /** Ambiguous suspend/scheduling gaps excluded from active-stall percentiles. */
+  discardedIdleGapCount: Schema.optional(NonNegativeInt),
+  discardedIdleGapMs: Schema.optional(RuntimeMilliseconds),
+  lastStall: Schema.NullOr(
+    Schema.Struct({ durationMs: RuntimeMilliseconds, ageMs: RuntimeMilliseconds }),
+  ),
+});
+export type ServerRuntimeStatus = typeof ServerRuntimeStatus.Type;

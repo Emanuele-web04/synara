@@ -5,18 +5,7 @@
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
 
 import * as fs from "node:fs/promises";
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  readlinkSync,
-  realpathSync,
-  statSync,
-  type BigIntStats,
-} from "node:fs";
+import { constants, lstatSync, readFileSync, readlinkSync, type BigIntStats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -33,7 +22,18 @@ import {
   resolveCodexHomeOverlayAccountSegment,
   resolveSynaraCodexHomeOverlayPath,
 } from "./codexHomePaths.ts";
-import { codexPathsReferenceSameLocation, resolveCodexPathIdentity } from "./codexPathIdentity.ts";
+import {
+  codexAuthFs,
+  runCodexAuthIoSync,
+  runCodexAuthIoAsync,
+  type CodexAuthIo,
+  type CodexAuthHandle,
+} from "./codexAuthIo.ts";
+import {
+  codexPathsReferenceSameLocation,
+  codexPathsReferenceSameLocationIo,
+  resolveCodexPathIdentity,
+} from "./codexPathIdentity.ts";
 import {
   buildProviderChildEnvironment,
   registerProviderCredentialKey,
@@ -327,16 +327,16 @@ function filesystemErrorCode(cause: unknown): string | undefined {
     : undefined;
 }
 
-function validateCodexPrivateHomePath(
+function* validateCodexPrivateHomePathIo(
   sourceHomePath: string,
   privateHomePath: string,
   label: "shadow home" | "overlay home",
-): void {
-  if (codexPathsReferenceSameLocation(sourceHomePath, privateHomePath)) {
+): CodexAuthIo<void> {
+  if (yield* codexPathsReferenceSameLocationIo(sourceHomePath, privateHomePath)) {
     throw new Error(`Codex account ${label} must be different from CODEX_HOME.`);
   }
   try {
-    if (lstatSync(privateHomePath).isSymbolicLink()) {
+    if ((yield* codexAuthFs.lstat(privateHomePath)).isSymbolicLink()) {
       throw new Error(
         `Codex account ${label} at ${privateHomePath} is a symlink; it must be a real directory so accounts cannot alias each other's auth.`,
       );
@@ -347,10 +347,10 @@ function validateCodexPrivateHomePath(
   }
 }
 
-function assertCodexPrivateAuthIsNotSymlink(privateHomePath: string): void {
+function* assertCodexPrivateAuthIsNotSymlinkIo(privateHomePath: string): CodexAuthIo<void> {
   const authPath = path.join(privateHomePath, "auth.json");
   try {
-    if (lstatSync(authPath).isSymbolicLink()) {
+    if ((yield* codexAuthFs.lstat(authPath)).isSymbolicLink()) {
       throw new Error(
         `Codex account private state at ${authPath} is a symlink; it must be a real file so accounts cannot alias each other's private state.`,
       );
@@ -365,9 +365,16 @@ function bindCodexPreparedHomeSource(
   homePath: string,
   options: { readonly label: string; readonly requireRealDirectory: boolean },
 ): CodexPreparedHomeSource {
+  return runCodexAuthIoSync(bindCodexPreparedHomeSourceIo(homePath, options));
+}
+
+function* bindCodexPreparedHomeSourceIo(
+  homePath: string,
+  options: { readonly label: string; readonly requireRealDirectory: boolean },
+): CodexAuthIo<CodexPreparedHomeSource> {
   let initialLogicalStat: BigIntStats;
   try {
-    initialLogicalStat = lstatSync(homePath, { bigint: true });
+    initialLogicalStat = yield* codexAuthFs.lstat(homePath);
   } catch (cause) {
     if (filesystemErrorCode(cause) === "ENOENT") return { kind: "missing" };
     throw cause;
@@ -381,10 +388,10 @@ function bindCodexPreparedHomeSource(
     throw new Error(`${options.label} at ${homePath} is not a directory.`);
   }
   try {
-    const canonicalHomePath = realpathSync(homePath);
-    const canonicalStat = lstatSync(canonicalHomePath, { bigint: true });
-    const finalLogicalStat = lstatSync(homePath, { bigint: true });
-    const finalTargetStat = statSync(homePath, { bigint: true });
+    const canonicalHomePath = yield* codexAuthFs.realpath(homePath);
+    const canonicalStat = yield* codexAuthFs.lstat(canonicalHomePath);
+    const finalLogicalStat = yield* codexAuthFs.lstat(homePath);
+    const finalTargetStat = yield* codexAuthFs.stat(homePath);
     const logicalEntryIsStable =
       initialLogicalStat.dev === finalLogicalStat.dev &&
       initialLogicalStat.ino === finalLogicalStat.ino &&
@@ -422,12 +429,12 @@ function preparedHomeFileIdentityMatches(left: BigIntStats, right: BigIntStats):
   );
 }
 
-function assertPreparedHomeIdentity(
+function* assertPreparedHomeIdentityIo(
   source: Extract<CodexPreparedHomeSource, { kind: "bound" }>,
   fileName: string,
-): void {
+): CodexAuthIo<void> {
   try {
-    const current = lstatSync(source.canonicalHomePath, { bigint: true });
+    const current = yield* codexAuthFs.lstat(source.canonicalHomePath);
     if (
       !current.isDirectory() ||
       current.isSymbolicLink() ||
@@ -451,14 +458,14 @@ function assertPreparedHomeIdentity(
   }
 }
 
-function assertLogicalHomeMatchesPreparedSource(input: {
+function* assertLogicalHomeMatchesPreparedSourceIo(input: {
   readonly logicalHomePath: string;
   readonly source: CodexPreparedHomeSource;
   readonly label: string;
-}): void {
+}): CodexAuthIo<void> {
   if (input.source.kind === "missing") {
     try {
-      lstatSync(input.logicalHomePath, { bigint: true });
+      yield* codexAuthFs.lstat(input.logicalHomePath);
     } catch (cause) {
       if (filesystemErrorCode(cause) === "ENOENT") return;
       throw new Error(
@@ -473,10 +480,10 @@ function assertLogicalHomeMatchesPreparedSource(input: {
     );
   }
 
-  assertPreparedHomeIdentity(input.source, path.basename(input.logicalHomePath));
+  yield* assertPreparedHomeIdentityIo(input.source, path.basename(input.logicalHomePath));
   let logicalTarget: BigIntStats;
   try {
-    logicalTarget = statSync(input.logicalHomePath, { bigint: true });
+    logicalTarget = yield* codexAuthFs.stat(input.logicalHomePath);
   } catch (cause) {
     throw new Error(`${input.label} at ${input.logicalHomePath} could not be revalidated safely.`, {
       cause,
@@ -493,18 +500,18 @@ function assertLogicalHomeMatchesPreparedSource(input: {
   }
 }
 
-function assertPreparedAuthAndSourceBindingsCurrent(input: {
+function* assertPreparedAuthAndSourceBindingsCurrentIo(input: {
   readonly sourceHomePath: string;
   readonly sourceHomeSource: CodexPreparedHomeSource;
   readonly authoritativeAuthHomePath: string;
   readonly authSource: CodexPreparedAuthSource;
-}): void {
-  assertLogicalHomeMatchesPreparedSource({
+}): CodexAuthIo<void> {
+  yield* assertLogicalHomeMatchesPreparedSourceIo({
     logicalHomePath: input.sourceHomePath,
     source: input.sourceHomeSource,
     label: "Codex source home",
   });
-  assertLogicalHomeMatchesPreparedSource({
+  yield* assertLogicalHomeMatchesPreparedSourceIo({
     logicalHomePath: input.authoritativeAuthHomePath,
     source: input.authSource,
     label: "Codex account auth home",
@@ -527,6 +534,13 @@ export function readCodexPreparedHomeFileSnapshot(
   source: CodexPreparedHomeSource,
   fileName: string,
 ): Buffer | undefined {
+  return runCodexAuthIoSync(readCodexPreparedHomeFileSnapshotIo(source, fileName));
+}
+
+function* readCodexPreparedHomeFileSnapshotIo(
+  source: CodexPreparedHomeSource,
+  fileName: string,
+): CodexAuthIo<Buffer | undefined> {
   if (source.kind === "missing") return undefined;
   if (path.basename(fileName) !== fileName || fileName === "." || fileName === "..") {
     throw new CodexPreparedHomeFileSnapshotError(
@@ -535,13 +549,13 @@ export function readCodexPreparedHomeFileSnapshot(
       "A prepared Codex home snapshot must name one direct child file.",
     );
   }
-  assertPreparedHomeIdentity(source, fileName);
+  yield* assertPreparedHomeIdentityIo(source, fileName);
   const filePath = path.join(source.canonicalHomePath, fileName);
   let initial: BigIntStats;
   try {
-    initial = lstatSync(filePath, { bigint: true });
+    initial = yield* codexAuthFs.lstat(filePath);
   } catch (cause) {
-    assertPreparedHomeIdentity(source, fileName);
+    yield* assertPreparedHomeIdentityIo(source, fileName);
     if (filesystemErrorCode(cause) === "ENOENT") return undefined;
     throw new CodexPreparedHomeFileSnapshotError(
       "file-check-failed",
@@ -564,13 +578,13 @@ export function readCodexPreparedHomeFileSnapshot(
       `Codex ${fileName} must be a regular file.`,
     );
   }
-  let descriptor: number | undefined;
+  let descriptor: CodexAuthHandle | undefined;
   try {
-    descriptor = openSync(
+    descriptor = yield* codexAuthFs.open(
       filePath,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
-    const before = fstatSync(descriptor, { bigint: true });
+    const before = yield* descriptor.stat();
     if (!before.isFile() || !preparedHomeFileIdentityMatches(initial, before)) {
       throw new CodexPreparedHomeFileSnapshotError(
         "file-changed",
@@ -578,8 +592,8 @@ export function readCodexPreparedHomeFileSnapshot(
         `Codex ${fileName} changed while its identity was being verified; retry the request.`,
       );
     }
-    const content = readFileSync(descriptor);
-    const after = fstatSync(descriptor, { bigint: true });
+    const content = yield* descriptor.read();
+    const after = yield* descriptor.stat();
     if (
       !preparedHomeFileIdentityMatches(before, after) ||
       BigInt(content.byteLength) !== after.size
@@ -590,7 +604,7 @@ export function readCodexPreparedHomeFileSnapshot(
         `Codex ${fileName} changed while its snapshot was being read; retry the request.`,
       );
     }
-    assertPreparedHomeIdentity(source, fileName);
+    yield* assertPreparedHomeIdentityIo(source, fileName);
     return content;
   } catch (cause) {
     if (cause instanceof CodexPreparedHomeFileSnapshotError) throw cause;
@@ -601,7 +615,7 @@ export function readCodexPreparedHomeFileSnapshot(
       { cause },
     );
   } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
+    if (descriptor !== undefined) yield* descriptor.close();
   }
 }
 
@@ -741,10 +755,16 @@ function preparedEffectiveAuthMatchesAuthoritative(
 export function readCodexPreparedAuthTrackingFingerprint(
   tracking: PreparedCodexAuthTracking,
 ): string {
+  return runCodexAuthIoSync(readCodexPreparedAuthTrackingFingerprintIo(tracking));
+}
+
+function* readCodexPreparedAuthTrackingFingerprintIo(
+  tracking: PreparedCodexAuthTracking,
+): CodexAuthIo<string> {
   return JSON.stringify({
     storeMode: readEffectiveCodexAuthCredentialsStoreMode(tracking.sourceConfigSnapshot),
     auth: readCodexPreparedAuthIdentity(
-      readCodexPreparedHomeFileSnapshot(tracking.authSource, "auth.json"),
+      yield* readCodexPreparedHomeFileSnapshotIo(tracking.authSource, "auth.json"),
     ),
   });
 }
@@ -753,12 +773,19 @@ export function prepareCodexAuthTracking(
   input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
   hooks: CodexAuthTrackingPreparationHooks = {},
 ): PreparedCodexAuthTracking {
+  return runCodexAuthIoSync(prepareCodexAuthTrackingIo(input, hooks));
+}
+
+function* prepareCodexAuthTrackingIo(
+  input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
+  hooks: CodexAuthTrackingPreparationHooks = {},
+): CodexAuthIo<PreparedCodexAuthTracking> {
   const env = { ...(input.env ?? process.env) };
   const sourceHomePath = resolveBaseCodexHomePath(env, input.homePath);
   const ambientHomePath = resolveBaseCodexHomePath(env);
   const hasDedicatedAccountHome =
     Boolean(input.homePath?.trim()) &&
-    !codexPathsReferenceSameLocation(sourceHomePath, ambientHomePath);
+    !(yield* codexPathsReferenceSameLocationIo(sourceHomePath, ambientHomePath));
   const shadowHomePath = input.shadowHomePath
     ? resolveBaseCodexHomePath(env, input.shadowHomePath)
     : undefined;
@@ -777,20 +804,20 @@ export function prepareCodexAuthTracking(
   const sourceHomeAlsoOwnsAuth =
     path.resolve(authoritativeAuthHomePath) === path.resolve(sourceHomePath);
   if (shadowHomePath) {
-    validateCodexPrivateHomePath(sourceHomePath, shadowHomePath, "shadow home");
+    yield* validateCodexPrivateHomePathIo(sourceHomePath, shadowHomePath, "shadow home");
   }
   if (accountSegment && !shadowHomePath && !hasDedicatedAccountHome) {
-    validateCodexPrivateHomePath(sourceHomePath, overlayHomePath, "overlay home");
+    yield* validateCodexPrivateHomePathIo(sourceHomePath, overlayHomePath, "overlay home");
   }
 
-  const sourceHomeSource = bindCodexPreparedHomeSource(sourceHomePath, {
+  const sourceHomeSource = yield* bindCodexPreparedHomeSourceIo(sourceHomePath, {
     label: "Codex source home",
     requireRealDirectory: false,
   });
   hooks.afterSourceHomeBound?.();
   const authSource = sourceHomeAlsoOwnsAuth
     ? sourceHomeSource
-    : bindCodexPreparedHomeSource(authoritativeAuthHomePath, {
+    : yield* bindCodexPreparedHomeSourceIo(authoritativeAuthHomePath, {
         label: "Codex account auth home",
         requireRealDirectory: requiresRealPrivateHome,
       });
@@ -803,20 +830,22 @@ export function prepareCodexAuthTracking(
     authoritativeAuthHomePath,
     authSource,
   };
-  assertPreparedAuthAndSourceBindingsCurrent(bindingTransaction);
+  yield* assertPreparedAuthAndSourceBindingsCurrentIo(bindingTransaction);
   if (requiresRealPrivateHome && authSource.kind === "bound") {
-    assertCodexPrivateAuthIsNotSymlink(authSource.canonicalHomePath);
+    yield* assertCodexPrivateAuthIsNotSymlinkIo(authSource.canonicalHomePath);
   }
 
   const sourceConfigSnapshot =
-    readCodexPreparedHomeFileSnapshot(sourceHomeSource, "config.toml")?.toString("utf8") ?? "";
+    (yield* readCodexPreparedHomeFileSnapshotIo(sourceHomeSource, "config.toml"))?.toString(
+      "utf8",
+    ) ?? "";
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
   assertManagedCodexHomeUsesObservableAuth({
     sourceConfig: sourceConfigSnapshot,
     ...(input.accountId ? { accountId: input.accountId } : {}),
   });
   const authoritativeAuthFilePath = path.join(authoritativeAuthHomePath, "auth.json");
-  assertPreparedAuthAndSourceBindingsCurrent(bindingTransaction);
+  yield* assertPreparedAuthAndSourceBindingsCurrentIo(bindingTransaction);
   return {
     sourceConfigPath,
     authoritativeAuthFilePath,
@@ -2820,4 +2849,16 @@ export async function buildCodexProcessLaunchContext(
     authFingerprint,
     appServerArgs: buildCodexAppServerArgs(sourceHomePath),
   };
+}
+
+export function readCodexAuthFingerprintAsync(
+  input: Pick<CodexProcessEnvInput, "env" | "homePath" | "shadowHomePath" | "accountId"> = {},
+  hooks: CodexAuthTrackingPreparationHooks = {},
+): Promise<string> {
+  return runCodexAuthIoAsync(
+    (function* () {
+      const tracking = yield* prepareCodexAuthTrackingIo(input, hooks);
+      return yield* readCodexPreparedAuthTrackingFingerprintIo(tracking);
+    })(),
+  );
 }

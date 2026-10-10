@@ -6,10 +6,25 @@ const redactProcessTableArgs = (args: string) =>
   redactSensitiveProcessArgs(args, { truncateSensitiveEnvironmentRemainder: true });
 
 describe("redactSensitiveProcessArgs", () => {
-  it("redacts sensitive flag values in both supported forms", () => {
-    expect(redactSensitiveProcessArgs("tool --api-key secret --token=other --verbose")).toBe(
-      "tool --api-key [redacted] --token=[redacted] --verbose",
-    );
+  it("redacts complete sensitive flag values, including composed or unterminated quotes", () => {
+    for (const [args, expected] of [
+      [
+        "tool --api-key secret --token=other --verbose",
+        "tool --api-key [redacted] --token=[redacted] --verbose",
+      ],
+      [
+        `tool --password "correct horse" --token='alpha beta' --verbose`,
+        "tool --password [redacted] --token=[redacted] --verbose",
+      ],
+      [
+        `tool --password=prefix"correct horse"suffix --token='alpha'" beta" --verbose`,
+        "tool --password=[redacted] --token=[redacted] --verbose",
+      ],
+      ["tool --secret=`gamma delta`suffix --verbose", "tool --secret=[redacted] --verbose"],
+      ['tool --password "correct horse', "tool --password [redacted]"],
+    ] as const) {
+      expect(redactSensitiveProcessArgs(args), args).toBe(expected);
+    }
   });
 
   it("redacts bearer and OpenAI-style secret tokens", () => {

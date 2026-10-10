@@ -21,18 +21,28 @@ import {
   type PullRequestDetail,
   type ThreadId,
 } from "@synara/contracts";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { useState } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render } from "vitest-browser-react";
+import { cleanup, render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
+import { ToastProvider, toastManager } from "~/components/ui/toast";
 import { getSidechatCreator } from "~/lib/sidechatCreatorRegistry";
+import { gitQueryKeys } from "~/lib/gitReactQuery";
+import { deferred } from "~/lib/pullRequestReactQuery.testUtils";
 import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
 import { GITHUB_INBOX_DOCK_HOST_ID } from "~/rightDockStore.logic";
 import { useStore } from "~/store";
 import { initialState } from "~/storeState";
+import { useProjectEnvironmentStore } from "~/projectEnvironmentStore";
 import type { Project } from "~/types";
 
 const handleNewThread = vi.fn();
@@ -355,13 +365,26 @@ function Harness({ initialSearch }: { initialSearch: GitHubInboxSearch }) {
   );
 }
 
-function mount(initialSearch: GitHubInboxSearch) {
-  const queryClient = new QueryClient({
+function mount(
+  initialSearch: GitHubInboxSearch,
+  queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  }),
+) {
+  const routeTree = createRootRoute({
+    component: () => (
+      <ToastProvider>
+        <Harness initialSearch={initialSearch} />
+      </ToastProvider>
+    ),
+  });
+  const router = createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <Harness initialSearch={initialSearch} />
+      <RouterProvider router={router} />
     </QueryClientProvider>,
   );
 }
@@ -395,6 +418,7 @@ function shownSidechat(): string | null {
 
 beforeEach(async () => {
   localStorage.clear();
+  useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
   createdSidechats.length = 0;
   expiredSidechatIds.clear();
   dispatchCommand.mockClear();
@@ -418,13 +442,33 @@ beforeEach(async () => {
   await page.viewport(1400, 900);
 });
 
-afterEach(() => {
-  document.body.innerHTML = "";
+afterEach(async () => {
+  await cleanup();
+  toastManager.close();
   delete (window as { nativeApi?: NativeApi }).nativeApi;
   useStore.setState({ projects: [] });
 });
 
 describe("Send to agent", () => {
+  it("reports checkout failure, clears progress, and allows retry", async () => {
+    const prepared = deferred<never>();
+    preparePullRequestThread.mockReturnValueOnce(prepared.promise);
+    await mount(PULL_REQUEST_SEARCH);
+    await expect.element(page.getByRole("heading", { name: "Fix login redirect" })).toBeVisible();
+    await page.getByRole("button", { name: "Send to agent", exact: true }).click();
+    await expect
+      .element(page.getByText("Checking out pull request branch…", { exact: true }))
+      .toBeVisible();
+    prepared.reject(new Error("Checkout failed"));
+    await expect.element(page.getByText("Checkout failed", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText("Checking out pull request branch…", { exact: true }))
+      .not.toBeInTheDocument();
+    expect(handleNewThread).not.toHaveBeenCalled();
+    await page.getByRole("button", { name: "Send to agent", exact: true }).click();
+    await expect.poll(() => handleNewThread.mock.calls.length).toBe(1);
+  });
+
   it("opens a draft thread for an issue in the chosen project with the issue card attached", async () => {
     await mount(ISSUE_SEARCH);
     await expect.element(page.getByRole("heading", { name: "Crash on launch" })).toBeVisible();
@@ -459,32 +503,79 @@ describe("Send to agent", () => {
     expect(dispatchCommand).not.toHaveBeenCalled();
   });
 
-  it("prepares a pull request's branch before opening its thread", async () => {
-    await mount(PULL_REQUEST_SEARCH);
-    await expect.element(page.getByRole("heading", { name: "Fix login redirect" })).toBeVisible();
+  it.each(["local", "worktree"] as const)(
+    "waits for %s PR checkout but opens its thread without waiting for Git refreshes",
+    async (mode) => {
+      useProjectEnvironmentStore.getState().setProjectEnvMode(projectA, mode);
+      const prepared = deferred<{ branch: string; worktreePath: string }>();
+      preparePullRequestThread.mockReturnValueOnce(prepared.promise);
+      const opened = deferred<ThreadId>();
+      handleNewThread.mockReturnValueOnce(opened.promise);
+      const status = deferred<{ branch: string }>();
+      const queryClient = new QueryClient();
+      const statusKey = gitQueryKeys.status("/work/other-project");
+      queryClient.setQueryData(statusKey, { branch: "main" });
+      const refreshStatus = vi.fn(() => status.promise);
+      const unsubscribe = new QueryObserver(queryClient, {
+        queryKey: statusKey,
+        queryFn: refreshStatus,
+        staleTime: Infinity,
+      }).subscribe(() => undefined);
+      await mount(PULL_REQUEST_SEARCH, queryClient);
+      await expect.element(page.getByRole("heading", { name: "Fix login redirect" })).toBeVisible();
 
-    await page.getByRole("button", { name: "Send to agent", exact: true }).click();
+      await page.getByRole("button", { name: "Send to agent", exact: true }).click();
 
-    await expect.poll(() => handleNewThread.mock.calls.length).toBe(1);
-    expect(preparePullRequestThread).toHaveBeenCalledWith({
-      cwd: "/work/alpha",
-      reference: "https://github.com/acme/widgets/pull/41",
-      mode: "local",
-    });
-    expect(handleNewThread).toHaveBeenCalledWith(projectA, {
-      branch: "fix/login",
-      worktreePath: "/work/alpha-wt",
-      envMode: "local",
-      fresh: true,
-    });
-    await expect
-      .poll(
-        () =>
-          useComposerDraftStore.getState().draftsByThreadId["draft-thread" as ThreadId]
-            ?.pullRequestContexts[0]?.text,
-      )
-      .toContain("currently checked-out branch");
-  });
+      await expect
+        .element(page.getByRole("button", { name: "Preparing…", exact: true }))
+        .toBeDisabled();
+      expect(handleNewThread).not.toHaveBeenCalled();
+      await expect
+        .element(
+          page.getByText(
+            mode === "worktree"
+              ? "Preparing pull request worktree…"
+              : "Checking out pull request branch…",
+            { exact: true },
+          ),
+        )
+        .toBeVisible();
+      prepared.resolve({ branch: "fix/login", worktreePath: "/work/alpha-wt" });
+
+      try {
+        await expect.poll(() => refreshStatus.mock.calls.length).toBe(1);
+        await expect.poll(() => handleNewThread.mock.calls.length).toBe(1);
+        await expect.element(page.getByText("Opening chat…", { exact: true })).toBeVisible();
+        opened.resolve("draft-thread" as ThreadId);
+        expect(preparePullRequestThread).toHaveBeenCalledWith({
+          cwd: "/work/alpha",
+          reference: "https://github.com/acme/widgets/pull/41",
+          mode,
+        });
+        expect(handleNewThread).toHaveBeenCalledWith(projectA, {
+          branch: "fix/login",
+          worktreePath: "/work/alpha-wt",
+          envMode: "worktree",
+          fresh: true,
+        });
+        await expect
+          .poll(
+            () =>
+              useComposerDraftStore.getState().draftsByThreadId["draft-thread" as ThreadId]
+                ?.pullRequestContexts[0]?.text,
+          )
+          .toBe("https://github.com/acme/widgets/pull/41");
+        await expect
+          .element(page.getByText("Opening chat…", { exact: true }))
+          .not.toBeInTheDocument();
+      } finally {
+        status.resolve({ branch: "main" });
+        opened.resolve("draft-thread" as ThreadId);
+        unsubscribe();
+        queryClient.clear();
+      }
+    },
+  );
 });
 
 describe("Ask", () => {

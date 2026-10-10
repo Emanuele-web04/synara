@@ -717,7 +717,7 @@ describe("pullRequestActionMutationOptions", () => {
       action: "merge",
     } as const;
     const openKey = githubInboxQueryKeys.list("open");
-    const closedKey = githubInboxQueryKeys.list("closed");
+    const closedKey = githubInboxQueryKeys.list("closed", "updated");
     queryClient.setQueryData(openKey, {
       items: [{ ...input, state: "open", isDraft: false, isPinned: false }],
     });

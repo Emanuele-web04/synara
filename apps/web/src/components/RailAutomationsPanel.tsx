@@ -6,7 +6,6 @@
 
 import type { AutomationDefinition } from "@synara/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { useState } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { AddPlusIcon } from "~/lib/icons";
@@ -25,7 +24,13 @@ import { SidebarPanelTitle } from "./SidebarPanelTitle";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { SidebarGroup, SidebarMenu } from "./ui/sidebar";
 
-export function RailAutomationsPanel() {
+export function RailAutomationsPanel({
+  createOpen,
+  onCreateOpenChange,
+}: {
+  createOpen: boolean;
+  onCreateOpenChange: (open: boolean) => void;
+}) {
   const navigate = useNavigate();
   const openAutomationId = useParams({
     strict: false,
@@ -36,7 +41,6 @@ export function RailAutomationsPanel() {
     (threadId) => void navigate({ to: "/$threadId", params: { threadId } }),
   );
   const now = useAutomationListClock();
-  const [createOpen, setCreateOpen] = useState(false);
 
   const active = data.definitions.filter((definition) => definition.enabled);
   const paused = data.definitions.filter((definition) => !definition.enabled);
@@ -90,7 +94,7 @@ export function RailAutomationsPanel() {
             icon={AddPlusIcon}
             label="New automation"
             disabled={projects.length === 0}
-            onClick={() => setCreateOpen(true)}
+            onClick={() => onCreateOpenChange(true)}
           />
         </SidebarMenu>
       </SidebarGroup>
@@ -112,7 +116,7 @@ export function RailAutomationsPanel() {
       </SidebarGroup>
       <AutomationCreateDialog
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={onCreateOpenChange}
         createAutomation={(input, onCreated) =>
           createMutation.mutate(input, { onSuccess: onCreated })
         }

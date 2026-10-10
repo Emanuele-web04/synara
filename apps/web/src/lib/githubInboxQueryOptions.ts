@@ -1,8 +1,9 @@
-// Query definitions for the GitHub inbox: one list query per state (a superset every filter is
+// Query definitions for the GitHub inbox: one list query per state and sort (a superset every filter is
 // applied to on the client), the sidebar review badge that shares it, and issue detail.
 import type {
   GitHubInboxListResult,
   GitHubInboxState,
+  GitHubInboxSort,
   GitHubIssueCommentInput,
   GitHubIssueDetailInput,
 } from "@synara/contracts";
@@ -14,7 +15,9 @@ export const GITHUB_INBOX_STATES: readonly GitHubInboxState[] = ["open", "closed
 
 export const githubInboxQueryKeys = {
   all: ["github-inbox"] as const,
-  list: (state: GitHubInboxState) => ["github-inbox", "list", state] as const,
+  lists: (state: GitHubInboxState) => ["github-inbox", "list", state] as const,
+  list: (state: GitHubInboxState, sort: GitHubInboxSort = "created") =>
+    ["github-inbox", "list", state, sort] as const,
   issueDetail: (
     input: Pick<GitHubIssueDetailInput, "projectId" | "repository" | "number"> | null,
   ) =>
@@ -35,14 +38,17 @@ export const GITHUB_INBOX_BADGE_POLL_INTERVAL_MS = 15 * 60_000;
 export const GITHUB_ITEM_DETAIL_POLL_INTERVAL_MS = 2 * 60_000;
 export const GITHUB_ITEM_DETAIL_STALE_TIME_MS = 60_000;
 
-function fetchGitHubInboxList(state: GitHubInboxState) {
-  return ensureNativeApi().githubInbox.list({ state });
+function fetchGitHubInboxList(state: GitHubInboxState, sort: GitHubInboxSort) {
+  return ensureNativeApi().githubInbox.list({ state, sort });
 }
 
-export function githubInboxListQueryOptions(state: GitHubInboxState) {
+export function githubInboxListQueryOptions(
+  state: GitHubInboxState,
+  sort: GitHubInboxSort = "created",
+) {
   return queryOptions({
-    queryKey: githubInboxQueryKeys.list(state),
-    queryFn: () => fetchGitHubInboxList(state),
+    queryKey: githubInboxQueryKeys.list(state, sort),
+    queryFn: () => fetchGitHubInboxList(state, sort),
     staleTime: 60_000,
     gcTime: 30 * 60_000,
     refetchInterval: GITHUB_INBOX_POLL_INTERVAL_MS,
@@ -67,10 +73,10 @@ export function selectGitHubReviewRequestBadgeCount(
  * The sidebar review badge observes the open inbox list rather than a count endpoint. With the
  * inbox open the badge costs nothing extra; with it closed, the list refreshes every 15 minutes.
  */
-export function githubInboxReviewBadgeQueryOptions() {
+export function githubInboxReviewBadgeQueryOptions(sort: GitHubInboxSort = "created") {
   return queryOptions({
-    queryKey: githubInboxQueryKeys.list("open"),
-    queryFn: () => fetchGitHubInboxList("open"),
+    queryKey: githubInboxQueryKeys.list("open", sort),
+    queryFn: () => fetchGitHubInboxList("open", sort),
     staleTime: GITHUB_INBOX_BADGE_POLL_INTERVAL_MS,
     gcTime: 30 * 60_000,
     refetchInterval: GITHUB_INBOX_BADGE_POLL_INTERVAL_MS,
@@ -120,8 +126,7 @@ export function githubIssueCommentMutationOptions(queryClient: QueryClient) {
         }),
         ...GITHUB_INBOX_STATES.map((state) =>
           queryClient.invalidateQueries({
-            queryKey: githubInboxQueryKeys.list(state),
-            exact: true,
+            queryKey: githubInboxQueryKeys.lists(state),
           }),
         ),
       ]),

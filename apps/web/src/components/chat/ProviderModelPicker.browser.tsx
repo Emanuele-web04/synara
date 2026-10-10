@@ -16,6 +16,7 @@ import {
 } from "./ProviderModelPicker";
 import { mergeDynamicModelOptions, type ProviderModelOption } from "../../providerModelOptions";
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
+import { appHistory } from "../../appNavigation";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
   claudeAgent: [
@@ -351,9 +352,8 @@ describe("ProviderModelPicker", () => {
         .element(page.getByRole("menuitem", { name: "Codex", exact: true }))
         .toBeVisible();
       const signedOut = page.getByRole("menuitem", { name: /Codex · Side/ });
-      await expect.element(signedOut).toHaveAttribute("aria-disabled", "true");
+      await expect.element(signedOut).not.toHaveAttribute("aria-disabled", "true");
       expect(signedOut.element().textContent).toContain("Sign in");
-      // A disabled account is managed in settings, not offered here.
       expect(document.body.textContent ?? "").not.toContain("Old");
 
       await page.getByRole("menuitem", { name: /Codex · Work/ }).click();
@@ -540,6 +540,26 @@ describe("ProviderModelPicker", () => {
         "gpt-5-work-fast",
         "codex_work",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides disabled provider models even when an existing thread is locked to it", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: "codex",
+      providers: [providerStatus("codex", { enabled: false, available: false })],
+    });
+    try {
+      await page.getByRole("button").click();
+      expect(
+        page.getByRole("menuitemradio", { name: "GPT-5 Codex", exact: true }).elements(),
+      ).toHaveLength(0);
+      expect(
+        page.getByRole("menuitemradio", { name: "GPT-5.3 Codex", exact: true }).elements(),
+      ).toHaveLength(0);
     } finally {
       await mounted.cleanup();
     }
@@ -927,6 +947,37 @@ describe("ProviderModelPicker", () => {
       });
       await expect.element(page.getByRole("menuitem", { name: "Add Providers" })).toBeVisible();
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens provider settings when an installed provider needs sign-in", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      providers: [
+        providerStatus("codex"),
+        providerStatus("antigravity", {
+          status: "error",
+          available: true,
+          authStatus: "unauthenticated",
+        }),
+      ],
+    });
+    const pushSpy = vi.spyOn(appHistory, "push").mockImplementation(() => undefined);
+
+    try {
+      await page.getByRole("button").click();
+      const signIn = page.getByRole("menuitem", { name: /Antigravity/ });
+      await expect.element(signIn).toBeVisible();
+      await expect.element(signIn).not.toHaveAttribute("aria-disabled", "true");
+      expect(signIn.element().textContent).toContain("Sign in");
+
+      await signIn.click();
+      expect(pushSpy).toHaveBeenCalledWith("/settings?section=providers");
+    } finally {
+      pushSpy.mockRestore();
       await mounted.cleanup();
     }
   });

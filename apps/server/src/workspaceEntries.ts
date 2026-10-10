@@ -596,10 +596,30 @@ async function buildWorkspaceIndexFromGit(cwd: string): Promise<WorkspaceIndex |
     return null;
   }
 
+  // `--cached` keeps listing tracked files that were deleted from disk but not
+  // staged (e.g. an agent's `rm`), so they would show up in search and open to
+  // ENOENT. Drop them, and fall back to the filesystem walk if this listing fails.
+  const deletedFiles = await runProcess(
+    "git",
+    [...WORKSPACE_GIT_HARDENED_CONFIG_ARGS, "ls-files", "--deleted", "-z"],
+    {
+      cwd,
+      allowNonZeroExit: true,
+      timeoutMs: 20_000,
+      maxBufferBytes: 16 * 1024 * 1024,
+      outputMode: "truncate",
+    },
+  ).catch(() => null);
+  if (!deletedFiles || deletedFiles.code !== 0 || deletedFiles.stdoutTruncated) {
+    return null;
+  }
+  const deletedPaths = new Set(splitNullSeparatedPaths(deletedFiles.stdout, false));
+
   const listedPaths = splitNullSeparatedPaths(
     listedFiles.stdout,
     Boolean(listedFiles.stdoutTruncated),
   )
+    .filter((entry) => !deletedPaths.has(entry))
     .map((entry) => toPosixPath(entry))
     .filter((entry) => entry.length > 0 && !isPathInIgnoredDirectory(entry));
   const filePaths = await filterGitIgnoredPaths(cwd, listedPaths);

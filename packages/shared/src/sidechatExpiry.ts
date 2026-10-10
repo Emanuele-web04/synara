@@ -1,5 +1,18 @@
+import type { SidechatExpiry } from "@synara/contracts";
+
 export const SIDECHAT_INACTIVITY_EXPIRY_MS = 3_600_000;
 export const SIDECHAT_VISIBLE_ACTIVITY_HEARTBEAT_MS = 5 * 60 * 1_000;
+
+const SIDECHAT_EXPIRY_MS: Record<SidechatExpiry, number | null> = {
+  "1h": SIDECHAT_INACTIVITY_EXPIRY_MS,
+  "24h": 24 * SIDECHAT_INACTIVITY_EXPIRY_MS,
+  never: null,
+};
+
+/** Inactivity window for a `sidechatExpiry` setting; `null` means side chats never expire. */
+export function sidechatExpiryMs(setting: SidechatExpiry): number | null {
+  return SIDECHAT_EXPIRY_MS[setting];
+}
 
 export interface SidechatExpiryTimerClock<TimerHandle> {
   readonly now: () => number;
@@ -10,7 +23,7 @@ export interface SidechatExpiryTimerClock<TimerHandle> {
 export interface SidechatExpiryTimerOptions<
   TimerHandle,
 > extends SidechatExpiryTimerClock<TimerHandle> {
-  readonly expiryMs?: number;
+  readonly expiryMs?: number | null;
   readonly onExpire: (threadId: string, expectedLastActivityAtMs: number) => void;
 }
 
@@ -38,6 +51,7 @@ export interface SidechatExpiryTimer {
   readonly markExpired: (threadId: string) => void;
   readonly retryExpiry: (threadId: string, delayMs?: number) => void;
   readonly remove: (threadId: string) => void;
+  readonly setExpiryMs: (expiryMs: number | null) => void;
   readonly getViewedThreadIds: () => readonly string[];
   readonly dispose: () => void;
 }
@@ -45,7 +59,7 @@ export interface SidechatExpiryTimer {
 export function createSidechatExpiryTimer<TimerHandle>(
   options: SidechatExpiryTimerOptions<TimerHandle>,
 ): SidechatExpiryTimer {
-  const expiryMs = options.expiryMs ?? SIDECHAT_INACTIVITY_EXPIRY_MS;
+  let expiryMs = options.expiryMs === undefined ? SIDECHAT_INACTIVITY_EXPIRY_MS : options.expiryMs;
   const states = new Map<string, SidechatExpiryState<TimerHandle>>();
 
   const clearTimer = (state: SidechatExpiryState<TimerHandle>) => {
@@ -56,13 +70,14 @@ export function createSidechatExpiryTimer<TimerHandle>(
 
   const scheduleExpiry = (threadId: string, state: SidechatExpiryState<TimerHandle>) => {
     clearTimer(state);
-    if (state.running || state.viewerCount > 0 || state.expiryPending) return;
+    if (expiryMs === null || state.running || state.viewerCount > 0 || state.expiryPending) return;
+    const windowMs = expiryMs;
 
-    const remainingMs = Math.max(0, state.lastActivityAtMs + expiryMs - options.now());
+    const remainingMs = Math.max(0, state.lastActivityAtMs + windowMs - options.now());
     state.timer = options.schedule(() => {
       state.timer = null;
       if (state.running || state.viewerCount > 0 || state.expiryPending) return;
-      const remainingAtFireMs = state.lastActivityAtMs + expiryMs - options.now();
+      const remainingAtFireMs = state.lastActivityAtMs + windowMs - options.now();
       if (remainingAtFireMs > 0) {
         scheduleExpiry(threadId, state);
         return;
@@ -153,6 +168,14 @@ export function createSidechatExpiryTimer<TimerHandle>(
       const state = states.get(threadId);
       if (state) clearTimer(state);
       states.delete(threadId);
+    },
+    setExpiryMs: (nextExpiryMs) => {
+      if (nextExpiryMs === expiryMs) return;
+      expiryMs = nextExpiryMs;
+      for (const [threadId, state] of states) {
+        state.expiryPending = false;
+        scheduleExpiry(threadId, state);
+      }
     },
     getViewedThreadIds: () =>
       [...states.entries()].flatMap(([threadId, state]) =>

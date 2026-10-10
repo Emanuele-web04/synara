@@ -41,7 +41,11 @@ import {
   type PullRequestContextDraft,
   normalizePullRequestContexts,
 } from "./lib/pullRequestContext";
-import { type TerminalContextDraft, normalizeTerminalContextText } from "./lib/terminalContext";
+import {
+  INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
+  type TerminalContextDraft,
+  normalizeTerminalContextText,
+} from "./lib/terminalContext";
 import {
   type ChatAssistantSelectionAttachment,
   type ChatFileAttachment,
@@ -314,10 +318,7 @@ export interface ComposerDraftStoreState {
   clearProjectDraftThreadById: (projectId: ProjectId, threadId: ThreadId) => void;
   markDraftThreadPromoting: (threadId: ThreadId, promotedTo?: ThreadId) => void;
   finalizePromotedDraftThread: (threadId: ThreadId) => void;
-  clearDraftThread: (
-    threadId: ThreadId,
-    options?: { readonly preserveComputerControl?: boolean },
-  ) => void;
+  clearDraftThread: (threadId: ThreadId) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
   setPrompt: (threadId: ThreadId, prompt: string) => void;
   setPromptHistorySavedDraft: (
@@ -989,6 +990,27 @@ export function composerDraftHasUnsentContent(
  */
 export function composerThreadDraftIsPending(draft: ComposerThreadDraftState): boolean {
   return composerDraftHasUnsentContent(draft.promptHistorySavedDraft ?? draft);
+}
+
+/** Longest draft excerpt a hover preview shows; the card also clamps it to a few lines. */
+export const COMPOSER_DRAFT_PREVIEW_MAX_CHARS = 280;
+
+/**
+ * Single-line excerpt of a chat's unsent prompt for compact previews, or null when the
+ * draft holds no text. Inline context placeholders are dropped and whitespace collapsed.
+ */
+export function composerThreadDraftPreviewText(
+  draft: ComposerThreadDraftState | undefined,
+): string | null {
+  if (!draft) return null;
+  const text = (draft.promptHistorySavedDraft ?? draft).prompt
+    .replaceAll(INLINE_TERMINAL_CONTEXT_PLACEHOLDER, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length === 0) return null;
+  return text.length > COMPOSER_DRAFT_PREVIEW_MAX_CHARS
+    ? `${text.slice(0, COMPOSER_DRAFT_PREVIEW_MAX_CHARS).trimEnd()}…`
+    : text;
 }
 
 /** Thread ids with a pending draft, sorted so shallow selectors stay stable while typing. */

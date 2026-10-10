@@ -14,16 +14,18 @@ import {
   DEFAULT_CODEX_ACCOUNT_ID,
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
-  GIT_TEXT_GENERATION_PROVIDERS,
   type ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   type ProviderDriverKind,
   type ProviderInstanceEnvironment,
   ProviderInstanceId,
-  GitHubInboxState,
+  GitHubInboxSort,
+  KeepAwakeMode,
   TrimmedNonEmptyString,
   ProviderKind,
-  type GitTextGenerationProvider,
+  SidechatExpiry,
+  SourceControlWritingStyle,
+  SourceControlCustomInstructions,
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
@@ -50,12 +52,6 @@ import {
   normalizeHiddenProviders,
   normalizeProviderOrder,
 } from "./providerOrdering";
-import {
-  DEFAULT_SIDEBAR_NAV_ORDER,
-  normalizeHiddenSidebarNavItems,
-  normalizeSidebarNavOrder,
-  SIDEBAR_NAV_ITEM_IDS,
-} from "./sidebarNavOrdering";
 import {
   DEFAULT_HIDDEN_RAIL_ITEMS,
   normalizeHiddenRailItems,
@@ -162,20 +158,19 @@ function persistedKnownIdList<const Ids extends ReadonlyArray<string>>(ids: Ids)
   return persistedIdList(Id, (value) => (isKnownId(value) ? value : undefined));
 }
 
-const SidebarNavItemIdList = persistedKnownIdList(SIDEBAR_NAV_ITEM_IDS);
 const RailOrderableItemIdList = persistedKnownIdList(RAIL_ORDERABLE_ITEM_IDS);
-/** Where Beta's Tasks entry opens: the to-do list or the Kanban board of chats. */
+/** Where the Tasks entry opens: the to-do list or the Kanban board of chats. */
 export const TasksViewMode = Schema.Literals(["list", "kanban"]);
 export type TasksViewMode = typeof TasksViewMode.Type;
 export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "list";
 
-/** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (see useSidebarLayout). */
-export const SidebarLayout = Schema.Literals(["classic", "rail"]);
-export type SidebarLayout = typeof SidebarLayout.Type;
-export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "rail";
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
+/** The inbox status filter. Merged is the closed list narrowed to merged pull requests. */
+export const GitHubInboxStateFilter = Schema.Literals(["open", "closed", "merged"]);
+export type GitHubInboxStateFilter = typeof GitHubInboxStateFilter.Type;
+
 /** GitHub inbox kind filter: both kinds, or only pull requests or only issues. */
 export const GitHubInboxKindFilter = Schema.Literals(["all", "pullRequest", "issue"]);
 export type GitHubInboxKindFilter = typeof GitHubInboxKindFilter.Type;
@@ -188,11 +183,20 @@ export const GitHubInboxInvolvementFilter = Schema.Literals([
   "assigned",
 ]);
 export type GitHubInboxInvolvementFilter = typeof GitHubInboxInvolvementFilter.Type;
+/** Where a plain click on a GitHub pull request or issue link opens: the built-in review view,
+ *  the in-app browser, or the system browser. */
+export const GitHubLinkOpenTarget = Schema.Literals(["app", "browser", "external"]);
+export type GitHubLinkOpenTarget = typeof GitHubLinkOpenTarget.Type;
+export const DEFAULT_GITHUB_LINK_OPEN_TARGET: GitHubLinkOpenTarget = "app";
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
-// Sound the chat message trail moves with (Beta desktop on macOS).
+// Sound the chat message trail moves with (desktop on macOS).
 export const MessageTrailAudioSource = Schema.Literals(["off", "system", "microphone", "both"]);
 export type MessageTrailAudioSource = typeof MessageTrailAudioSource.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
+/** Which account windows each app-rail usage ring draws: both, or only one of them. */
+export const RailUsageWindow = Schema.Literals(["both", "fiveHour", "weekly"]);
+export type RailUsageWindow = typeof RailUsageWindow.Type;
+export const DEFAULT_RAIL_USAGE_WINDOW: RailUsageWindow = "both";
 // What plain Enter does while a composer voice note is recording: "stop" only
 // transcribes into the draft, "send" also sends the draft once transcribed.
 export const VoiceEnterBehavior = Schema.Literals(["stop", "send"]);
@@ -306,6 +310,10 @@ function resolvePersistedProviderListEntry(provider: string): ProviderKind | und
 }
 
 const PersistedProviderKindList = persistedIdList(ProviderKind, resolvePersistedProviderListEntry);
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
+const PersistedProviderInstanceIdList = persistedIdList(ProviderInstanceId, (value) =>
+  isProviderInstanceId(value) ? value : undefined,
+);
 
 const PersistedHiddenModels = Schema.Array(
   Schema.Struct({
@@ -372,6 +380,7 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeServerPasswordConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
+  anchorSentMessagesToTop: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -381,11 +390,15 @@ export const AppSettingsSchema = Schema.Struct({
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
+  githubLinkOpenTarget: GitHubLinkOpenTarget.pipe(
+    withDefaults(() => DEFAULT_GITHUB_LINK_OPEN_TARGET),
+  ),
   // Local-only GitHub inbox view state: the filters the page reopens with (URL parameters
   // override them for one visit; search text lives only in the URL). The column widths are not
   // stored: the page always opens at even fractions.
   githubInboxKind: GitHubInboxKindFilter.pipe(withDefaults(() => "all" as const)),
-  githubInboxState: GitHubInboxState.pipe(withDefaults(() => "open" as const)),
+  githubInboxState: GitHubInboxStateFilter.pipe(withDefaults(() => "open" as const)),
+  githubInboxSort: GitHubInboxSort.pipe(withDefaults(() => "created" as const)),
   githubInboxInvolvement: GitHubInboxInvolvementFilter.pipe(
     withDefaults(() => "everything" as const),
   ),
@@ -401,6 +414,8 @@ export const AppSettingsSchema = Schema.Struct({
   ).pipe(withDefaults(() => ["authored", "reviewRequested"] as const)),
   // Server-backed: the inbox also reads each project's other GitHub remotes (fork upstreams).
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Server-backed: how long an idle side chat stays usable before it expires.
+  sidechatExpiry: SidechatExpiry.pipe(withDefaults(() => "1h" as const satisfies SidechatExpiry)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showGroupsSection` controls the
@@ -410,25 +425,15 @@ export const AppSettingsSchema = Schema.Struct({
   // Deprecated rename bridge from the Studio surface. Normalization migrates this
   // value onto `showGroupsSection` once and then omits the key.
   showStudioSection: Schema.optionalKey(Schema.Boolean),
-  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban or Tasks,
-  // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
-  // An item whose route is currently active stays visible regardless (mirrors
-  // `hiddenProviders`), so hiding a surface never strands the user mid-route.
-  sidebarNavOrder: SidebarNavItemIdList.pipe(withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER])),
-  hiddenSidebarNavItems: SidebarNavItemIdList.pipe(withDefaults(() => [])),
-  // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
-  // mobile on classic even when the stored preference is "rail".
-  sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
-  // Beta-only: the view the Tasks entry opens, last picked in its List/Kanban switch.
+  // The view the Tasks entry opens, last picked in its List/Kanban switch.
   // Stable never reads it (Kanban is its only view).
   tasksViewMode: TasksViewMode.pipe(withDefaults(() => DEFAULT_TASKS_VIEW_MODE)),
-  // Rail layout shortcuts the user added from the rail's "…" menu, in rail order:
+  // Rail shortcuts the user added from the rail's "…" menu, in rail order:
   // "space:<id>" (the Void key for unfiled) or "project:<id>" (see appRail.logic).
   railShortcuts: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).pipe(
     withDefaults(() => []),
   ),
-  // Rail layout's own Customize state (the classic nav block keeps `sidebarNavOrder`):
-  // the order of the rail's top items and the ones the user hid. Home never hides, and an
+  // The rail's Customize state: the order of the rail's top items and the ones the user hid. Home never hides, and an
   // active hidden item stays visible (see appRail.logic).
   railItemOrder: RailOrderableItemIdList.pipe(withDefaults(() => [...RAIL_ORDERABLE_ITEM_IDS])),
   hiddenRailItems: RailOrderableItemIdList.pipe(withDefaults(() => [...DEFAULT_HIDDEN_RAIL_ITEMS])),
@@ -443,6 +448,24 @@ export const AppSettingsSchema = Schema.Struct({
   // also write back here so the last explicit open/close survives reloads.
   environmentPanelDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Legacy provider selection, retained to migrate existing sidebar preferences.
+  railUsageProviders: PersistedProviderKindList.pipe(
+    withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
+  ),
+  // Accounts whose usage rings sit at the bottom of the app rail. Null migrates the
+  // legacy provider ids to their default accounts; an empty list explicitly hides all rings.
+  railUsageInstanceIds: Schema.NullOr(PersistedProviderInstanceIdList).pipe(
+    withDefaults(() => null),
+  ),
+  railUsageWindow: RailUsageWindow.pipe(withDefaults(() => DEFAULT_RAIL_USAGE_WINDOW)),
+  // Usage popovers (rail rings, chat header, branch toolbar) open on the limit rows only;
+  // reset credits, credits, and token totals sit behind a "Details" toggle. The toggle
+  // writes back here, so the last choice sticks; Settings → Usage exposes it too.
+  usageDetailsDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Which detail sections usage popovers offer at all. Ignored when a provider reports no
+  // limit rows, since the details are then the only usage there is to show.
+  usagePopoverShowResetCredits: Schema.Boolean.pipe(withDefaults(() => true)),
+  usagePopoverShowUsageLines: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPullRequest: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -453,14 +476,24 @@ export const AppSettingsSchema = Schema.Struct({
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Fold each finished turn's tool calls and intermediate messages behind one
+  // "Worked for…" line. Off keeps every step of finished turns visible.
+  collapseFinishedTurns: Schema.Boolean.pipe(withDefaults(() => true)),
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
-  // Beta desktop on macOS: the message trail moves with the Mac's audio output,
+  // Desktop on macOS: the message trail moves with the Mac's audio output,
   // the microphone, or both. Opt-in because the first use asks macOS for access.
   messageTrailAudioSource: MessageTrailAudioSource.pipe(withDefaults(() => "off" as const)),
+  // Core Audio UID of the microphone the trail listens to; "" follows the Mac's
+  // default input (which may be a Bluetooth headset).
+  messageTrailMicrophoneId: Schema.String.check(Schema.isMaxLength(512)).pipe(
+    withDefaults(() => ""),
+  ),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
+  keepAwakeMode: KeepAwakeMode.pipe(withDefaults(() => "off" as const satisfies KeepAwakeMode)),
+  lowerProviderProcessPriority: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
   // Local desktop preference: frameless custom title bar on Windows/Linux.
@@ -469,6 +502,9 @@ export const AppSettingsSchema = Schema.Struct({
   useCustomTitleBar: Schema.Boolean.pipe(withDefaults(() => true)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Finished-work alerts wait for the agent's background subagents too, and a
+  // subagent's own thread never alerts. Off alerts every time any of them stops.
+  notifyAfterSubagentsFinish: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local desktop preference. Native capability/permission state remains owned by Electron.
   // AppSnap is opt-in because enabling its Settings toggle requests macOS
   // Input Monitoring and Screen Recording permissions.
@@ -500,6 +536,9 @@ export const AppSettingsSchema = Schema.Struct({
   // One-shot composer hint that suggests Medium effort for faster desktop actions.
   // Set when the user applies or dismisses it, so the hint never asks twice.
   dismissedComputerControlEffortHint: Schema.Boolean.pipe(withDefaults(() => false)),
+  // One-shot composer hint offering Auto-fix CI on a chat's open PR. Set when the
+  // user dismisses it or turns Auto-fix CI on anywhere, so it never asks twice.
+  dismissedPullRequestAutoFixHint: Schema.Boolean.pipe(withDefaults(() => false)),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
   ),
@@ -521,6 +560,10 @@ export const AppSettingsSchema = Schema.Struct({
   textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  sourceControlWritingStyle: SourceControlWritingStyle.pipe(
+    withDefaults(() => "repository" as const),
+  ),
+  sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
@@ -578,13 +621,6 @@ type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPat
 export interface AppModelOption extends ProviderModelOption {
   provider: ProviderKind;
   isCustom: boolean;
-}
-
-export interface GitTextGenerationModelPickerOption {
-  readonly key: string;
-  readonly value: string;
-  readonly instance: ProviderInstanceOption;
-  readonly option: AppModelOption;
 }
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
@@ -957,7 +993,8 @@ export function getProviderInstanceOptions(
   settings: Pick<
     AppSettings,
     "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
-  >,
+  > &
+    Partial<Pick<AppSettings, "disabledProviders">>,
 ): ProviderInstanceOption[] {
   const optionsById = new Map<ProviderInstanceId, ProviderInstanceOption>();
 
@@ -1015,18 +1052,23 @@ export function getProviderInstanceOptions(
     });
   }
 
-  return Array.from(optionsById.values()).toSorted((left, right) => {
-    const providerDelta =
-      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
-      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
-    if (providerDelta !== 0) {
-      return providerDelta;
-    }
-    if (left.isDefault !== right.isDefault) {
-      return left.isDefault ? -1 : 1;
-    }
-    return left.label.localeCompare(right.label);
-  });
+  return Array.from(optionsById.values())
+    .map((option) => ({
+      ...option,
+      enabled: option.enabled && !settings.disabledProviders?.includes(option.provider),
+    }))
+    .toSorted((left, right) => {
+      const providerDelta =
+        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
+        PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
+      if (providerDelta !== 0) {
+        return providerDelta;
+      }
+      if (left.isDefault !== right.isDefault) {
+        return left.isDefault ? -1 : 1;
+      }
+      return left.label.localeCompare(right.label);
+    });
 }
 
 export function getUnsupportedProviderInstanceOptions(
@@ -1389,6 +1431,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     : DEFAULT_CODEX_ACCOUNT_ID;
   return {
     ...currentSettings,
+    railUsageInstanceIds: settings.railUsageInstanceIds ?? settings.railUsageProviders,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
     // Read the legacy Studio key once: it defaults to true, so only an explicit
     // `false` carries over onto the renamed Groups section.
@@ -1440,8 +1483,6 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     disabledProviders: normalizeHiddenProviders(settings.disabledProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
-    sidebarNavOrder: normalizeSidebarNavOrder(settings.sidebarNavOrder),
-    hiddenSidebarNavItems: normalizeHiddenSidebarNavItems(settings.hiddenSidebarNavItems),
     railItemOrder: normalizeRailItemOrder(settings.railItemOrder),
     hiddenRailItems: normalizeHiddenRailItems(settings.hiddenRailItems),
     hiddenModels: [],
@@ -1477,7 +1518,7 @@ export function didProviderCommandDiscoverySettingsChange(
   );
 }
 
-function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
+export function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     claudeEnableArtifacts: settings.providers.claudeAgent.enableArtifacts,
@@ -1491,8 +1532,11 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     devinBinaryPath: settings.providers.devin.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     githubInboxIncludeUpstreams: settings.githubInboxIncludeUpstreams,
+    sidechatExpiry: settings.sidechatExpiry,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+    keepAwakeMode: settings.keepAwakeMode,
+    lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
@@ -1519,6 +1563,8 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationProviderInstanceId: settings.textGenerationModelSelection.instanceId,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    sourceControlWritingStyle: settings.sourceControlWritingStyle,
+    sourceControlCustomInstructions: settings.sourceControlCustomInstructions,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
@@ -1626,14 +1672,37 @@ export function appSettingsPatchToServerSettingsPatch(
   if (hasOwn(patch, "enableProviderUpdateChecks")) {
     serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
   }
+  if (
+    patch.keepAwakeMode === "always" ||
+    patch.keepAwakeMode === "agent" ||
+    patch.keepAwakeMode === "off"
+  ) {
+    serverPatch.keepAwakeMode = patch.keepAwakeMode;
+  }
+  if (hasOwn(patch, "lowerProviderProcessPriority")) {
+    serverPatch.lowerProviderProcessPriority = Boolean(patch.lowerProviderProcessPriority);
+  }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
   if (hasOwn(patch, "githubInboxIncludeUpstreams")) {
     serverPatch.githubInboxIncludeUpstreams = Boolean(patch.githubInboxIncludeUpstreams);
   }
+  if (
+    patch.sidechatExpiry === "1h" ||
+    patch.sidechatExpiry === "24h" ||
+    patch.sidechatExpiry === "never"
+  ) {
+    serverPatch.sidechatExpiry = patch.sidechatExpiry;
+  }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
+  }
+  if (patch.sourceControlWritingStyle !== undefined) {
+    serverPatch.sourceControlWritingStyle = patch.sourceControlWritingStyle;
+  }
+  if (patch.sourceControlCustomInstructions !== undefined) {
+    serverPatch.sourceControlCustomInstructions = patch.sourceControlCustomInstructions;
   }
   if (
     hasOwn(patch, "textGenerationModel") ||
@@ -1837,6 +1906,7 @@ export function buildInitialServerSettingsMigrationPatch(
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
     "devinBinaryPath",
+    "keepAwakeMode",
     "antigravityBinaryPath",
     "grokBinaryPath",
     "droidBinaryPath",
@@ -1851,6 +1921,8 @@ export function buildInitialServerSettingsMigrationPatch(
     "textGenerationModel",
     "textGenerationProvider",
     "textGenerationProviderInstanceId",
+    "sourceControlWritingStyle",
+    "sourceControlCustomInstructions",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
       patch[key] = normalizedSettings[key] as never;
@@ -2118,141 +2190,6 @@ export function getAppModelOptions(
   }
 
   return options;
-}
-
-export function mapCatalogModelOptionsToAppModelOptions(
-  provider: GitTextGenerationProvider,
-  options: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>,
-): AppModelOption[] {
-  return options.map((option) => ({
-    ...option,
-    provider,
-    isCustom: option.isCustom ?? false,
-  }));
-}
-
-export function getGitTextGenerationModelOptions(
-  settings: Pick<AppSettings, "textGenerationModel" | "textGenerationProvider"> &
-    Partial<Pick<AppSettings, CustomModelSettingsKey>>,
-  discoveredOptionsByProvider?: Partial<
-    Record<GitTextGenerationProvider, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
-  >,
-): AppModelOption[] {
-  const options = GIT_TEXT_GENERATION_PROVIDERS.flatMap((provider) => {
-    const discovered = discoveredOptionsByProvider?.[provider];
-    if (discovered !== undefined) {
-      return mapCatalogModelOptionsToAppModelOptions(provider, discovered);
-    }
-    const customModels = settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey] ?? [];
-    return getAppModelOptions(provider, customModels);
-  });
-  const deduped: AppModelOption[] = [];
-  const seen = new Set<string>();
-
-  for (const option of options) {
-    const key = `${option.provider}:${option.slug}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(option);
-  }
-
-  const selectedModel = settings.textGenerationModel?.trim();
-  const selectedProvider =
-    settings.textGenerationProvider ??
-    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
-  if (selectedModel && !seen.has(`${selectedProvider}:${selectedModel}`)) {
-    deduped.push({
-      provider: selectedProvider,
-      slug: selectedModel,
-      name: formatProviderModelOptionName({
-        provider: selectedProvider,
-        slug: selectedModel,
-      }),
-      isCustom: true,
-    });
-  }
-
-  return deduped;
-}
-
-export function getGitTextGenerationPickerOptions(
-  settings: Pick<
-    AppSettings,
-    | CustomModelSettingsKey
-    | "codexAccounts"
-    | "codexHomePath"
-    | "providerInstances"
-    | "selectedCodexAccountId"
-    | "textGenerationModel"
-    | "textGenerationProvider"
-    | "textGenerationProviderInstanceId"
-  >,
-  discoveredOptionsByProviderInstance?: Partial<
-    Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
-  >,
-): GitTextGenerationModelPickerOption[] {
-  const selectedModel = settings.textGenerationModel?.trim();
-  const selectedProvider =
-    settings.textGenerationProvider ??
-    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
-  const selectedInstanceId = ProviderInstanceId.makeUnsafe(
-    settings.textGenerationProviderInstanceId?.trim() || selectedProvider,
-  );
-  const entries: GitTextGenerationModelPickerOption[] = [];
-  const seen = new Set<string>();
-
-  for (const instance of getProviderInstanceOptions(settings)) {
-    if (
-      !instance.enabled ||
-      !GIT_TEXT_GENERATION_PROVIDERS.includes(instance.provider as GitTextGenerationProvider)
-    ) {
-      continue;
-    }
-    const selectedModelForInstance =
-      selectedModel &&
-      instance.provider === selectedProvider &&
-      instance.instanceId === selectedInstanceId
-        ? selectedModel
-        : undefined;
-    const selectedModelOption = selectedModelForInstance
-      ? getAppModelOptions(instance.provider, [], selectedModelForInstance).find(
-          (option) =>
-            option.slug === normalizeModelSlug(selectedModelForInstance, instance.provider),
-        )
-      : undefined;
-    const discoveredOptions = discoveredOptionsByProviderInstance?.[instance.instanceId];
-    const catalogOptions = discoveredOptions
-      ? mapCatalogModelOptionsToAppModelOptions(
-          instance.provider as GitTextGenerationProvider,
-          discoveredOptions,
-        )
-      : null;
-    const options = catalogOptions
-      ? [
-          ...catalogOptions,
-          ...(selectedModelOption &&
-          !catalogOptions.some((option) => option.slug === selectedModelOption.slug)
-            ? [selectedModelOption]
-            : []),
-        ]
-      : getAppModelOptions(
-          instance.provider,
-          getCustomModelsForProviderInstance(settings, instance),
-          selectedModelForInstance,
-        );
-    for (const option of options) {
-      const key = `${instance.instanceId}:${option.provider}:${option.slug}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      entries.push({ key, value: key, instance, option });
-    }
-  }
-
-  return entries;
 }
 
 export function resolveAppModelSelection(

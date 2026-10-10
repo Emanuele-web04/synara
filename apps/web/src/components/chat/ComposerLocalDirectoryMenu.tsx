@@ -8,7 +8,7 @@ import type { Ref } from "react";
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { ArrowUpIcon, FileIcon } from "~/lib/icons";
+import { ArrowUpIcon, FileIcon, FolderIcon } from "~/lib/icons";
 import { expandLocalFolderPath } from "~/lib/localFolderMentions";
 import { projectSearchLocalEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { readNativeApi } from "~/nativeApi";
@@ -17,7 +17,6 @@ import {
   ELEVATED_HOVER_SURFACE_CLASS_NAME,
   ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
 } from "~/surfaceStyles";
-import { FolderClosed } from "../FolderClosed";
 import {
   Command,
   CommandGroup,
@@ -410,7 +409,7 @@ export function ComposerLocalDirectoryMenu(props: {
               <ArrowUpIcon className="size-3.5" />
             </button>
           ) : (
-            <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
+            <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
           )}
           <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground/80">
             {headerLabel}
@@ -556,7 +555,7 @@ function UseCurrentFolderRow(props: {
       }}
       onClick={onActivate}
     >
-      <FolderClosed className="size-3.5 text-muted-foreground/60" />
+      <FolderIcon className="size-3.5 text-muted-foreground/60" />
       <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
         <span className="shrink-0 text-ui-sm font-medium text-foreground/80">Use this folder</span>
         <span className="truncate text-ui-sm text-muted-foreground/55">{directoryLabel}</span>
@@ -605,7 +604,7 @@ function LocalSearchRow(props: {
       onClick={() => onActivate(entry)}
     >
       {isDirectory ? (
-        <FolderClosed className="size-3.5 text-muted-foreground/60" />
+        <FolderIcon className="size-3.5 text-muted-foreground/60" />
       ) : (
         <FileIcon className="size-3.5 text-muted-foreground/60" />
       )}
@@ -647,7 +646,7 @@ function LocalEntryRow(props: {
       onClick={() => onActivate(entry)}
     >
       {isDirectory ? (
-        <FolderClosed className="size-3.5 text-muted-foreground/60" />
+        <FolderIcon className="size-3.5 text-muted-foreground/60" />
       ) : (
         <FileIcon className="size-3.5 text-muted-foreground/60" />
       )}

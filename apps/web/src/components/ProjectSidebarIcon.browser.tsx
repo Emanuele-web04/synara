@@ -32,9 +32,7 @@ it("uses a project's favicon as the sidebar glyph when one is available", async 
     expect(icon?.getAttribute("alt")).toBe("");
     expect(icon?.getAttribute("aria-hidden")).toBe("true");
   });
-  expect(
-    document.querySelector('[data-testid="project-icon"] [data-slot="central-icon"]'),
-  ).toBeNull();
+  expect(document.querySelector('[data-testid="project-icon"] [data-slot="hugeicon"]')).toBeNull();
 });
 
 it("keeps the folder glyph when a project has no usable favicon", async () => {
@@ -47,7 +45,7 @@ it("keeps the folder glyph when a project has no usable favicon", async () => {
   await vi.waitFor(() => {
     expect(document.querySelector('[data-testid="project-icon"] img')).toBeNull();
     expect(
-      document.querySelector('[data-testid="project-icon"] [data-slot="central-icon"]'),
+      document.querySelector('[data-testid="project-icon"] [data-slot="hugeicon"]'),
     ).not.toBeNull();
   });
 });

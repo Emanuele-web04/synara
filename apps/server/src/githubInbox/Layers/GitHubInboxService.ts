@@ -6,9 +6,10 @@ import type {
   OrchestrationProject,
 } from "@synara/contracts";
 import { pullRequestListProjectContexts } from "@synara/shared/githubRepository";
-import { Effect, Layer, Scope, Semaphore, Stream } from "effect";
+import { Effect, Layer, Scope, Stream } from "effect";
 
 import type { GitHubCliError } from "../../git/Errors";
+import { GITHUB_READ_SLOTS } from "../../git/githubReadGate";
 import { GitCore } from "../../git/Services/GitCore";
 import {
   GitHubCli,
@@ -69,9 +70,6 @@ const GITHUB_REPOSITORY_CACHE_MAX_ENTRIES = 256;
 const GITHUB_REPOSITORY_CACHE_TTL_MS = 5 * 60_000;
 const PIN_RECOVERY_CACHE_MAX_ENTRIES = 64;
 const ISSUE_DETAIL_CACHE_MAX_ENTRIES = 64;
-/** Concurrent GitHub reads across every inbox and detail request. Mutations bypass this queue so
- * user actions never wait behind list refreshes. */
-const GITHUB_READ_SLOTS = 6;
 
 export interface GitHubInboxServiceDependencies {
   readonly github: GitHubCliShape;
@@ -129,9 +127,8 @@ export const makeGitHubInboxService = (
   Scope.Scope
 > =>
   Effect.gen(function* () {
-    const githubReadSlots = yield* Semaphore.make(GITHUB_READ_SLOTS);
-    const withGitHubRead = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      githubReadSlots.withPermits(1)(effect);
+    // The read queue belongs to the `gh` boundary, so inbox, detail, and git status share it.
+    const withGitHubRead = dependencies.github.withRead;
     const repositoryCache = yield* makeKeyedSingleFlightCache<GitHubRepositoryInventory, unknown>({
       maxEntries: GITHUB_REPOSITORY_CACHE_MAX_ENTRIES,
       ttlMs: GITHUB_REPOSITORY_CACHE_TTL_MS,
@@ -239,6 +236,7 @@ export const makeGitHubInboxService = (
                 cwd: repositoryProjects[0]!.workspaceRoot,
                 repository: repository.nameWithOwner,
                 state: input.state,
+                sort: input.sort ?? "updated",
                 forceRefresh,
               })
               .pipe(

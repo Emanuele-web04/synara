@@ -193,16 +193,21 @@ async function waitForText(text: string): Promise<HTMLElement> {
   return found!;
 }
 
-async function mount(props: { projects: Project[]; threadsHydrated: boolean }) {
+async function mount(props: {
+  projects: Project[];
+  threadsHydrated: boolean;
+  dataById?: ReadonlyMap<ProjectId, SidebarDerivedProjectData>;
+}) {
   const callbacks = makeCallbacks(
-    new Map(
-      props.projects.map((project) => [
-        project.id,
-        project.id === GROUP_A_ID
-          ? projectData(makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one"))
-          : emptyProjectData(),
-      ]),
-    ),
+    props.dataById ??
+      new Map(
+        props.projects.map((project) => [
+          project.id,
+          project.id === GROUP_A_ID
+            ? projectData(makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one"))
+            : emptyProjectData(),
+        ]),
+      ),
   );
   useStore.setState({ projects: props.projects, threadsHydrated: props.threadsHydrated });
   if (mountedRoot) {
@@ -357,6 +362,42 @@ describe("SidebarGroupsSurface", () => {
     });
   });
 
+  it("keeps a collapsed hub with chats expandable without an active hub thread", async () => {
+    const group = makeGroupProject({
+      id: GROUP_A_ID,
+      kind: "group",
+      name: "Team Alpha",
+      cwd: `${GROUPS_ROOT}/team-alpha`,
+      expanded: false,
+    });
+    const data = projectData(makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one"));
+    // Collapsed hubs omit their rows when no thread inside them is active.
+    data.visibleEntries = [];
+    await mount({
+      projects: [group],
+      threadsHydrated: true,
+      dataById: new Map([[GROUP_A_ID, data]]),
+    });
+
+    await waitForText("Team Alpha");
+    const toggle = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Show threads in Team Alpha"]',
+    );
+    expect(toggle).not.toBeNull();
+    expect(getComputedStyle(toggle!).visibility).toBe("visible");
+    expect(toggle!.tabIndex).toBe(0);
+    expect(toggle!.getAttribute("aria-expanded")).toBe("false");
+    toggle!.focus();
+    expect(document.activeElement).toBe(toggle);
+    toggle!.click();
+    await vi.waitFor(() => {
+      expect(toggle!.getAttribute("aria-expanded")).toBe("true");
+      expect(
+        useStore.getState().projects.find((project) => project.id === GROUP_A_ID)?.expanded,
+      ).toBe(true);
+    });
+  });
+
   it("shows just the coordinator row for a hub with no chats", async () => {
     const group = makeGroupProject({
       id: GROUP_B_ID,
@@ -411,6 +452,55 @@ describe("SidebarGroupsSurface", () => {
       expect(row?.textContent).toContain("Team Alpha");
     });
   });
+
+  it.each(["approval", "recovery"] as const)(
+    "tracks %s attention from owned workers in linked repositories",
+    async (attention) => {
+      const group = makeGroupProject({
+        id: GROUP_A_ID,
+        kind: "group",
+        name: "Team Alpha",
+        cwd: `${GROUPS_ROOT}/team-alpha`,
+      });
+      const repoId = ProjectId.makeUnsafe("linked-repository");
+      const workerId = ThreadId.makeUnsafe("linked-worker");
+      const worker = makeThreadSummary(workerId, repoId, "Fix login");
+      worker.hasPendingApprovals = attention === "approval";
+      const unrelated = makeThreadSummary(THREAD_A, repoId, "Unrelated work");
+      unrelated.hasPendingApprovals = true;
+      harness.listSummaries.mockResolvedValue({
+        summaries: [
+          {
+            projectId: GROUP_A_ID,
+            configured: true,
+            coordinatorName: "Team Alpha",
+            coordinatorThreadId: ThreadId.makeUnsafe("coordinator-thread"),
+            coordinatorIcon: null,
+            coordinatorColor: null,
+            coordinatorStatus: "idle",
+            revision: 1,
+            memberThreadIds: [workerId],
+            needsYouThreadIds: attention === "recovery" ? [workerId] : [],
+          },
+        ],
+      });
+      useStore.setState({
+        sidebarThreadSummaryById: { [workerId]: worker, [THREAD_A]: unrelated },
+      });
+      await mount({ projects: [group], threadsHydrated: true });
+      await waitForText("A thread needs you");
+
+      useStore.setState({
+        sidebarThreadSummaryById: {
+          [workerId]: { ...worker, archivedAt: "2026-01-02T00:00:00.000Z" },
+          [THREAD_A]: unrelated,
+        },
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector('[title="A thread needs you"]')).toBeNull();
+      });
+    },
+  );
 
   it("re-lists summaries when a coordinator automation event lands while closed", async () => {
     const group = makeGroupProject({

@@ -53,7 +53,7 @@ describe("disclosureMotion", () => {
   it("uses asymmetric pop durations with reduced-motion fallback", () => {
     expect(DISCLOSURE_POP_OPEN_MS).toBe(280);
     expect(DISCLOSURE_POP_CLOSE_MS).toBe(160);
-    expect(DISCLOSURE_POP_MOTION_CLASS).toContain("transition-[opacity,transform]");
+    expect(DISCLOSURE_POP_MOTION_CLASS).toContain("transition-[opacity,translate,scale]");
     expect(DISCLOSURE_POP_MOTION_CLASS).toContain("duration-280");
     expect(DISCLOSURE_POP_MOTION_CLASS).toContain("ease-out");
     expect(DISCLOSURE_POP_MOTION_CLASS).toContain("motion-reduce:transition-none");

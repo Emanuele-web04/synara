@@ -12,6 +12,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type { FastModeNotice } from "~/lib/fastModeState";
 import { ChevronDownIcon, FastModeIcon, FastModeOutlineIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -46,7 +47,7 @@ import {
 } from "./composerTraits";
 import { useComposerTraitCommit } from "./useComposerTraitCommit";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { ShortcutKbd } from "../ui/kbd";
 
 export function defaultAgentForProvider(provider: ProviderKind): string | null {
   if (provider === "opencode") return "build";
@@ -167,13 +168,17 @@ export function FastModeToggle({
   enabled,
   onToggle,
   tone: toneProp,
+  notice,
 }: {
   enabled: boolean;
   onToggle: () => void;
   tone?: "muted" | "accent";
+  // Requested but not serving: the toggle stays pressed and reads as inactive.
+  notice?: FastModeNotice | null | undefined;
 }) {
   const tone = toneProp ?? "muted";
-  const Icon = enabled ? FastModeIcon : FastModeOutlineIcon;
+  const serving = enabled && !notice;
+  const Icon = serving ? FastModeIcon : FastModeOutlineIcon;
   return (
     <Tooltip>
       <TooltipTrigger
@@ -194,7 +199,7 @@ export function FastModeToggle({
           aria-hidden="true"
           className={cn(
             "size-3.5",
-            enabled
+            serving
               ? tone === "accent"
                 ? "text-[var(--color-text-accent)]"
                 : "text-[hsl(var(--chart-4))]"
@@ -203,7 +208,7 @@ export function FastModeToggle({
         />
       </TooltipTrigger>
       <TooltipPopup side="top" variant="picker">
-        {enabled ? "Fast mode on" : "Fast mode off"}
+        {enabled ? (notice?.label ?? "Fast mode on") : "Fast mode off"}
       </TooltipPopup>
     </Tooltip>
   );
@@ -740,10 +745,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change effort, context, and speed</span>
-                <ShortcutKbd
-                  shortcutLabel={shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
-                />
+                <ShortcutKbd shortcutLabel={shortcutLabel} className="h-4 min-w-4 text-ui-2xs" />
               </span>
             </TooltipPopup>
           ) : null}

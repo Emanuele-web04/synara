@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type { GitPullRequestComment, PullRequestComment } from "@synara/contracts";
+import {
+  ThreadId,
+  type GitPullRequestComment,
+  type PullRequestAutoFixState,
+  type PullRequestComment,
+} from "@synara/contracts";
 
 import {
+  describePullRequestAutoFix,
+  findPullRequestAutoFixState,
   buildFixFailingChecksPrompt,
   buildFixReviewCommentsPrompt,
   buildFixFindingsPrompt,
@@ -21,6 +28,50 @@ import {
   summarizePullRequestDiffStat,
   withStableCheckKeys,
 } from "./environmentPullRequest.logic";
+
+describe("describePullRequestAutoFix", () => {
+  const base: PullRequestAutoFixState = {
+    threadId: ThreadId.makeUnsafe("thread"),
+    pullRequestUrl: "https://github.com/o/r/pull/1",
+    status: "watching",
+    pauseReason: null,
+    attempts: 0,
+    lastHandledHeadSha: null,
+    updatedAt: "2026-10-03T10:00:00.000Z",
+  };
+
+  it("matches a saved redirect alias and canonical URL variants", () => {
+    const state = { ...base, requestedPullRequestUrl: "https://github.com/old/repo/pull/1" };
+    expect(findPullRequestAutoFixState([state], "https://github.com/O/R/pull/1/files?x=1")).toBe(
+      state,
+    );
+    expect(
+      findPullRequestAutoFixState([state], "https://github.com/OLD/Repo/pull/1#comments"),
+    ).toBe(state);
+    expect(findPullRequestAutoFixState([state], "https://github.com/o/r/pull/0")).toBeNull();
+    expect(
+      findPullRequestAutoFixState([state], "https://github.com/o/r/pull/9007199254740993"),
+    ).toBeNull();
+  });
+  it("is unchecked while off and checked while watching or fixing", () => {
+    expect(describePullRequestAutoFix(null)).toMatchObject({ checked: false, trailing: null });
+    expect(describePullRequestAutoFix(base)).toMatchObject({ checked: true, trailing: null });
+    expect(describePullRequestAutoFix({ ...base, status: "fixing", attempts: 2 })).toMatchObject({
+      checked: true,
+      trailing: "Fixing",
+    });
+  });
+
+  it("reads as unchecked when paused so ticking it resumes, and explains why", () => {
+    const paused = describePullRequestAutoFix({
+      ...base,
+      status: "paused",
+      pauseReason: "no-push",
+    });
+    expect(paused).toMatchObject({ checked: false, trailing: "Paused" });
+    expect(paused.title).toContain("did not push");
+  });
+});
 
 function makeComment(overrides: Partial<GitPullRequestComment> = {}): GitPullRequestComment {
   return {
@@ -605,18 +656,19 @@ describe("GitHub item cards (Send to agent / Ask)", () => {
     expect(prompt).toContain("Earlier comments are omitted here");
   });
 
-  it("says whether a pull request's branch is the checked-out one", () => {
+  it("attaches only the PR link regardless of checkout, body, or discussion size", () => {
     const pullRequest = itemCardSource({
       itemKind: "pullRequest",
       url: "https://github.com/o/r/pull/42",
       branches: { head: "fix/crash", base: "main" },
+      body: "Long PR description".repeat(1_000),
+      comments: Array.from({ length: 100 }, (_, index) => itemComment(index)),
     });
-    expect(buildGitHubItemReferencePrompt(pullRequest, { checkedOut: true })).toContain(
-      "currently checked-out branch",
-    );
-    expect(buildGitHubItemReferencePrompt(pullRequest, { checkedOut: false })).toContain(
-      "may not be checked out",
-    );
+    for (const checkedOut of [true, false]) {
+      expect(createGitHubItemContextDraft(pullRequest, { checkedOut }).text).toBe(
+        "https://github.com/o/r/pull/42",
+      );
+    }
   });
 
   it("builds a reference card marked as an issue, or unmarked for a pull request", () => {

@@ -1,7 +1,7 @@
 // FILE: SidebarCustomizeList.tsx
 // Purpose: The "Customize" editor for sidebar navigation: a header with Done, and sortable
 //          rows with a visibility checkbox, label, and drag handle.
-// Layer: Sidebar UI primitive (the classic nav card and the rail layout's customize popover)
+// Layer: Sidebar UI primitive (the rail's customize popover)
 // Exports: SidebarCustomizeHeader, SidebarCustomizeList, SidebarCustomizeItem
 
 import {

@@ -4,7 +4,7 @@
 // Layer: Web inbox logic
 // Exports: resolveInboxDay, recapInputForRange, summarizeInboxSlots, sumRecapBefore,
 //          compareWithYesterday, modelIconProvider, collectNeedsYouItems,
-//          countNeedsYouActions, groupInboxThreads
+//          countNeedsYouActions, groupInboxThreads, selectInboxTasks
 
 import type {
   ProviderKind,
@@ -20,6 +20,7 @@ import {
   isThreadRunningForActivity,
   resolveActivityDayStartMs,
 } from "../SidebarActivityView.logic";
+import { buildTaskSections, toLocalDueDate, type TaskRowModel } from "../tasks/tasks.logic";
 
 export type InboxSlotId = "morning" | "afternoon" | "evening";
 
@@ -286,6 +287,7 @@ function needsYouKind(
   if (status?.label === "Pending Approval") return "approval";
   if (status?.label === "Awaiting Input") return "input";
   if (status?.label === "Plan Ready") return "plan";
+  if (status?.label === "Reminder") return "unread";
   // The sidebar shows a failed turn as a plain completion, so dismissing it hides both.
   if (status?.label === "Completed") return isUnseenFailedThread(thread) ? "failed" : "unread";
   return null;
@@ -302,7 +304,7 @@ export function collectNeedsYouItems(
 ): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
   for (const thread of threads) {
-    if (!isActivityThread(thread)) continue;
+    if (thread.snoozedUntil != null || !isActivityThread(thread)) continue;
     const kind = needsYouKind(thread, dismissed);
     if (kind) items.push({ kind, thread });
   }
@@ -326,7 +328,8 @@ export function countNeedsYouActions(
 ): number {
   let count = 0;
   for (const thread of threads) {
-    if (thread.id === activeThreadId || !isActivityThread(thread)) continue;
+    if (thread.snoozedUntil != null || thread.id === activeThreadId || !isActivityThread(thread))
+      continue;
     const kind = needsYouKind(thread, dismissed);
     if (kind && NEEDS_YOU_ACTION_KINDS.has(kind)) count += 1;
   }
@@ -358,10 +361,51 @@ export function groupInboxThreads(
     working: threads
       .filter(
         (thread) =>
-          isActivityThread(thread) && !listed.has(thread.id) && isThreadRunningForActivity(thread),
+          thread.snoozedUntil == null &&
+          isActivityThread(thread) &&
+          !listed.has(thread.id) &&
+          isThreadRunningForActivity(thread),
       )
       .toSorted(byLatestUpdate),
     finished: items.filter((item) => item.kind === "unread").map((item) => item.thread),
     failed: items.filter((item) => item.kind === "failed").map((item) => item.thread),
+  };
+}
+
+export interface InboxTasks {
+  /** Open to-dos that count today, in the Tasks list's order. */
+  readonly open: readonly TaskRowModel[];
+  /** To-dos finished during this working day, newest first. */
+  readonly doneToday: readonly TaskRowModel[];
+  /** How many of the open ones were due before today. */
+  readonly overdue: number;
+}
+
+/**
+ * The to-dos that belong to today: open ones due today or earlier, ones an agent is working
+ * on or waiting with, and ones finished since the working day started. The backlog (no due
+ * day, or a later one) stays on the Tasks page. "Due today" follows the calendar date, as
+ * the rows' own due labels do.
+ */
+export function selectInboxTasks(
+  rows: readonly TaskRowModel[],
+  day: InboxTimeRange,
+  nowMs: number,
+): InboxTasks {
+  const today = toLocalDueDate(new Date(nowMs));
+  const { sections, completed } = buildTaskSections(
+    rows.filter(({ todo, status }) => {
+      if (status.kind === "done") {
+        const completedAtMs = Date.parse(todo.completedAt ?? "");
+        return completedAtMs >= day.fromMs && completedAtMs < day.toMs;
+      }
+      return status.kind !== "todo" || (todo.dueDate !== null && todo.dueDate <= today);
+    }),
+  );
+  const open = sections.flatMap((section) => section.rows);
+  return {
+    open,
+    doneToday: completed,
+    overdue: open.filter(({ todo }) => todo.dueDate !== null && todo.dueDate < today).length,
   };
 }

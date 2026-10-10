@@ -21,8 +21,13 @@ describe("parseDesktopWindowMaterial", () => {
       material: "translucent",
       blurRadius: 64,
     });
+    // An unblurred clear window is see-through, so translucent never drops below the floor.
     expect(parseDesktopWindowMaterial({ material: "translucent", blurRadius: -4.6 })).toEqual({
       material: "translucent",
+      blurRadius: 1,
+    });
+    expect(parseDesktopWindowMaterial({ material: "opaque", blurRadius: 0 })).toEqual({
+      material: "opaque",
       blurRadius: 0,
     });
   });

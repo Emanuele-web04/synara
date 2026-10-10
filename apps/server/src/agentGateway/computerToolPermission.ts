@@ -181,6 +181,15 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_list_threads",
   "synara_read_thread",
   "synara_wait_for_threads",
+  // Kanban tools (kanbanTools.ts)
+  "synara_read_kanban_board",
+  "synara_read_kanban_card",
+  "synara_create_kanban_task",
+  "synara_create_kanban_draft",
+  "synara_move_kanban_card",
+  "synara_update_kanban_card",
+  "synara_set_kanban_goal",
+  "synara_delete_kanban_card",
   // Thread write tools (Layers/AgentGateway.ts)
   "synara_create_threads",
   "synara_create_thread",

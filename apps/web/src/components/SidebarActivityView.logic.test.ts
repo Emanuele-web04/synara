@@ -14,6 +14,7 @@ import {
   resolveActivityDateBucket,
   resolveActivityScope,
   resolveActivitySectionRows,
+  resolveActivityThreadReadAt,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
@@ -86,6 +87,83 @@ function completedTurn(completedAt: string): SidebarThreadSummary["latestTurn"] 
 }
 
 describe("buildActivityViewModel", () => {
+  it("keeps snoozed empty top-level threads accessible and restores them after expiry", () => {
+    const snoozed = { ...makeThread({ id: "empty" }), snoozedUntil: "2026-08-02T09:00:00.000Z" };
+    const archived = {
+      ...snoozed,
+      id: ThreadId.makeUnsafe("archived"),
+      archivedAt: "2026-08-01T12:00:00.000Z",
+    };
+    const child = { ...snoozed, id: ThreadId.makeUnsafe("child"), parentThreadId: snoozed.id };
+    const beforeExpiry = buildActivityViewModel({
+      threads: [snoozed, archived, child],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(beforeExpiry.snoozed.map((row) => row.id)).toEqual(["empty"]);
+    const returned = {
+      ...snoozed,
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-02T09:00:00.000Z",
+    };
+    const afterExpiry = buildActivityViewModel({
+      threads: [returned],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(afterExpiry.active.map((row) => row.id)).toEqual(["empty"]);
+    expect(
+      splitRecentActivityThreads(afterExpiry.active, {
+        nowMs: Date.parse("2026-08-02T10:00:00.000Z"),
+      }).recent.map((row) => row.id),
+    ).toEqual(["empty"]);
+  });
+
+  it("keeps snoozed threads separate before pinned and done, including overdue deadlines", () => {
+    const snoozed = {
+      ...makeThread({ id: "snoozed", latestTurn: completedTurn("2026-08-01T10:00:00.000Z") }),
+      snoozedUntil: "2026-08-01T08:00:00.000Z",
+      settledAt: "2026-08-01T11:00:00.000Z",
+    };
+    const later = {
+      ...snoozed,
+      id: ThreadId.makeUnsafe("later"),
+      snoozedUntil: "2026-08-02T09:00:00.000Z",
+    };
+    const model = buildActivityViewModel({
+      threads: [later, snoozed],
+      pinnedThreadIdSet: new Set([snoozed.id]),
+    });
+    expect(model.snoozed.map((thread) => thread.id)).toEqual(["snoozed", "later"]);
+    expect(model.pinned).toEqual([]);
+    expect(model.active).toEqual([]);
+    expect(model.settled).toEqual([]);
+  });
+
+  it("restores an older thread to recent activity using its reminder time", () => {
+    const reminded = {
+      ...makeThread({
+        id: "reminded",
+        latestHumanMessageAt: "2026-07-01T10:00:00.000Z",
+        latestTurn: completedTurn("2026-07-01T10:05:00.000Z"),
+      }),
+      snoozeReminderAt: "2026-08-02T11:30:00.000Z",
+    };
+    const newer = makeThread({
+      id: "newer",
+      latestHumanMessageAt: "2026-08-02T10:00:00.000Z",
+      latestTurn: completedTurn("2026-08-02T10:05:00.000Z"),
+    });
+    const model = buildActivityViewModel({
+      threads: [newer, reminded],
+      pinnedThreadIdSet: new Set(),
+    });
+    expect(model.active.map((thread) => thread.id)).toEqual(["reminded", "newer"]);
+    expect(
+      splitRecentActivityThreads(model.active, {
+        nowMs: Date.parse("2026-08-02T12:00:00.000Z"),
+      }).recent.map((thread) => thread.id),
+    ).toEqual(["reminded", "newer"]);
+  });
+
   it("keeps human-send order through startup, completion, attention, reads, and MCP sends", () => {
     const older = makeThread({
       id: "older",
@@ -321,6 +399,93 @@ describe("buildActivityViewModel", () => {
     expect(model.active.map((thread) => thread.id)).toEqual(["newest"]);
     expect(model.settled).toEqual([]);
     expect(model.pinned.map((thread) => thread.id)).toEqual(["pinned-draft", "pinned-plain"]);
+  });
+
+  it("keeps the open thread and working threads out of Drafts while their composer has text", () => {
+    const turn = completedTurn("2026-08-01T09:30:00.000Z");
+    const idleDraft = makeThread({
+      id: "idle-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T08:00:00.000Z",
+    });
+    const runningDraft = makeThread({
+      id: "running-draft",
+      session: makeSession("running"),
+      latestTurn: null,
+      latestHumanMessageAt: "2026-08-01T11:00:00.000Z",
+    });
+    const connectingDraft = makeThread({
+      id: "connecting-draft",
+      session: makeSession("connecting"),
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T10:30:00.000Z",
+    });
+    // Just sent: the session runs but latestTurn is still the previous, settled turn.
+    const startingDraft = makeThread({
+      id: "starting-draft",
+      session: makeSession("running"),
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T10:15:00.000Z",
+    });
+    const openDraft = makeThread({
+      id: "open-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T10:00:00.000Z",
+    });
+    const pinnedPlain = makeThread({
+      id: "pinned-plain",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T12:00:00.000Z",
+    });
+    const pinnedRunningDraft = makeThread({
+      id: "pinned-running-draft",
+      session: makeSession("running"),
+      latestTurn: null,
+      latestHumanMessageAt: "2026-08-01T07:00:00.000Z",
+    });
+    const pinnedIdleDraft = makeThread({
+      id: "pinned-idle-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T06:00:00.000Z",
+    });
+
+    const model = buildActivityViewModel({
+      threads: [
+        idleDraft,
+        runningDraft,
+        connectingDraft,
+        startingDraft,
+        openDraft,
+        pinnedPlain,
+        pinnedRunningDraft,
+        pinnedIdleDraft,
+      ],
+      pinnedThreadIdSet: new Set([pinnedPlain.id, pinnedRunningDraft.id, pinnedIdleDraft.id]),
+      draftThreadIdSet: new Set([
+        idleDraft.id,
+        runningDraft.id,
+        connectingDraft.id,
+        startingDraft.id,
+        openDraft.id,
+        pinnedRunningDraft.id,
+        pinnedIdleDraft.id,
+      ]),
+      activeThreadId: openDraft.id,
+    });
+
+    expect(model.drafts.map((thread) => thread.id)).toEqual(["idle-draft"]);
+    expect(model.active.map((thread) => thread.id)).toEqual([
+      "running-draft",
+      "connecting-draft",
+      "starting-draft",
+      "open-draft",
+    ]);
+    // Only the idle draft leads Pinned; the running one keeps its recency slot.
+    expect(model.pinned.map((thread) => thread.id)).toEqual([
+      "pinned-idle-draft",
+      "pinned-plain",
+      "pinned-running-draft",
+    ]);
   });
 });
 
@@ -674,6 +839,19 @@ describe("resolveActivitySectionRows", () => {
 });
 
 describe("collectUnreadActivityThreads", () => {
+  it("holds unread snoozed threads out of the activity bell and read sweep", () => {
+    const thread = {
+      ...makeThread({
+        id: "snoozed",
+        latestTurn: completedTurn("2026-08-01T10:00:00.000Z"),
+        lastVisitedAt: "2026-08-01T09:00:00.000Z",
+      }),
+      snoozedUntil: "2026-08-01T08:00:00.000Z",
+    };
+    expect(collectUnreadActivityThreads([thread])).toEqual([]);
+    expect(hasUnreadActivity([thread], null)).toBe(false);
+  });
+
   it("collects only eligible threads with unseen completions", () => {
     const unread = makeThread({
       id: "unread",
@@ -695,6 +873,23 @@ describe("collectUnreadActivityThreads", () => {
     expect(collectUnreadActivityThreads([unread, read, archivedUnread]).map((t) => t.id)).toEqual([
       "unread",
     ]);
+  });
+
+  it("reads a chat back from snooze at the reminder, or at a later completion", () => {
+    const returned = {
+      ...makeThread({
+        id: "returned",
+        latestTurn: completedTurn("2026-08-01T09:30:00.000Z"),
+        lastVisitedAt: "2026-08-01T09:45:00.000Z",
+      }),
+      snoozedUntil: null,
+      snoozeReminderAt: "2026-08-01T11:00:00.000Z",
+    };
+    // A turn left running when the chat was snoozed can finish after the reminder.
+    const finishedLater = { ...returned, latestTurn: completedTurn("2026-08-01T11:30:00.000Z") };
+
+    expect(resolveActivityThreadReadAt(returned)).toBe("2026-08-01T11:00:00.000Z");
+    expect(resolveActivityThreadReadAt(finishedLater)).toBe("2026-08-01T11:30:00.000Z");
   });
 
   it("does not light the bell for the thread currently being read", () => {

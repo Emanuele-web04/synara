@@ -7,18 +7,23 @@ import {
   MODEL_OPTIONS_BY_PROVIDER,
   type ProviderKind,
   type ProviderModelDescriptor,
+  type NativeApi,
 } from "@synara/contracts";
 import { useState } from "react";
+import { QueryClient } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProviderModelCatalog } from "./useProviderModelCatalog";
 import { useProviderModelCatalog } from "./useProviderModelCatalog";
+import * as nativeApi from "../nativeApi";
+import { providerModelsQueryOptions } from "../lib/providerDiscoveryReactQuery";
 
 const mocks = vi.hoisted(() => ({
   useAppSettings: vi.fn(),
   useQueries: vi.fn(),
   useQuery: vi.fn(),
+  useQueryClient: vi.fn(),
   useEffect: vi.fn(),
 }));
 
@@ -29,7 +34,12 @@ vi.mock("react", async (importOriginal) => {
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
-  return { ...actual, useQueries: mocks.useQueries, useQuery: mocks.useQuery };
+  return {
+    ...actual,
+    useQueries: mocks.useQueries,
+    useQuery: mocks.useQuery,
+    useQueryClient: mocks.useQueryClient,
+  };
 });
 
 vi.mock("../appSettings", async (importOriginal) => {
@@ -130,6 +140,7 @@ function readModelQueryEnabled(provider: ProviderKind): boolean | undefined {
 }
 
 beforeEach(() => {
+  mocks.useQueryClient.mockReturnValue(new QueryClient());
   mocks.useEffect.mockClear();
   modelQueries.clear();
   instanceModelQueries.clear();
@@ -184,6 +195,158 @@ beforeEach(() => {
 });
 
 describe("useProviderModelCatalog", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shares account catalog refreshes across projects and updates the observed query", async () => {
+    const listModels = vi.fn().mockResolvedValue({
+      models: [{ slug: "gpt-6.1-sol", name: "GPT-6.1 Sol" }],
+      source: "codex-app-server",
+    });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: { listModels },
+    } as unknown as NativeApi);
+    const [first] = readCatalogRenders({
+      selectedProvider: "codex",
+      cwd: "/one",
+      discoveryEnabled: false,
+    });
+    const [second] = readCatalogRenders({
+      selectedProvider: "codex",
+      cwd: "/two",
+      discoveryEnabled: false,
+    });
+    const queryClient = mocks.useQueryClient() as QueryClient;
+    const options = providerModelsQueryOptions({ provider: "codex", instanceId: "codex" });
+    // Ordinary discovery can cache a stale server snapshot moments before a tab opens.
+    queryClient.setQueryData(options.queryKey, {
+      models: [{ slug: "old-model", name: "Old model" }],
+      source: "codex-app-server",
+      cached: true,
+    });
+    await first!.refreshModels("codex", "codex", "if-stale");
+    await second!.refreshModels("codex", "codex", "if-stale");
+    expect(listModels).toHaveBeenCalledTimes(2);
+    expect(listModels).toHaveBeenLastCalledWith({
+      provider: "codex",
+      instanceId: "codex",
+      refresh: "if-stale",
+    });
+    expect(queryClient.getQueryData(options.queryKey)).toMatchObject({
+      models: [{ slug: "gpt-6.1-sol" }],
+    });
+    listModels.mockResolvedValueOnce({ models: [], source: "codex-app-server" });
+    await second!.refreshModels("codex", "codex", "now");
+    expect(listModels).toHaveBeenLastCalledWith({
+      provider: "codex",
+      instanceId: "codex",
+      refresh: "now",
+    });
+    expect(queryClient.getQueryData(options.queryKey)).toMatchObject({ models: [] });
+    queryClient.clear();
+  });
+
+  it("does not lose refresh intent behind an in-flight stale prefetch", async () => {
+    let finish!: (value: unknown) => void;
+    const promise = new Promise<unknown>((resolve) => {
+      finish = resolve;
+    });
+    const listModels = vi
+      .fn()
+      .mockReturnValueOnce(promise)
+      .mockResolvedValue({
+        models: [{ slug: "new-model", name: "New model" }],
+        source: "codex-app-server",
+      });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: { listModels },
+    } as unknown as NativeApi);
+    const queryClient = mocks.useQueryClient() as QueryClient;
+    const options = providerModelsQueryOptions({ provider: "codex", instanceId: "codex" });
+    const prefetch = queryClient.fetchQuery(options);
+    await vi.waitFor(() => expect(listModels).toHaveBeenCalledTimes(1));
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: false });
+    const refreshed = catalog!.refreshModels("codex", "codex", "now");
+    finish({
+      models: [{ slug: "old-model", name: "Old model" }],
+      source: "codex-app-server",
+      cached: true,
+    });
+    await Promise.all([prefetch, refreshed]);
+    expect(listModels).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(options.queryKey)).toMatchObject({
+      models: [{ slug: "new-model" }],
+    });
+    queryClient.clear();
+  });
+
+  it.each([false, true])(
+    "keeps an account refresh ahead of background catalogs after a prefetch (fails: %s)",
+    async (prefetchFails) => {
+      let finishActive!: () => void;
+      const catalog = { models: [{ slug: "same-model", name: "Same model" }], source: "runtime" };
+      const listModels = vi.fn().mockImplementation(({ provider, refresh }) => {
+        if (provider === "opencode") {
+          return new Promise((resolve) => {
+            finishActive = () => resolve(catalog);
+          });
+        }
+        if (provider === "codex" && !refresh && prefetchFails) {
+          return Promise.reject(new Error("prefetch failed"));
+        }
+        return Promise.resolve(catalog);
+      });
+      vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+        provider: { listModels },
+      } as unknown as NativeApi);
+      const client = mocks.useQueryClient() as QueryClient;
+      const active = client.fetchQuery(providerModelsQueryOptions({ provider: "opencode" }));
+      await vi.waitFor(() => expect(finishActive).toBeDefined());
+      const background = client.fetchQuery(providerModelsQueryOptions({ provider: "pi" }));
+      const prefetch = client
+        .fetchQuery({
+          ...providerModelsQueryOptions({ provider: "codex", instanceId: "codex_work" }),
+          retry: false,
+        })
+        .catch(() => undefined);
+      const [catalogHook] = readCatalogRenders({
+        selectedProvider: "codex",
+        discoveryEnabled: false,
+      });
+      const refreshed = catalogHook!.refreshModels("codex", "codex_work", "now");
+      const outcome = refreshed.then(
+        () => "completed",
+        () => "failed",
+      );
+      finishActive();
+      await Promise.all([active, background, prefetch]);
+      expect(await outcome).toBe("completed");
+      expect(listModels.mock.calls.map(([input]) => input)).toEqual([
+        { provider: "opencode" },
+        { provider: "codex", instanceId: "codex_work" },
+        { provider: "codex", instanceId: "codex_work", refresh: "now" },
+        { provider: "pi" },
+      ]);
+      client.clear();
+    },
+  );
+
+  it("reports a degraded provider response as a failed refresh", async () => {
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: {
+        listModels: vi.fn().mockResolvedValue({
+          models: [{ slug: "fallback", name: "Fallback" }],
+          source: "runtime.static",
+          error: "Provider unavailable",
+        }),
+      },
+    } as unknown as NativeApi);
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: false });
+    await expect(catalog!.refreshModels("codex", "codex", "now")).rejects.toThrow(
+      "Provider unavailable",
+    );
+    (mocks.useQueryClient() as QueryClient).clear();
+  });
+
   it.each([{ models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }] }, { models: [] }])(
     "uses the Codex catalog without restoring retired built-ins: %j",
     ({ models }) => {
@@ -195,6 +358,10 @@ describe("useProviderModelCatalog", () => {
         ...EMPTY_QUERY,
         data: { models, source: "codex-app-server", cached: false },
       });
+      instanceModelQueries.set("codex", {
+        ...EMPTY_QUERY,
+        data: { models, source: "codex-app-server", cached: false },
+      });
 
       const [catalog] = readCatalogRenders({
         selectedProvider: "codex",
@@ -203,6 +370,10 @@ describe("useProviderModelCatalog", () => {
       });
 
       expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual([
+        ...models.map((model) => model.slug),
+        "private-model",
+      ]);
+      expect(catalog?.modelOptionsByProviderInstance.codex?.map((model) => model.slug)).toEqual([
         ...models.map((model) => model.slug),
         "private-model",
       ]);
@@ -219,10 +390,14 @@ describe("useProviderModelCatalog", () => {
     },
   ])("keeps the Codex fallback until discovery succeeds: %j", (query) => {
     modelQueries.set("codex", query);
+    instanceModelQueries.set("codex", query);
 
     const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
 
     expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual(
+      MODEL_OPTIONS_BY_PROVIDER.codex.map((model) => model.slug),
+    );
+    expect(catalog?.modelOptionsByProviderInstance.codex?.map((model) => model.slug)).toEqual(
       MODEL_OPTIONS_BY_PROVIDER.codex.map((model) => model.slug),
     );
   });
@@ -529,6 +704,37 @@ describe("useProviderModelCatalog", () => {
     expect(catalog?.modelOptionsByProvider.omp.map((m) => m.slug)).toEqual([
       "anthropic/claude-sonnet-4",
     ]);
+  });
+
+  it("does not expose OMP internal roles as selectable models", () => {
+    // Keep the legacy field in the runtime-shaped fixture: the server still
+    // carries roles for ACP/runtime consumers, while this hook owns the
+    // user-facing model catalog boundary.
+    const discovery = {
+      models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
+      roles: [{ name: "smol", model: "anthropic/claude-sonnet-4" }],
+      source: "omp-cli",
+      cached: false,
+    };
+    modelQueries.set("omp", {
+      data: discovery,
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.modelOptionsByProvider.omp.map((model) => model.slug)).toEqual([
+      "anthropic/claude-sonnet-4",
+    ]);
+    expect(
+      catalog?.modelOptionsByProvider.omp.some((model) => model.slug.startsWith("role:")),
+    ).toBe(false);
   });
 
   it("clears OMP loading and options on terminal discovery failure", () => {
