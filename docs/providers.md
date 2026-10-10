@@ -46,7 +46,10 @@ Runtime events are journaled before live subscribers receive them. Codex and Cla
 contiguous assistant-text deltas into one durable event, with a 25 ms admission window, at most
 32 KiB of UTF-8 text and 256 source events. A different thread, turn, item, stream kind, or
 metadata ends the batch. Tools, reasoning, terminal events and errors flush preceding text
-immediately; Stop, session replacement and graceful shutdown flush before retiring its owner.
+immediately. Native interruption and session teardown begin before waiting for text persistence.
+Session teardown and the text drain run concurrently under the old lifecycle generation;
+retirement waits for both, and a teardown failure preserves that generation and the accepted text.
+Stop, session replacement and graceful shutdown flush before retiring the text's owner.
 Unknown metadata or nonempty raw payloads retain their original events.
 
 This optimization requires the adapter's explicit `fresh-ids-once` delivery guarantee: each
