@@ -2138,6 +2138,19 @@ async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasureme
   };
 }
 
+async function waitForSplitChatReady(threadIds: readonly ThreadId[]): Promise<void> {
+  // Empty secondary threads have a composer before detail hydration. Capture
+  // DOM identity after their loading layout has become the real empty landing.
+  await vi.waitFor(() => {
+    const state = useStore.getState();
+    for (const threadId of threadIds) {
+      expect(state.threadDetailSyncById?.[threadId]).toBe("synced");
+    }
+    expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(threadIds.length);
+  });
+  await waitForLayout();
+}
+
 async function waitForMountedChatReady(options: {
   host: HTMLElement;
   snapshot: OrchestrationReadModel;
@@ -3016,10 +3029,7 @@ describe("ChatView transcript geometry (full app)", () => {
           search: () => ({ splitViewId }),
         });
       await openSplit();
-      await vi.waitFor(() =>
-        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
-      );
-      await waitForLayout();
+      await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
       const editors = [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')];
       const divider = document.querySelector<HTMLElement>('[data-split-divider="true"]')!;
       const frame = divider.parentElement!.getBoundingClientRect();
@@ -3120,10 +3130,7 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(2),
-        );
-        await waitForLayout();
+        await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
         const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const editorForThread = (threadId: ThreadId) => {
           const scope = splitViewPaneScopeId(
@@ -3196,10 +3203,7 @@ describe("ChatView transcript geometry (full app)", () => {
         params: { threadId: THREAD_ID },
         search: () => ({ splitViewId }),
       });
-      await vi.waitFor(() =>
-        expect(document.querySelectorAll('[contenteditable="true"]').length).toBe(2),
-      );
-      await waitForLayout();
+      await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID]);
       const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
       if (
         split.root.kind !== "split" ||
@@ -3280,10 +3284,7 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(3),
-        );
-        await waitForLayout();
+        await waitForSplitChatReady([THREAD_ID, OTHER_THREAD_ID, thirdId]);
         const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const editorForThread = (threadId: ThreadId) => {
           const scope = splitViewPaneScopeId(
@@ -3379,10 +3380,9 @@ describe("ChatView transcript geometry (full app)", () => {
           params: { threadId: THREAD_ID },
           search: () => ({ splitViewId }),
         });
-        await vi.waitFor(() =>
-          expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(panes),
+        await waitForSplitChatReady(
+          panes === 3 ? [THREAD_ID, OTHER_THREAD_ID, thirdId] : [THREAD_ID, OTHER_THREAD_ID],
         );
-        await waitForLayout();
         const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
         const targetThreadId = closing === "source" ? thirdId : THREAD_ID;
         const editorForThread = (threadId: ThreadId) => {
@@ -6759,10 +6759,15 @@ describe("ChatView transcript geometry (full app)", () => {
           container.dispatchEvent(new Event("scroll"));
         }
         await vi.waitFor(
-          () =>
+          () => {
+            if (action === "thread switch") {
+              expect(useStore.getState().threadDetailSyncById?.[THREAD_ID]).toBe("synced");
+              expect(isTranscriptContentVisible(container)).toBe(true);
+            }
             expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(
               action === "thread switch" ? AUTO_SCROLL_BOTTOM_THRESHOLD_PX : 4,
-            ),
+            );
+          },
           { timeout: 3_000 },
         );
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
@@ -6770,6 +6775,21 @@ describe("ChatView transcript geometry (full app)", () => {
       for (let index = 0; index < 8; index += 1) {
         grow();
         await waitForLayout();
+      }
+      if (action === "thread switch") {
+        // The reveal still drains after delivery. Verify follow at the painted
+        // end, rather than during the first frames of the final text batch.
+        await vi.waitFor(
+          () => {
+            const paragraphs = container
+              .querySelector(`[data-message-id='${CSS.escape(messageId)}']`)
+              ?.querySelectorAll("p");
+            expect(paragraphs?.length).toBe(24);
+            expect(paragraphs?.[23]?.textContent).toBe("More streaming output. ".repeat(35).trim());
+          },
+          { timeout: 10_000, interval: 20 },
+        );
+        await waitForTranscriptLayoutToSettle(container);
       }
       await vi.waitFor(() =>
         expect(getScrollContainerDistanceFromBottom(container)).toBeLessThanOrEqual(4),
