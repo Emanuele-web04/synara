@@ -295,7 +295,7 @@ export function useChatTurnFollowUps({
       await dispatchPlanFollowUpTurn();
       armLocalDispatchAckFallback(threadIdForSend);
       sendInFlightRef.current = false;
-      resumeQueueAfterSend?.();
+      if (resumeQueueAfterSend) resumeQueueAfterSend();
       return true;
     } catch (err) {
       setOptimisticUserMessages((existing) =>
