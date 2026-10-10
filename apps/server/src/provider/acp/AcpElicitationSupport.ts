@@ -12,6 +12,9 @@ type FormElicitationRequest = Acp.ElicitationFormMode & {
   readonly _meta?: Record<string, unknown> | null;
 };
 type ElicitationProperty = Acp.ElicitationPropertySchema;
+type ElicitationMappingOptions = {
+  readonly otherAnswerConvention?: "droid";
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -100,9 +103,14 @@ function otherAnswerCompanions(
 // Converts primitive ACP form fields into the question shape consumed by Synara's composer.
 export function elicitationQuestionsFromRequest(
   request: FormElicitationRequest,
+  options: ElicitationMappingOptions = {},
 ): ReadonlyArray<UserInputQuestion> {
   const properties = request.requestedSchema.properties ?? {};
-  const companions = otherAnswerCompanions(properties);
+  // The companion naming convention is Droid-specific, not part of ACP schemas.
+  const companions =
+    options.otherAnswerConvention === "droid"
+      ? otherAnswerCompanions(properties)
+      : new Map<string, string>();
   const companionIds = new Set(companions.values());
   return Object.entries(properties)
     .filter(([id]) => !companionIds.has(id))
@@ -155,10 +163,15 @@ function coerceElicitationAnswer(
 export function elicitationResponseFromAnswers(
   request: FormElicitationRequest,
   answers: ProviderUserInputAnswers,
+  options: ElicitationMappingOptions = {},
 ): Acp.CreateElicitationResponse {
   const content: Record<string, Acp.ElicitationContentValue> = {};
   const properties = request.requestedSchema.properties ?? {};
-  const companions = otherAnswerCompanions(properties);
+  // The companion naming convention is Droid-specific, not part of ACP schemas.
+  const companions =
+    options.otherAnswerConvention === "droid"
+      ? otherAnswerCompanions(properties)
+      : new Map<string, string>();
   const companionIds = new Set(companions.values());
   for (const [id, property] of Object.entries(properties)) {
     if (companionIds.has(id)) continue;

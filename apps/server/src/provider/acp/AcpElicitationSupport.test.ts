@@ -37,6 +37,8 @@ const request = {
   },
 };
 
+const droidMapping = { otherAnswerConvention: "droid" as const };
+
 const droidRequest = {
   mode: "form" as const,
   sessionId: "session-1",
@@ -108,7 +110,7 @@ describe("ACP elicitation mapping", () => {
   });
 
   it("folds other-answer companion fields into their real questions", () => {
-    const questions = elicitationQuestionsFromRequest(droidRequest);
+    const questions = elicitationQuestionsFromRequest(droidRequest, droidMapping);
     expect(questions.map(({ id }) => id)).toEqual(["single", "multiple"]);
     expect(questions[0]?.options).toEqual([
       { label: "option_0", description: "First approach" },
@@ -119,7 +121,9 @@ describe("ACP elicitation mapping", () => {
   });
 
   it("encodes custom single-select text using the provider's other sentinel", () => {
-    expect(elicitationResponseFromAnswers(droidRequest, { single: "A custom approach" })).toEqual({
+    expect(
+      elicitationResponseFromAnswers(droidRequest, { single: "A custom approach" }, droidMapping),
+    ).toEqual({
       action: "accept",
       content: { single: "other", single_other: "A custom approach" },
     });
@@ -127,9 +131,13 @@ describe("ACP elicitation mapping", () => {
 
   it("preserves known selections while encoding multi-select custom text", () => {
     expect(
-      elicitationResponseFromAnswers(droidRequest, {
-        multiple: ["option_1", "A custom feature", "Another feature"],
-      }),
+      elicitationResponseFromAnswers(
+        droidRequest,
+        {
+          multiple: ["option_1", "A custom feature", "Another feature"],
+        },
+        droidMapping,
+      ),
     ).toEqual({
       action: "accept",
       content: {
@@ -141,12 +149,16 @@ describe("ACP elicitation mapping", () => {
 
   it("leaves option-only submissions unchanged and ignores stale companion text", () => {
     expect(
-      elicitationResponseFromAnswers(droidRequest, {
-        single: "option_0",
-        single_other: ".",
-        multiple: ["option_1", "option_0"],
-        multiple_other: ".",
-      }),
+      elicitationResponseFromAnswers(
+        droidRequest,
+        {
+          single: "option_0",
+          single_other: ".",
+          multiple: ["option_1", "option_0"],
+          multiple_other: ".",
+        },
+        droidMapping,
+      ),
     ).toEqual({
       action: "accept",
       content: { single: "option_0", multiple: ["option_1", "option_0"] },
@@ -155,12 +167,16 @@ describe("ACP elicitation mapping", () => {
 
   it("accepts legacy direct companion answers when other is selected", () => {
     expect(
-      elicitationResponseFromAnswers(droidRequest, {
-        single: "other",
-        single_other: "Legacy single answer",
-        multiple: ["option_0", "other"],
-        multiple_other: "Legacy multiple answer",
-      }),
+      elicitationResponseFromAnswers(
+        droidRequest,
+        {
+          single: "other",
+          single_other: "Legacy single answer",
+          multiple: ["option_0", "other"],
+          multiple_other: "Legacy multiple answer",
+        },
+        droidMapping,
+      ),
     ).toEqual({
       action: "accept",
       content: {
@@ -174,21 +190,26 @@ describe("ACP elicitation mapping", () => {
 
   it("drops bare other sentinels without discarding valid multi-select choices", () => {
     expect(
-      elicitationResponseFromAnswers(droidRequest, {
-        single: "other",
-        single_other: " ",
-        multiple: ["other", "option_1"],
-      }),
+      elicitationResponseFromAnswers(
+        droidRequest,
+        {
+          single: "other",
+          single_other: " ",
+          multiple: ["other", "option_1"],
+        },
+        droidMapping,
+      ),
     ).toEqual({ action: "accept", content: { multiple: ["option_1"] } });
   });
 
-  it("does not fold unrelated fields when either convention marker is missing", () => {
+  it("preserves independent fields for ACP providers without the Droid convention", () => {
     const ordinaryRequest = {
       ...droidRequest,
       requestedSchema: {
         type: "object" as const,
         properties: {
           choice: { type: "string" as const, enum: ["first", "other"] },
+          choice_other: { type: "string" as const },
           text: { type: "string" as const },
           text_other: { type: "string" as const },
         },
@@ -196,18 +217,25 @@ describe("ACP elicitation mapping", () => {
     };
     expect(elicitationQuestionsFromRequest(ordinaryRequest).map(({ id }) => id)).toEqual([
       "choice",
+      "choice_other",
       "text",
       "text_other",
     ]);
     expect(
       elicitationResponseFromAnswers(ordinaryRequest, {
         choice: "other",
+        choice_other: "Independent follow-up",
         text: "Custom",
         text_other: "Independent field",
       }),
     ).toEqual({
       action: "accept",
-      content: { choice: "other", text: "Custom", text_other: "Independent field" },
+      content: {
+        choice: "other",
+        choice_other: "Independent follow-up",
+        text: "Custom",
+        text_other: "Independent field",
+      },
     });
   });
 });
