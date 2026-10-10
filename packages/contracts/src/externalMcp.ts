@@ -39,6 +39,10 @@ export type ExternalMcpProjectScope = typeof ExternalMcpProjectScope.Type;
 export const ExternalMcpIntegrationId = TrimmedNonEmptyString;
 export type ExternalMcpIntegrationId = typeof ExternalMcpIntegrationId.Type;
 
+export const ExternalMcpConcurrencyLimit = Schema.NullOr(
+  Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(Schema.isLessThanOrEqualTo(100)),
+);
+
 export const ExternalMcpProjectGrant = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -67,7 +71,7 @@ export const ExternalMcpIntegration = Schema.Struct({
   pairedAt: Schema.NullOr(IsoDateTime),
   revokedAt: Schema.NullOr(IsoDateTime),
   rateLimitPerMinute: Schema.Int,
-  concurrencyLimit: Schema.Int,
+  concurrencyLimit: ExternalMcpConcurrencyLimit,
   clientKind: ExternalMcpClientKind,
   stdio: ExternalMcpStdioConfiguration,
 });
@@ -86,8 +90,15 @@ export const ExternalMcpCreateIntegrationInput = Schema.Struct({
     Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(Schema.isLessThanOrEqualTo(365)),
   ),
   clientKind: Schema.optional(ExternalMcpClientKind),
+  concurrencyLimit: Schema.optional(ExternalMcpConcurrencyLimit),
 });
 export type ExternalMcpCreateIntegrationInput = typeof ExternalMcpCreateIntegrationInput.Type;
+
+export const ExternalMcpUpdateIntegrationInput = Schema.Struct({
+  integrationId: ExternalMcpIntegrationId,
+  concurrencyLimit: ExternalMcpConcurrencyLimit,
+});
+export type ExternalMcpUpdateIntegrationInput = typeof ExternalMcpUpdateIntegrationInput.Type;
 
 export const ExternalMcpCreateIntegrationResult = Schema.Struct({
   integration: ExternalMcpIntegration,
