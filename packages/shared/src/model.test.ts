@@ -1033,7 +1033,7 @@ describe("normalizePiModelOptions", () => {
 });
 
 describe("normalizeAntigravityModelOptions", () => {
-  it("stores only supported non-default effort overrides", () => {
+  it("dispatches supported selected and discovered-default efforts explicitly", () => {
     const runtimeCapabilities = {
       reasoningEffortLevels: [
         { value: "low", label: "Low" },
@@ -1047,25 +1047,38 @@ describe("normalizeAntigravityModelOptions", () => {
     };
     expect(
       normalizeAntigravityModelOptions(
-        "Gemini 3.5 Flash",
+        "Gemini 3.8 Flash",
         { reasoningEffort: "medium" },
         runtimeCapabilities,
       ),
-    ).toBeUndefined();
+    ).toEqual({ reasoningEffort: "medium" });
     expect(
       normalizeAntigravityModelOptions(
-        "Gemini 3.5 Flash",
+        "Gemini 3.8 Flash",
         { reasoningEffort: "ultra" },
         runtimeCapabilities,
       ),
-    ).toBeUndefined();
+    ).toEqual({ reasoningEffort: "medium" });
     expect(
       normalizeAntigravityModelOptions(
-        "Gemini 3.5 Flash",
+        "Gemini 3.8 Flash",
         { reasoningEffort: "high" },
         runtimeCapabilities,
       ),
     ).toEqual({ reasoningEffort: "high" });
+    expect(
+      normalizeAntigravityModelOptions("Gemini 3.8 Flash", undefined, runtimeCapabilities),
+    ).toEqual({ reasoningEffort: "medium" });
+    expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.8 Flash",
+        { reasoningEffort: " " },
+        runtimeCapabilities,
+      ),
+    ).toEqual({ reasoningEffort: "medium" });
+    expect(
+      normalizeAntigravityModelOptions("Unknown model", { reasoningEffort: "high" }),
+    ).toBeUndefined();
   });
 });
 describe("normalizePiModelOptions", () => {

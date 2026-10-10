@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
+import { EMPTY_MODEL_CAPABILITIES, normalizeAntigravityModelOptions } from "@synara/shared/model";
 import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -189,17 +190,53 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
     expect(resolveAntigravityCliModelLabel("Gemini 4 Pro", undefined, "low")).toBe(
       "Gemini 4 Pro (Low)",
     );
+    expect(resolveAntigravityCliModelLabel("Gemini 4 Pro", { reasoningEffort: " " }, "low")).toBe(
+      "Gemini 4 Pro (Low)",
+    );
+    expect(resolveAntigravityCliModelLabel("Gemini 3.5 Flash", { reasoningEffort: " " }, " ")).toBe(
+      "Gemini 3.5 Flash (Medium)",
+    );
   });
 });
 
 describe("Antigravity CLI integration helpers", () => {
-  it("rotates the gateway lease per print turn and rejects a retained prior bootstrap", async () => {
+  it("rotates gateway leases and preserves discovered effort across reused-session turns", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-turn-lease-"));
     const liveTokens = new Set<string>();
     const bootstrapOwners = new Map<string, string>();
     const revokedTokens: string[] = [];
     const leasedCapabilities: Array<readonly string[]> = [];
     const spawnedEnvironments: NodeJS.ProcessEnv[] = [];
+    const spawnedArguments: Array<readonly string[]> = [];
+    // A persisted discovery result survives restart, while this fresh adapter
+    // has never run listModels and only knows its built-in default-effort table.
+    const [discoveredModel] = parseAntigravityModelLines(`
+Gemini 3.8 Flash (High)
+Gemini 3.8 Flash (Medium)
+Gemini 3.8 Flash (Low)
+`);
+    if (!discoveredModel) throw new Error("Expected discovered Antigravity model");
+    const capabilities = {
+      ...EMPTY_MODEL_CAPABILITIES,
+      reasoningEffortLevels: (discoveredModel.supportedReasoningEfforts ?? []).map(
+        ({ value, label = value }) =>
+          value === discoveredModel.defaultReasoningEffort
+            ? { value, label, isDefault: true as const }
+            : { value, label },
+      ),
+    };
+    const modelSelectionForEffort = (reasoningEffort?: string) => {
+      const options = normalizeAntigravityModelOptions(
+        discoveredModel.slug,
+        reasoningEffort === undefined ? undefined : { reasoningEffort },
+        capabilities,
+      );
+      return {
+        provider: "antigravity" as const,
+        model: discoveredModel.slug,
+        ...(options ? { options } : {}),
+      };
+    };
     let tokenSequence = 0;
     let bootstrapSequence = 0;
     const issueSessionToken = () => {
@@ -249,10 +286,11 @@ describe("Antigravity CLI integration helpers", () => {
     let processSequence = 0;
     const spawnProcess = ((
       _command: string,
-      _args: readonly string[],
+      args: readonly string[],
       options: { readonly env?: NodeJS.ProcessEnv },
     ) => {
       spawnedEnvironments.push(options.env ?? {});
+      spawnedArguments.push(args);
       const child = new EventEmitter() as ChildProcess;
       const stdout = new PassThrough();
       const stderr = new PassThrough();
@@ -286,6 +324,7 @@ describe("Antigravity CLI integration helpers", () => {
             // loses the computer tools.
             enableComputerControl: true,
             providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            modelSelection: { provider: "antigravity", model: discoveredModel.slug },
           });
           const waitUntilReady = Effect.gen(function* () {
             for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -298,13 +337,27 @@ describe("Antigravity CLI integration helpers", () => {
             throw new Error("Antigravity test turn did not settle.");
           });
 
-          yield* adapter.sendTurn({ threadId, input: "turn A", attachments: [] });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "turn A",
+            attachments: [],
+            modelSelection: modelSelectionForEffort(),
+          });
+          const firstArgs = spawnedArguments[0]!;
+          expect(firstArgs[firstArgs.indexOf("--model") + 1]).toBe("Gemini 3.8 Flash (Low)");
           const bootstrapA = spawnedEnvironments[0]?.SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN;
           expect(bootstrapA).toBe("turn-bootstrap-1");
           yield* waitUntilReady;
           expect(revokedTokens).toEqual(["turn-session-1"]);
 
-          yield* adapter.sendTurn({ threadId, input: "turn B", attachments: [] });
+          yield* adapter.sendTurn({
+            threadId,
+            input: "turn B",
+            attachments: [],
+            modelSelection: modelSelectionForEffort("high"),
+          });
+          const secondArgs = spawnedArguments[1]!;
+          expect(secondArgs[secondArgs.indexOf("--model") + 1]).toBe("Gemini 3.8 Flash (High)");
           const bootstrapB = spawnedEnvironments[1]?.SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN;
           expect(bootstrapB).toBe("turn-bootstrap-2");
           expect(credentials.exchangeStdioBootstrapToken(bootstrapA!)).toBeNull();

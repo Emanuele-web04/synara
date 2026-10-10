@@ -1010,14 +1010,17 @@ export function normalizeAntigravityModelOptions(
   modelOptions: AntigravityModelOptions | null | undefined,
   capabilities: ModelCapabilities = getModelCapabilities("antigravity", model),
 ): AntigravityModelOptions | undefined {
-  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
-  if (!reasoningEffort || !hasEffortLevel(capabilities, reasoningEffort)) {
-    return undefined;
-  }
-  if (reasoningEffort === getDefaultEffort(capabilities)) {
-    return undefined;
-  }
-  return { reasoningEffort };
+  const rawEffort = trimOrNull(modelOptions?.reasoningEffort);
+  const defaultEffort = getDefaultEffort(capabilities);
+  // The CLI model label includes its effort. Keep the discovered default in
+  // dispatch too: a cached catalog can outlive the adapter's in-memory defaults.
+  const reasoningEffort =
+    rawEffort && hasEffortLevel(capabilities, rawEffort)
+      ? rawEffort
+      : defaultEffort && hasEffortLevel(capabilities, defaultEffort)
+        ? defaultEffort
+        : undefined;
+  return reasoningEffort ? { reasoningEffort } : undefined;
 }
 
 export function normalizePiModelOptions(
