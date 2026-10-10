@@ -55,15 +55,13 @@ it("restarts Find loading when a new window owner arrives during the older reque
   let cancelled = false;
   const previousFind = ensureThreadHistoryLoaded(thread.id, undefined, () => cancelled);
   await Promise.resolve();
-  useStore
-    .getState()
-    .syncServerThreadDetailHotPath(
-      makeReadModelThread({
-        messages: [{ ...older, id: cursor.messageId, text: "authoritative latest" }],
-      }),
-      21,
-      { totalMessageCount: 2, olderCursor: cursor },
-    );
+  useStore.getState().syncServerThreadDetailHotPath(
+    makeReadModelThread({
+      messages: [{ ...older, id: cursor.messageId, text: "authoritative latest" }],
+    }),
+    21,
+    { totalMessageCount: 2, olderCursor: cursor },
+  );
   cancelled = true;
   const nextFind = ensureThreadHistoryLoaded(thread.id);
   finish(page());
