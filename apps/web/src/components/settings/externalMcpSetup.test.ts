@@ -111,6 +111,31 @@ describe("external MCP guided setup", () => {
     expect(description).not.toContain("runtime:local");
   });
 
+  it("describes provider usage only when explicitly granted", () => {
+    expect(describeExternalMcpPermissions(["projects:read", "tasks:create"])).not.toContain(
+      "provider accounts",
+    );
+    expect(
+      describeExternalMcpPermissions([
+        "projects:read",
+        "tasks:create",
+        "tasks:read",
+        "tasks:wait",
+        "usage:read",
+      ]),
+    ).toBe("Create and follow its own tasks · Read usage for all provider accounts");
+    expect(describeExternalMcpPermissions(["usage:read"])).toBe(
+      "Read usage for all provider accounts",
+    );
+    expect(describeExternalMcpPermissions(["projects:read", "usage:read"])).toBe(
+      "Discover allowed projects · Read usage for all provider accounts",
+    );
+    expect(describeExternalMcpPermissions(["tasks:read", "usage:read"])).toBe(
+      "Follow permitted tasks · Read usage for all provider accounts",
+    );
+    expect(describeExternalMcpPermissions(["tasks:create"])).toBe("Create its own tasks");
+  });
+
   it("offers a non-destructive resume path when only the pairing code expired", () => {
     expect(
       externalMcpSetupAction({

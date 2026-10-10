@@ -23,6 +23,10 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  makeProviderAccountUsageReader,
+  PROVIDER_ACCOUNT_USAGE_INPUT_SCHEMA,
+} from "../../providerUsage/agentReader.ts";
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { makeCreateThreadsHandler } from "../../agentGateway/creationCoordinator.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../../agentGateway/startupRecovery.ts";
@@ -89,7 +93,7 @@ import {
 } from "../Services/ExternalMcpGateway.ts";
 
 const EXTERNAL_MCP_INSTRUCTIONS =
-  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Tools are restricted to the integration's allowed projects and scopes. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
+  "This is Synara's loopback-only external integration. Call synara_overview first to discover the allowed projects (with on-disk paths), provider availability, and granted scopes. Tools are restricted to the integration's allowed projects and scopes. When usage:read is granted, check synara_get_usage before starting parallel work; only fresh, available quotaWindows are actionable. Task creation is one task per stable requestId and defaults to a managed worktree with approval-required execution.";
 const MCP_MAX_BATCH_MESSAGES = 50;
 
 interface ExternalToolContext {
@@ -162,6 +166,16 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
   const git = yield* GitCore;
   const serverConfig = yield* ServerConfig;
   const operationRepository = yield* AgentGatewayOperationRepository;
+  const loadProviderUsage = makeProviderAccountUsageReader({
+    getSettings: settings.getSettings,
+    context: {
+      homeDir: serverConfig.homeDir,
+      env: process.env,
+      platform: process.platform,
+    },
+    stateDir: serverConfig.stateDir,
+    baseDir: serverConfig.baseDir,
+  });
 
   yield* recoverInterruptedAgentGatewayOperations({
     operationRepository: {
@@ -390,6 +404,25 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           },
           nextSteps,
         });
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
+  };
+
+  const usageTool: ExternalTool = {
+    requiredCapability: "usage:read",
+    definition: {
+      name: "synara_get_usage",
+      description:
+        "Read cached quota for all configured provider accounts, optionally filtered by provider and instanceId. Requires the explicit usage:read scope, independent of project grants. This never refreshes providers; missing, stale, disabled, and unsupported accounts remain explicit. Only fresh authoritative quotaWindows have actionable remaining percentages.",
+      inputSchema: PROVIDER_ACCOUNT_USAGE_INPUT_SCHEMA,
+      annotations: { title: "Get provider usage", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const usage = yield* loadProviderUsage(args);
+        // Credential-context checks can be asynchronous. Do not return account
+        // data if the integration was revoked or expired while they settled.
+        yield* context.assertActive();
+        return mcpToolResultJson({ usage });
       }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
@@ -678,6 +711,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     overviewTool,
     capabilitiesTool,
     projectsTool,
+    usageTool,
     createTaskTool,
     waitTaskTool,
     readTaskTool,

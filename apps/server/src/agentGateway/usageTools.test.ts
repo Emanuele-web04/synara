@@ -1,4 +1,8 @@
-import type { ServerAgentProviderUsage } from "@synara/contracts";
+import {
+  ProviderInstanceId,
+  type ServerAgentProviderAccountUsage,
+  type ServerAgentProviderUsage,
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import { readProviderUsageForAgents } from "../providerUsage/agentReader";
@@ -7,8 +11,12 @@ import { describe, expect, it } from "vitest";
 import type { ToolContext } from "./toolRuntime";
 import { makeAgentGatewayUsageTools } from "./usageTools";
 
-const usage: ServerAgentProviderUsage = {
+const usage: ServerAgentProviderAccountUsage = {
   provider: "codex",
+  instanceId: ProviderInstanceId.makeUnsafe("codex"),
+  displayName: "Codex",
+  isDefault: true,
+  enabled: true,
   availability: "available",
   checkedAt: "2026-09-08T18:00:00.000Z",
   freshness: { stale: false, ageMs: 0, maxAgeMs: 300_000 },
@@ -55,6 +63,14 @@ function resultJson(result: unknown) {
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+const withAccount = (result: ServerAgentProviderUsage): ServerAgentProviderAccountUsage => ({
+  ...result,
+  instanceId: ProviderInstanceId.makeUnsafe(result.provider),
+  displayName: result.provider,
+  isDefault: true,
+  enabled: true,
+});
+
 describe("makeAgentGatewayUsageTools", () => {
   it("registers both tools behind usage:read", () => {
     const tools = makeAgentGatewayUsageTools({ loadProviderUsage: () => Effect.succeed([usage]) });
@@ -67,36 +83,34 @@ describe("makeAgentGatewayUsageTools", () => {
     expect(tools.every((tool) => tool.definition.annotations?.readOnlyHint === true)).toBe(true);
   });
 
-  it("scopes synara_get_usage to authenticated caller provider", async () => {
-    let requestedProvider: string | undefined;
-    let requestedThread: string | undefined;
+  it("requests all configured accounts when synara_get_usage has no filters", async () => {
+    let requestedQuery: unknown;
     const [tool] = makeAgentGatewayUsageTools({
-      loadProviderUsage: (provider, callerThreadId) => {
-        requestedProvider = provider;
-        requestedThread = callerThreadId;
+      loadProviderUsage: (query) => {
+        requestedQuery = query;
         return Effect.succeed([usage]);
       },
     });
 
     const result = await Effect.runPromise(tool!.handler({}, context));
 
-    expect(requestedProvider).toBe("codex");
-    expect(requestedThread).toBe(context.callerThreadId);
-    expect(resultJson(result).usage).toEqual(usage);
+    expect(requestedQuery).toEqual({});
+    expect(resultJson(result).usage).toEqual([usage]);
   });
 
-  it("lists enabled provider results without a caller-selected provider", async () => {
-    let requestedProvider: string | undefined = "not-called";
+  it("retains the list alias with the same account filter semantics", async () => {
+    let requestedQuery: unknown;
     const tools = makeAgentGatewayUsageTools({
-      loadProviderUsage: (provider) => {
-        requestedProvider = provider;
+      loadProviderUsage: (query) => {
+        requestedQuery = query;
         return Effect.succeed([usage]);
       },
     });
 
-    const result = await Effect.runPromise(tools[1]!.handler({}, context));
+    const query = { provider: "codex", instanceId: "codex" };
+    const result = await Effect.runPromise(tools[1]!.handler(query, context));
 
-    expect(requestedProvider).toBeUndefined();
+    expect(requestedQuery).toEqual(query);
     expect(resultJson(result).usage).toEqual([usage]);
   });
 
@@ -108,16 +122,16 @@ describe("makeAgentGatewayUsageTools", () => {
           enabledProviders: new Set(["codex"]),
           loadSnapshot: () => Effect.never,
           timeout: "10 millis",
-        }),
+        }).pipe(Effect.map((results) => results.map(withAccount))),
     });
 
     const result = await Effect.runPromise(tool!.handler({}, context));
-    const timedOut = resultJson(result).usage as Record<string, unknown>;
+    const [timedOut] = resultJson(result).usage as Array<Record<string, unknown>>;
 
-    expect(timedOut.provider).toBe("codex");
-    expect(timedOut.availability).toBe("unavailable");
-    expect(timedOut.unavailableReason).toBe("timed-out");
-    expect(timedOut.quotaWindows).toEqual([]);
+    expect(timedOut?.provider).toBe("codex");
+    expect(timedOut?.availability).toBe("unavailable");
+    expect(timedOut?.unavailableReason).toBe("timed-out");
+    expect(timedOut?.quotaWindows).toEqual([]);
   });
 
   it("preserves healthy provider quotas when another provider stalls", async () => {
@@ -130,7 +144,7 @@ describe("makeAgentGatewayUsageTools", () => {
             provider === "codex" ? Effect.succeed(usage.snapshot) : Effect.never,
           timeout: "10 millis",
           now: () => Date.parse(usage.checkedAt),
-        }),
+        }).pipe(Effect.map((results) => results.map(withAccount))),
     });
 
     const result = await Effect.runPromise(tools[1]!.handler({}, context));
@@ -141,14 +155,19 @@ describe("makeAgentGatewayUsageTools", () => {
     expect(results[1]).toMatchObject({ provider: "cursor", unavailableReason: "timed-out" });
   });
 
-  it("reports missing snapshots explicitly", async () => {
-    const [tool] = makeAgentGatewayUsageTools({ loadProviderUsage: () => Effect.succeed([]) });
-    const result = await Effect.runPromise(tool!.handler({}, context));
-    expect(resultJson(result).usage).toMatchObject({
-      provider: "codex",
-      availability: "unavailable",
-      unavailableReason: "missing-snapshot",
+  it("retains missing account identity instead of inventing caller quota", async () => {
+    const missing = {
+      ...usage,
+      availability: "unavailable" as const,
+      unavailableReason: "missing-snapshot" as const,
+      snapshot: null,
+      quotaWindows: [],
+    };
+    const [tool] = makeAgentGatewayUsageTools({
+      loadProviderUsage: () => Effect.succeed([missing]),
     });
+    const result = await Effect.runPromise(tool!.handler({}, context));
+    expect(resultJson(result).usage).toEqual([missing]);
   });
 
   it("returns an error result when the load fails", async () => {

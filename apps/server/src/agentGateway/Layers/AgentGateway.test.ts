@@ -36,7 +36,7 @@ import { homedir } from "node:os";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { vi } from "vitest";
-import { getProviderInstanceUsageSnapshot } from "../../providerUsage/index.ts";
+import { getCachedProviderInstanceUsageSnapshot } from "../../providerUsage/index.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
@@ -97,7 +97,7 @@ import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegis
 
 // Gateway tests exercise authorization and conversion without reading local account credentials.
 vi.mock("../../providerUsage/index.ts", () => ({
-  getProviderInstanceUsageSnapshot: vi.fn(async () => null),
+  getCachedProviderInstanceUsageSnapshot: vi.fn(async () => null),
 }));
 
 const NOW = "2026-03-01T10:00:00.000Z";
@@ -2150,6 +2150,7 @@ describe("AgentGateway", () => {
   it.effect("requires the explicit usage capability for quota tools", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
       const harness = yield* makeHarness;
       const response = yield* harness.callTool({
         token: "token-parent-readonly",
@@ -2162,13 +2163,14 @@ describe("AgentGateway", () => {
       };
       assert.equal(error.code, "capability_denied");
       assert.equal(error.details.requiredCapability, "usage:read");
+      assert.equal(vi.mocked(getCachedProviderInstanceUsageSnapshot).mock.calls.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("scopes usage reads and context summaries to caller authority", () => {
+  it.effect("lists account usage while keeping context summaries caller-scoped", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
-      vi.mocked(getProviderInstanceUsageSnapshot).mockResolvedValue({
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockResolvedValue({
         provider: "codex",
         updatedAt: new Date().toISOString(),
         limits: [{ window: "Weekly", usedPercent: 75 }],
@@ -2182,23 +2184,22 @@ describe("AgentGateway", () => {
         name: "synara_get_usage",
         args: {},
       });
-      const usage = toolResultJson(usageResponse.result).usage as {
+      const usages = toolResultJson(usageResponse.result).usage as Array<{
+        instanceId: string;
         provider: string;
         availability: string;
         unavailableReason?: string;
         snapshot: unknown;
         quotaWindows: unknown[];
-      };
+      }>;
+      const usage = usages.find((entry) => entry.instanceId === "codex")!;
       assert.equal(usage.provider, "codex");
       assert.equal(usage.availability, "available");
-      assert.equal(
-        vi.mocked(getProviderInstanceUsageSnapshot).mock.lastCall?.[0].instanceId,
-        "codex",
-      );
       assert.isArray(usage.quotaWindows);
       assert.notProperty(usage, "credential");
       assert.notProperty(usage, "token");
 
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
       const contextResponse = yield* harness.callTool({
         token: "token-parent",
         name: "synara_context",
@@ -2210,6 +2211,12 @@ describe("AgentGateway", () => {
       };
       assert.isTrue(context.capabilities.usageRead);
       assert.equal(context.usage.provider, "codex");
+      assert.deepEqual(
+        vi
+          .mocked(getCachedProviderInstanceUsageSnapshot)
+          .mock.calls.map(([instance]) => instance.instanceId),
+        ["codex"],
+      );
 
       const readonlyContextResponse = yield* harness.callTool({
         token: "token-parent-readonly",
@@ -2224,7 +2231,9 @@ describe("AgentGateway", () => {
       assert.equal(readonlyContext.usage.unavailableReason, "not-authorized");
     }).pipe(
       Effect.provide(gatewayLayer),
-      Effect.ensuring(Effect.sync(() => vi.mocked(getProviderInstanceUsageSnapshot).mockReset())),
+      Effect.ensuring(
+        Effect.sync(() => vi.mocked(getCachedProviderInstanceUsageSnapshot).mockReset()),
+      ),
     );
   });
 
@@ -2249,23 +2258,25 @@ describe("AgentGateway", () => {
       },
     });
     return Effect.gen(function* () {
-      vi.mocked(getProviderInstanceUsageSnapshot).mockClear();
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
       const harness = yield* makeHarness;
       const response = yield* harness.callTool({
         token: "token-parent",
-        name: "synara_get_usage",
+        name: "synara_context",
         args: {},
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       assert.deepEqual(
         vi
-          .mocked(getProviderInstanceUsageSnapshot)
+          .mocked(getCachedProviderInstanceUsageSnapshot)
           .mock.calls.map(([instance]) => instance.instanceId),
         ["codex_work"],
       );
     }).pipe(
       Effect.provide(gatewayLayer),
-      Effect.ensuring(Effect.sync(() => vi.mocked(getProviderInstanceUsageSnapshot).mockReset())),
+      Effect.ensuring(
+        Effect.sync(() => vi.mocked(getCachedProviderInstanceUsageSnapshot).mockReset()),
+      ),
     );
   });
 
@@ -2283,15 +2294,15 @@ describe("AgentGateway", () => {
     );
     const { gatewayLayer, makeHarness } = makeHarnessLayer(threads);
     return Effect.gen(function* () {
-      vi.mocked(getProviderInstanceUsageSnapshot).mockClear();
+      vi.mocked(getCachedProviderInstanceUsageSnapshot).mockClear();
       const harness = yield* makeHarness;
       const response = yield* harness.callTool({
         token: "token-parent",
-        name: "synara_get_usage",
+        name: "synara_context",
         args: {},
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
-      assert.equal(vi.mocked(getProviderInstanceUsageSnapshot).mock.calls.length, 0);
+      assert.equal(vi.mocked(getCachedProviderInstanceUsageSnapshot).mock.calls.length, 0);
       const usage = toolResultJson(response.result).usage as { availability: string };
       assert.equal(usage.availability, "unavailable");
     }).pipe(Effect.provide(gatewayLayer));
