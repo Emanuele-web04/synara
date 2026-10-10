@@ -9,6 +9,7 @@ import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurablePro
 import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
 import PullRequestAutoFixMigration from "./Migrations/130_PullRequestAutoFix.ts";
+import WorkspaceInitializationMigration from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -80,11 +81,36 @@ layer("reconcileMigrationLineage", (it) => {
     }),
   );
 
+  it.effect(
+    "adds workspace classification without changing existing turns or erasing it on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 132 });
+        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, checkpoint_files_json)
+        VALUES ('old-workspace-thread', 'old-workspace-turn', 'completed', '2026-10-10T10:00:00.000Z', '[]')`;
+        yield* runMigrations();
+        const read = () => sql<{
+          state: string;
+          marker: number;
+        }>`SELECT state, started_without_git_workspace AS marker
+        FROM projection_turns WHERE turn_id = 'old-workspace-turn'`;
+        assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 0 }]);
+        yield* sql`UPDATE projection_turns SET started_without_git_workspace = 1 WHERE turn_id = 'old-workspace-turn'`;
+        yield* WorkspaceInitializationMigration;
+        assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 1 }]);
+      }),
+  );
+
   it.effect("leaves a healthy tracker alone", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
       yield* runMigrations();
+      assert.include(
+        yield* tableColumnNames(sql, "projection_turns"),
+        "started_without_git_workspace",
+      );
       const executed = yield* runMigrations();
       assert.lengthOf(executed, 0);
 
@@ -631,6 +657,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -715,6 +742,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 130, name: "PullRequestAutoFix" },
           { migration_id: 131, name: "ProjectSourceFolders" },
           { migration_id: 132, name: "ExternalMcpTurnCapacityRecovery" },
+          { migration_id: 133, name: "ProjectionTurnsWorkspaceInitialization" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -879,6 +907,7 @@ agentGatewayRetentionLegacyLayer(
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1006,6 +1035,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1074,6 +1104,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
         ],
       );
 
@@ -1196,6 +1227,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1260,6 +1292,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
