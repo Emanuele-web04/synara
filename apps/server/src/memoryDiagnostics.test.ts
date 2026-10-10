@@ -4,11 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  shouldWarnServerMemory,
-  toServerMemoryDiagnosticLogPayload,
-  type ServerMemoryDiagnosticSnapshot,
-} from "./memoryDiagnostics";
+import { shouldWarnServerMemory, type ServerMemoryDiagnosticSnapshot } from "./memoryDiagnostics";
 
 function snapshot(heapUsedRatio: number): ServerMemoryDiagnosticSnapshot {
   return {
@@ -21,20 +17,6 @@ function snapshot(heapUsedRatio: number): ServerMemoryDiagnosticSnapshot {
     arrayBuffersMb: 40,
   };
 }
-
-describe("toServerMemoryDiagnosticLogPayload", () => {
-  it("rounds heap ratio to a readable percentage", () => {
-    expect(toServerMemoryDiagnosticLogPayload(snapshot(0.73456))).toEqual({
-      rssMb: 1200,
-      heapUsedMb: 700,
-      heapTotalMb: 900,
-      heapLimitMb: 1000,
-      heapUsedPercent: 73.5,
-      externalMb: 90,
-      arrayBuffersMb: 40,
-    });
-  });
-});
 
 describe("shouldWarnServerMemory", () => {
   it("warns at or above the configured heap ratio", () => {

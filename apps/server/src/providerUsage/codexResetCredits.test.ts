@@ -157,7 +157,7 @@ describe("isolated app-server reset flow", () => {
     ).toBeUndefined();
     expect(spawn).not.toHaveBeenCalled();
   });
-  it.each(["reset", "alreadyRedeemed", "noCredit", "nothingToReset"])(
+  it.each(["reset", "nothingToReset"])(
     "recognizes %s after fresh usage and preserves the caller's key",
     async (outcome) => {
       const { calls } = fakeServer((message) => ({

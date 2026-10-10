@@ -222,6 +222,10 @@ export type GitSummarizeDiffInput = typeof GitSummarizeDiffInput.Type;
 
 export const GitRunStackedActionInput = Schema.Struct({
   actionId: TrimmedNonEmptyStringSchema,
+  // Only recovery-aware clients opt into work that survives observer loss.
+  recoverable: Schema.optional(Schema.Boolean),
+  // Reattach only: never start a missing action after a lost acknowledgement.
+  resume: Schema.optional(Schema.Boolean),
   cwd: TrimmedNonEmptyStringSchema,
   action: GitStackedAction,
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
@@ -324,6 +328,14 @@ export const GitRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   path: TrimmedNonEmptyStringSchema,
   force: Schema.optional(Schema.Boolean),
+  // Automatic archive cleanup must revalidate the exact archived event on the
+  // server before removing a checkout. Manual removals leave this unset.
+  archiveCleanup: Schema.optional(
+    Schema.Struct({
+      threadId: ThreadId,
+      archiveSequence: NonNegativeInt,
+    }),
+  ),
   // Managed worktrees are born on temporary synara/* branches. When set, a
   // removal also deletes that branch so retiring the worktree cannot strand it;
   // user-named branches are never touched. Handoff flows leave this unset

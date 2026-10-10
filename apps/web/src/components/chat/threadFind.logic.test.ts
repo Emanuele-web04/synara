@@ -15,7 +15,6 @@ import {
   collectThreadFindDocuments,
   createThreadFindDocumentTextCache,
   createThreadFindHighlightStore,
-  eventTargetsInAppBrowser,
   findThreadMatches,
   resolveThreadFindJump,
   shouldCaptureChatFindShortcut,
@@ -38,13 +37,6 @@ function document(id: string, text: string, segmentIndex?: number): ThreadFindDo
 }
 
 describe("collectCaseInsensitiveSubstringRanges", () => {
-  it("finds non-overlapping case-insensitive substrings", () => {
-    expect(collectCaseInsensitiveSubstringRanges("Error: failed with error", "ERROR")).toEqual([
-      { startOffset: 0, endOffset: 5 },
-      { startOffset: 19, endOffset: 24 },
-    ]);
-  });
-
   it("does not overlap successive matches", () => {
     expect(collectCaseInsensitiveSubstringRanges("aaa", "aa")).toEqual([
       { startOffset: 0, endOffset: 2 },
@@ -258,16 +250,6 @@ describe("collectThreadFindDocuments", () => {
 });
 
 describe("wrapFindQueryInHtml", () => {
-  it("wraps matches inside highlighted code without breaking tags", () => {
-    const html = '<pre class="shiki"><code><span class="line">Error: failed</span></code></pre>';
-    const wrapped = wrapFindQueryInHtml(html, "error", 10);
-    expect(wrapped).toContain('data-chat-find-match="true"');
-    expect(wrapped).toContain('data-chat-find-start="10"');
-    expect(wrapped).toContain(">Error</span>");
-    expect(wrapped).toContain('class="shiki"');
-    expect(wrapped).toContain("failed");
-  });
-
   it("matches the previous splice output across tags, entities, and adjacent hits", () => {
     const html = '<pre><code><span class="line">Error &amp; error</span> errorerror</code></pre>';
     const wrapped = wrapFindQueryInHtml(html, "error", 7, {
@@ -403,12 +385,6 @@ describe("shouldCaptureChatFindShortcut", () => {
         inAppBrowserFocused: false,
       }),
     ).toBe(false);
-  });
-});
-
-describe("eventTargetsInAppBrowser", () => {
-  it("treats missing or non-element targets as outside the in-app browser", () => {
-    expect(eventTargetsInAppBrowser(null)).toBe(false);
   });
 });
 

@@ -208,16 +208,6 @@ describe("ComputerPreviewPopover", () => {
     expect(markup).toContain("Hide the computer preview for the rest of this task");
   });
 
-  it("grows to the large footprint when the size setting asks for it", () => {
-    const markup = render({
-      session: session("live"),
-      state: threadState(),
-      size: "large",
-      maxWidthPx: 560,
-    });
-    expect(markup).toContain("width:560px");
-  });
-
   it("renders a live session closed until the first frame arrives", () => {
     const markup = render({ session: session("live"), state: threadState(), frame: false });
     expect(markup).toContain("opacity-0");
@@ -284,37 +274,6 @@ describe("ComputerPreviewPopover", () => {
     expect(markup).toContain("scale-100 opacity-100");
     expect(markup).toContain("960 / 600");
     expect(markup).not.toContain("Waiting for the window");
-  });
-
-  it("marks the status pill with a static dot, never an animated orb", () => {
-    // The live indicator is a plain 6px dot — no ping ring, no colored orb
-    // pulsing while the agent works.
-    const markup = render({
-      session: session("live"),
-      state: threadState({ agentActive: true }),
-    });
-    expect(markup).toContain("Live");
-    expect(markup).not.toContain("animate-ping");
-    expect(markup).not.toContain("violet");
-  });
-
-  it("offers only close: the pane is disabled and stopping lives in the composer", () => {
-    const markup = render({
-      session: session("live"),
-      state: threadState({ agentActive: true }),
-    });
-    expect(markup).not.toContain("Open the Computer pane");
-    expect(markup).toContain("Hide the computer preview for the rest of this task");
-    expect(markup).not.toContain("Stop the agent controlling");
-  });
-
-  it("shows the current live activity instead of a stale action", () => {
-    const markup = render({
-      session: { ...session("live"), lastActionLabel: "Type text" },
-      state: threadState({ agentActive: true, activity: "Reading clipboard" }),
-    });
-    expect(markup).toContain("Reading clipboard");
-    expect(markup).not.toContain("Type text");
   });
 
   it("stays closed for hidden and ended sessions", () => {

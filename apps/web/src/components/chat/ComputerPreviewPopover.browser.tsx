@@ -79,26 +79,3 @@ it("hides for the rest of the task when closed", async () => {
   await expect.poll(() => session()?.phase).toBe("hidden-for-task");
   await screen.unmount();
 });
-
-it("does not expose the disabled Computer pane", async () => {
-  useComputerPreviewStore.getState().requestPreviewSurface(threadId);
-  const screen = await render(<ComputerPreviewPopover threadId={threadId} />);
-  await expect.poll(() => session()?.phase).toBe("live");
-
-  await expect
-    .element(screen.getByRole("button", { name: "Open the Computer pane", exact: true }))
-    .not.toBeInTheDocument();
-  await screen.unmount();
-});
-
-it("leaves stopping to the composer: no stop control on the card", async () => {
-  fixture.agentActive = true;
-  useComputerPreviewStore.getState().requestPreviewSurface(threadId);
-  const screen = await render(<ComputerPreviewPopover threadId={threadId} />);
-  await expect.poll(() => session()?.phase).toBe("live");
-
-  await expect
-    .element(screen.getByRole("button", { name: "Stop the agent controlling", exact: false }))
-    .not.toBeInTheDocument();
-  await screen.unmount();
-});

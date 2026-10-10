@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   encodeLengthPrefixedRecord,
@@ -29,6 +29,27 @@ describe("LengthPrefixedRecordParser", () => {
     for (const cut of [1, 3, 5]) {
       expect(parser.push(record.subarray(0, cut))).toEqual([]);
       expect(parser.push(record.subarray(cut)).map(bytes)).toEqual([[9, 8, 7, 6]]);
+    }
+  });
+
+  it("joins a record's chunks once, not on every chunk that arrives", () => {
+    // Re-concatenating the pending bytes per chunk is quadratic in the record
+    // size, which is what a multi-megabyte keyframe in 64 KB reads costs.
+    const parser = new LengthPrefixedRecordParser();
+    const record = encodeLengthPrefixedRecord(new Uint8Array(64 * 1024).fill(7));
+    const concat = vi.spyOn(Buffer, "concat");
+    try {
+      const payloads: Uint8Array[] = [];
+      for (let offset = 0; offset < record.byteLength; offset += 1024) {
+        payloads.push(...parser.push(record.subarray(offset, offset + 1024)));
+      }
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.byteLength).toBe(64 * 1024);
+      expect(payloads[0]?.every((value) => value === 7)).toBe(true);
+      expect(concat).toHaveBeenCalledTimes(1);
+    } finally {
+      concat.mockRestore();
     }
   });
 

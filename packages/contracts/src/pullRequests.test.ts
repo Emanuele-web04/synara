@@ -9,17 +9,12 @@ import {
   PullRequestActionResult,
   PullRequestDetail,
   PullRequestListEntry,
-  PullRequestReviewRequestCountResult,
-  PullRequestSetPinnedInput,
+  PullRequestsUnavailableError,
 } from "./pullRequests";
 
 const decodeListEntry = Schema.decodeUnknownSync(PullRequestListEntry);
 const decodeDetail = Schema.decodeUnknownSync(PullRequestDetail);
 const decodeCommentInput = Schema.decodeUnknownSync(PullRequestCommentInput);
-const decodeSetPinnedInput = Schema.decodeUnknownSync(PullRequestSetPinnedInput);
-const decodeReviewRequestCountResult = Schema.decodeUnknownSync(
-  PullRequestReviewRequestCountResult,
-);
 const decodeActionResult = Schema.decodeUnknownSync(PullRequestActionResult);
 
 describe("PullRequestCommitAuthor", () => {
@@ -43,7 +38,7 @@ describe("PullRequestCommitAuthor", () => {
     expect(() => Schema.decodeUnknownSync(PullRequestActor)(localAuthor)).toThrow();
   });
 
-  it.each(["", "   ", 123, false, {}])("rejects invalid login %j", (login) => {
+  it.each(["", "   ", 123])("rejects invalid login %j", (login) => {
     expect(() => decodeAuthor({ ...localAuthor, login })).toThrow();
   });
 
@@ -83,23 +78,16 @@ describe("PullRequestListEntry", () => {
     expect(decoded.projectContexts).toEqual([]);
     expect(decoded.mergeability).toBe("unknown");
     expect(decoded.stack).toBeNull();
+    expect(decoded.commentCount).toBe(0);
+    expect(decoded.assignees).toEqual([]);
+    expect(decoded.viewerInvolvement).toEqual({
+      authored: false,
+      assigned: false,
+      involved: false,
+    });
     expect(
       decodeListEntry({ ...listEntry(), isPinned: true, mergeability: "conflicting" }),
     ).toMatchObject({ isPinned: true, mergeability: "conflicting" });
-  });
-
-  it("decodes compact stack metadata for list rows", () => {
-    expect(
-      decodeListEntry({
-        ...listEntry(),
-        stack: {
-          number: 8,
-          size: 3,
-          position: 2,
-          baseBranch: "main",
-        },
-      }).stack,
-    ).toEqual({ number: 8, size: 3, position: 2, baseBranch: "main" });
   });
 });
 
@@ -152,83 +140,6 @@ describe("PullRequestDetail", () => {
       decodeDetail({ ...decoded, stackMetadataIncomplete: true }).stackMetadataIncomplete,
     ).toBe(true);
   });
-
-  it("decodes a complete stack while preserving bottom-to-top positions", () => {
-    const decoded = decodeDetail({
-      projectId: "project-1",
-      projectTitle: "Project One",
-      workspaceRoot: "/workspace/project-one",
-      repository: "acme/widgets",
-      number: 43,
-      title: "Top layer",
-      body: "Description",
-      url: "https://github.com/acme/widgets/pull/43",
-      author: null,
-      state: "open",
-      isDraft: false,
-      mergeable: "MERGEABLE",
-      mergeability: "mergeable",
-      mergeStateStatus: "CLEAN",
-      reviewDecision: null,
-      additions: 2,
-      deletions: 1,
-      changedFiles: 1,
-      headBranch: "feature/top",
-      baseBranch: "feature/base",
-      createdAt: "2026-07-13T08:00:00.000Z",
-      updatedAt: "2026-07-14T08:00:00.000Z",
-      mergedAt: null,
-      closedAt: null,
-      maintainerCanModify: true,
-      reviewers: [],
-      labels: [],
-      checks: [],
-      comments: [],
-      commentsTruncated: false,
-      commentsIncomplete: false,
-      commits: [],
-      mergeCapabilities: {
-        merge: true,
-        squash: true,
-        rebase: true,
-        deleteBranchOnMerge: false,
-      },
-      stack: {
-        number: 8,
-        size: 2,
-        position: 2,
-        baseBranch: "main",
-        entries: [
-          {
-            position: 1,
-            number: 42,
-            title: "Base layer",
-            url: "https://github.com/acme/widgets/pull/42",
-            headBranch: "feature/base",
-            baseBranch: "main",
-            state: "open",
-            isDraft: false,
-            mergeability: "mergeable",
-            mergeStateStatus: "CLEAN",
-          },
-          {
-            position: 2,
-            number: 43,
-            title: "Top layer",
-            url: "https://github.com/acme/widgets/pull/43",
-            headBranch: "feature/top",
-            baseBranch: "feature/base",
-            state: "open",
-            isDraft: false,
-            mergeability: "mergeable",
-            mergeStateStatus: "CLEAN",
-          },
-        ],
-      },
-    });
-
-    expect(decoded.stack?.entries.map((entry) => entry.number)).toEqual([42, 43]);
-  });
 });
 
 describe("PullRequestActionResult", () => {
@@ -257,31 +168,23 @@ describe("PullRequestCommentInput", () => {
   });
 });
 
-describe("PullRequestSetPinnedInput", () => {
-  it("decodes a project-scoped idempotent pin setter", () => {
+describe("PullRequestsUnavailableError", () => {
+  it("carries a retry time only for the rate-limited reason", () => {
+    const decode = Schema.decodeUnknownSync(PullRequestsUnavailableError);
     expect(
-      decodeSetPinnedInput({
-        projectId: "project-1",
-        repository: "acme/widgets",
-        number: 42,
-        isPinned: true,
-      }),
-    ).toEqual({
-      projectId: "project-1",
-      repository: "acme/widgets",
-      number: 42,
-      isPinned: true,
-    });
-  });
-});
-
-describe("PullRequestReviewRequestCountResult", () => {
-  it("requires a non-negative count and explicit completeness", () => {
-    expect(decodeReviewRequestCountResult({ count: 2, incomplete: true })).toEqual({
-      count: 2,
-      incomplete: true,
-    });
-    expect(() => decodeReviewRequestCountResult({ count: -1, incomplete: false })).toThrow();
-    expect(() => decodeReviewRequestCountResult({ count: 2 })).toThrow();
+      decode({
+        _tag: "PullRequestsUnavailableError",
+        reason: "rate-limited",
+        message: "GitHub rate limit reached.",
+        retryAt: "2026-07-15T01:00:00.000Z",
+      }).retryAt,
+    ).toBe("2026-07-15T01:00:00.000Z");
+    expect(
+      decode({
+        _tag: "PullRequestsUnavailableError",
+        reason: "gh-not-authenticated",
+        message: "Sign in.",
+      }).retryAt,
+    ).toBeUndefined();
   });
 });

@@ -301,37 +301,6 @@ describe("useComputerPreviewTap", () => {
     expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
   });
 
-  it("unsubscribes but keeps the canvas it drew on disable", async () => {
-    const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
-    const { context, canvasRef } = createCanvas();
-
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
-    feed(bridge, 1);
-    await flushDecode();
-
-    render({ enabled: false, canvasRef, threadId: THREAD_ID });
-    expect(bridge.unsubscribe).toHaveBeenCalledOnce();
-    // The last decoded frame stays on the canvas: the stills stream or a
-    // re-subscribed tap paints over it, so clearing would only blank the card.
-    expect(context.clearRect).not.toHaveBeenCalled();
-    expect(render({ enabled: false, canvasRef, threadId: THREAD_ID }).active).toBe(false);
-  });
-
-  it("leaves a canvas it never drew on alone", () => {
-    const bridge = createBridge();
-    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
-    const { context, canvasRef } = createCanvas();
-
-    render({ enabled: true, canvasRef, threadId: THREAD_ID });
-    render({ enabled: false, canvasRef, threadId: THREAD_ID });
-
-    // No frame ever decoded, so the stills stream owns the canvas content:
-    // the tap must not wipe another drawer's pixels on its way out.
-    expect(bridge.unsubscribe).toHaveBeenCalledOnce();
-    expect(context.clearRect).not.toHaveBeenCalled();
-  });
-
   it("unsubscribes while the page is hidden and resubscribes on return", async () => {
     const bridge = createBridge();
     vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });

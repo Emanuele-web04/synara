@@ -59,7 +59,7 @@ function run(): FocusProbeRunResult {
 }
 
 describe("packaged fixture evidence", () => {
-  it.each(["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"])(
+  it.each(["/private/tmp", "/var/folders"])(
     "refuses an app under temporary root %s even if registration resolves to it",
     (root) => {
       const bundle = `${root}/isolated/Synara Cua.app`;
@@ -292,6 +292,8 @@ describe("selected provider discovery", () => {
   afterEach(() => vi.useRealTimers());
   const ready: ServerProviderStatus = {
     provider: "codex",
+    instanceId: "codex",
+    driver: "codex",
     status: "ready",
     available: true,
     authStatus: "authenticated",

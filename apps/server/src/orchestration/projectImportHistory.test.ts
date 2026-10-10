@@ -32,3 +32,35 @@ it("reads the frozen Claude copy from its source project, not the destination wo
     configDir: "/selected-claude-home",
   });
 });
+
+it("imports a recent Codex page without requesting an oversized full transcript", async () => {
+  const reader = makeProjectImportHistoryReader({
+    getByProvider: () =>
+      Effect.succeed({
+        hasSession: () => Effect.succeed(true),
+        readThread: () => Effect.fail(new Error("JSONL frame exceeded its byte limit")),
+        readExternalThreadPage: () =>
+          Effect.succeed({
+            threadId: "frozen-copy",
+            turns: [
+              {
+                id: "last-turn",
+                items: [{ id: "reply", type: "agentMessage", text: "Latest answer" }],
+              },
+            ],
+            nextCursor: "older-turns",
+          }),
+      }),
+  } as unknown as ProviderAdapterRegistryShape);
+  const page = await Effect.runPromise(
+    reader({
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("imported-thread"),
+      nativeId: "frozen-copy",
+      sourceHome: "/codex",
+      sourceCwd: "/project",
+      sourceCreatedAt: "2026-09-01T00:00:00.000Z",
+    }),
+  );
+  expect(page).toMatchObject({ messages: [{ text: "Latest answer" }], nextCursor: "older-turns" });
+});

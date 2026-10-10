@@ -26,6 +26,277 @@ export interface ChangelogEntry {
 
 export const CHANGELOG_ENTRIES: readonly ChangelogEntry[] = [
   {
+    version: "1.0.2-beta.1",
+    date: "Oct 11",
+    features: [
+      {
+        id: "subagents",
+        title: "Follow subagents without losing the conversation",
+        description:
+          "Claude and Codex child agents now have their own conversations, with compact launch cards and a roster in Environment and the right dock.",
+        details:
+          "Inspect each brief, current step, elapsed time and result; open, message, background or stop supported runs. Nested and repeated invocations keep their own identity. Background results remain visible after the parent finishes; stopped work is shown as stopped rather than completed.",
+      },
+      {
+        id: "turns",
+        title: "A clearer record of each turn",
+        description:
+          "Turn headers and compact work groups make long conversations easier to scan, including interrupted turns and background tasks.",
+        details:
+          "Claude Monitor wake-ups appear as compact disclosures. Tool groups use clearer action summaries and icons, while assistant text and activity retain their chronological order. Live follow survives layout changes and thread switches; scrolling away keeps you in control.",
+      },
+      {
+        id: "history",
+        title: "Reopen long conversations faster",
+        description:
+          "Recent messages load first, with Load earlier messages for older history and a private local cache for quicker reopening.",
+        details:
+          "Search, pinned messages and message links load the pages they need. Cached approvals, questions and queued sends wait for authoritative synchronization. Paging does not truncate saved history or exports; unavailable browser storage falls back to normal loading.",
+      },
+      {
+        id: "queue",
+        title: "Stop also pauses your queued follow-ups",
+        description:
+          "Queued messages stay put after you stop a turn, encounter an error or hit a usage limit.",
+        details:
+          "Use Resume when you are ready. The pause survives reload, and an older rate-limit event does not pause an unrelated turn. Draft edits, attachments and failed sends remain recoverable instead of disappearing during thread creation or synchronization.",
+      },
+      {
+        id: "todos",
+        title: "Ask your agent to maintain Tasks",
+        description:
+          "Supported agent sessions can create, list and update the to-dos in your Tasks list directly from a chat.",
+        details:
+          "Set notes, priority, due date and project, mark a to-do complete or reopen it. Retried creates use a request ID to avoid duplicates. These tools maintain the list; they do not dispatch the to-do to an agent. Synara permissions still apply.",
+      },
+      {
+        id: "hub-approvals",
+        title: "Resolve Hub worker approvals in one place",
+        description:
+          "In Synara Beta, pending worker approvals appear above the coordinator composer, with links to the worker conversation.",
+        details:
+          "Approve once, allow the session when supported, decline or cancel the worker turn. Answering in either conversation clears the request in both. Only you can approve; the coordinator has no approval tool. Queued Hub tasks inherit the coordinator access mode unless explicitly overridden.",
+      },
+      {
+        id: "fork-diff",
+        title: "Branch from the message you chose",
+        description:
+          "Provider session forks now respect the selected message, and each chat remembers its own stacked or split diff layout.",
+        details:
+          "Choose a default Diff layout in Settings without overwriting existing chat choices. Checkpoint initialization survives restart; Undo refuses to run while another chat is editing the same workspace. Detached Git status and automatic branch publication are handled more reliably.",
+      },
+      {
+        id: "providers",
+        title: "More dependable provider sessions",
+        description:
+          "OpenCode v2 reconnects avoid duplicate text, Pi gets more time for its first startup, and Claude shows whether Fast mode is actually serving.",
+        details:
+          "Oh My Pi preserves explicit model choices and hides internal roles. Droid custom answers, Cursor prompt usage and completed OpenCode reasoning are retained. Antigravity preserves quota and OAuth failures, bounds helper cleanup and chooses effort only from discovered capabilities.",
+      },
+      {
+        id: "polish",
+        title: "Small improvements throughout the workspace",
+        description:
+          "Readable chat tabs, higher-contrast light terminals, a steadier context gauge and a working Create project action improve everyday use.",
+        details:
+          "Composer panels no longer cover the transcript on glass. Linked right-to-left text keeps its direction, the voice waveform fills wide tracks, and hidden browser panels release stale bounds. Beta data import preserves this installation’s runtime identity.",
+      },
+    ],
+  },
+  {
+    version: "0.9.1",
+    date: "Sep 22",
+    features: [
+      {
+        id: "claude-opus-5-5",
+        title: "Claude Opus 5.5",
+        description:
+          "Select Claude Opus 5.5 with the right model name and effort controls; the Opus alias now resolves to 5.5.",
+        details:
+          "The Claude Code runtime and your account determine availability. Existing explicit model choices remain unchanged.",
+      },
+      {
+        id: "gpt-6-sol-luna",
+        title: "GPT-6 Sol & Luna",
+        description: "Choose GPT-6 Sol or Luna in Codex with model-specific reasoning options.",
+        details:
+          "Sol offers Low through Ultra effort; Luna offers Low through Max. GPT-6 Astra remains the default for chat, and GPT-6 Luna is the default for Git writing. Your installed Codex runtime and account determine which models are available.",
+      },
+      {
+        id: "environment-tasks",
+        title: "Find tasks created from an environment",
+        description:
+          "The Environment panel now shows tasks created from it, with direct navigation and clearer status.",
+      },
+      {
+        id: "computer-control",
+        title: "Clearer Computer control",
+        description:
+          "Computer previews and settings better explain which window is targeted and when control is available.",
+      },
+      {
+        id: "opencode-recovery",
+        title: "More reliable OpenCode startup",
+        description:
+          "Synara finds OpenCode across common installation paths and explains when a CLI lacks the managed-session tools it needs.",
+      },
+      {
+        id: "release-performance",
+        title: "Less repeated work",
+        description:
+          "Streaming, sidebar, Git, simulator and provider paths avoid redundant reads or rendering; release builds reuse verified artifacts where possible.",
+        details: "These are targeted optimizations, not a universal speed or battery-life claim.",
+      },
+      {
+        id: "small-fixes",
+        title: "Polish across longer sessions",
+        description:
+          "Long durations include days, model favorites behave more predictably, and deleting active tasks handles cleanup more safely.",
+      },
+    ],
+  },
+  {
+    version: "0.9.0",
+    date: "Sep 21",
+    features: [
+      {
+        id: "computer-beta",
+        title: "Computer Use beta — macOS first",
+        description:
+          "Ask Synara to work with Mac apps and browsers. Computer Use is in beta and available on macOS only for this release; Linux is coming soon.",
+        details:
+          "Use /computer-use followed by a task, or opt in to Computer control in Settings. Guided Accessibility, Input Monitoring and Screen Recording setup, task approvals, background-first actions, human-readable activity and a window-specific preview keep the work visible. Stop ends the task; physical Escape interrupts the current action when Input Monitoring is granted. Closing the preview only hides it. App compatibility varies during beta.",
+      },
+      {
+        id: "computer-preview",
+        title: "Follow the app your agent is using",
+        description:
+          "A compact, draggable preview follows the targeted window or browser tab, with an expand control and clearer action cards.",
+        details:
+          "The preview retains its last frame through short gaps and uses bounded stills when a live stream is unavailable. It does not fall back to capturing the whole desktop. Preview frames are local feedback; they are not automatically streamed into model context.",
+      },
+      {
+        id: "project-import",
+        title: "Bring your Codex and Claude Code projects",
+        description:
+          "Discover local projects and import their conversations into Synara with a source picker, search, selection and progress.",
+        details:
+          "Choose which projects and sessions to bring over, include archived conversations when needed, and select a replacement folder for moved projects. Imports preserve source history, retain completed legacy turns and resume from separate provider session copies. Failed items can be retried without duplicating completed imports.",
+      },
+      {
+        id: "model-presets",
+        title: "Favorite a model and its effort together",
+        description:
+          "The tabbed model picker saves starred model-and-effort combinations for quick reuse.",
+        details:
+          "Refreshed Codex discovery keeps current provider model metadata in sync. Favorites preserve the selected effort, unsupported options are normalized, and the picker stays stable while adjusting reasoning effort.",
+      },
+      {
+        id: "claude-cache",
+        title: "See and review Claude prompt-cache usage",
+        description:
+          "Inspect observed cache reads and writes, and review expensive context resumptions before sending.",
+        details:
+          "Cache evidence persists across reconnects. When a resume needs review, continue with full context, compact then send, or cancel. Native compaction holds the original message until it finishes and shows progress. Cache observations and lifetime estimates are not a guarantee of a future cache hit or provider billing.",
+      },
+      {
+        id: "claude-context",
+        title: "Clearer Claude context budgets",
+        description:
+          "Context-budget changes are applied safely, and the interface shows the runtime budget actually in use.",
+        details:
+          "Local transcript diagnostics also report cache usage. Model and context changes no longer silently present stale runtime limits as the active budget.",
+      },
+      {
+        id: "claude-artifacts",
+        title: "Opt in to Claude Artifacts",
+        description: "Enable Claude Artifacts, /design and /slides from Claude provider settings.",
+        details:
+          "Artifacts are off by default in Synara sessions. After enabling them, start a new session; availability depends on the installed Claude version and account. Unavailable commands now explain the requirement instead of silently failing.",
+      },
+      {
+        id: "codex-questions",
+        title: "Answer Codex questions without blocking the task",
+        description:
+          "Non-blocking question cards let supported Codex sessions keep working while you prepare a reply.",
+        details:
+          "Question state and responses are reconciled across updates. Blocking multiple-choice questions can also be cancelled when you do not want to answer.",
+      },
+      {
+        id: "codex-resets",
+        title: "Use your banked Codex resets",
+        description:
+          "View available reset credits and redeem one from usage panels after explicit confirmation.",
+        details:
+          "Synara rechecks the account and current limits before spending a credit. A reset is available when the five-hour or weekly limit has 10% or less remaining. Retrying an uncertain result checks the same attempt rather than spending another credit.",
+      },
+      {
+        id: "chat-drag",
+        title: "Drag chats into context or a split pane",
+        description:
+          "Drop a chat into the composer to mention it, or into the workspace to open a split view.",
+        details:
+          "Activity ordering follows your latest message rather than background assistant updates, making it easier to return to the conversations you actually touched.",
+      },
+      {
+        id: "pull-request-actions",
+        title: "More useful pull request controls",
+        description:
+          "PR status controls expose relevant actions, pending feedback and richer chat hover cards.",
+        details:
+          "Pull request lookups are cached and sidebar badges poll less often. Commit authors remain visible even without a linked GitHub account, and redundant settled status rows are removed.",
+      },
+      {
+        id: "gateway-results",
+        title: "Delegated task results come back automatically",
+        description:
+          "Eligible tasks created through Agent Gateway can return their completed result to the originating task.",
+        details:
+          "Durable delivery waits for the child output to settle and ties the result to the initial delegated run. This is a scoped completion handoff, not a promise that every long-running goal automatically reports back.",
+      },
+      {
+        id: "transcript-polish",
+        title: "A quieter, clearer live transcript",
+        description:
+          "Ongoing tool work uses one compact accordion line with the latest human-readable status.",
+        details:
+          "GitHub-style note, tip, important, warning and caution alerts render in chat Markdown. More controls follow your chosen UI text size, and temporary-chat accents stay visible on hover.",
+      },
+      {
+        id: "editor-streaming",
+        title: "Smoother editing and streaming",
+        description:
+          "Inserted editor lines redraw correctly, Markdown files open in Preview, and streamed text avoids stalled reveal frames.",
+        details:
+          "Editing performs less repeated work. Hidden presentations stop unnecessary animation ticks, and development loading skips React Compiler overhead. These changes do not establish a universal battery-life or whole-app performance percentage.",
+      },
+      {
+        id: "macos-refresh",
+        title: "A refreshed Mac app and installer",
+        description:
+          "New Liquid Glass app icons and a redesigned drag-to-Applications installer give Synara a more native finish.",
+        details:
+          "Alternate app icon choices persist after quitting and are reapplied on launch. Default restores the bundled system-appearance behavior. The command palette and recent-view switcher also share a cleaner visual layout.",
+      },
+      {
+        id: "provider-reliability",
+        title: "More reliable sessions and provider setup",
+        description:
+          "Recover Stop during stuck provider startup, preserve side-chat permissions, and avoid reloading Codex history on resume.",
+        details:
+          "OpenCode supports current server/model metadata; mixed Codex MCP transports are repaired. Provider settings show setup health, usage profiles include providers without token telemetry, Linux zoom shortcuts reach the main process, and browser leases use the current BetterWright lifecycle.",
+      },
+      {
+        id: "leaner-package",
+        title: "Leaner desktop packaging and release checks",
+        description:
+          "Unused production assets are removed while required runtime resources and third-party licenses stay bundled.",
+        details:
+          "Release infrastructure pins the native Computer driver toolchain and validates its provenance. Canary can bootstrap its own Rust toolchain. Cross-platform process cleanup, migration checks and native packaging remain explicit verification gates.",
+      },
+    ],
+  },
+  {
     version: "0.8.4",
     date: "Sep 14",
     features: [

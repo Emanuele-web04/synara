@@ -22,7 +22,7 @@ export const DISCLOSURE_INNER_CLASS = "min-h-0 overflow-hidden";
 
 /** Optional content drift/fade layered on top of the shell animation. */
 export const DISCLOSURE_CONTENT_MOTION_CLASS =
-  "transition-[opacity,transform] duration-220 ease-out motion-reduce:transition-none";
+  "transition-[opacity,translate] duration-220 ease-out motion-reduce:transition-none";
 
 export const DISCLOSURE_CONTENT_OPEN_CLASS = "translate-y-0 opacity-100";
 export const DISCLOSURE_CONTENT_CLOSED_CLASS = "-translate-y-1 opacity-0 pointer-events-none";
@@ -92,9 +92,9 @@ export function disclosureChevronClassName(open: boolean, className?: string) {
 export const DISCLOSURE_POP_OPEN_MS = 280;
 export const DISCLOSURE_POP_CLOSE_MS = 160;
 
-/** Base transition covering opacity+transform with the open duration. */
+/** Base transition covering opacity + translate/scale with the open duration. */
 export const DISCLOSURE_POP_MOTION_CLASS =
-  "origin-top-right transition-[opacity,transform] duration-280 ease-out motion-reduce:transition-none";
+  "origin-top-right transition-[opacity,translate,scale] duration-280 ease-out motion-reduce:transition-none";
 
 export const DISCLOSURE_POP_OPEN_CLASS = "translate-y-0 scale-100 opacity-100";
 export const DISCLOSURE_POP_CLOSED_CLASS =

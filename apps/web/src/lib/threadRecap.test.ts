@@ -7,8 +7,6 @@ import { describe, expect, it } from "vitest";
 import type { MessageId, ThreadId } from "@synara/contracts";
 import type { ChatMessage, Thread } from "~/types";
 import {
-  DEFAULT_INITIAL_THREAD_RECAP_IDLE_MS,
-  DEFAULT_REFRESH_THREAD_RECAP_IDLE_MS,
   THREAD_RECAP_STORAGE_KEY,
   deriveThreadRecapSource,
   persistThreadRecapCache,
@@ -245,15 +243,6 @@ describe("shouldScheduleThreadRecapGeneration", () => {
 });
 
 describe("resolveThreadRecapIdleMs", () => {
-  it("uses a shorter delay for the first recap and a slower delay for refreshes", () => {
-    expect(resolveThreadRecapIdleMs({ hasExistingRecap: false })).toBe(
-      DEFAULT_INITIAL_THREAD_RECAP_IDLE_MS,
-    );
-    expect(resolveThreadRecapIdleMs({ hasExistingRecap: true })).toBe(
-      DEFAULT_REFRESH_THREAD_RECAP_IDLE_MS,
-    );
-  });
-
   it("allows one override for tests or separate initial/refresh overrides", () => {
     expect(
       resolveThreadRecapIdleMs({

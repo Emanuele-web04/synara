@@ -8,28 +8,21 @@
 // Layer: Kanban UI component
 // Exports: KanbanNewTaskDialog
 
-import type {
-  ProjectId,
-  ProviderInteractionMode,
-  ProviderKind,
-  RuntimeMode,
-} from "@synara/contracts";
+import type { ProjectId, ProviderInteractionMode } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  getProviderInstanceOptions,
   getProviderStartOptions,
   resolveAssistantDeliveryMode,
   useAppSettings,
 } from "~/appSettings";
-import { RuntimeUsageControls } from "~/components/BranchToolbar";
 import {
   ComposerPromptEditor,
   type ComposerPromptEditorHandle,
 } from "~/components/ComposerPromptEditor";
 import { ComposerCommandMenu } from "~/components/chat/ComposerCommandMenu";
-import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
-import { TraitsPicker } from "~/components/chat/TraitsPicker";
 import {
   ComposerLocalDirectoryMenu,
   type ComposerLocalDirectoryMenuHandle,
@@ -38,7 +31,6 @@ import { ComposerReferenceAttachments } from "~/components/chat/ComposerReferenc
 import { ComposerVoiceButton } from "~/components/chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "~/components/chat/ComposerVoiceRecorderBar";
 import { useComposerVoiceController } from "~/components/chat/useComposerVoiceController";
-import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCapabilities";
 import {
   COMPOSER_COMMAND_MENU_INLINE_WRAPPER_CLASS_NAME,
   COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
@@ -54,35 +46,30 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Switch } from "~/components/ui/switch";
-import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { useScratchModelCatalog } from "~/hooks/useScratchModelCatalog";
 import { useComposerDropzone } from "~/hooks/useComposerDropzone";
 import { toastManager } from "~/components/ui/toast";
 import { useTheme } from "~/hooks/useTheme";
 import { ChevronRightIcon, LoaderCircleIcon, PaperclipIcon } from "~/lib/icons";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
-import { findProviderStatus } from "~/lib/providerAvailability";
+import { resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
-import {
-  normalizeRuntimeModeForProvider,
-  providerModelSupportsAutoRuntimeMode,
-} from "~/lib/runtimeMode";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
-import {
-  type ComposerFileAttachment,
-  type DraftThreadEnvMode,
-  useComposerDraftStore,
-} from "../../composerDraftStore";
-import { buildModelSelection } from "../../providerModelOptions";
-import { type ExpandedImagePreview } from "../chat/ExpandedImagePreview";
+import { type ComposerFileAttachment, type DraftThreadEnvMode } from "../../composerDraftStore";
 import { ExpandedImageOverlay } from "../chat/ExpandedImageOverlay";
+import { useExpandedImagePreview } from "../chat/useExpandedImagePreview";
 import { useStore } from "../../store";
-import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
+import { DEFAULT_INTERACTION_MODE } from "../../types";
 import { appendKanbanTaskTranscript, buildKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
 import { KanbanTaskExtrasMenu } from "./KanbanTaskExtrasMenu";
 import { KanbanTaskProjectPicker } from "./KanbanTaskProjectPicker";
+import {
+  ScratchModelPickers,
+  ScratchRuntimeControls,
+} from "~/components/chat/ScratchAgentControls";
 import { useKanbanTaskComposerMenu } from "./useKanbanTaskComposerMenu";
 import { useKanbanTaskScratchDraft } from "./useKanbanTaskScratchDraft";
 import { useKanbanTaskSubmit } from "./useKanbanTaskSubmit";
@@ -119,7 +106,6 @@ export function KanbanNewTaskDialog({
   const { settings } = useAppSettings();
   const { resolvedTheme } = useTheme();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const projects = useStore((state) => state.projects);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
@@ -132,6 +118,7 @@ export function KanbanNewTaskDialog({
   const [selectedProjectId, setSelectedProjectId] = useState<ProjectId | null>(
     () => initialProjectId ?? projectOptions[0]?.id ?? null,
   );
+  const draft = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider, settings });
   const {
     scratchThreadId,
     prompt,
@@ -146,20 +133,22 @@ export function KanbanNewTaskDialog({
     pendingImageCount,
     waitForPendingImages,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
-    selectedModelSupportsAutoMode,
-    selectedProviderModelOptions,
     setPrompt,
-    handleProviderModelChange: setScratchProviderModel,
     addComposerImages,
     removeComposerImage,
     clearComposerAssistantSelections,
     clearComposerFileComments,
     removeComposerTerminalContext,
-  } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
+  } = draft;
   const promptRef = useRef(prompt);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => getProviderStartOptions(settings, selectedProviderInstanceId),
+    [selectedProviderInstanceId, settings],
+  );
 
-  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
   const [interactionMode, setInteractionMode] =
     useState<ProviderInteractionMode>(DEFAULT_INTERACTION_MODE);
   const [envMode, setEnvMode] = useState<DraftThreadEnvMode>("local");
@@ -167,10 +156,13 @@ export function KanbanNewTaskDialog({
   // fresh chat). The Draft column's "+" opens the dialog with the toggle on, so
   // the task parks in Draft — matching where the user clicked.
   const [sendAsDraft, setSendAsDraft] = useState(initialSendAsDraft);
-  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
-  const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
+  // Off by default: create-and-send starts the task with its prompt as the
+  // agent goal. Disabled while "Send as draft" is on (a parked draft has no
+  // turn to carry a goal).
+  const [sendAsGoal, setSendAsGoal] = useState(false);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
-  const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const { expandedImage, setExpandedImage, closeExpandedImage, navigateExpandedImage } =
+    useExpandedImagePreview();
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
@@ -183,70 +175,30 @@ export function KanbanNewTaskDialog({
 
   // Voice transcription always rides on the Codex ChatGPT session, regardless of
   // which provider the task targets — gate the mic on the Codex status.
-  const voiceProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, "codex"),
-    [providerStatuses],
+  const voiceProviderTarget = useMemo(
+    () =>
+      resolveVoiceTranscriptionTarget({
+        statuses: providerStatuses,
+        providerInstances,
+        selectedProvider,
+        selectedProviderInstanceId,
+      }),
+    [providerInstances, providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
-  const selectedProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, selectedProvider),
-    [providerStatuses, selectedProvider],
-  );
-
-  const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
-    () => ({ [selectedProvider]: selectedModel }),
-    [selectedProvider, selectedModel],
-  );
+  const voiceProviderStatus = voiceProviderTarget?.status ?? null;
+  const catalog = useScratchModelCatalog({
+    draft,
+    providerStatuses,
+    discoveryCwd: providerModelDiscoveryCwd,
+  });
   const {
     modelOptionsByProvider,
-    loadingModelProviders,
-    discoveryErrorsByProvider,
-    runtimeModelsByProvider,
-    selectedRuntimeModel,
+    modelOptionsByProviderInstance,
     selectedRuntimeAgents,
-  } = useProviderModelCatalog({
-    selectedProvider,
-    // Keep discovery warm whenever either picker can open so cursor/codex effort
-    // and fast-mode controls are populated, not just the model list.
-    discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
-    cwd: providerModelDiscoveryCwd,
-    modelHintByProvider,
-  });
-  const selectedRuntimeModelForCapabilities = useMemo(
-    () =>
-      selectedRuntimeModel ??
-      (selectedProvider === "claudeAgent" && typeof selectedModelSupportsAutoMode === "boolean"
-        ? {
-            slug: selectedModel ?? "default",
-            name: selectedModel ?? "default",
-            supportsAutoMode: selectedModelSupportsAutoMode,
-          }
-        : undefined),
-    [selectedModel, selectedModelSupportsAutoMode, selectedProvider, selectedRuntimeModel],
-  );
-  const handleProviderModelChange = useCallback(
-    (provider: ProviderKind, model: Parameters<typeof setScratchProviderModel>[1]) => {
-      const runtimeModel = resolveRuntimeModelDescriptor({
-        provider,
-        model,
-        runtimeModels: runtimeModelsByProvider[provider],
-      });
-      setRuntimeMode((current) => normalizeRuntimeModeForProvider(current, provider));
-      setScratchProviderModel(provider, model, runtimeModel?.supportsAutoMode);
-    },
-    [runtimeModelsByProvider, setScratchProviderModel],
-  );
-  useEffect(() => {
-    if (
-      runtimeMode === "auto" &&
-      !providerModelSupportsAutoRuntimeMode(
-        selectedProvider,
-        selectedRuntimeModelForCapabilities,
-        selectedProviderStatus,
-      )
-    ) {
-      setRuntimeMode("approval-required");
-    }
-  }, [runtimeMode, selectedProvider, selectedProviderStatus, selectedRuntimeModelForCapabilities]);
+    runtimeMode,
+    runtimeModelForCapabilities,
+    handleProviderModelChange,
+  } = catalog;
   const trimmedPrompt = prompt.trim();
   const hasSendableContent =
     trimmedPrompt.length > 0 ||
@@ -263,8 +215,9 @@ export function KanbanNewTaskDialog({
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
-    selectedModelSupportsAutoMode: selectedRuntimeModelForCapabilities?.supportsAutoMode,
+    selectedModelSupportsAutoMode: runtimeModelForCapabilities?.supportsAutoMode,
     taskPreview,
     trimmedPrompt,
     scratchThreadId,
@@ -272,9 +225,11 @@ export function KanbanNewTaskDialog({
     interactionMode,
     envMode,
     sendAsDraft,
+    sendAsGoal,
     defaultProvider: settings.defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
     isPreparingImages,
     waitForPendingImages,
@@ -312,7 +267,10 @@ export function KanbanNewTaskDialog({
     composerMentions,
     scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd: selectedProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
@@ -321,40 +279,11 @@ export function KanbanNewTaskDialog({
     hiddenProviders: settings.hiddenProviders,
     providerOrder: settings.providerOrder,
     piAgentDir: settings.piAgentDir || null,
+    ompAgentDir: settings.ompAgentDir || null,
     handleProviderModelChange,
     setInteractionMode,
     onCreate: handleCreateRequest,
   });
-
-  // Providers without a static default (e.g. Pi) resolve their model once
-  // discovery delivers the catalog.
-  useEffect(() => {
-    if (selectedModel !== null) {
-      return;
-    }
-    const firstOption = modelOptionsByProvider[selectedProvider][0];
-    if (firstOption) {
-      useComposerDraftStore.getState().setModelSelection(
-        scratchThreadId,
-        buildModelSelection(
-          selectedProvider,
-          firstOption.slug,
-          undefined,
-          resolveRuntimeModelDescriptor({
-            provider: selectedProvider,
-            model: firstOption.slug,
-            runtimeModels: runtimeModelsByProvider[selectedProvider],
-          })?.supportsAutoMode,
-        ),
-      );
-    }
-  }, [
-    modelOptionsByProvider,
-    runtimeModelsByProvider,
-    scratchThreadId,
-    selectedModel,
-    selectedProvider,
-  ]);
 
   const handleTranscriptReady = useCallback(
     (transcript: string) => {
@@ -368,6 +297,8 @@ export function KanbanNewTaskDialog({
     activeThreadId: null,
     threadId: scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
+    voiceProviderInstanceId: voiceProviderTarget?.instanceId ?? "codex",
     activeProviderStatus: voiceProviderStatus,
     pendingUserInputCount: 0,
     onTranscriptReady: handleTranscriptReady,
@@ -437,21 +368,6 @@ export function KanbanNewTaskDialog({
     },
     [addComposerImages, scheduleComposerFocus],
   );
-  const closeExpandedImage = useCallback(() => {
-    setExpandedImage(null);
-  }, []);
-  const navigateExpandedImage = useCallback((direction: -1 | 1) => {
-    setExpandedImage((existing) => {
-      if (!existing || existing.images.length <= 1) {
-        return existing;
-      }
-      return {
-        ...existing,
-        index: (existing.index + direction + existing.images.length) % existing.images.length,
-      };
-    });
-  }, []);
-
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-3xl rounded-3xl" onKeyDown={handleSubmitShortcut}>
@@ -565,6 +481,7 @@ export function KanbanNewTaskDialog({
               <ComposerVoiceRecorderBar
                 durationLabel={voice.voiceRecordingDurationLabel}
                 isRecording={voice.isVoiceRecording}
+                isWaitingForAudio={voice.isVoiceWaitingForAudio}
                 isTranscribing={voice.isVoiceTranscribing}
                 waveformLevels={voice.voiceWaveformLevels}
                 onDiscard={voice.cancelComposerVoiceRecording}
@@ -579,44 +496,15 @@ export function KanbanNewTaskDialog({
                     envMode={envMode}
                     onEnvModeChange={setEnvMode}
                   />
-                  <RuntimeUsageControls
-                    provider={selectedProvider}
-                    runtimeModel={selectedRuntimeModelForCapabilities}
-                    providerStatus={selectedProviderStatus}
-                    runtimeMode={runtimeMode}
-                    onRuntimeModeChange={setRuntimeMode}
-                  />
+                  <ScratchRuntimeControls draft={draft} catalog={catalog} />
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   {/* Same split controls as a fresh chat composer: model picker plus
                       the separate effort/thinking/speed picker. */}
-                  <ProviderModelPicker
-                    compact
-                    provider={selectedProvider}
-                    model={selectedModel ?? ""}
-                    lockedProvider={null}
-                    providers={providerStatuses}
-                    modelOptionsByProvider={modelOptionsByProvider}
-                    loadingModelProviders={loadingModelProviders}
-                    discoveryErrorsByProvider={discoveryErrorsByProvider}
-                    hiddenProviders={settings.hiddenProviders}
-                    providerOrder={settings.providerOrder}
-                    onProviderModelChange={handleProviderModelChange}
-                    open={isModelPickerOpen}
-                    onOpenChange={setIsModelPickerOpen}
-                  />
-                  <TraitsPicker
-                    provider={selectedProvider}
-                    threadId={scratchThreadId}
-                    model={selectedModel}
-                    runtimeModel={selectedRuntimeModel}
-                    runtimeModels={runtimeModelsByProvider[selectedProvider]}
-                    runtimeAgents={selectedRuntimeAgents}
-                    modelOptions={selectedProviderModelOptions}
-                    prompt={prompt}
-                    onPromptChange={setPrompt}
-                    open={isTraitsPickerOpen}
-                    onOpenChange={setIsTraitsPickerOpen}
+                  <ScratchModelPickers
+                    draft={draft}
+                    catalog={catalog}
+                    providerStatuses={providerStatuses}
                   />
                 </div>
               </div>
@@ -649,6 +537,7 @@ export function KanbanNewTaskDialog({
                 <ComposerVoiceButton
                   disabled={!selectedProject}
                   isRecording={voice.isVoiceRecording}
+                  isStarting={voice.isVoiceStarting}
                   isTranscribing={voice.isVoiceTranscribing}
                   durationLabel={voice.voiceRecordingDurationLabel}
                   onClick={() => void voice.startComposerVoiceRecording()}
@@ -662,6 +551,17 @@ export function KanbanNewTaskDialog({
                   onCheckedChange={(checked) => setSendAsDraft(checked === true)}
                 />
                 Send as draft
+              </label>
+              <label
+                className="flex cursor-pointer items-center gap-2 text-ui-xs text-muted-foreground"
+                title={sendAsDraft ? "Turn off Send as draft to send as goal." : undefined}
+              >
+                <Switch
+                  checked={sendAsGoal && !sendAsDraft}
+                  disabled={sendAsDraft}
+                  onCheckedChange={(checked) => setSendAsGoal(checked === true)}
+                />
+                Send as goal
               </label>
               <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
                 {isCreating ? "Creating..." : isPreparingImages ? "Optimizing..." : "Create task"}

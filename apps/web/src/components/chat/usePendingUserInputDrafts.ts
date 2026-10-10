@@ -1,10 +1,11 @@
-import type { OrchestrationPendingInteraction, ThreadId } from "@synara/contracts";
+import type { OrchestrationThreadActivity, ThreadId } from "@synara/contracts";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useComposerDraftStore, useComposerThreadDraft } from "../../composerDraftStore";
 import type { PendingUserInput } from "../../pendingInteractionDerivation";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingUserInputRecoveryDraft } from "../../pendingUserInputRecovery";
+import { asActivityRecord } from "../../storeNormalization";
 
 type Answers = Record<string, Record<string, PendingUserInputDraftAnswer>>;
 const EMPTY_DRAFTS: Record<string, PendingUserInputRecoveryDraft> = {};
@@ -16,7 +17,7 @@ function draftAnswers(drafts: Record<string, PendingUserInputRecoveryDraft>): An
 export function usePendingUserInputDrafts(
   threadId: ThreadId,
   requests: ReadonlyArray<PendingUserInput>,
-  interactions: ReadonlyArray<OrchestrationPendingInteraction> | undefined,
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
 ) {
   const drafts = useComposerThreadDraft(threadId).pendingUserInputDrafts ?? EMPTY_DRAFTS;
   const answers = useMemo(() => draftAnswers(drafts), [drafts]);
@@ -48,15 +49,31 @@ export function usePendingUserInputDrafts(
     [threadId],
   );
 
-  // Command acceptance is not delivery. Keep the answer through transient
-  // failures and only discard it after authoritative settlement.
+  // Only a provider resolution proves delivery. Terminal stale rows must keep
+  // their undelivered drafts, even after the invalidation activity is pruned.
   useEffect(() => {
+    if (Object.keys(drafts).length === 0) return;
+    const resolvedInstances = new Set<string>();
+    const legacyResolvedAt = new Map<string, string>();
+    for (const activity of activities) {
+      if (activity.kind !== "user-input.resolved") continue;
+      const payload = asActivityRecord(activity.payload);
+      if (typeof payload?.requestId !== "string") continue;
+      const generation = payload.lifecycleGeneration;
+      if (typeof generation === "string" && generation.length > 0) {
+        resolvedInstances.add(pendingRequestInstanceKey(payload.requestId, generation));
+      } else if (activity.createdAt > (legacyResolvedAt.get(payload.requestId) ?? "")) {
+        legacyResolvedAt.set(payload.requestId, activity.createdAt);
+      }
+    }
     const confirmed = new Set(
-      (interactions ?? [])
-        .filter((row) => row.interactionKind === "userInput" && row.status === "confirmed")
-        .map((row) =>
-          pendingRequestInstanceKey(row.requestId, row.lifecycleGeneration ?? undefined),
-        ),
+      Object.entries(drafts)
+        .filter(
+          ([key, draft]) =>
+            resolvedInstances.has(key) ||
+            (legacyResolvedAt.get(draft.request.requestId) ?? "") >= draft.request.createdAt,
+        )
+        .map(([key]) => key),
     );
     if (!Object.keys(drafts).some((key) => confirmed.has(key))) return;
     useComposerDraftStore
@@ -65,7 +82,7 @@ export function usePendingUserInputDrafts(
         threadId,
         Object.fromEntries(Object.entries(drafts).filter(([key]) => !confirmed.has(key))),
       );
-  }, [drafts, interactions, threadId]);
+  }, [drafts, activities, threadId]);
 
   return { answers, answersRef, setAnswers, drafts };
 }

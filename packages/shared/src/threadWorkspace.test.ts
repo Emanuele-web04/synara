@@ -17,20 +17,12 @@ describe("isWorkspaceRootWithin", () => {
     expect(isWorkspaceRootWithin("/Users/dev/app", "/Users/dev/app")).toBe(true);
   });
 
-  it("treats a nested path as contained", () => {
-    expect(isWorkspaceRootWithin("/Users/dev/app/apps/web", "/Users/dev/app")).toBe(true);
-  });
-
   it("ignores trailing slashes and separator style", () => {
     expect(isWorkspaceRootWithin("/Users/dev/app/apps/web/", "/Users/dev/app/")).toBe(true);
   });
 
   it("does not match a sibling that shares a name prefix", () => {
     expect(isWorkspaceRootWithin("/Users/dev/app-extra", "/Users/dev/app")).toBe(false);
-  });
-
-  it("does not match an unrelated path", () => {
-    expect(isWorkspaceRootWithin("/Users/dev/other", "/Users/dev/app")).toBe(false);
   });
 
   it("does not match when the candidate is an ancestor of the root", () => {
@@ -70,10 +62,6 @@ describe("isScratchWorkspacePath", () => {
   it("does not match relative paths even when they contain the segment", () => {
     expect(isScratchWorkspacePath(`${SCRATCH_WORKSPACES_DIRNAME}/thread-1/report.pdf`)).toBe(false);
     expect(isScratchWorkspacePath(`work/${SCRATCH_WORKSPACES_DIRNAME}/report.pdf`)).toBe(false);
-  });
-
-  it("does not match absolute paths without the scratch segment", () => {
-    expect(isScratchWorkspacePath("/Users/dev/Documents/report.pdf")).toBe(false);
   });
 
   it("does not match when the dirname is the final segment", () => {

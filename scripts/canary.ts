@@ -91,7 +91,7 @@ export function canaryCloneArgs(originUrl: string, source: string): ReadonlyArra
   return ["clone", "--", originUrl, source];
 }
 
-export function canaryStartArgs(): ReadonlyArray<string> {
+function canaryStartArgs(): ReadonlyArray<string> {
   // Invoke the desktop launcher directly. `bun run --cwd apps/desktop start`
   // adds a short-lived package-script process in front of the launcher, so the
   // PID persisted by Canary goes stale while Electron is still running. The
@@ -178,7 +178,29 @@ function isRunning(pid: number): boolean {
   }
 }
 
+function escapeExtendedRegex(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&");
+}
+
+/**
+ * On macOS the launcher opens the app through LaunchServices, which parents it
+ * to launchd in its own process group, so signalling the launcher's group leaves
+ * Canary and its backend running. This matches the app's main process by its
+ * executable and entry point inside the managed checkout.
+ */
+export function canaryAppCommandPattern(source: string): string {
+  const desktop = Path.join(source, "apps/desktop");
+  const runtime = escapeExtendedRegex(Path.join(desktop, ".electron-runtime"));
+  const main = escapeExtendedRegex(Path.join(desktop, "dist-electron/main.js"));
+  return `^${runtime}/[^/]+\\.app/Contents/MacOS/Electron ${main}( |$)`;
+}
+
 function stopCanary(paths: CanaryPaths): void {
+  if (process.platform === "darwin" && FS.existsSync(paths.source)) {
+    // The launcher reports its checkout by real path, with symlinks resolved.
+    const pattern = canaryAppCommandPattern(FS.realpathSync(paths.source));
+    spawnSync("pkill", ["-TERM", "-f", "--", pattern], { stdio: "ignore" });
+  }
   const pid = readPid(paths);
   if (pid === null || !isRunning(pid)) {
     FS.rmSync(paths.pid, { force: true });

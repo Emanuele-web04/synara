@@ -15,7 +15,10 @@ import { Schema } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 
 import { ProviderAdapterRequestError, type ProviderAdapterError } from "../Errors.ts";
-import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/computerToolPermission.ts";
+import {
+  isSynaraGatewayToolCall,
+  shouldAllowSynaraComputerProviderTool,
+} from "../../agentGateway/computerToolPermission.ts";
 
 // Synara-internal ACP tool kind for provider-native subagent runs. ACP's ToolKind has
 // no subagent variant (Cursor sends `kind: "other"` + `rawInput._toolName: "task"`), so
@@ -23,10 +26,15 @@ import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/comput
 // collab_agent_tool_call presentation (agent icon, prompt preview, subagent live meta).
 export const ACP_SUBAGENT_TOOL_KIND = "agent";
 
+// ACP has no image-generation kind; keep this inferred presentation separate from permissions.
+export const ACP_IMAGE_GENERATION_TOOL_KIND = "image_generation";
+
 export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
   switch (kind) {
     case ACP_SUBAGENT_TOOL_KIND:
       return "collab_agent_tool_call";
+    case ACP_IMAGE_GENERATION_TOOL_KIND:
+      return "image_generation";
     case "execute":
       return "command_execution";
     case "edit":
@@ -81,7 +89,7 @@ export function mapAcpToAdapterError(
   return new ProviderAdapterRequestError({
     provider,
     method,
-    detail: error.message,
+    detail: error.message.trim() || "ACP request failed without an error message.",
     cause: error,
   });
 }
@@ -151,9 +159,13 @@ export function resolveAcpPermissionPolicy(input: {
   readonly options: ReadonlyArray<AcpPermissionOptionLike>;
   readonly computerControlEnabled?: boolean;
   readonly activeTurn?: boolean;
+  readonly autoApproveSynaraTools?: boolean;
+  readonly gatewaySessionActive?: boolean;
   readonly toolCall?: {
+    readonly kind?: unknown;
     readonly title?: unknown;
     readonly rawInput?: unknown;
+    readonly metadata?: unknown;
   };
 }): AcpPermissionPolicyOutcome | undefined {
   if (input.interactionMode === "plan") {
@@ -175,6 +187,25 @@ export function resolveAcpPermissionPolicy(input: {
         title: input.toolCall?.title,
         rawInput: input.toolCall?.rawInput,
       },
+    })
+  ) {
+    const optionId = input.options.find((option) => option.kind === "allow_once")?.optionId.trim();
+    if (optionId) return { outcome: "selected", optionId };
+  }
+
+  // Coordinator threads pre-approve the Synara gateway catalog: a gateway tool
+  // call is Synara's own orchestration surface, so prompting the user for it
+  // would deadlock the coordinator on its own permission request. The name
+  // must match the catalog exactly (never the composed title), and an
+  // execute-kind request can never claim a gateway tool — a shell command
+  // named like one keeps the normal prompt path.
+  if (
+    input.autoApproveSynaraTools === true &&
+    input.gatewaySessionActive === true &&
+    input.toolCall?.kind !== "execute" &&
+    isSynaraGatewayToolCall({
+      rawInput: input.toolCall?.rawInput,
+      metadata: input.toolCall?.metadata,
     })
   ) {
     const optionId = input.options.find((option) => option.kind === "allow_once")?.optionId.trim();

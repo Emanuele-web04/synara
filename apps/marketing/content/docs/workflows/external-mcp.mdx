@@ -232,3 +232,7 @@ Create and pair a new integration. Do not weaken validation or modify the creden
   Pairing another client grants it real ability to create Synara work. Keep project access and
   execution permissions narrow, and revoke integrations that are no longer needed.
 </Callout>
+
+## Computer control scope in 0.9.0
+
+An external integration needs the explicit `computer:control` scope to create a task with Computer enabled. Ordinary task-creation permission is not enough. The created task still passes through Synara's Computer approval and targeting rules; the integration scope does not bypass operator approval. See [Computer Use beta](/docs/features/computer-use) for setup and the macOS-only release boundary.

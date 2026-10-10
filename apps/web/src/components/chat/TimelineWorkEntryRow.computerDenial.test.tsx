@@ -10,7 +10,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { WorkLogEntry } from "../../workLog";
-import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
+import { TimelineWorkEntryRow, workEntryLeftIcon } from "./TimelineWorkEntryRow";
+import { CircleAlertIcon } from "~/lib/icons";
 
 function denialEntry(): WorkLogEntry {
   return {
@@ -68,4 +69,18 @@ describe("TimelineWorkEntryRow computer denial wiring", () => {
       expect(markup).toContain("Computer control needs setup");
     },
   );
+});
+
+describe("TimelineWorkEntryRow baseline feedback", () => {
+  it("uses a warning icon for skipped baseline feedback rather than a success check", () => {
+    expect(
+      workEntryLeftIcon({
+        id: "baseline-skip",
+        createdAt: new Date(0).toISOString(),
+        label: "Baseline unavailable",
+        tone: "info",
+        activityKind: "checkpoint.baseline.skipped",
+      }),
+    ).toBe(CircleAlertIcon);
+  });
 });

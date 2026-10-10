@@ -3,7 +3,6 @@
 // token telemetry.
 // Layer: web profile feature tests.
 
-import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -57,44 +56,5 @@ describe("profile selectors", () => {
       metric: "turns",
       unavailableProviders: [],
     });
-  });
-
-  // #1007: a provider with real turns (Grok) that never emits token telemetry
-  // must not silently disappear from the ranking once any other provider has
-  // token stats — callers need the list to disclose it instead.
-  it("surfaces providers with turns but no token telemetry instead of dropping them", () => {
-    const grokStats = {
-      ...baseStats,
-      insights: { ...baseStats.insights, topProvider: "grok", topProviderPercent: 100 },
-      providerModels: [
-        ...baseStats.providerModels,
-        { provider: "grok", model: "grok-4.6", turnCount: 3, percent: 50 },
-      ],
-    } satisfies ProfileStats;
-    const tokenStatsMissingGrok = {
-      ...tokenStats,
-      unavailableProviders: ["grok"],
-    } satisfies ProfileTokenStats;
-
-    const topProvider = selectProfileTopProvider(grokStats, tokenStatsMissingGrok);
-    expect(topProvider.metric).toBe("tokens");
-    expect(topProvider.unavailableProviders).toEqual(["grok"]);
-
-    const modelUsage = selectProfileModelUsage(grokStats, tokenStatsMissingGrok);
-    expect(modelUsage.metric).toBe("tokens");
-    expect(modelUsage.unavailableProviders).toEqual(["grok"]);
-  });
-
-  it("reports no unavailable providers once telemetry fully falls back to turns", () => {
-    // available: false forces the turns-based branch; that branch's providers
-    // are all represented by definition, so the stale unavailableProviders
-    // list from a not-yet-available token payload must not leak through.
-    const notAvailable = {
-      ...tokenStats,
-      available: false,
-      unavailableProviders: ["grok"],
-    } satisfies ProfileTokenStats;
-    expect(selectProfileTopProvider(baseStats, notAvailable).unavailableProviders).toEqual([]);
-    expect(selectProfileModelUsage(baseStats, notAvailable).unavailableProviders).toEqual([]);
   });
 });

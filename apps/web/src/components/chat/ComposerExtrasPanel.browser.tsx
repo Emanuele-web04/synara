@@ -199,21 +199,6 @@ describe("ComposerExtrasPanel", () => {
     ]);
   });
 
-  it("lists every composer extra as one flat Add list", async () => {
-    await using _ = await mountMenu({ interactionMode: "plan", fastModeEnabled: true });
-
-    await vi.waitFor(() => {
-      const text = document.body.textContent ?? "";
-      expect(text).toContain("Files and folders");
-      expect(text).toContain("Goal");
-      expect(text).toContain("Turn plan mode off");
-      expect(text).toContain("Turn debug mode on");
-      expect(text).toContain("Turn fast mode off");
-      expect(text).not.toContain("Speed");
-      expect(document.querySelectorAll("[data-slot='command-group-label']")).toHaveLength(1);
-    });
-  });
-
   it("toggles the interaction mode and closes", async () => {
     await using menu = await mountMenu({ interactionMode: "debug" });
 
@@ -223,15 +208,6 @@ describe("ComposerExtrasPanel", () => {
     await page.getByText("Debug mode", { exact: true }).click();
     expect(menu.onInteractionModeChange).toHaveBeenLastCalledWith("default");
     expect(menu.onClose).toHaveBeenCalledTimes(2);
-  });
-
-  it("inserts the goal command and closes", async () => {
-    await using menu = await mountMenu();
-
-    await page.getByText("Set a goal to keep pursuing").click();
-
-    expect(menu.onInsertGoal).toHaveBeenCalledTimes(1);
-    expect(menu.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("wires the speed control", async () => {

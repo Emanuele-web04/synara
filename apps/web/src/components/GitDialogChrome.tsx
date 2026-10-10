@@ -102,6 +102,7 @@ export function GitDialogActionRow({
   icon,
   label,
   trailing,
+  "aria-keyshortcuts": ariaKeyShortcuts,
 }: {
   highlighted?: boolean;
   disabled?: boolean;
@@ -111,11 +112,13 @@ export function GitDialogActionRow({
   icon: ReactNode;
   label: string;
   trailing?: ReactNode;
+  "aria-keyshortcuts"?: string;
 }) {
   const row = (
     <button
       type="button"
       disabled={disabled}
+      aria-keyshortcuts={ariaKeyShortcuts}
       onClick={onClick}
       className={cn(
         "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui leading-snug outline-none transition-colors",

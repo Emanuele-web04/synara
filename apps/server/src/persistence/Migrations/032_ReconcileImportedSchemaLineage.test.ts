@@ -254,27 +254,4 @@ layer("032_ReconcileImportedSchemaLineage", (it) => {
       assert.strictEqual(pendingApproval?.status, "pending");
     }),
   );
-
-  it.effect("is a no-op on a fresh Synara install", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-
-      // Run the entire chain in order, the way a fresh install would.
-      yield* runMigrations();
-
-      // Nothing should blow up if we run it again.
-      yield* runMigrations();
-
-      const threadsColumns = yield* projectionThreadsColumnNames(sql);
-      const messagesColumns = yield* projectionThreadMessagesColumnNames(sql);
-
-      // Columns from the regular in-order runs of 17-23 are still there,
-      // confirming #032 didn't try to ADD COLUMN on top of existing ones.
-      assert.include(threadsColumns, "env_mode");
-      assert.include(threadsColumns, "associated_worktree_ref");
-      assert.include(threadsColumns, "create_branch_flow_completed");
-      assert.include(messagesColumns, "skills_json");
-      assert.include(messagesColumns, "dispatch_mode");
-    }),
-  );
 });

@@ -77,9 +77,11 @@ export async function refreshPiOpenCodeCatalog(
     signal?: AbortSignal | undefined;
     request?: typeof outboundHttp.request;
     timeoutMs?: number;
+    environment?: Readonly<NodeJS.ProcessEnv> | undefined;
   } = {},
 ): Promise<void> {
-  if (process.env.PI_OFFLINE !== undefined || options.signal?.aborted) return;
+  const environment = options.environment ?? process.env;
+  if (environment.PI_OFFLINE !== undefined || options.signal?.aborted) return;
   if (!runtime.hasConfiguredAuth("opencode")) return;
   if (runtime.getModels("opencode").some((model) => model.baseUrl !== BASE_URLS[model.api])) return;
   const controller = new AbortController();

@@ -13,9 +13,15 @@ const nodeChildProcess = createRequire(import.meta.url)(
 ) as typeof import("node:child_process");
 
 describe("Effect process signal guards", () => {
-  it.each([undefined, 0, 1, -1, 1.5, NaN, Infinity, 2 ** 32 + 1])(
-    "never turns invalid child PID %s into a group signal",
-    async (pid) => {
+  const invalidPids = [undefined, 0, 1, -1, 1.5, NaN, Infinity, 2 ** 32 + 1];
+  const cases = [...new Set([process.platform, "win32"])]
+    .flatMap((platform) => invalidPids.map((pid) => ({ platform, pid, cleanup: false })))
+    .concat([{ platform: "win32", pid: 32123, cleanup: true }]);
+
+  it.each(cases)(
+    "Windows console policy and PID guard: $platform pid=$pid",
+    async ({ platform, pid, cleanup }) => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
       const fake = Object.assign(new EventEmitter(), {
         pid,
         stdin: null,
@@ -24,17 +30,20 @@ describe("Effect process signal guards", () => {
         stdio: [],
         kill: vi.fn(() => true),
       });
-      // No OS signals may leave this test, even when validating an unpatched runtime.
+      // No OS signals may leave this test, even against an unpatched runtime.
       const kill = vi.spyOn(process, "kill").mockReturnValue(true);
       const spawn = vi.spyOn(nodeChildProcess, "spawn").mockImplementation(() => {
         queueMicrotask(() => fake.emit("spawn"));
         return fake as unknown as import("node:child_process").ChildProcess;
       });
-      const exec = vi.spyOn(nodeChildProcess, "exec").mockImplementation((...args: unknown[]) => {
+      const complete = (...args: unknown[]) => {
         const callback = args.at(-1);
         if (typeof callback === "function") callback(null, "", "");
         return fake as unknown as import("node:child_process").ChildProcess;
-      });
+      };
+      const exec = vi.spyOn(nodeChildProcess, "exec").mockImplementation(complete);
+      const execFile = vi.spyOn(nodeChildProcess, "execFile").mockImplementation(complete);
+      Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
       syncBuiltinESMExports();
       try {
         await Effect.runPromise(
@@ -49,15 +58,27 @@ describe("Effect process signal guards", () => {
                 }),
               );
               fake.emit("exit", 1, null);
-              yield* child.exitCode;
+              expect(yield* child.exitCode).toBe(1);
             }),
           ).pipe(Effect.provide(NodeServices.layer)),
         );
-        expect(kill).not.toHaveBeenCalled();
+        if (cleanup) {
+          expect(execFile).toHaveBeenCalledWith(
+            "taskkill",
+            ["/pid", String(pid), "/T", "/F"],
+            expect.objectContaining({ windowsHide: true }),
+            expect.any(Function),
+          );
+        } else {
+          expect(execFile).not.toHaveBeenCalled();
+        }
         expect(exec).not.toHaveBeenCalled();
+        expect(kill).not.toHaveBeenCalled();
       } finally {
+        Object.defineProperty(process, "platform", originalPlatform);
         spawn.mockRestore();
         exec.mockRestore();
+        execFile.mockRestore();
         kill.mockRestore();
         syncBuiltinESMExports();
       }

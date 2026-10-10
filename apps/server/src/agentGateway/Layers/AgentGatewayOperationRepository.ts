@@ -1,5 +1,6 @@
 import { makeCompletionRepository } from "../completionRepository.ts";
 import { Effect, Layer } from "effect";
+import { withCommitNotifications } from "../../persistence/commitNotifications.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
@@ -170,10 +171,14 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
       )
       .pipe(Effect.mapError(mapSqlError("recordWorktreeCreated")));
 
-  const complete: AgentGatewayOperationRepositoryShape["complete"] = (input) =>
+  const complete: AgentGatewayOperationRepositoryShape["complete"] = (
+    input,
+    beforeCommit = Effect.void,
+  ) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
+          yield* beforeCommit;
           yield* sql`
             UPDATE agent_gateway_operations
             SET status = 'completed', result_json = ${input.resultJson}, error_json = NULL,
@@ -196,7 +201,7 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
           `;
         }),
       )
-      .pipe(Effect.mapError(mapSqlError("complete")));
+      .pipe(withCommitNotifications, Effect.mapError(mapSqlError("complete")));
 
   const markCompensating: AgentGatewayOperationRepositoryShape["markCompensating"] = (input) =>
     sql`

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   composerOverlayBottomClearancePx,
+  composerOverlayScrollFadeVars,
   composerOverlayScrollMaskImage,
+  composerTranscriptBottomInsetPx,
 } from "./composerOverlay";
 
 describe("composer overlay mask", () => {
@@ -27,5 +29,18 @@ describe("composer overlay mask", () => {
     expect(composerOverlayScrollMaskImage(40, 100)).toBe(
       "linear-gradient(to bottom, #000 calc(100% - 60px), transparent calc(100% - 60px))",
     );
+  });
+});
+
+describe("composer overlay scroll fade", () => {
+  it("leaves the edge fade at the viewport bottom without a composer inset", () => {
+    expect(composerOverlayScrollFadeVars(0)).toBeNull();
+  });
+
+  it("ends the bottom edge fade at the composer's top edge", () => {
+    const insetPx = composerTranscriptBottomInsetPx(140);
+    const vars = composerOverlayScrollFadeVars(insetPx, 72);
+    expect(vars?.["--scroll-edge-fade-inset-b"]).toBe("140px");
+    expect(vars?.["--scroll-edge-fade-layer"]).toBe(composerOverlayScrollMaskImage(insetPx, 72));
   });
 });

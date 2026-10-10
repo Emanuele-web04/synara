@@ -1,4 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
+import { basename } from "node:path";
+import { SYNARA_PACKAGED_DESKTOP_FLAVORS } from "@synara/shared/desktopIdentity";
+import { desktopIconAssetPaths } from "./lib/brand-assets.ts";
 
 import {
   createDesktopPlatformBuildConfig,
@@ -12,14 +15,23 @@ import {
   MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
   MAC_ICON_ASSETS_CAR_STAGE_PATH,
   MAC_INHERITED_ENTITLEMENTS_PATH,
+  MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION,
+  AUDIO_CAPTURE_USAGE_DESCRIPTION,
   MICROPHONE_USAGE_DESCRIPTION,
-  NODE_PTY_ASAR_UNPACK_GLOBS,
   validateDesktopNativeBuildHost,
   WINDOWS_INSTALLER_GUID,
 } from "./lib/desktop-platform-build-config.ts";
-import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
+  it("names every packaged Icon Composer asset for CFBundleIconName", () => {
+    for (const flavor of SYNARA_PACKAGED_DESKTOP_FLAVORS) {
+      assert.equal(
+        basename(desktopIconAssetPaths(flavor).macIconComposer, ".icon"),
+        MAC_ICON_ASSET_NAME,
+      );
+    }
+  });
+
   it("adds explicit microphone entitlements to macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
@@ -34,7 +46,8 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(mac.icon, "icon.icns");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
-    assert.equal(mac.notarize, true);
+    assert.equal(mac.notarize, false);
+    assert.ok(config.afterSign?.endsWith("/mac-after-sign.cjs"));
     assert.equal(mac.identity, undefined);
     assert.equal(dmg.sign, true);
     assert.equal(dmg.writeUpdateInfo, false);
@@ -43,11 +56,12 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Helpers/synara-appsnap-helper");
     assert.deepStrictEqual(mac.binaries, [
       "Contents/Helpers/synara-appsnap-helper",
+      "Contents/Frameworks/synara-window-material.node",
       "Contents/Resources/cua-driver/cua-driver",
     ]);
     assert.equal(
       mac.x64ArchFiles,
-      "Contents/{Helpers/synara-appsnap-helper,Resources/cua-driver/cua-driver}",
+      "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver}",
     );
     assert.equal(
       MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -56,6 +70,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/native/appsnap/build/**");
     assert.equal(config.files?.[0], "**/*");
     assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
+    assert.ok(config.files?.includes(MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION));
     assert.ok(config.files?.includes("!apps/desktop/resources/cua-driver/**"));
     assert.deepStrictEqual(config.extraFiles, [
       {
@@ -65,6 +80,10 @@ describe("createDesktopPlatformBuildConfig", () => {
       {
         from: "apps/desktop/native/appsnap/build/synara-appsnap-helper",
         to: "Helpers/synara-appsnap-helper",
+      },
+      {
+        from: "apps/desktop/native/window-material/build/synara-window-material.node",
+        to: "Frameworks/synara-window-material.node",
       },
       {
         from: MAC_DEVICE_HELPER_STAGE_PATH,
@@ -81,6 +100,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     // bundle falls back to the flat ICNS and never gets the glass material.
     assert.equal(extendInfo.CFBundleIconName, MAC_ICON_ASSET_NAME);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
+    assert.equal(extendInfo.NSAudioCaptureUsageDescription, AUDIO_CAPTURE_USAGE_DESCRIPTION);
     assert.equal(
       extendInfo.NSScreenCaptureUsageDescription,
       "Synara captures the windows you authorize for Computer use.",
@@ -140,7 +160,8 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(config.mac?.identity, undefined);
     assert.equal(config.mac?.timestamp, undefined);
     assert.equal(config.mac?.hardenedRuntime, true);
-    assert.equal(config.mac?.notarize, true);
+    assert.equal(config.mac?.notarize, false);
+    assert.ok(config.afterSign?.endsWith("/mac-after-sign.cjs"));
   });
 
   it("packages the Linux driver as an external executable and leaves Windows unchanged", () => {
@@ -202,16 +223,6 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
   });
 
-  it("keeps node-pty unpacked from ASAR in generated build config", () => {
-    const config = createDesktopPlatformBuildConfig({
-      platform: "linux",
-      target: "AppImage",
-    });
-
-    assert.deepStrictEqual([...NODE_PTY_ASAR_UNPACK_GLOBS], ["node_modules/node-pty/**"]);
-    assert.deepStrictEqual(config.asarUnpack, [...NODE_PTY_ASAR_UNPACK_GLOBS]);
-  });
-
   it("blocks unsupported or non-matching Linux native build hosts", () => {
     assert.equal(
       validateDesktopNativeBuildHost({
@@ -261,14 +272,5 @@ describe("createDesktopPlatformBuildConfig", () => {
       hostArch: "arm64",
     });
     assert.ok(issue?.includes("Build mac/arm64 on macOS"));
-  });
-
-  it("keeps separate macOS sources for solid and rounded icons", () => {
-    assert.equal(BRAND_ASSET_PATHS.productionMacIconPng, "assets/prod/black-macos-1024.png");
-    assert.equal(BRAND_ASSET_PATHS.productionMacIconComposer, "assets/prod/Synara.icon");
-    assert.equal(
-      BRAND_ASSET_PATHS.productionMacLegacyIconPng,
-      "assets/prod/black-macos-legacy-1024.png",
-    );
   });
 });

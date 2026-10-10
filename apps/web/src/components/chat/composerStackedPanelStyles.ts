@@ -14,12 +14,15 @@ import { COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyl
  *  z-index: the input shell paints later and keeps its top border visible across
  *  the seam. */
 export const COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME = [
-  "chat-composer-stacked-top relative overflow-hidden border border-b-0",
+  "chat-composer-stacked-top squircle relative overflow-hidden border border-b-0",
   COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME,
 ].join(" ");
 
 /** Divider between rows inside the same stacked panel. */
 export const COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME = `border-t ${COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME}`;
+
+/** Shared spacing and typography for contextual composer notices. */
+export const COMPOSER_NOTICE_CONTENT_CLASS_NAME = "px-5 py-3 text-ui-sm leading-snug sm:px-6";
 
 /** Standard single-line row inside a stacked panel header strip. */
 export const COMPOSER_STACKED_PANEL_ROW_CLASS_NAME =

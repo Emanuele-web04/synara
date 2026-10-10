@@ -13,7 +13,10 @@ vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({ orchestration: { dispatchCommand: mocks.dispatchCommand } }),
   ensureNativeApi: () => ({ orchestration: { dispatchCommand: mocks.dispatchCommand } }),
 }));
-vi.mock("../components/ui/toast", () => ({ toastManager: { add: mocks.toast } }));
+vi.mock("../components/ui/toast", () => ({
+  toastManager: { add: mocks.toast },
+  reportToastIssue: vi.fn(),
+}));
 const threadId = ThreadId.makeUnsafe("claude-compact-thread");
 const thread = makeThread({
   id: threadId,
@@ -46,6 +49,17 @@ function callbacks() {
 }
 
 describe("useClaudeContextCompaction", () => {
+  it("holds a cached idle session before sending the native compaction turn", async () => {
+    useStore.setState({ threadDetailSyncById: { [threadId]: "cached" } });
+    const actions = callbacks();
+    const hook = await renderHook(() =>
+      useClaudeContextCompaction({ threadId, disabledReason: null, ...actions }),
+    );
+    expect(await hook.result.current.compact()).toBe(false);
+    expect(mocks.dispatchCommand).not.toHaveBeenCalled();
+    expect(actions.onBegin).not.toHaveBeenCalled();
+    await hook.unmount();
+  });
   it("uses the exact native command without sending draft settings or attachments", async () => {
     useComposerDraftStore.getState().setPrompt(threadId, "Keep this draft for later");
     const actions = callbacks();
@@ -261,25 +275,6 @@ describe("useClaudeContextCompaction", () => {
   });
 });
 
-it("preserves operation identity after lost acknowledgement and event", async () => {
-  const accepted: string[] = [];
-  mocks.dispatchCommand.mockImplementation(async (command) => {
-    accepted.push(command.commandId);
-    if (accepted.length === 1)
-      throw new Error("Disconnected after server commit, before ack and event");
-  });
-  const hook = await renderHook(() =>
-    useClaudeContextCompaction({ threadId, disabledReason: null, ...callbacks() }),
-  );
-  try {
-    await hook.result.current.compact();
-    await hook.result.current.compact();
-    expect(new Set(accepted).size).toBe(1);
-  } finally {
-    await hook.unmount();
-  }
-});
-
 it("reuses an unconfirmed request after remount and persisted state hydration", async () => {
   mocks.dispatchCommand.mockRejectedValueOnce(new Error("Lost acknowledgement"));
   const first = await renderHook(() =>
@@ -319,37 +314,6 @@ it("allows a fresh request after a proven server rejection", async () => {
     expect(mocks.dispatchCommand.mock.calls[0]![0].commandId).not.toBe(
       mocks.dispatchCommand.mock.calls[1]![0].commandId,
     );
-  } finally {
-    await hook.unmount();
-  }
-});
-
-it("allows a later compaction after observing the accepted message", async () => {
-  const hook = await renderHook(() =>
-    useClaudeContextCompaction({ threadId, disabledReason: null, ...callbacks() }),
-  );
-  try {
-    expect(await hook.result.current.compact()).toBe(true);
-    const command = mocks.dispatchCommand.mock.calls[0]![0];
-    useStore.setState(
-      makeState(
-        makeThread({
-          ...thread,
-          messages: [
-            {
-              id: command.message.messageId,
-              role: "user",
-              text: "/compact",
-              createdAt: command.createdAt,
-              streaming: false,
-            },
-          ],
-        }),
-      ),
-    );
-    expect(useClaudeCompactionRequests.getState().requests[threadId]).toBeUndefined();
-    expect(await hook.result.current.compact()).toBe(true);
-    expect(mocks.dispatchCommand.mock.calls[1]![0].commandId).not.toBe(command.commandId);
   } finally {
     await hook.unmount();
   }

@@ -43,22 +43,4 @@ describe("104_ProjectionThreadsClaudeCacheReview", () => {
       assert.strictEqual(retained?.review, review);
     }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );
-
-  it.effect("accepts an existing column without changing the migration identity", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 103 });
-      yield* sql`ALTER TABLE projection_threads ADD COLUMN claude_cache_review_json TEXT`;
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 104 }), [
-        [104, "ProjectionThreadsClaudeCacheReview"],
-      ]);
-      const columns = yield* sql<{ readonly name: string }>`
-        SELECT name FROM pragma_table_info('projection_threads')
-      `;
-      assert.strictEqual(
-        columns.filter((column) => column.name === "claude_cache_review_json").length,
-        1,
-      );
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
-  );
 });

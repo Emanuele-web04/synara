@@ -4,6 +4,7 @@
 
 import type {
   OrchestrationThread,
+  ProviderInstanceId,
   ProviderKind,
   ServerCodexResetCredits,
   ServerGetProviderUsageSnapshotResult,
@@ -101,6 +102,7 @@ export function resolveProviderUsageSummary(input: {
 
 export function useProviderUsageSummary(input: {
   provider: ProviderKind | null | undefined;
+  instanceId?: ProviderInstanceId | undefined;
   threads?: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   codexHomePath?: string | null;
@@ -108,13 +110,25 @@ export function useProviderUsageSummary(input: {
   fetchOpenUsageData?: boolean | undefined;
 }) {
   const provider = input.provider ?? null;
+  const instanceId = input.instanceId ?? input.providerSnapshot?.instanceId;
   const shouldFetchLiveProviderUsage = provider !== null && input.providerSnapshot === undefined;
-  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
       enabled: shouldFetchLiveProviderUsage,
     }),
   );
+  const liveProviderSnapshot = (allProviderUsageQuery.data ?? []).find(
+    (snapshot) =>
+      snapshot.provider === provider &&
+      (snapshot.instanceId ?? snapshot.provider) === (instanceId ?? provider),
+  );
+  const authoritativeLiveSnapshot =
+    input.providerSnapshot !== undefined ? input.providerSnapshot : (liveProviderSnapshot ?? null);
+  // Thread, local and OpenUsage fallbacks identify only the driver. They cannot be
+  // attributed to a selected account, even when that account is the default one.
+  const accountScoped =
+    instanceId !== undefined || authoritativeLiveSnapshot?.instanceId !== undefined;
+  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage && !accountScoped;
   const localUsageSnapshotQuery = useQuery(
     serverProviderUsageSnapshotQueryOptions({
       provider,
@@ -124,26 +138,24 @@ export function useProviderUsageSummary(input: {
   );
   const openUsageSnapshotQuery = useQuery(
     openUsageProviderSnapshotQueryOptions(provider, {
-      enabled: input.fetchOpenUsageData ?? true,
+      enabled: !accountScoped && (input.fetchOpenUsageData ?? true),
     }),
   );
-  const liveProviderSnapshot = (allProviderUsageQuery.data ?? []).find(
-    (snapshot) => snapshot.provider === provider,
-  );
-  const authoritativeLiveSnapshot = liveProviderSnapshot ?? input.providerSnapshot ?? null;
-  const accountRateLimits = input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []);
+  const accountRateLimits = accountScoped
+    ? []
+    : (input.threadRateLimits ?? deriveAccountRateLimits(input.threads ?? []));
   const summary = resolveProviderUsageSummary({
     provider,
     accountRateLimits,
     authoritativeLiveSnapshot,
-    localUsageSnapshot: localUsageSnapshotQuery.data ?? null,
-    openUsageSnapshot: openUsageSnapshotQuery.data,
+    localUsageSnapshot: accountScoped ? null : (localUsageSnapshotQuery.data ?? null),
+    openUsageSnapshot: accountScoped ? undefined : openUsageSnapshotQuery.data,
   });
 
   const isLoading =
     shouldFetchLiveProviderUsage &&
     allProviderUsageQuery.isPending &&
-    localUsageSnapshotQuery.isPending &&
+    (!shouldFetchLocalProviderUsage || localUsageSnapshotQuery.isPending) &&
     summary.rateLimits.length === 0 &&
     summary.usageLines.length === 0;
 

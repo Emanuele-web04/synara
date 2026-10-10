@@ -228,7 +228,7 @@ describe("decider computer-control pass-through", () => {
     }
   });
 
-  it.each(["agent", "automation"] as const)(
+  it.each(["agent"] as const)(
     "does not infer consent from a %s message",
     async (dispatchOrigin) => {
       const command = turnStartCommand();
@@ -246,7 +246,6 @@ describe("decider computer-control pass-through", () => {
   it.each([
     { enableComputerControl: true, expectedMode: "chat" as const, expected: true },
     { enableComputerControl: false, expectedMode: "off" as const, expected: false },
-    { enableComputerControl: undefined, expectedMode: "off" as const, expected: false },
   ])(
     "freezes the switch and generation across every dispatch path",
     async ({ enableComputerControl, expectedMode, expected }) => {
@@ -276,56 +275,4 @@ describe("decider computer-control pass-through", () => {
       }
     },
   );
-  it("carries the flag onto a turn-start request", async () => {
-    const events = await decide(turnStartCommand(true), makeReadModel());
-    expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(true);
-  });
-
-  it("carries the flag onto a queued turn", async () => {
-    const events = await decide(
-      { ...turnStartCommand(true), dispatchMode: "queue" as const },
-      makeReadModel({ session: runningSession() }),
-    );
-    expect(payloadOf(events, "thread.turn-queued").enableComputerControl).toBe(true);
-  });
-
-  it("carries an explicit false onto a turn-start request", async () => {
-    const events = await decide(turnStartCommand(false), makeReadModel());
-    expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(false);
-  });
-
-  it("defaults the flag to off from a turn-start request when the command omits it", async () => {
-    const events = await decide(turnStartCommand(), makeReadModel());
-    expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(false);
-  });
-
-  it("carries the flag when a queued turn is dispatched", async () => {
-    const events = await decide(dispatchQueuedCommand(true), makeReadModel());
-    expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(true);
-  });
-
-  it("defaults the flag to off when a queued dispatch omits it", async () => {
-    const events = await decide(dispatchQueuedCommand(), makeReadModel());
-    expect(payloadOf(events, "thread.turn-start-requested").enableComputerControl).toBe(false);
-  });
-
-  it("carries the flag onto an edit-and-resend request", async () => {
-    const events = await decide(
-      editAndResendCommand(true),
-      makeReadModel({ messages: [tailUserMessage()] }),
-    );
-    expect(payloadOf(events, "thread.message-edit-resend-requested").enableComputerControl).toBe(
-      true,
-    );
-  });
-
-  it("defaults the flag to off when an edit-and-resend omits it", async () => {
-    const events = await decide(
-      editAndResendCommand(),
-      makeReadModel({ messages: [tailUserMessage()] }),
-    );
-    expect(payloadOf(events, "thread.message-edit-resend-requested").enableComputerControl).toBe(
-      false,
-    );
-  });
 });

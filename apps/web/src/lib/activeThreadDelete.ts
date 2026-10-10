@@ -5,6 +5,7 @@
 
 import type { ThreadId } from "@synara/contracts";
 import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
+import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
@@ -37,6 +38,8 @@ async function disposeThreadTerminalRuntimes(threadId: ThreadId): Promise<void> 
 
 export async function deleteActiveThreadFromClient<TPrepared = undefined>(input: {
   readonly threadId: ThreadId;
+  /** Delete native descendants before their parent, invoking callbacks for each accepted delete. */
+  readonly includeSubagentDescendants?: boolean;
   readonly deletedThreadIds?: ReadonlySet<ThreadId>;
   readonly reconcileDeletedThread?: boolean;
   readonly worktreeCleanupMode?: "prompt" | "skip";
@@ -59,13 +62,16 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
   if (!thread) return;
   const project = state.projects.find((candidate) => candidate.id === thread.projectId) ?? null;
   const allThreads = getThreadsFromState(state);
-  const survivingThreads =
-    input.deletedThreadIds && input.deletedThreadIds.size > 0
-      ? allThreads.filter(
-          (candidate) =>
-            candidate.id === input.threadId || !input.deletedThreadIds?.has(candidate.id),
-        )
-      : allThreads;
+  const threadsToDelete = input.includeSubagentDescendants
+    ? [...collectSubagentDescendants(allThreads, thread.id).toReversed(), thread]
+    : [thread];
+  const deletedThreadIds = new Set([
+    ...(input.deletedThreadIds ?? []),
+    ...threadsToDelete.map((candidate) => candidate.id),
+  ]);
+  const survivingThreads = allThreads.filter(
+    (candidate) => candidate.id === input.threadId || !deletedThreadIds.has(candidate.id),
+  );
   const orphanedWorktreePath = getOrphanedWorktreePathForThread(survivingThreads, input.threadId);
   const displayWorktreePath = orphanedWorktreePath
     ? formatWorktreePathForDisplay(orphanedWorktreePath)
@@ -83,23 +89,27 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
       ].join("\n"),
     ));
 
-  const prepared = input.prepareForDelete?.(thread);
-  await api.orchestration.dispatchCommand({
-    type: "thread.delete",
-    commandId: newCommandId(),
-    threadId: input.threadId,
-  });
-  // Provider and terminal cleanup are owned by the server-side lifecycle
-  // reactor. Dispose only the local renderer after the durable delete intent
-  // was accepted, so a rejected delete never tears down a live client session.
-  await disposeThreadTerminalRuntimes(input.threadId);
-  if (input.reconcileDeletedThread ?? true) {
-    void reconcileDeletedThreadFromClient({
-      threadId: input.threadId,
-      removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
+  // Children go first: if a delete fails, their surviving parent remains reachable.
+  // Worktree removal happens only after the entire requested subtree was accepted.
+  for (const deletedThread of threadsToDelete) {
+    const prepared = input.prepareForDelete?.(deletedThread);
+    await api.orchestration.dispatchCommand({
+      type: "thread.delete",
+      commandId: newCommandId(),
+      threadId: deletedThread.id,
     });
+    // Provider and terminal cleanup are owned by the server-side lifecycle
+    // reactor. Dispose only the local renderer after the durable delete intent
+    // was accepted, so a rejected delete never tears down a live client session.
+    await disposeThreadTerminalRuntimes(deletedThread.id);
+    if (input.reconcileDeletedThread ?? true) {
+      void reconcileDeletedThreadFromClient({
+        threadId: deletedThread.id,
+        removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
+      });
+    }
+    await input.onDeleted({ thread: deletedThread, prepared });
   }
-  await input.onDeleted({ thread, prepared });
 
   if (!shouldDeleteWorktree || !orphanedWorktreePath || !project) return;
   try {

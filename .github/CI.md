@@ -6,6 +6,36 @@ changes run typechecking, five unit partitions, six stable browser partitions,
 desktop build, native Windows regression and migration lineage. Docs-only
 detection and nightly geometry ownership are unchanged.
 
+After workspace setup and CI contract validation, `static-fast` uses GitHub
+Actions' native `parallel` group for identity, Windows boundary, formatting,
+lint and release smoke. These checks read the installed workspace; release
+smoke writes only to its own temporary fixture directory. Each check retains
+separate step logs, and the group waits for all checks and fails the lane if any
+check fails. Installation stays sequential, including the shared lifecycle
+patches. This overlaps work on one runner; it does not add runner capacity or
+establish an overall CI speedup without hosted measurements. See the
+[workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsparallel).
+
+The Linux PTY dependency smoke runs once, on the first server shard; the Windows
+PTY smoke remains a separate native check. The desktop lifecycle smoke exercises
+the real Electron browser integration. The synthetic Energy Cloud A/B benchmark
+runs only through its dedicated workflow, not on every PR build: it measures
+copied baseline/candidate algorithms and adds no application regression assertion.
+This removes twelve ten-second measurement waits from the blocking build lane.
+
+The desktop build lane also runs the composer-focus Electron regression under
+Xvfb. It covers navigation in previews, visible native views and renderer guests,
+plus popup opener/POST/close behavior and deliberate browser input. The test
+disables host focus emulation and checks focus, draft text and selection before
+sending synthetic input. Run it locally with
+`bun run --cwd apps/web test:electron:e2e visibleBrowserMcp.e2e.ts --grep 'preserves composer keyboard ownership'`
+from an unlocked graphical session. It does not certify physical keyboard or IME
+delivery on macOS or Windows.
+
+Windows checks are grouped by package, removing six separate Vitest startups
+while keeping the same runtime, lifecycle and migration test files. The credential
+reader's filtered compilation test and native Bun PTY probe remain separate.
+
 ## Install scopes and caches
 
 The shared setup action defaults to `full`. Typecheck, Linux unit/browser and
@@ -27,14 +57,19 @@ install cache lives under `RUNNER_TEMP`, on the hosted checkout's drive, matchin
 the measured install layout and allowing Bun to hardlink package files. Full
 Linux installs retain their modules cache; the Bun package archive is restored
 only when modules are not an exact hit. Frozen installation and lifecycle patches
-still run on cache hits. Turbo persistence is opt-in for unit/build consumers.
+still run on cache hits. Lifecycle scripts use `--concurrent-scripts=1` in every
+scope: multiple workspace `prepare` hooks patch the same TypeScript files, and
+parallel hooks can read a partially written compiler file. Scripts and dependency
+patches remain enabled. The September measurements below predate this serialization.
+Turbo persistence is opt-in for unit/build consumers.
 OS, architecture and lockfile boundaries prevent incompatible archive reuse.
 Test and typecheck task results remain uncached.
 
 Release smoke shares the static runner, removing one checkout/install/runner and
 one duplicate identity scan. The platform-independent Windows boundary scanner
-runs there once; native Windows validation is not removed. Release preflight
-still installs the full workspace and runs all tests. Signing, notarization,
+runs there once; native Windows validation is not removed. Release quality lanes
+still install the full workspace and run the audited test suite while unsigned
+preparation proceeds in parallel. Packaging waits for every quality gate. Signing, notarization,
 source provenance, publication and production dependency staging are unchanged.
 
 ## Cross-platform setup measurements: September 14, 2026
@@ -194,8 +229,11 @@ not added together into an overall percentage.
 `node --test .github/scripts/ci-contracts.test.mjs` executes the actual aggregate
 shell for successful code/docs runs and rejects failures, cancellations, invalid
 change outputs and unexpected skips. It also guards install scopes, native Windows
-test inventory, three-way server/component distribution, browser preparation and
-complementary ChatView ownership.
+test inventory, three-way server/component distribution and browser preparation.
+`scripts/browser-ci-partitions.test.ts` owns complementary ChatView membership,
+complete file ownership, serial execution and geometry exclusion through the
+resolved Vitest configuration. Its expected membership is independent of that
+configuration, so accidentally relaxing the quarantine fails the test.
 
 After editing CI, run `bun run fmt:check`, `bun run lint`, `bun run typecheck`,
 `bun run test`, the CI contract tests and workflow syntax/expression validation.

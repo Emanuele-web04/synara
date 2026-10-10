@@ -10,7 +10,7 @@ import {
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
-import { isDuplicateThreadCreateError, promoteThreadCreate } from "./threadCreatePromotion";
+import { promoteThreadCreate } from "./threadCreatePromotion";
 
 const initialStoreState = useStore.getState();
 const initialComposerDraftState = useComposerDraftStore.getState();
@@ -53,17 +53,6 @@ function makeThreadCreateCommand(threadId = "thread-promote") {
 }
 
 describe("threadCreatePromotion", () => {
-  it("recognizes duplicate thread.create invariant errors", () => {
-    expect(
-      isDuplicateThreadCreateError(
-        new Error(
-          "Orchestration command invariant failed (thread.create): Thread 'thread-promote' already exists and cannot be created twice.",
-        ),
-        ThreadId.makeUnsafe("thread-promote"),
-      ),
-    ).toBe(true);
-  });
-
   it("joins concurrent promotions for the same thread id", async () => {
     let resolveDispatch: (() => void) | null = null;
     const dispatchCommand = vi.fn(
@@ -220,5 +209,29 @@ describe("threadCreatePromotion", () => {
     );
     expect(getShellSnapshot).toHaveBeenCalledTimes(1);
     expect(getThreadFromState(useStore.getState(), threadId)?.id).toBe(threadId);
+  });
+
+  it("keeps the duplicate-create failure when the recovered snapshot lacks the thread", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-duplicate-missing");
+    const duplicateError = new Error(
+      `Orchestration command invariant failed (thread.create): Thread '${threadId}' already exists and cannot be created twice.`,
+    );
+    const dispatchCommand = vi.fn(() => Promise.reject(duplicateError));
+    const getShellSnapshot = vi.fn(() =>
+      Promise.resolve({
+        snapshotSequence: 1,
+        spaces: [],
+        projects: [],
+        threads: [],
+        updatedAt: "2026-05-06T20:00:00.000Z",
+      }),
+    );
+    const api = makeApi({ dispatchCommand, getShellSnapshot });
+
+    await expect(promoteThreadCreate(makeThreadCreateCommand(threadId), api)).rejects.toBe(
+      duplicateError,
+    );
+    expect(getShellSnapshot).toHaveBeenCalledTimes(1);
+    expect(getThreadFromState(useStore.getState(), threadId)).toBeUndefined();
   });
 });

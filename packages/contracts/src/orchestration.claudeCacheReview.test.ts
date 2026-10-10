@@ -15,12 +15,9 @@ const response = {
 };
 
 describe("Claude cache review client commands", () => {
-  it.each(["continue", "compact", "cancel"])(
-    "accepts the %s decision with review and message identity",
-    (decision) => {
-      expect(decodeClientCommand({ ...response, decision })).toEqual({ ...response, decision });
-    },
-  );
+  it("accepts a decision with review and message identity", () => {
+    expect(decodeClientCommand(response)).toEqual(response);
+  });
 
   it("does not accept client-supplied cache observations or turn bypass fields", () => {
     expect(

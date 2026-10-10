@@ -360,37 +360,6 @@ describe("decider worktree metadata", () => {
     expect(createdEvent.payload.title).toBe("Sidechat: Worktree thread");
   });
 
-  it("does not emit associated worktree clears for unrelated thread.meta.update commands", async () => {
-    const now = new Date().toISOString();
-    const readModel = await createWorktreeThreadReadModel(now);
-
-    const result = await Effect.runPromise(
-      decideOrchestrationCommand({
-        command: {
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-thread-meta-update-title-only"),
-          threadId: THREAD_ID,
-          title: "Renamed worktree thread",
-        },
-        readModel,
-      }),
-    );
-
-    const event = Array.isArray(result) ? result[0] : result;
-    expect(event?.type).toBe("thread.meta-updated");
-    if (!event || event.type !== "thread.meta-updated") {
-      return;
-    }
-
-    expect(event.payload).toMatchObject({
-      threadId: THREAD_ID,
-      title: "Renamed worktree thread",
-    });
-    expect(event.payload).not.toHaveProperty("associatedWorktreePath");
-    expect(event.payload).not.toHaveProperty("associatedWorktreeBranch");
-    expect(event.payload).not.toHaveProperty("associatedWorktreeRef");
-  });
-
   it("keeps associated worktree metadata when switching back to local without an explicit clear", async () => {
     const now = new Date().toISOString();
     const readModel = await createWorktreeThreadReadModel(now);

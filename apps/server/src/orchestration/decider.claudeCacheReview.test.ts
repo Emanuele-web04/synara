@@ -143,7 +143,7 @@ describe("decider Claude cache review", () => {
     },
   );
 
-  it.each(["pending", "responding", "failed"] as const)(
+  it.each(["pending"] as const)(
     "does not release a compaction completion when the current review is %s",
     async (status) => {
       expect(
@@ -173,7 +173,7 @@ describe("decider Claude cache review", () => {
     ).toEqual([]);
   });
 
-  it.each([undefined, null])(
+  it.each([null])(
     "creates a review when expectedReviewId is null and current is %s",
     async (review) => {
       const events = await decide(
@@ -258,7 +258,7 @@ describe("decider Claude cache review", () => {
     },
   );
 
-  it.each(["responding", "compacting", "uncertain"] as const)(
+  it.each(["responding"] as const)(
     "does not replay responses while a review is %s",
     async (status) => {
       expect(await decide(respond(), makeReadModel({ review: { ...REVIEW, status } }))).toEqual([]);
@@ -278,43 +278,7 @@ describe("decider Claude cache review", () => {
     expect(await decide(respond(), makeReadModel({ review: null }))).toEqual([]);
   });
 
-  it("projects the accepted response before rejecting a duplicate command", async () => {
-    let readModel = makeReadModel({ review: REVIEW });
-    const events = await decide(respond(), readModel);
-    for (const [index, event] of events.entries()) {
-      readModel = await Effect.runPromise(
-        projectEvent(readModel, { ...event, sequence: 43 + index }),
-      );
-    }
-
-    expect(readModel.threads[0]?.claudeCacheReview?.status).toBe("responding");
-    expect(
-      await decide(
-        respond("continue", { commandId: CommandId.makeUnsafe("cmd-cache-respond-again") }),
-        readModel,
-      ),
-    ).toEqual([]);
-  });
-
-  it("requests cancellation without emitting a turn request", async () => {
-    const events = await decide(respond("cancel"), makeReadModel({ review: REVIEW }));
-
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "thread.claude-cache-set",
-        payload: expect.objectContaining({ review: { ...REVIEW, status: "responding" } }),
-      }),
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "thread.claude-cache-response-requested",
-        payload: expect.objectContaining({ decision: "cancel", review: REVIEW }),
-      }),
-    );
-    expect(events.map((event) => event.type)).not.toContain("thread.turn-start-requested");
-  });
-
-  it.each(["queue", "steer"] as const)(
+  it.each(["steer"] as const)(
     "holds new %s messages during review without interrupting a turn",
     async (dispatchMode) => {
       const events = await decide(

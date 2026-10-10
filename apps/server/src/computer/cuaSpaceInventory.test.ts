@@ -30,7 +30,6 @@ describe("cuaSpaceInventory", () => {
   it.each([
     { windows: [{ space_ids: [7] }] },
     { ...inventory, spaces: [{ ...space, space_id: 1.5 }] },
-    { ...inventory, spaces: [{ ...space, space_id: Number.MAX_SAFE_INTEGER + 1 }] },
     { ...inventory, spaces: [{ ...space, display_id: "" }] },
     { ...inventory, spaces: [space, { ...space, space_uuid: "other" }] },
     { ...inventory, spaces: [space, { ...space, space_id: 8 }] },

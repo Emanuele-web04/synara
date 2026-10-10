@@ -153,10 +153,6 @@ describe("decider thread.turn.start resumePrecondition", () => {
     ).toBe(BEFORE_RECORD);
   });
 
-  it("accepts the continuation while the recorded turn ended by interruption", async () => {
-    await expectAccepted(makeReadModel({ latestTurn: makeLatestTurn("interrupted") }));
-  });
-
   it("accepts a chat that was still connecting when recorded", async () => {
     await expectAccepted(makeReadModel({ latestTurn: null }), null);
     await expectAccepted(

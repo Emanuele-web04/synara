@@ -6,6 +6,20 @@ import { RuntimeUsageControls } from "./BranchToolbar";
 afterEach(() => cleanup());
 
 describe("task-invoked Computer", () => {
+  it("identifies a saved access mode that will apply after the active turn", async () => {
+    await render(
+      <RuntimeUsageControls
+        runtimeMode="full-access"
+        activeRuntimeMode="approval-required"
+        onRuntimeModeChange={() => {}}
+      />,
+    );
+    await expect
+      .element(page.getByRole("button", { name: /Full access.*next turn/ }))
+      .toBeVisible();
+    expect(page.getByRole("button").element().getAttribute("title")).toContain("Ask for approval");
+  });
+
   it("keeps access rules available without a persistent Computer switch", async () => {
     const onRuntime = vi.fn();
     await render(
@@ -17,12 +31,5 @@ describe("task-invoked Computer", () => {
       .not.toBeInTheDocument();
     await page.getByRole("menuitemradio", { name: /Full access/ }).click();
     expect(onRuntime).toHaveBeenCalledExactlyOnceWith("full-access");
-  });
-
-  it("does not add a Computer badge to the composer", async () => {
-    await render(
-      <RuntimeUsageControls runtimeMode="approval-required" onRuntimeModeChange={() => {}} />,
-    );
-    await expect.element(page.getByText(/Computer/)).not.toBeInTheDocument();
   });
 });

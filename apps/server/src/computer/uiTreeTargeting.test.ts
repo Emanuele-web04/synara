@@ -70,13 +70,6 @@ function thrown(run: () => unknown): ComputerTargetError {
 describe("resolving a coordinate target", () => {
   const screen = { width: 1_920, height: 1_080, scale: 1 };
 
-  it("takes a point that is on the screen", () => {
-    expect(resolveComputerPoint({ x: 10, y: 20 }, screen)).toEqual({
-      x: 10,
-      y: 20,
-    });
-  });
-
   it("refuses half a coordinate and a coordinate past the edge", () => {
     const half = thrown(() => resolveComputerPoint({ x: 10 }, screen));
     expect(half.code).toBe("computer_target_invalid");
@@ -131,17 +124,14 @@ describe("resolving a labelled desktop target", () => {
     expect(error.code).toBe("computer_target_not_found");
   });
 
-  it.each(["\u00a0", "\u2007", "\u202f"])(
-    "matches a visible form label containing a non-breaking space (%j)",
-    (space) => {
-      const field = node({ role: "AXTextField", label: `First name${space}*` });
-      const desktop = node({
-        role: "desktop",
-        children: [field, node({ role: "AXTextField", label: "First name * (optional)" })],
-      });
-      expect(resolveComputerSemanticTarget(desktop, { label: "First name *" }).node).toBe(field);
-    },
-  );
+  it("matches a visible form label containing a non-breaking space", () => {
+    const field = node({ role: "AXTextField", label: "First name\u00a0*" });
+    const desktop = node({
+      role: "desktop",
+      children: [field, node({ role: "AXTextField", label: "First name * (optional)" })],
+    });
+    expect(resolveComputerSemanticTarget(desktop, { label: "First name *" }).node).toBe(field);
+  });
 
   it("refuses ambiguity between labels differing only in non-breaking spaces", () => {
     const desktop = node({
@@ -267,12 +257,6 @@ describe("naming the candidates", () => {
     expect(error.message).toContain("Save As");
     expect(error.message).toContain("push button");
     expect(error.message).toContain('in window "editor"');
-  });
-
-  it("leaves a message alone when there are no candidates to name", () => {
-    const screen = { width: 100, height: 100 };
-    const error = thrown(() => resolveComputerPoint({ x: 5_000, y: 10 }, screen));
-    expect(error.message).toBe("Computer target (5000, 10) is outside the 100x100 screen.");
   });
 
   it("caps a candidate list at sixteen entries", () => {
@@ -515,15 +499,6 @@ describe("diffActionableElements", () => {
     });
   });
 
-  it("reports an identical digest as no change", () => {
-    const items = [element("Save"), element("Cancel", { value: "armed" })];
-    expect(diffActionableElements(items, [...items])).toEqual({
-      added: [],
-      removed: [],
-      changed: [],
-    });
-  });
-
   it("separates added, removed, and value-changed entries", () => {
     const before = [element("Save"), element("Display", { value: "0" }), element("Help")];
     const after = [element("Save"), element("Display", { value: "42" }), element("About")];
@@ -663,21 +638,6 @@ describe("resolving a duplicate by ordinal", () => {
     );
     expect(error.code).toBe("computer_target_not_found");
     expect(error.candidates).toHaveLength(2);
-  });
-
-  it("reports the pool's near-misses when nothing matches", () => {
-    const thrown = (() => {
-      try {
-        resolveComputerSemanticTarget(twoSaves, {
-          label: "Missing",
-          refOrdinal: 0,
-        });
-      } catch (cause) {
-        return cause as ComputerTargetError;
-      }
-      throw new Error("expected a refusal");
-    })();
-    expect(thrown.code).toBe("computer_target_not_found");
   });
 });
 

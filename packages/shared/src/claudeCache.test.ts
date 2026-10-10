@@ -35,6 +35,19 @@ describe("Claude cache assessment", () => {
     });
   });
 
+  it.each([
+    [299, "likely-warm", false],
+    [300, "unknown", false],
+    [3599, "unknown", false],
+    [3600, "likely-expired", true],
+  ] as const)("assesses mixed cache lifetimes after %i seconds", (seconds, state, confirmation) => {
+    expect(assessClaudeCache({ ...baseline, partialTtlSeconds: 300 }, time(seconds))).toEqual({
+      state,
+      idleSeconds: seconds,
+      requiresConfirmation: confirmation,
+    });
+  });
+
   it("keeps an authoritative native expired observation even inside an inferred TTL", () => {
     expect(
       assessClaudeCache({ ...baseline, state: "likely-expired", source: "session-start" }, time(1))

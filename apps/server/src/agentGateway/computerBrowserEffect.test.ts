@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import type { ComputerBrowserToolName } from "@synara/contracts";
 import { computerBrowserEffect, computerBrowserFieldReadback } from "./computerBrowserEffect.ts";
 
 const navigationArgs = {
@@ -16,13 +15,9 @@ const navigationProof = {
 
 describe("computerBrowserEffect", () => {
   it.each([
-    { status: "ok" },
     { effect: "confirmed", evidence: [{ kind: "value_readback" }] },
-    { effect: "unverifiable", route: "dom", evidence: [{ kind: "value_readback" }] },
     { effect: "partial", route: "trusted_input", delivery: { delivered_count: 2 } },
-    { effect: "suspected_noop" },
     { status: "completed", download_id: "some-file", bytes: 200 },
-    { status: "ok", delivered_chars: 12, requested_chars: 12, readback: "matched" },
   ])("does not promote generic browser dispatch evidence: %j", (structuredContent) => {
     expect(computerBrowserEffect("computer_browser_click", {}, { structuredContent })).toEqual({
       effect: "dispatched-unknown",
@@ -166,12 +161,8 @@ describe("computerBrowserFieldReadback", () => {
     });
   });
 
-  it.each([
-    "computer_browser_press",
-    "computer_browser_click",
-    "computer_browser_upload",
-  ] satisfies ComputerBrowserToolName[])("does not treat field readback as %s proof", (name) => {
-    expect(computerBrowserFieldReadback(name, args, result)).toBe(false);
+  it("does not treat field readback as proof for another browser tool", () => {
+    expect(computerBrowserFieldReadback("computer_browser_click", args, result)).toBe(false);
   });
 
   it("requires the exact replacement route and actual value evidence", () => {

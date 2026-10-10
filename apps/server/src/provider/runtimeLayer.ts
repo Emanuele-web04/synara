@@ -1,6 +1,7 @@
 import { Effect, Layer } from "effect";
 
 import { AgentGatewayCredentialsWithSecretsLive } from "../agentGateway/Layers/AgentGatewayCredentials";
+import { ServerSecretStoreLive } from "../auth/Layers/ServerSecretStore";
 import { ServerConfig } from "../config";
 import {
   makeProviderServerPasswordResolver,
@@ -8,7 +9,6 @@ import {
   ProviderCredentialsLive,
 } from "../providerCredentials";
 import { ServerSettingsService } from "../serverSettings";
-import { ProviderValidationError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
@@ -19,8 +19,10 @@ import { makeDroidAdapterLive } from "./Layers/DroidAdapter";
 import { makeGrokAdapterLive } from "./Layers/GrokAdapter";
 import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { makePiAdapterLive } from "./Layers/PiAdapter";
+import { makeOmpAdapterLive } from "./Layers/OmpAdapter";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
+import { ProviderHealthLive } from "./Layers/ProviderHealth";
 import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./Layers/ProviderSessionDirectory";
 import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime";
@@ -86,6 +88,10 @@ export function makeServerProviderLayer(
     const piAdapterLayer = makePiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     ).pipe(Layer.provide(agentGatewayCredentialsLayer));
+    const ompAdapterLayer = makeOmpAdapterLive(
+      {},
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
@@ -96,29 +102,24 @@ export function makeServerProviderLayer(
       Layer.provide(droidAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
       Layer.provide(piAdapterLayer),
+      Layer.provide(ompAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
+      Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
     );
     const providerServiceLayer = makeDurableProviderServiceLive({
       ...(canonicalEventLogger ? { canonicalEventLogger } : {}),
-      providerIsEnabled: (provider) =>
-        serverSettings.getSettings.pipe(
-          Effect.map((settings) => settings.providers[provider].enabled),
-          Effect.mapError(
-            (cause) =>
-              new ProviderValidationError({
-                operation: "ProviderService.startSession",
-                issue: "Failed to read provider enablement settings.",
-                cause,
-              }),
-          ),
-        ),
     }).pipe(
       Layer.provide(adapterRegistryLayer),
       Layer.provide(providerSessionDirectoryLayer),
       Layer.provide(ProviderRuntimeEventRepositoryLive),
+      // Provider sessions resolve persisted provider-instance settings before launch.
+      Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
+      Layer.provide(ServerSecretStoreLive),
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
+      Layer.provide(ProviderHealthLive),
+      Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
     );
     return Layer.mergeAll(
       providerServiceLayer,

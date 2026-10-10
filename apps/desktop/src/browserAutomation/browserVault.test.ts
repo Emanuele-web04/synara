@@ -9,6 +9,9 @@ import { VaultKeyProtection } from "./vaultKeyProtection";
 
 const homes: string[] = [];
 const master = "synthetic-master-password-only";
+// These tests intentionally exercise the production-strength password KDF, often
+// more than once, so they need headroom while the workspace suite competes for CPU.
+const VAULT_TEST_TIMEOUT_MS = 30_000;
 afterEach(async () => {
   for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
 });
@@ -24,7 +27,7 @@ const page = (url = origin) => ({ getURL: () => url, isDestroyed: () => false })
 
 // These integration tests repeat production scrypt derivations and durable writes.
 // Allow for CPU contention when release preflight runs all workspace suites together.
-describe("browser vault", { timeout: 15_000 }, () => {
+describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
   it("defers OS key access for an empty vault until password saving is enabled", async () => {
     const home = await mkdtemp(join(tmpdir(), "synara-empty-vault-"));
     homes.push(home);

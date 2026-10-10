@@ -104,7 +104,7 @@ export function getDropZoneFromPointer(
   return chooseHorizontal();
 }
 
-export function dropZoneToDirectionSide(zone: DropZone): {
+function dropZoneToDirectionSide(zone: DropZone): {
   direction: SplitDirection;
   side: SplitDropSide;
 } {

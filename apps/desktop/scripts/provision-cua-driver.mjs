@@ -1,5 +1,6 @@
 // Build the exact upstream commit plus the native patch required by the host.
 // The upstream binary archive is baseline provenance, never a patched artifact.
+import { timeBuildStage, startBuildStage } from "../../../scripts/lib/build-timing.ts";
 import { mkdir, readFile, writeFile, chmod, mkdtemp, rm, copyFile, cp } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -113,13 +114,19 @@ const environment = {
     : {}),
 };
 const run = (binary, args, cwd) =>
-  execFileSync(binary, args, { cwd, env: environment, stdio: "inherit" });
+  timeBuildStage(
+    `cua-${binary}-${args[0]}`,
+    () => execFileSync(binary, args, { cwd, env: environment, stdio: "inherit" }),
+    binary === "git" && args.includes("fetch") ? "download" : "local",
+  );
 const output = (binary, args, cwd) =>
   execFileSync(binary, args, {
     cwd,
     env: environment,
     encoding: "utf8",
   }).trim();
+const finishProvision = startBuildStage(artifact ? "cua-artifact-import" : "cua-source-build");
+let provisionSucceeded = false;
 try {
   let binary;
   let provenance;
@@ -367,9 +374,11 @@ try {
     fileURLToPath(new URL("../../../docs/computer-use-cua/CUA-LICENSE.txt", import.meta.url)),
     join(destination, "LICENSE.txt"),
   );
+  provisionSucceeded = true;
   console.log(
     `Cua ${release.version} ${provenance.patched === false ? "upstream (unpatched, no browser input control)" : platform === "linux" ? `browser input control ${provenance.browserInputControl}, native desktop input unavailable` : `native revision ${release.nativeRevision}`} (${architectures.join("+")}) staged at ${destination}`,
   );
 } finally {
+  finishProvision(provisionSucceeded);
   await rm(temporary, { recursive: true, force: true });
 }

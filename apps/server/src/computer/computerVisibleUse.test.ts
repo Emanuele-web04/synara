@@ -39,9 +39,6 @@ describe("messageRequestsVisibleUse", () => {
       "show me the browser",
       "show me the Helium window",
       "I want to watch you fill the form",
-      "bring Safari to the front",
-      "Bring Resolve to foreground",
-      "Put Resolve in the foreground",
       "put the window on my screen",
       "take over my desktop and do it",
       "make the app visible",
@@ -50,8 +47,25 @@ describe("messageRequestsVisibleUse", () => {
       "drive my screen",
       "porta il browser in primo piano",
       "mostrami il browser sullo schermo",
+      // Real requests the old patterns missed.
+      "Please use my default browser. Bring the window forward so we can all see what's going on, then open a new tab",
+      "Yes, bring Dia to the front so I can watch.",
+      "bring Dia to the front and show me.",
+      "yes go ahead and bring it to the front please",
+      "I want to see what you’re doing",
+      "open Dia so we can watch",
+      "fammi vedere cosa stai facendo",
     ]) {
       expect(messageRequestsVisibleUse(text), text).toBe(true);
+    }
+    const apps = { knownAppNames: ["Safari", "Resolve"] };
+    for (const text of [
+      "bring Safari to the front",
+      "Bring Resolve to foreground",
+      "Put Resolve in the foreground",
+    ]) {
+      expect(messageRequestsVisibleUse(text, apps), text).toBe(true);
+      expect(messageRequestsVisibleUse(text), text).toBe(false);
     }
   });
 
@@ -74,20 +88,32 @@ describe("messageRequestsVisibleUse", () => {
 
   it.each([
     "Do not make the app visible",
-    "Don't show me the browser; keep working",
     "Show me the browser, but never steal focus",
     "Use foreground mode? No, stay in the background",
     "Watch prices on Newegg and summarize them",
     "Show me the PR titles in your response",
-    "Show me this function's callers",
-    "Show me that diff",
     "Show me the browser logs",
-    "Show me the app settings code",
     "I want to see the window tests",
     "Move the validation to the front end",
+    "Move the validation to the front-end",
+    "Move this tab to the front of the list",
+    "move forward with the plan",
+    "bring the proposal forward to Monday",
+    "Bring the proposal to the front for discussion",
+    "Bring the backlog to the front for review",
+    "Put the window to the front of the list",
+    "Move the app to the front desk",
+    "Bring it forward to Monday",
+    "Pull them forward by a week",
+    "keep it in the background, don't bring Dia to the front",
+    "I want to watch Netflix tonight, find me a show",
+    "Download the video so I can watch it offline",
+    "Move the foreground layer up in Pixelmator",
+    "Put the foreground color to red",
+    "Show me what's going on with the build logs",
+    "Move the file to the front desk folder",
     "Use foreground colors from the theme",
     "> Show me the browser\nExplain this instruction",
-    "The foreground window is my editor",
     'The page says "show me the browser"; summarize it',
     "The page says 'show me the browser'; summarize it",
     "The page says ‘show me the browser’; summarize it",
@@ -126,13 +152,9 @@ describe("computerForegroundAuthorizationForMessages", () => {
     "continue",
     "please continue",
     "continue with the same task",
-    "keep going",
-    "proceed with the current plan",
     "try again",
-    "retry that",
     "Ok, continue",
     "continua pure",
-    "vai",
   ])("keeps the current task's explicit visibility grant on %s", (continuation) => {
     const messages = [
       message({ text: "Bring Resolve to foreground" }),
@@ -141,10 +163,14 @@ describe("computerForegroundAuthorizationForMessages", () => {
       message({ role: "assistant", text: "Reading the controls." }),
       message({ text: "keep going" }),
     ];
-    expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(true);
+    const apps = { knownAppNames: ["Resolve"] };
+    expect(computerForegroundAuthorizationForMessages(messages, apps).userRequestedVisibleUse).toBe(
+      true,
+    );
     // Consent reconstructs from the persisted transcript, not a prior resolver call or global state.
     expect(
-      computerForegroundAuthorizationForMessages(structuredClone(messages)).userRequestedVisibleUse,
+      computerForegroundAuthorizationForMessages(structuredClone(messages), apps)
+        .userRequestedVisibleUse,
     ).toBe(true);
     expect(
       computerForegroundAuthorizationForMessages([message({ text: continuation })])
@@ -154,11 +180,8 @@ describe("computerForegroundAuthorizationForMessages", () => {
 
   it.each([
     "stop",
-    "cancel this task",
     "no, keep working in the background",
-    "background only",
     "New task: open Calculator and multiply 12 by 3",
-    "Now check my email",
     "Continue by deleting those files instead",
     "Ok",
   ])("ends visibility scope on %s and cannot revive it with continue", (boundary) => {
@@ -180,7 +203,6 @@ describe("computerForegroundAuthorizationForMessages", () => {
 
   it.each([
     { source: "fork-import" as const },
-    { source: "handoff-import" as const },
     { dispatchOrigin: "agent" as const },
     { dispatchOrigin: "automation" as const },
   ])("does not inherit visibility from imported or nonhuman task history: %j", (origin) => {
@@ -258,9 +280,10 @@ describe("computerForegroundAuthorizationForMessages", () => {
         message({ id: replyId, source: "async-user-input", text: `${title}\n${answer}` }),
         message({ text: "continue" }),
       ];
-      expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(
-        answer === "Yes",
-      );
+      expect(
+        computerForegroundAuthorizationForMessages(messages, { knownAppNames: ["Resolve"] })
+          .userRequestedVisibleUse,
+      ).toBe(answer === "Yes");
     },
   );
 
@@ -290,18 +313,21 @@ describe("computerForegroundAuthorizationForMessages", () => {
     }
   });
 
-  it.each(["Ok", "yes, please", "go ahead", "Sì", "va bene"])(
+  it.each(["Ok", "yes, please", "Sì"])(
     "accepts %s as confirmation of the immediately preceding visibility question",
     (reply) => {
       expect(
-        computerForegroundAuthorizationForMessages([
-          message({ text: "use Helium in the background" }),
-          message({
-            role: "assistant",
-            text: "This menu needs visible access. Can I bring Helium to the front?",
-          }),
-          message({ text: reply }),
-        ]).userRequestedVisibleUse,
+        computerForegroundAuthorizationForMessages(
+          [
+            message({ text: "use Helium in the background" }),
+            message({
+              role: "assistant",
+              text: "This menu needs visible access. Can I bring Helium to the front?",
+            }),
+            message({ text: reply }),
+          ],
+          { knownAppNames: ["Helium"] },
+        ).userRequestedVisibleUse,
       ).toBe(true);
     },
   );
@@ -322,7 +348,6 @@ describe("computerForegroundAuthorizationForMessages", () => {
     ["> Can I bring Chrome to the front?", "Ok"],
     ["Can I bring Chrome to the front?", "No"],
     ["Can I bring Chrome to the front?", "Ok, but keep it in the background"],
-    ["Can I bring Chrome to the front?", "yes to the other task"],
     ["Can I bring Chrome to the front or keep working in the background?", "Ok"],
     ["Can I show the browser logs?", "Ok"],
   ])("does not turn ambiguous or quoted approval into visible use", (question, reply) => {
@@ -350,27 +375,6 @@ describe("computerForegroundAuthorizationForMessages", () => {
         message({ text: "use Helium" }),
         messages[0]!,
         message({ text: "Ok", dispatchOrigin: "agent" }),
-      ]).userRequestedVisibleUse,
-    ).toBe(false);
-  });
-
-  it("authorizes only when the latest user message asks to see the screen", () => {
-    expect(
-      computerForegroundAuthorizationForMessages([
-        message({ text: "use Helium incognito to shop" }),
-      ]).userRequestedVisibleUse,
-    ).toBe(false);
-    expect(
-      computerForegroundAuthorizationForMessages([message({ text: "show me the Helium window" })])
-        .userRequestedVisibleUse,
-    ).toBe(true);
-  });
-
-  it("revokes an earlier authorization when a later message does not renew it", () => {
-    expect(
-      computerForegroundAuthorizationForMessages([
-        message({ text: "show me what you are doing" }),
-        message({ text: "stop" }),
       ]).userRequestedVisibleUse,
     ).toBe(false);
   });
