@@ -11,7 +11,8 @@ import {
   isReasoningUpdateWorkEntry,
   isUnmappedProviderEventWorkEntry,
 } from "./agentActivity.logic";
-import { deriveTimelineEntries } from "../../workLog";
+import { deriveTimelineEntries, deriveWorkLogEntries } from "../../workLog";
+import { makeActivity } from "../../storeTestFixtures";
 
 function workEntry(overrides: Partial<WorkLogEntry> & Pick<WorkLogEntry, "id">): WorkLogEntry {
   return {
@@ -279,6 +280,55 @@ describe("subagent progress", () => {
     expect(state.detailById.get("subagent-progress:a-1")?.entries).toHaveLength(2);
     expect(state.detailById.get("subagent-progress:a-1")?.title).toBe("Agent A");
   });
+
+  it.each(["stopped", "failed"] as const)(
+    "preserves a %s invocation when resumed in the same turn",
+    (status) => {
+      const turnId = TurnId.makeUnsafe("same-parent-turn");
+      const activity = (
+        id: string,
+        kind: string,
+        payload: Record<string, string>,
+        second: number,
+      ) =>
+        makeActivity({ id, kind, turnId, createdAt: `2026-06-05T00:00:0${second}.000Z`, payload });
+      const identity = { taskId: "task-reused", toolUseId: "toolu_reused" };
+      const state = deriveAgentActivityTimelineState(
+        deriveWorkLogEntries(
+          [
+            activity("old-start", "task.started", identity, 0),
+            activity(
+              "old-progress",
+              "task.progress",
+              { ...identity, detail: "Running old step" },
+              1,
+            ),
+            activity("old-end", "task.completed", { ...identity, status }, 2),
+            activity("resume", "task.started", identity, 3),
+            activity(
+              "new-progress",
+              "task.progress",
+              { ...identity, detail: "Running new step" },
+              4,
+            ),
+            activity("new-end", "task.completed", { ...identity, status: "completed" }, 5),
+          ],
+          undefined,
+        ),
+      );
+      const groups = state.timelineWorkEntries.filter((entry) => entry.subagentProgress);
+      expect(groups).toHaveLength(2);
+      expect(groups[0]?.subagentProgress?.outcome).toBe(status);
+      expect(groups[0]?.preview).toContain(status === "failed" ? "Failed" : "Stopped");
+      expect(groups[1]?.subagentProgress?.outcome).toBe("completed");
+      expect(state.detailById.get(groups[0]!.id)?.entries.map((entry) => entry.id)).toEqual([
+        "old-progress",
+      ]);
+      expect(state.detailById.get(groups[1]!.id)?.entries.map((entry) => entry.id)).toEqual([
+        "new-progress",
+      ]);
+    },
+  );
 
   it("shows a stopped or failed subagent's outcome instead of a done row", () => {
     const withOutcome = (

@@ -2547,6 +2547,16 @@ const make = Effect.gen(function* () {
           ? TurnId.makeUnsafe(terminalApplicability.resolvedTurnId)
           : rawEventTurnId;
 
+      const shouldApplyThreadLifecycle =
+        event.type === "turn.started"
+          ? !STRICT_PROVIDER_LIFECYCLE_GUARD ||
+            isStartedTurnApplicable({ activeTurnId, eventTurnId })
+          : event.type === "session.exited" && thread.id !== parentThread.id
+            ? rawEventTurnId === undefined ||
+              activeTurnId === null ||
+              rawEventTurnId === activeTurnId
+            : !isTerminalTurnEvent || (terminalApplicability?.applicable ?? true);
+
       // In-flight tool tracking: a started-but-unfinished tool call counts as
       // activity for the whole duration it runs (a 12-minute test suite must
       // never look silent). INSERT OR IGNORE / DELETE keeps it replay-safe.
@@ -2568,6 +2578,9 @@ const make = Effect.gen(function* () {
       if (
         event.type === "item.completed" &&
         event.itemId !== undefined &&
+        (rawEventTurnId === undefined ||
+          activeTurnId === null ||
+          rawEventTurnId === activeTurnId) &&
         isToolLifecycleItemType(event.payload.itemType)
       ) {
         yield* projectionThreadSessionRepository
@@ -2577,7 +2590,7 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.catchCause(() => Effect.void));
       }
-      if (event.type === "turn.started" && eventTurnId) {
+      if (event.type === "turn.started" && eventTurnId && shouldApplyThreadLifecycle) {
         yield* projectionThreadSessionRepository
           .clearActiveTools({
             threadId: thread.id,
@@ -2585,7 +2598,7 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.catchCause(() => Effect.void));
       }
-      if (isTerminalTurnEvent || event.type === "session.exited") {
+      if ((isTerminalTurnEvent || event.type === "session.exited") && shouldApplyThreadLifecycle) {
         yield* projectionThreadSessionRepository
           .clearActiveTools({
             threadId: thread.id,
@@ -2598,11 +2611,6 @@ const make = Effect.gen(function* () {
         flushMap.delete(thread.id);
       }
 
-      const shouldApplyThreadLifecycle =
-        event.type === "turn.started"
-          ? !STRICT_PROVIDER_LIFECYCLE_GUARD ||
-            isStartedTurnApplicable({ activeTurnId, eventTurnId })
-          : !isTerminalTurnEvent || (terminalApplicability?.applicable ?? true);
       if (isTerminalTurnEvent) {
         if (eventTurnId) {
           yield* forgetOutstandingTurn(thread.id, eventTurnId);

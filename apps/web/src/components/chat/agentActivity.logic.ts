@@ -183,12 +183,12 @@ export function deriveAgentActivityTimelineState(
     detailById.set(groupId, buildAgentActivityDetail(groupId, displayEntry, groupEntries));
   };
 
-  // One row per subagent per turn, anchored where its first update landed:
+  // One row per subagent invocation per turn, anchored at its first update:
   // parallel subagents interleave their updates, and a turn boundary or a
   // different subagent always starts a new group.
   const subagentProgressGroups = new Map<string, { index: number; entries: WorkLogEntry[] }>();
   const upsertSubagentProgressGroup = (entry: WorkLogEntry) => {
-    const key = `${entry.turnId ?? "no-turn"}\u001f${entry.subagentProgress!.toolUseId}`;
+    const key = `${entry.turnId ?? "no-turn"}\u001f${entry.subagentProgress!.toolUseId}\u001f${entry.subagentProgress!.invocationId ?? "legacy"}`;
     const group = subagentProgressGroups.get(key);
     const groupEntries = group ? [...group.entries, entry] : [entry];
     const first = groupEntries[0]!;
