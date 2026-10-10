@@ -3196,6 +3196,23 @@ diffs-container {
   border-top-right-radius: 0;
 }
 
+/* Join the input to the last visible flush panel, including panels with a
+   side-margin wrapper. Detached notices or cards between the rail and input
+   retain the input's rounded top. This follows rendered panels rather than
+   duplicating the visibility state of queue, file, task, and notice components. */
+[data-composer-panels]:has(
+    > [data-composer-flush-panel]:last-child,
+    > [data-composer-stacked-wrapper]:last-child > [data-composer-flush-panel]
+  )
+  + .chat-composer-shell {
+  &,
+  & .chat-composer-surface,
+  & .chat-composer-surface-banner {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
+}
+
 /* Composer glass — the same material as the floating menus/pickers
    (`APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME`) and the sidebar.
 

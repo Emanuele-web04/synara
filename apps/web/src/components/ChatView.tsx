@@ -6014,7 +6014,7 @@ export default function ChatView({
         <ComposerColumnFrame>
           {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
-          <div>
+          <div data-composer-panels>
             <ComposerTransportNotice />
             {isSidechatExpired ? (
               <ExpiredSidechatNotice onStartNew={startReplacementSidechat} />
@@ -6231,13 +6231,12 @@ export default function ChatView({
             <div
               className={cn(
                 COMPOSER_INPUT_SURFACE_CLASS_NAME,
-                queuedComposerTurns.length > 0 && "rounded-t-none!",
                 composerProviderState.composerSurfaceClassName,
                 composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
               )}
             >
               <ComposerInputBanners
-                roundedTopReset={queuedComposerTurns.length > 0}
+                roundedTopReset={false}
                 planFollowUp={
                   !activePendingApproval &&
                   pendingUserInputs.length === 0 &&

@@ -950,6 +950,14 @@ function createSnapshotWithTallComposerStack(): OrchestrationReadModel {
   };
 }
 
+function createSnapshotWithActiveFileChanges(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithTallComposerStack();
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) => ({ ...thread, activities: [] })),
+  };
+}
+
 function createSnapshotWithSettledInlinePlan(): OrchestrationReadModel {
   const snapshot = createSnapshotWithActiveInlinePlan();
   const activeTurnId = TurnId.makeUnsafe("turn-inline-plan");
@@ -9065,7 +9073,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("editing a queued follow-up removes only that row and restores its images to the composer", async () => {
+  it("editing a queued follow-up with live file changes removes only that row and restores its images to the composer", async () => {
     const queuedImage = createComposerImage({
       id: "queued-image-1",
       previewUrl: "blob:queued-image-1",
@@ -9076,11 +9084,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-running-edit-queue" as MessageId,
-        targetText: "running edit queue target",
-        sessionStatus: "running",
-      }),
+      snapshot: createSnapshotWithActiveFileChanges(),
     });
 
     try {
@@ -9158,9 +9162,6 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(railBounds.left).toBeCloseTo(inputBounds.left, 1);
         expect(railBounds.right).toBeCloseTo(inputBounds.right, 1);
         expect(railBounds.bottom).toBeCloseTo(inputBounds.top + 1, 1);
-        await page.screenshot({
-          path: `../../../../output/playwright/queue-after-${viewport.width === 480 ? "narrow" : "wide"}.png`,
-        });
         expect(getComputedStyle(surface).borderTopLeftRadius).toBe("0px");
         expect(getComputedStyle(surface).borderTopRightRadius).toBe("0px");
         expect(getComputedStyle(surface).borderBottomLeftRadius).not.toBe("0px");
@@ -14746,6 +14747,34 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("joins live file changes to the composer without queued messages", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithActiveFileChanges(),
+    });
+    try {
+      await expect.element(page.getByText("2 files changed", { exact: true })).toBeVisible();
+      expect(document.querySelector('[data-testid="queued-follow-up-row"]')).toBeNull();
+      for (const viewport of [DEFAULT_VIEWPORT, { name: "narrow", width: 480, height: 640 }]) {
+        await mounted.setViewport(viewport);
+        const surface = document.querySelector<HTMLElement>(".chat-composer-surface")!;
+        const rail = page
+          .getByText("2 files changed", { exact: true })
+          .element()
+          .closest<HTMLElement>(".chat-composer-stacked-top")!;
+        const inputBounds = surface.getBoundingClientRect();
+        const railBounds = rail.getBoundingClientRect();
+        expect(railBounds.left).toBeCloseTo(inputBounds.left, 1);
+        expect(railBounds.right).toBeCloseTo(inputBounds.right, 1);
+        expect(railBounds.bottom).toBeCloseTo(inputBounds.top + 1, 1);
+        expect(getComputedStyle(surface).borderTopLeftRadius).toBe("0px");
+        expect(getComputedStyle(surface).borderTopRightRadius).toBe("0px");
+      }
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("aligns the inline plan card with the composer input", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -14776,15 +14805,14 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      // Active plan activity shares the composer column width while the input keeps its
-      // rounded top corners. The stacked frame must stay aligned at every viewport size.
+      // Active plan activity shares the input width and a continuous outline.
       const taskRect = taskListCard!.getBoundingClientRect();
       const composerRect = composerShell!.getBoundingClientRect();
       expect(Math.abs(taskRect.width - composerRect.width)).toBeLessThanOrEqual(2);
       expect(
         Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
       ).toBeLessThanOrEqual(1);
-      expect(parseFloat(getComputedStyle(composerShell!).borderTopLeftRadius)).toBeGreaterThan(0);
+      expect(getComputedStyle(composerShell!).borderTopLeftRadius).toBe("0px");
 
       const openPlanButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[title="Open tasks sidebar"]'),
