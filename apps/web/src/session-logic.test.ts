@@ -1043,7 +1043,7 @@ describe("hasLiveTurnTailWork", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("lists available providers", () => {
+  it("lists installable providers without a bare external profile choice", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     const devin = PROVIDER_OPTIONS.find((option) => option.value === "devin");
@@ -1062,7 +1062,6 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "pi", label: "Pi", available: true },
       { value: "devin", label: "Devin", available: true },
       { value: "omp", label: "Oh My Pi", available: true },
-      { value: "external", label: "External Agent", available: true },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",
