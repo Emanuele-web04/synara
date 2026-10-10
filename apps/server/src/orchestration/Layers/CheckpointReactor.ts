@@ -881,8 +881,21 @@ const make = Effect.gen(function* () {
       ? existingPlaceholder.checkpointTurnCount
       : currentTurnCount + 1;
 
+    // The in-memory marker covers the normal turn.started path. Read the
+    // projection as well so a reactor restart between turn start and completion
+    // retains the provider-independent workspace classification.
+    const persistedTurn = yield* projectionTurnRepository.getByTurnId({
+      threadId: thread.id,
+      turnId,
+    });
+    const pendingTurnStart = Option.isNone(persistedTurn)
+      ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({ threadId: thread.id })
+      : Option.none();
     const workspaceInitializedDuringTurn =
-      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId;
+      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId ||
+      (Option.isSome(persistedTurn) && persistedTurn.value.startedWithoutGitWorkspace === true) ||
+      (Option.isSome(pendingTurnStart) &&
+        pendingTurnStart.value.startedWithoutGitWorkspace === true);
     turnsStartedWithoutGitWorkspace.delete(thread.id);
 
     yield* captureAndDispatchCheckpoint({
@@ -1129,6 +1142,37 @@ const make = Effect.gen(function* () {
     Effect.sync(() => {
       pendingMessageStartByThread.set(event.payload.threadId, event.payload.messageId);
     });
+
+  const rememberPendingWorkspaceInitialization = Effect.fnUntraced(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
+  ) {
+    const thread = yield* getThreadDetail(event.payload.threadId);
+    if (!thread) return;
+    const project = yield* getProjectShell(thread.projectId);
+    if (!project) return;
+    const workspace = yield* resolveCheckpointWorkspace({
+      threadId: thread.id,
+      thread,
+      project,
+    });
+    if (!workspace || workspace.isGitRepository) return;
+
+    // The projector commits the request before publishing it. A lagging reactor
+    // may see an already-promoted turn or a newer pending request, so mark only
+    // the row owned by this message without replacing the pending slot.
+    yield* projectionTurnRepository.markStartedWithoutGitWorkspace({
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
+    });
+    yield* Effect.logDebug(
+      "checkpoint turn start marked workspace as not yet initialized as a git repository",
+      {
+        threadId: event.payload.threadId,
+        messageId: event.payload.messageId,
+        cwd: workspace.cwd,
+      },
+    );
+  });
 
   const handleRevertRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<OrchestrationEvent, { type: "thread.checkpoint-revert-requested" }>,
@@ -1741,6 +1785,7 @@ const make = Effect.gen(function* () {
   const processDomainEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
     if (event.type === "thread.turn-start-requested") {
       yield* rememberPendingMessageStart(event);
+      yield* rememberPendingWorkspaceInitialization(event);
       return;
     }
 
