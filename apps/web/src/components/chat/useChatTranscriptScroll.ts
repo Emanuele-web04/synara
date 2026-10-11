@@ -325,7 +325,7 @@ export function useChatTranscriptScroll({
     const pending = pendingScrollGestureRef.current;
     if (container instanceof HTMLElement && pending?.container === container) {
       // Virtual-row compensation can raise scrollTop again before the delayed
-      // gesture check. Retain proof that the user's wheel actually moved up.
+      // gesture check. Retain proof that the user's gesture actually moved up.
       pending.lowestScrollTop = Math.min(pending.lowestScrollTop, container.scrollTop);
     }
   }, [legendListRef]);
@@ -456,7 +456,8 @@ export function useChatTranscriptScroll({
       const check = () => {
         pendingScrollGestureFrameRef.current = null;
         if (pendingScrollGestureRef.current !== origin) return;
-        const movedUp = origin.container.scrollTop < origin.scrollTop - 1;
+        const movedUp =
+          Math.min(origin.lowestScrollTop, origin.container.scrollTop) < origin.scrollTop - 1;
         if (!movedUp && performance.now() < deadline) {
           pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
           return;
