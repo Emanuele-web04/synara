@@ -45,6 +45,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           requestedAt: "2026-10-10T10:00:00.000Z",
           sourceProposedPlanThreadId: null,
           sourceProposedPlanId: null,
+          externalAgentRevisionId: null,
+          spawningProfileId: null,
         };
         yield* turns.replacePendingTurnStart(request);
         yield* turns.markStartedWithoutGitWorkspace({ threadId, messageId });
@@ -58,6 +60,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           pendingMessageId: messageId,
           sourceProposedPlanThreadId: null,
           sourceProposedPlanId: null,
+          externalAgentRevisionId: null,
+          spawningProfileId: null,
           assistantMessageId: null,
           state: "running",
           requestedAt: request.requestedAt,
