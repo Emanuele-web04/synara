@@ -677,7 +677,33 @@ describe("ProfileStatsArchive", () => {
         yield* archive.purgeThreadWithStatsSnapshot({
           threadId: ThreadId.makeUnsafe("thread-native-uncovered"),
         });
-        expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 })).toEqual(before);
+        const after = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        // Lifetime totals survive purge; retained-only detail must not invent archived turns.
+        expect({ ...after, providerUsage: undefined }).toEqual({
+          ...before,
+          providerUsage: undefined,
+        });
+        expect(
+          before.providerUsage?.find((entry) => entry.provider === "claudeAgent"),
+        ).toMatchObject({
+          tokens: 1_500,
+          turnCount: 1,
+          threadCount: 1,
+          tokenCoverage: "complete",
+          lastUsedAt: "2026-06-13T12:01:00.000Z",
+        });
+        expect(
+          after.providerUsage?.find((entry) => entry.provider === "claudeAgent"),
+        ).toMatchObject({
+          tokens: 1_500,
+          tokensReported: true,
+          turnCount: 0,
+          threadCount: 0,
+          costUsd: null,
+          tokenCoverage: "not-reported",
+          costCoverage: "not-reported",
+          lastUsedAt: null,
+        });
         expect(
           yield* sql`
             SELECT tokens FROM profile_stats_deleted_tokens
