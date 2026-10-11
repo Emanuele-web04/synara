@@ -9345,6 +9345,7 @@ describe("ChatView transcript geometry (full app)", () => {
         fileComments: [],
         pastedTexts: [],
         pullRequestContexts: [],
+        workItems: [],
         skills: [],
         mentions: [],
         selectedProvider: "codex" as const,
