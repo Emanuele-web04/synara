@@ -59,6 +59,10 @@ interface TokenActivityRow {
   // Provider whose runtime emitted the counter (payload stamp first). Deltas
   // are taken per counter provider; NULL falls back to the resolved provider.
   readonly counterProvider?: string | null;
+  // Native/provider session that owns the cumulative counter. Provider
+  // processes can restart or switch native conversations while staying on the
+  // same Synara thread, so each session needs an independent baseline.
+  readonly usageSessionId?: string | null;
   readonly dispatchOrigin?: string | null;
   readonly createdAt: string | null;
   // Turn the context-window row belongs to; used to keep a modelUsage turn's
@@ -297,6 +301,19 @@ function tokenProviderModelKey(
   return `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}`;
 }
 
+function tokenCounterKey(counterProvider: string | null, usageSessionId: string | null): string {
+  return `${counterProvider ?? ""}\u0000${usageSessionId ?? ""}`;
+}
+
+function tokenProviderModelSessionKey(
+  provider: string | null,
+  instanceId: string | null,
+  model: string | null,
+  usageSessionId: string | null,
+): string {
+  return `${tokenProviderModelKey(provider, instanceId, model)}\u0000${usageSessionId ?? ""}`;
+}
+
 function resolveTokenProviderModel(
   row: TokenActivityRow,
   fallbackSelection?: {
@@ -366,17 +383,20 @@ export function aggregateThreadTokenRows(
       continue;
     }
     const { provider, instanceId, model } = resolveTokenProviderModel(row, fallbackSelection);
-    cumulativeProviderModels.add(tokenProviderModelKey(provider, instanceId, model));
+    cumulativeProviderModels.add(
+      tokenProviderModelSessionKey(provider, instanceId, model, row.usageSessionId ?? null),
+    );
   }
 
-  const previousCumulativeTotals = new Map<string | null, number>();
+  const previousCumulativeTotals = new Map<string, number>();
   for (const row of nonClaudeRows) {
     const total = tokenCounterValue(row.totalProcessedTokens);
     if (total === null) {
       continue;
     }
     const counterProvider = counterProviderOf(row);
-    const previousCumulativeTotal = previousCumulativeTotals.get(counterProvider);
+    const counterKey = tokenCounterKey(counterProvider, row.usageSessionId ?? null);
+    const previousCumulativeTotal = previousCumulativeTotals.get(counterKey);
     const { provider: counterKind } = resolveTokenProviderModel(row, fallbackSelection);
     const delta =
       counterKind === "opencode" || counterKind === "kilo"
@@ -384,7 +404,7 @@ export function aggregateThreadTokenRows(
         : previousCumulativeTotal === undefined || total < previousCumulativeTotal
           ? total
           : Math.max(0, total - previousCumulativeTotal);
-    previousCumulativeTotals.set(counterProvider, total);
+    previousCumulativeTotals.set(counterKey, total);
     if (
       delta <= 0 ||
       row.createdAt === null ||
@@ -406,13 +426,17 @@ export function aggregateThreadTokenRows(
   }
 
   const previousUsedByCounterProvider = new Map<
-    string | null,
+    string,
     { readonly total: number; readonly providerModelKey: string }
   >();
   for (const row of nonClaudeRows) {
     const { provider, instanceId, model } = resolveTokenProviderModel(row, fallbackSelection);
     const providerModelKey = tokenProviderModelKey(provider, instanceId, model);
-    if (cumulativeProviderModels.has(providerModelKey)) {
+    if (
+      cumulativeProviderModels.has(
+        tokenProviderModelSessionKey(provider, instanceId, model, row.usageSessionId ?? null),
+      )
+    ) {
       continue;
     }
     const total = tokenCounterValue(row.usedTokens);
@@ -420,13 +444,14 @@ export function aggregateThreadTokenRows(
       continue;
     }
     const counterProvider = counterProviderOf(row);
-    const previousUsed = previousUsedByCounterProvider.get(counterProvider);
+    const counterKey = tokenCounterKey(counterProvider, row.usageSessionId ?? null);
+    const previousUsed = previousUsedByCounterProvider.get(counterKey);
     const delta =
       previousUsed === undefined ||
       (total < previousUsed.total && providerModelKey !== previousUsed.providerModelKey)
         ? total
         : Math.max(0, total - previousUsed.total);
-    previousUsedByCounterProvider.set(counterProvider, { total, providerModelKey });
+    previousUsedByCounterProvider.set(counterKey, { total, providerModelKey });
     if (
       delta <= 0 ||
       row.createdAt === null ||
@@ -689,8 +714,6 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           AND COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id) = ${threadId}
           AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
       `;
-      // Same counters and per-turn attribution as the live
-      // profileStats.queryTokenActivity: both token counters come back raw so
       const skillMessageRows = yield* sql<SkillMessageRow>`
         SELECT
           message_id AS messageId,

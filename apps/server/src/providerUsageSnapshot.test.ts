@@ -156,6 +156,41 @@ describe("Claude activity window and dedup", () => {
     expect(snapshot?.usageLines.find((line) => line.label === "30d")?.value).toBe("40 tokens");
   });
 
+  it("excludes future Claude samples from usage lines and freshness", async () => {
+    const directory = await mkdtemp(nodePath.join(tmpdir(), "synara-claude-future-"));
+    tempDirs.push(directory);
+    const project = nodePath.join(directory, ".claude", "projects", "test");
+    await mkdir(project, { recursive: true });
+    const nowMs = Date.parse("2026-08-08T12:00:00.000Z");
+    const validTime = new Date(nowMs - 60_000).toISOString();
+    await writeFile(
+      nodePath.join(project, "session.jsonl"),
+      [validTime, new Date(nowMs + ONE_DAY_MS).toISOString()]
+        .map((timestamp, index) =>
+          JSON.stringify({
+            type: "assistant",
+            sessionId: "session",
+            requestId: `request-${index}`,
+            timestamp,
+            message: { model: "test-model", usage: { input_tokens: index === 0 ? 40 : 900 } },
+          }),
+        )
+        .join("\n") + "\n",
+    );
+    const snapshot = await __loadClaudeUsageSnapshotForTests({
+      homeDir: directory,
+      env: {},
+      nowMs,
+    });
+    expect(snapshot?.updatedAt).toBe(validTime);
+    expect(snapshot?.usageLines.map((line) => line.value)).toEqual([
+      "40 tokens",
+      "40 tokens",
+      "40 tokens",
+    ]);
+    expect(snapshot?.activity?.periods.map((period) => period.tokens.total)).toEqual([40, 40, 40]);
+  });
+
   it("counts copied Claude transcripts once through the shared sample-key set", async () => {
     const directory = await mkdtemp(nodePath.join(tmpdir(), "synara-claude-dedup-"));
     tempDirs.push(directory);

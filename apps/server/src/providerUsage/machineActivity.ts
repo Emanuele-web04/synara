@@ -63,6 +63,9 @@ interface GrokSignalFile {
 }
 
 function asNonNegativeNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || value.trim() === "")) {
+    return undefined;
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
@@ -298,7 +301,11 @@ function optionalCost(messages: ReadonlyArray<OpenCodeMessage>): number | null {
   const values = messages
     .map((message) => message.costUsd)
     .filter((value): value is number => value !== undefined);
-  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) : null;
+  // A known subtotal cannot stand in for a period's cost when some messages
+  // carry no cost evidence. Model breakdowns can still show fully covered groups.
+  return values.length > 0 && values.length === messages.length
+    ? values.reduce((sum, value) => sum + value, 0)
+    : null;
 }
 
 function buildPeriod(

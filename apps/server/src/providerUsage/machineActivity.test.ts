@@ -161,6 +161,29 @@ describe("scanLocalProviderActivity", () => {
     );
   });
 
+  it("keeps missing and incomplete machine costs unreported", async () => {
+    const nowMs = Date.parse("2026-08-09T00:00:00.000Z");
+    const db = await makeDatabase(
+      [0, null, false, ""].map((cost, index) => ({
+        id: `message-cost-${index}`,
+        sessionId: "session-cost",
+        createdAt: nowMs - index,
+        data: { role: "assistant", modelID: `model-${index}`, tokens: { total: 10 }, cost },
+      })),
+    );
+    const result = await scanLocalProviderActivity({
+      provider: "opencode",
+      homeDir: "/tmp/synara-test-home",
+      databasePaths: [db],
+      nowMs,
+    });
+    expect(result?.periods.map((period) => period.recordedCostUsd)).toEqual([null, null, null]);
+    expect(result?.breakdown.find((row) => row.model === "model-0")?.recordedCostUsd).toBe(0);
+    for (const model of ["model-1", "model-2", "model-3"]) {
+      expect(result?.breakdown.find((row) => row.model === model)?.recordedCostUsd).toBeNull();
+    }
+  });
+
   it("keeps an honest unavailable state when a known database has no token-bearing messages", async () => {
     const db = await makeDatabase([]);
     const result = await scanLocalProviderActivity({

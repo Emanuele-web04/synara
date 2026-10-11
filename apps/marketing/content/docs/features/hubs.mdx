@@ -1,0 +1,48 @@
+---
+title: Hubs and Library
+description: Coordinate related work across agents and repositories with shared instructions, memory, and a versioned Library in Synara Beta.
+---
+
+<Callout type="info" title="Synara 1.0.0">
+  Hubs require **Synara Beta** and remain unavailable in **Synara 1.0.0 Stable**.
+</Callout>
+
+Hubs are available in **Synara Beta**. A Hub combines one coordinator conversation, worker chats, shared context, and a Library of delivered files. It can cover several repositories or work without a repository for research, writing, and planning.
+
+## Create a Hub
+
+Open **Hubs → New hub**, name it, and finish setup. Choose coordinator and thread models in **General**, add shared instructions in **Memory**, and link repositories in **Environment**. Setup alone does not launch a model; send the coordinator your first request when ready. If the Hubs destination is hidden, enable it in **Settings → Sidebar sections**.
+
+Tell the coordinator what outcome you want. It can answer directly, follow up with an existing worker, or start independent worker chats. Ask it to propose work before starting if that is your preference. New chats inherit the Hub's instructions and memory, while their provider and model can differ.
+
+## Follow delegated work
+
+Task cards beneath your request show queued, starting, working, waiting, completed, failed, or cancelled work. Open a card to inspect its worker. Original request text and attachment references travel with the brief; keep source messages containing files until queued work starts.
+
+New Hubs allow **3 parallel threads**. In Hub settings → **General → Parallel threads**, choose 1–8. Excess tasks wait in a persistent queue. Repository workers default to isolated worktrees; general work and non-Git folders use a local workspace. Pausing or archiving the Hub prevents new queue starts.
+
+The Hubs panel groups threads by whether they need you, are working, are ready for review, are idle, or are resolved. It also collects their pull requests, automations, and shared context. The server tracks delegated workers and reports completion, errors, and requests for input. It never approves a worker's pending request for you. If recovery needs your help, use **Retry**, **Stop worker**, or **Open thread**.
+
+## Shared instructions and memory
+
+Use **Hub settings → Memory** to edit instructions, inspect `MEMORY.md`, and add or remove memory notes. Workers receive shared instructions and memory; coordinator planning and monitoring stay with the coordinator. Linked repositories determine where the coordinator can start repository work. It cannot steer unrelated chats just because they share a linked repository.
+
+## Keep deliverables in the Library
+
+Open **Library** from the chat header. Upload files, preview documents, filter and search, or expand the panel for reading. Library changes are versioned in Git. **History → Restore** recovers an earlier version or deleted file.
+
+For a remote backup, configure **Environment → Library hosting → Git remote** and **Push on change**. Configure working Git credentials first: background pushes are non-interactive. Inspect **Pushed**, **Not pushed yet**, or **Push failed** rather than assuming a local write reached the remote.
+
+## Pause, archive, and delete
+
+**Pause hub** interrupts running work and stops new coordinator wakes and Hub automations; resume when ready. **Restart coordinator** keeps its transcript. Archive hides the Hub and its chats until restored.
+
+Deleting a Hub removes its coordinator, context, and automations after name confirmation. Linked repositories and their chats remain. A custom Library folder is kept, while the default Library is moved to Trash when possible. Read the deletion notice for retained folders.
+
+Hubs use the Beta app's data home. The on-disk workspace parent retains its historical name, `~/Documents/Synara/Groups/`. Hubs remain unavailable in Stable; see [Synara Beta](/docs/features/synara-beta) for isolation and data-copy behavior.
+
+## Worker approvals in the coordinator chat
+
+In 1.0.2-beta.1, pending worker approvals appear above the coordinator composer. Open the named worker or choose **Approve once**, **Always allow this session** when supported, **Decline**, or **Cancel turn**. Answering in either conversation clears the request in both. These are human controls; agents have no tool for approving a worker.
+
+A task accepted into the Hub queue inherits the coordinator's access mode unless explicitly overridden, and retains that mode while queued. Changing an active chat's mode applies on its next turn. Hubs remains Beta-only.

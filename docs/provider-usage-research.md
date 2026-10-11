@@ -7,7 +7,7 @@ project documentation, and the typed Synara provider metadata were read. No
 local credential, cookie, Keychain, `auth.json`, `.env`, or settings file was
 read.
 
-## Integration status (2026-10-10)
+## Integration status (2026-10-11)
 
 The current contract has ten provider drivers: Codex, Claude Agent, Cursor,
 Antigravity, Grok, Droid, OpenCode, Pi, Devin, and OMP. Kilo is a legacy identity
@@ -17,7 +17,10 @@ own live quota and credential context; machine history is a separate field.
 Completed-turn accounting is shared by live profiles and delete-time archives.
 Claude uses verified/versioned accounting, not legacy cumulative totals. Generic
 completed turns are deduplicated, and replacement of context counters is scoped
-to the exact turn while preserving the next counter's baseline.
+to the exact turn while preserving the next counter's baseline. Native usage
+session ids retain upstream counter boundaries, and Cursor completion events
+carry their canonical session reference into cost accounting. Future Claude
+samples are excluded from usage lines, activity periods, and freshness timestamps.
 
 Local scans are bounded, exclude future timestamps, and report partial evidence
 when reads are skipped. Grok signals are approximate cumulative session snapshots

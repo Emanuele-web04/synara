@@ -792,6 +792,7 @@ async function loadClaudeUsageSnapshot(input: {
   env?: NodeJS.ProcessEnv;
   nowMs?: number;
 }): Promise<UsageSnapshot | null> {
+  const nowMs = input.nowMs ?? Date.now();
   const projectsRoots = resolveClaudeProjectsRoots(input.homeDir, input.env ?? process.env);
   const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoots);
   const partial = transcriptFiles.truncated || transcriptFiles.oversized;
@@ -808,13 +809,14 @@ async function loadClaudeUsageSnapshot(input: {
     await mapWithConcurrency(transcriptFiles.paths, PROVIDER_USAGE_FILE_READ_CONCURRENCY, (path) =>
       readClaudeUsageSamples(path, sharedSeenKeys),
     )
-  ).flat();
+  )
+    .flat()
+    .filter((sample) => sample.timestampMs <= nowMs);
 
   if (usageSamples.length === 0) {
     if (!partial) {
       return null;
     }
-    const nowMs = input.nowMs ?? Date.now();
     const activity = buildMachineUsageActivity({
       provider: "claudeAgent",
       source: "claude-project-transcripts",
@@ -833,7 +835,6 @@ async function loadClaudeUsageSnapshot(input: {
     };
   }
 
-  const nowMs = input.nowMs ?? Date.now();
   const cutoff24h = nowMs - ONE_DAY_MS;
   const cutoff7d = nowMs - LOOKBACK_7D_MS;
   const cutoff30d = nowMs - LOOKBACK_30D_MS;
