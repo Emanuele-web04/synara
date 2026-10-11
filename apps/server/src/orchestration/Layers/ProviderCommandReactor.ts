@@ -1629,6 +1629,9 @@ const make = Effect.gen(function* () {
       thread.session?.providerInstanceId !== requestedProviderInstanceId
         ? thread.session?.providerName
         : null;
+    const runtimeSession = (yield* providerService.listSessions()).find(
+      (session) => session.threadId === input.threadId,
+    );
     yield* setThreadSession({
       threadId: input.threadId,
       session: {
@@ -1637,7 +1640,13 @@ const make = Effect.gen(function* () {
         providerName:
           existingBoundProviderName ?? resolvedProviderName ?? errorModelSelection.provider,
         providerInstanceId: thread.session?.providerInstanceId ?? requestedProviderInstanceId,
-        runtimeMode: input.runtimeMode ?? thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        // A failed rebind can leave the previous process alive. Report its
+        // actual permissions while keeping the requested mode on the thread.
+        runtimeMode:
+          runtimeSession?.runtimeMode ??
+          input.runtimeMode ??
+          thread.session?.runtimeMode ??
+          DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: input.detail,
         updatedAt: input.createdAt,
@@ -2368,7 +2377,9 @@ const make = Effect.gen(function* () {
       thread.session && thread.session.status !== "stopped" ? activeSessionBeforeEnsure : undefined;
     if (reusableSession) {
       const existingSessionThreadId = thread.id;
-      const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
+      // Persisted projections can predate a failed rebind. The live process
+      // determines whether its permission mode still needs to change.
+      const runtimeModeChanged = desiredRuntimeMode !== reusableSession.runtimeMode;
       // A live session whose provider diverged from the binding (a stale
       // projection or an interrupted rebind) is treated as a provider change:
       // it is restarted on the preferred provider and its resume cursor —
@@ -4627,9 +4638,8 @@ const make = Effect.gen(function* () {
       // idle until the runtime's first event. Mirrors the message-edit-resend
       // path. Never touches a live session — a steer turn on a running provider
       // session must keep its running state and activeTurnId. Keeps the existing
-      // session's runtimeMode: ensureSessionForThread detects mode changes by
-      // comparing against it, and adopting the requested mode here would mask
-      // the restart.
+      // session's runtimeMode until the live process is actually reconfigured;
+      // ensureSessionForThread compares the request with the runtime itself.
       // The pre-turn session row can be an optimistic placeholder carrying a
       // stale provider; only defer to it for a real established binding, and
       // otherwise honor the turn's explicit requested selection.
