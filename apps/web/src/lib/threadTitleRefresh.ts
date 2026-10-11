@@ -4,15 +4,14 @@
 
 import type { ProjectId, ThreadId, ThreadTitleRefreshMode } from "@synara/contracts";
 
-import { readNativeApi } from "../nativeApi";
+import { ensureNativeApi } from "../nativeApi";
 import { newCommandId } from "./utils";
 
 export async function acceptThreadTitleSuggestion(input: {
   threadId: ThreadId;
   title: string;
 }): Promise<boolean> {
-  const api = readNativeApi();
-  if (!api) return false;
+  const api = ensureNativeApi();
   await api.orchestration.dispatchCommand({
     type: "thread.meta.update",
     commandId: newCommandId(),
@@ -25,8 +24,7 @@ export async function acceptThreadTitleSuggestion(input: {
 }
 
 export async function dismissThreadTitleSuggestion(threadId: ThreadId): Promise<boolean> {
-  const api = readNativeApi();
-  if (!api) return false;
+  const api = ensureNativeApi();
   await api.orchestration.dispatchCommand({
     type: "thread.meta.update",
     commandId: newCommandId(),
@@ -40,8 +38,7 @@ export async function setThreadManualTitlePin(
   threadId: ThreadId,
   pinned: boolean,
 ): Promise<boolean> {
-  const api = readNativeApi();
-  if (!api) return false;
+  const api = ensureNativeApi();
   await api.orchestration.dispatchCommand({
     type: "thread.meta.update",
     commandId: newCommandId(),
@@ -55,8 +52,7 @@ export async function setThreadTitleRefreshMode(
   threadId: ThreadId,
   mode: ThreadTitleRefreshMode | null,
 ): Promise<boolean> {
-  const api = readNativeApi();
-  if (!api) return false;
+  const api = ensureNativeApi();
   await api.orchestration.dispatchCommand({
     type: "thread.meta.update",
     commandId: newCommandId(),
@@ -70,8 +66,7 @@ export async function setProjectTitleRefreshMode(
   projectId: ProjectId,
   mode: ThreadTitleRefreshMode | null,
 ): Promise<boolean> {
-  const api = readNativeApi();
-  if (!api) return false;
+  const api = ensureNativeApi();
   await api.orchestration.dispatchCommand({
     type: "project.meta.update",
     commandId: newCommandId(),
