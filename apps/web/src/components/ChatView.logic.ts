@@ -1428,13 +1428,32 @@ export type WorkingLabel =
   | "Loading"
   | "Thinking"
   | "Checking message delivery…"
-  | `Starting ${string}…`;
+  | `Starting ${string}…`
+  | `Reconnecting to ${string}…`;
+
+/**
+ * A connecting session is a true first spawn only while the thread has never
+ * produced anything: no assistant reply and no settled turn. Keyed on produced
+ * output rather than raw message count so the first send's own user echo —
+ * which can land while the session is still connecting — cannot flip a
+ * brand-new thread's spawn into a "reconnect".
+ */
+export function isFirstSessionConnect(input: {
+  messages: readonly Pick<ChatMessage, "role">[];
+  latestTurn: Thread["latestTurn"];
+}): boolean {
+  return (
+    !input.messages.some((message) => message.role === "assistant") &&
+    input.latestTurn?.completedAt == null
+  );
+}
 
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
   isSettlingTurnDispatch?: boolean;
+  isFirstConnect?: boolean;
   providerName?: string;
 }): WorkingLabel {
   if (input.isSettlingTurnDispatch) return "Checking message delivery…";
@@ -1442,7 +1461,10 @@ export function resolveWorkingLabel(input: {
     return "Loading";
   }
   if (input.isConnecting && input.providerName) {
-    return `Starting ${input.providerName}…`;
+    // Mid-conversation the same phase is a restart/resume, not a first spawn.
+    return (input.isFirstConnect ?? true)
+      ? `Starting ${input.providerName}…`
+      : `Reconnecting to ${input.providerName}…`;
   }
   return "Thinking";
 }

@@ -1497,6 +1497,36 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("keeps automation auto-disable notices alongside turn-stamped work", () => {
+    const summary = "Automation stopped after 3 consecutive failed runs: Watch CI";
+    const activities = [
+      makeActivity({ id: "turn-work", turnId: "turn-1", kind: "tool.completed" }),
+      makeActivity({
+        id: "automation-disabled",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "automation.disabled",
+        summary,
+        tone: "error",
+        payload: {
+          automationId: "automation-7",
+          automationName: "Watch CI",
+          runId: "run-3",
+          consecutiveFailureCount: 3,
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+
+    expect(entries.find((entry) => entry.id === "automation-disabled")).toMatchObject({
+      activityKind: "automation.disabled",
+      label: summary,
+      tone: "error",
+    });
+  });
+
   it("carries pending proposal state into automation transcript cards", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

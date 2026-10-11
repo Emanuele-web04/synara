@@ -5075,11 +5075,55 @@ layer("AutomationService", (it) => {
       })).definitions.find((entry) => entry.id === created.id);
 
       assert.match(rerunError.message, /re-enable/i);
-      assert.strictEqual(dispatchedCommands.length, 2);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type !== "thread.activity.append").length,
+        2,
+      );
+      assert.strictEqual(
+        dispatchedCommands.filter(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === "automation.disabled",
+        ).length,
+        1,
+      );
       assert.isFalse(definition?.enabled ?? true);
       assert.strictEqual(definition?.iterationCount, 1);
       assert.strictEqual(definition?.consecutiveFailureCount, 1);
       assert.strictEqual(definition?.disabledReason, "failures");
+    }),
+  );
+
+  it.effect("requires re-enabling an unbounded automation disabled by failures", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        stopAfterConsecutiveFailures: 1,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* reconcileAutomationRun({
+        service,
+        run,
+        state: "error",
+        error: "failure-disabled",
+      });
+
+      const rerunError = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(rerunError.message, /re-enable/i);
+      assert.strictEqual(dispatchedCommands.length, 3);
+      const disableActivity = dispatchedCommands.find(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "automation.disabled",
+      );
+      assert.isDefined(disableActivity);
+      if (disableActivity?.type === "thread.activity.append") {
+        assert.strictEqual(disableActivity.activity.tone, "error");
+        assert.match(disableActivity.activity.summary, /stopped after 1 consecutive failed run/i);
+      }
     }),
   );
 

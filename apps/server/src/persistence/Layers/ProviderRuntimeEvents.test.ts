@@ -430,6 +430,39 @@ it.effect("journals image metadata and replays it without the model image body",
   ),
 );
 
+it.effect("canonicalizes provider whitespace before strict journal encoding", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const event: ProviderRuntimeEvent = {
+      type: "event.unmapped",
+      eventId: EventId.makeUnsafe("whitespace-detail"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("normalize-thread"),
+      createdAt: "2026-10-10T00:00:00Z",
+      payload: { nativeType: "item/future/outputDelta", detail: "  provider output\n" },
+    };
+    const stored = yield* repository.append(event);
+    const rows = yield* repository.readAfter({
+      sequenceExclusive: 0,
+      throughSequenceInclusive: stored.sequence,
+      limit: 10,
+    });
+    assert.deepStrictEqual(rows[0]?.event.payload, {
+      nativeType: "item/future/outputDelta",
+      detail: "provider output",
+    });
+    const duplicate = yield* repository.append({
+      ...event,
+      payload: { nativeType: "item/future/outputDelta", detail: "provider output" },
+    });
+    assert.equal(duplicate.sequence, stored.sequence);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
 layer("ProviderRuntimeEventRepository", (it) => {
   it.effect("journals exact events and advances its consumer cursor contiguously", () =>
     Effect.gen(function* () {

@@ -1113,9 +1113,9 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
-  // Created-automation milestones are thread-scoped and carry no provider turn id;
-  // keep them so the transcript card survives once the thread has turn-stamped messages.
-  if (activity.kind === "automation.created") {
+  // Automation milestones are thread-scoped and carry no provider turn id;
+  // keep them once the thread has turn-stamped messages.
+  if (activity.kind === "automation.created" || activity.kind === "automation.disabled") {
     return true;
   }
 

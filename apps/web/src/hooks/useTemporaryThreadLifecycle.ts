@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { resolveTemporaryThreadIdToDelete } from "../lib/temporaryThread";
+import { waitForPromotedThreadRouteReady } from "../lib/threadCreatePromotion";
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useSplitViewStore } from "../splitViewStore";
@@ -91,6 +92,12 @@ async function disposeTemporaryThread(input: {
   const { temporaryThreadId } = input;
   try {
     const api = readNativeApi();
+    // A promoted draft's record can be cleared before the thread's shell row
+    // lands — e.g. when a route bounce fires this hook mid-promotion. Wait out
+    // the (bounded) promotion window so `serverThread` below still resolves and
+    // the delete reaches the server instead of leaving the thread behind as a
+    // permanent chat after the local cleanup wiped its temporary mark.
+    await waitForPromotedThreadRouteReady(temporaryThreadId);
     const storeState = useStore.getState();
     const serverThread = getThreadFromState(storeState, temporaryThreadId) ?? null;
 

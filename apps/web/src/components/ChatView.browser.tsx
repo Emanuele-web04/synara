@@ -53,7 +53,11 @@ import {
 } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { type ComposerImageAttachment, useComposerDraftStore } from "../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  finalizePromotedDraftThreads,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import {
   AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
   getScrollContainerDistanceFromBottom,
@@ -11695,7 +11699,10 @@ describe("ChatView transcript geometry (full app)", () => {
     useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      snapshot: createDraftOnlySnapshot(),
+      snapshot: addThreadToSnapshot(
+        createDraftOnlySnapshot(),
+        ThreadId.makeUnsafe("existing-thread-before-promotion"),
+      ),
     });
 
     try {
@@ -11730,12 +11737,10 @@ describe("ChatView transcript geometry (full app)", () => {
       await expectTranscript();
 
       const createdSnapshot = addThreadToSnapshot(fixture.snapshot, THREAD_ID);
-      const createdThread = { ...createdSnapshot.threads[0]!, session: null };
-      fixture.snapshot = { ...createdSnapshot, threads: [createdThread] };
-      useStore
-        .getState()
-        .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
-      await expectTranscript();
+      const createdThread = {
+        ...createdSnapshot.threads.find((thread) => thread.id === THREAD_ID)!,
+        session: null,
+      };
       useStore.getState().syncServerThreadDetailHotPath(createdThread);
       await expectTranscript();
 
@@ -11752,10 +11757,21 @@ describe("ChatView transcript geometry (full app)", () => {
       fixture.snapshot = {
         ...fixture.snapshot,
         snapshotSequence: fixture.snapshot.snapshotSequence + 1,
-        threads: [startedThread],
+        threads: createdSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? startedThread : thread,
+        ),
       };
       useStore.getState().syncServerThreadDetailHotPath(startedThread);
-      useComposerDraftStore.getState().finalizePromotedDraftThread(THREAD_ID);
+      finalizePromotedDraftThreads(new Set([THREAD_ID]));
+      expect(useComposerDraftStore.getState().getDraftThread(THREAD_ID)).toBeNull();
+      // Keep the shell row delayed beyond a normal render while another server
+      // thread is already known. Detail-driven draft cleanup must not bounce
+      // this route home or replace its first message with the empty landing.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      await expectTranscript();
+      useStore
+        .getState()
+        .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
       await expectTranscript();
 
       // A creation snapshot can finish after the first message echo.
