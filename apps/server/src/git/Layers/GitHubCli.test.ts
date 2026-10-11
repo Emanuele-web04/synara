@@ -2312,7 +2312,11 @@ layer("GitHubCliLive", (it) => {
         }),
     );
   }
+});
 
+// Earlier error-classification tests deliberately pause their shared gate.
+// Work-item search owns a fresh layer so it tests admission without inherited pauses.
+it.layer(GitHubCliLive)("GitHubCli work item search", (it) => {
   it.effect("lists open issues and PRs when the work item query is empty", () =>
     Effect.gen(function* () {
       mockedRunProcess
