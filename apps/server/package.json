@@ -19,7 +19,6 @@
     "dev": "bun run src/index.ts",
     "build": "node scripts/cli.ts build",
     "start": "node dist/index.mjs",
-    "prepare": "effect-language-service patch",
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",

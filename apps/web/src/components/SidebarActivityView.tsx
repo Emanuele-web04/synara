@@ -273,32 +273,31 @@ export function ActivityThreadRow({
                 aria-hidden
               />
             )}
-            <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
+            {/* The folder outranks the branch: the branch shrinks first (weighted shrink). */}
+            <span className="mr-auto min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
-            <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
-              {isWorktree ? (
-                <span className="inline-flex size-5 shrink-0 items-center justify-center">
-                  <WorktreeIcon
-                    className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-                    aria-label="Worktree"
-                  />
-                </span>
-              ) : null}
-              {pr ? (
-                <PrStateChip
-                  pr={pr}
-                  className="min-h-5 min-w-5 justify-center [&_svg]:size-3"
-                  onOpen={(event) => onOpenPullRequest(event, pr)}
+            {isWorktree ? (
+              <span className="inline-flex size-5 shrink-0 items-center justify-center">
+                <WorktreeIcon
+                  className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                  aria-label="Worktree"
                 />
-              ) : null}
-              {branch ? (
-                <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/70">
-                  <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
-                  <span className="max-w-36 truncate">{branch}</span>
-                </span>
-              ) : null}
-            </span>
+              </span>
+            ) : null}
+            {pr ? (
+              <PrStateChip
+                pr={pr}
+                className="min-h-5 min-w-5 justify-center [&_svg]:size-3"
+                onOpen={(event) => onOpenPullRequest(event, pr)}
+              />
+            ) : null}
+            {branch ? (
+              <span className="flex min-w-0 shrink-[100] items-center gap-1 text-ui-sm text-muted-foreground/70">
+                <GitBranchIcon className={sidebarGlyphClass("meta", "shrink-0")} aria-hidden />
+                <span className="min-w-0 max-w-36 truncate">{branch}</span>
+              </span>
+            ) : null}
           </span>
           {thread.snoozedUntil != null ? (
             <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80">
