@@ -207,5 +207,7 @@ test("v0.9.0 guides keep platform, source preservation and interruption boundari
     read("content/docs/features/project-import.mdx").includes("Source history is preserved"),
   );
   assert.ok(read("content/docs/providers/codex.mdx").includes("10% or less remaining"));
-  assert.ok(read("content/docs/providers/claude-code.mdx").includes("Compact, then send"));
+  assert.ok(
+    read("content/docs/providers/claude-code.mdx").includes("Resume from summary (recommended)"),
+  );
 });

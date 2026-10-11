@@ -2387,11 +2387,12 @@ export default function ChatView({
         threadId,
         messageId: review.messageId,
         reviewId: review.reviewId,
-        decision,
+        decision: decision === "never" ? "continue" : decision,
         createdAt: new Date().toISOString(),
       });
+      if (decision === "never") updateSettings({ claudeConfirmColdCacheResume: false });
     },
-    [threadId],
+    [threadId, updateSettings],
   );
   const activeRootBranch = useMemo(
     () =>
