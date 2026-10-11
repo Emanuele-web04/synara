@@ -223,10 +223,11 @@ import {
   validateWsFeatureCompatibility,
 } from "./wsCompatibility";
 import {
+  isLegacyLoopbackTokenAccepted,
   isTrustedAppOrigin,
   normalizeCorsOrigin,
   requiresWebSocketAuthentication,
-  shouldRejectUntrustedRequestOrigin,
+  shouldRejectWebSocketRequestOrigin,
 } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
 import {
@@ -3201,7 +3202,7 @@ function trustedWebSocketRequestUrl(
 ): URL | null {
   const url = HttpServerRequest.toURL(request);
   return url &&
-    !shouldRejectUntrustedRequestOrigin({
+    !shouldRejectWebSocketRequestOrigin({
       rawOrigin: request.headers.origin,
       requestOrigin: url.origin,
       config,
@@ -3211,16 +3212,15 @@ function trustedWebSocketRequestUrl(
 }
 
 export function authenticateRpcWebSocketUpgrade(input: {
-  readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">;
+  readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl"> &
+    Partial<Pick<ServerConfigShape, "devUrl">>;
   readonly legacyToken: string | null;
   readonly request: AuthRequest;
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;
 }): Effect.Effect<AuthenticatedSession | null, AuthError> {
   if (
     !requiresWebSocketAuthentication(input.config) ||
-    (isLoopbackHost(input.config.host) &&
-      !input.config.publicUrl &&
-      input.legacyToken === input.config.authToken)
+    isLegacyLoopbackTokenAccepted({ config: input.config, token: input.legacyToken })
   ) {
     return Effect.succeed(null);
   }
@@ -3234,7 +3234,8 @@ export function authenticateRpcWebSocketUpgrade(input: {
  * the RPC socket rather than calling ServerAuth directly.
  */
 export function authorizeDeviceFrameWebSocketUpgrade(input: {
-  readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">;
+  readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl"> &
+    Partial<Pick<ServerConfigShape, "devUrl">>;
   readonly legacyToken: string | null;
   readonly request: AuthRequest;
   readonly serverAuth: Pick<ServerAuthShape, "authenticateWebSocketUpgrade">;

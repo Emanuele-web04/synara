@@ -1593,21 +1593,35 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("does not read shell env when the provider key is already present", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-existing-env-"));
+    vi.stubEnv("SYNARA_HOME", path.join(tempDir, "runtime"));
     const readEnvironment = vi.fn();
+    try {
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        'model_provider = "azure"\n[model_providers.azure]\nenv_key = "AZURE_OPENAI_API_KEY"\n',
+        "utf8",
+      );
+      const env = await buildCodexProcessEnv({
+        env: {
+          SHELL: "/bin/zsh",
+          PATH: "/usr/bin",
+          CODEX_HOME: tempDir,
+          SYNARA_HOME: process.env.SYNARA_HOME,
+          AZURE_OPENAI_API_KEY: "existing-secret",
+          OPENAI_API_KEY: "unselected-secret",
+        },
+        platform: "darwin",
+        readEnvironment,
+      });
 
-    const env = await buildCodexProcessEnv({
-      env: {
-        SHELL: "/bin/zsh",
-        PATH: "/usr/bin",
-        CODEX_HOME: "/tmp/.codex",
-        AZURE_OPENAI_API_KEY: "existing-secret",
-      },
-      platform: "darwin",
-      readEnvironment,
-    });
-
-    expect(readEnvironment).not.toHaveBeenCalled();
-    expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
+      expect(readEnvironment).not.toHaveBeenCalled();
+      expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps the private desktop browser host out of the Codex process", async () => {

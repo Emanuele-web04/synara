@@ -144,6 +144,7 @@ import {
   nativeWindowHandleToHwnd,
 } from "./windowsShellAppUserModel";
 import { createExclusiveApplyQueue } from "./exclusiveApplyQueue";
+import { isAllowedMainWindowNavigation } from "./mainWindowNavigationPolicy";
 import { extractIcoPngImages, toWindowsShellIco } from "./windowsShellIco";
 import {
   makeUpdateInstallPreparationCoordinator,
@@ -5616,6 +5617,9 @@ function getDesktopCustomTitleBarState() {
 }
 
 function createWindow(): BrowserWindow {
+  const appEntryUrl = isDevelopment
+    ? (process.env.VITE_DEV_SERVER_URL as string)
+    : desktopIdentity.entryUrl;
   const savedWindowState = readDesktopWindowState(DESKTOP_WINDOW_STATE_PATH);
   const primaryDisplay = screen.getPrimaryDisplay();
   const restoredBounds = savedWindowState
@@ -5719,6 +5723,24 @@ function createWindow(): BrowserWindow {
     return { action: "deny" };
   });
 
+  const blockUntrustedMainWindowNavigation = (
+    details: Electron.Event<
+      Electron.WebContentsWillNavigateEventParams | Electron.WebContentsWillRedirectEventParams
+    >,
+    legacyUrl?: string,
+    _legacyIsSameDocument?: boolean,
+    legacyIsMainFrame?: boolean,
+  ) => {
+    const url = typeof details.url === "string" ? details.url : (legacyUrl ?? "");
+    const isMainFrame =
+      typeof details.isMainFrame === "boolean" ? details.isMainFrame : legacyIsMainFrame !== false;
+    if (isMainFrame && !isAllowedMainWindowNavigation(url, appEntryUrl)) {
+      details.preventDefault();
+    }
+  };
+  window.webContents.on("will-navigate", blockUntrustedMainWindowNavigation);
+  window.webContents.on("will-redirect", blockUntrustedMainWindowNavigation);
+
   window.on("page-title-updated", (event) => {
     event.preventDefault();
     window.setTitle(APP_DISPLAY_NAME);
@@ -5790,10 +5812,10 @@ function createWindow(): BrowserWindow {
   });
 
   if (isDevelopment) {
-    void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
+    void window.loadURL(appEntryUrl);
     window.webContents.openDevTools({ mode: "detach" });
   } else {
-    void window.loadURL(desktopIdentity.entryUrl);
+    void window.loadURL(appEntryUrl);
   }
 
   if (process.platform === "linux" || process.platform === "win32") {

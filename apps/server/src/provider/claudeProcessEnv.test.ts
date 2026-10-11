@@ -244,6 +244,35 @@ describe("claudeProcessEnv", () => {
     assert.equal(result.AZURE_CLIENT_SECRET, "account-b-azure-secret");
   });
 
+  it("keeps supported Claude cloud auth while excluding unrelated provider and runtime authority", () => {
+    const environment = {
+      CLAUDE_CODE_USE_FOUNDRY: "1",
+      ANTHROPIC_FOUNDRY_API_KEY: "foundry-key",
+      AZURE_CLIENT_SECRET: "azure-identity-secret",
+      OPENAI_API_KEY: "unrelated-openai-key",
+      OTHER_VENDOR_API_KEY: "unrelated-vendor-key",
+      SYNARA_AUTH_TOKEN: "server-control-token",
+      NODE_OPTIONS: "--require=/server-only-module.cjs",
+    };
+    const defaultAccount = buildClaudeProcessEnv({
+      env: environment,
+      hasClaudeCliCredentials: false,
+    });
+    const selectedAccount = buildClaudeInstanceProcessEnv(undefined, environment, {
+      baseEnvironment: { ANTHROPIC_AWS_API_KEY: "ambient-account-key" },
+    });
+    for (const result of [defaultAccount, selectedAccount]) {
+      assert.equal(result.CLAUDE_CODE_USE_FOUNDRY, "1");
+      assert.equal(result.ANTHROPIC_FOUNDRY_API_KEY, "foundry-key");
+      assert.equal(result.AZURE_CLIENT_SECRET, "azure-identity-secret");
+      assert.equal(result.OPENAI_API_KEY, undefined);
+      assert.equal(result.OTHER_VENDOR_API_KEY, undefined);
+      assert.equal(result.SYNARA_AUTH_TOKEN, undefined);
+      assert.equal(result.NODE_OPTIONS, undefined);
+    }
+    assert.equal(selectedAccount.ANTHROPIC_AWS_API_KEY, undefined);
+  });
+
   it("treats an explicitly empty instance environment as an isolation boundary", () => {
     const result = withAmbientEnvironment(
       { ANTHROPIC_API_KEY: "account-a-key", AWS_PROFILE: "account-a-profile" },

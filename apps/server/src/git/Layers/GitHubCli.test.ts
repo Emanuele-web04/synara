@@ -1,6 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, expect, vi } from "vitest";
 
 vi.mock("../../processRunner", () => ({
@@ -27,6 +31,7 @@ const processResult = (stdout: string, overrides: { code?: number; stderr?: stri
   timedOut: false,
 });
 const layer = it.layer(GitHubCliLive);
+const quoteGitShellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 afterEach(() => {
   mockedRunProcess.mockReset();
@@ -2000,8 +2005,12 @@ layer("GitHubCliLive", (it) => {
       ]);
       expect(mockedRunProcess.mock.calls[2]?.[0]).toBe("git");
       expect(mockedRunProcess.mock.calls[2]?.[1]).toEqual([
+        "-c",
+        "core.fsmonitor=false",
         "diff",
         "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
         "1111111111111111...2222222222222222",
       ]);
     }),
@@ -2053,6 +2062,8 @@ layer("GitHubCliLive", (it) => {
       // Git resolves the validated remote name itself, preserving its transport and credentials
       // without putting a token-bearing remote URL in argv or process-runner errors.
       expect(mockedRunProcess.mock.calls[5]?.[1]).toEqual([
+        "-c",
+        "core.fsmonitor=false",
         "fetch",
         "--quiet",
         "--",
@@ -2061,6 +2072,61 @@ layer("GitHubCliLive", (it) => {
         "main",
       ]);
       expect(mockedRunProcess.mock.calls[5]?.[1]?.join(" ")).not.toContain("super-secret");
+    }),
+  );
+
+  it.effect("keeps fallback patches raw without executing repository textconv", () =>
+    Effect.gen(function* () {
+      const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-pr-diff-security-"));
+      const git = (args: ReadonlyArray<string>) =>
+        execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+      const markerPath = path.join(cwd, "textconv-invoked");
+      const converterPath = path.join(cwd, "converter.cjs");
+      try {
+        git(["init", "--quiet"]);
+        git(["config", "user.name", "Security fixture"]);
+        git(["config", "user.email", "fixture@example.invalid"]);
+        git(["config", "commit.gpgsign", "false"]);
+        git(["config", "core.hooksPath", "/dev/null"]);
+        writeFileSync(path.join(cwd, ".gitattributes"), "*.txt diff=synara-test\n");
+        writeFileSync(path.join(cwd, "change.txt"), "before\n");
+        git(["add", ".gitattributes", "change.txt"]);
+        git(["commit", "--quiet", "-m", "before"]);
+        const base = git(["rev-parse", "HEAD"]);
+        writeFileSync(path.join(cwd, "change.txt"), "after\n");
+        git(["add", "change.txt"]);
+        git(["commit", "--quiet", "-m", "after"]);
+        const head = git(["rev-parse", "HEAD"]);
+        writeFileSync(
+          converterPath,
+          `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "called");\nprocess.stdout.write("converted content\\n");\n`,
+        );
+        git([
+          "config",
+          "diff.synara-test.textconv",
+          `${quoteGitShellArgument(process.execPath.replaceAll("\\", "/"))} ${quoteGitShellArgument(converterPath.replaceAll("\\", "/"))}`,
+        ]);
+
+        // --no-ext-diff alone still runs textconv and can hide the real patch.
+        expect(git(["diff", "--no-ext-diff", `${base}...${head}`])).toBe("");
+        expect(existsSync(markerPath)).toBe(true);
+        unlinkSync(markerPath);
+
+        mockedRunProcess
+          .mockRejectedValueOnce(new Error("HTTP 406: diff exceeded the maximum number of files"))
+          .mockResolvedValueOnce(processResult(`main ${base} ${head}\n`))
+          .mockImplementationOnce(async (command, args) => {
+            expect(command).toBe("git");
+            return processResult(git(args));
+          });
+        const gh = yield* GitHubCli;
+        const diff = yield* gh.getPullRequestDiff({ cwd, repository: "acme/app", number: 357 });
+        expect(diff.patch).toContain("-before");
+        expect(diff.patch).toContain("+after");
+        expect(existsSync(markerPath)).toBe(false);
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
     }),
   );
 
@@ -2106,6 +2172,8 @@ layer("GitHubCliLive", (it) => {
 
       const fetchArgs = mockedRunProcess.mock.calls[5]?.[1];
       expect(fetchArgs).toEqual([
+        "-c",
+        "core.fsmonitor=false",
         "fetch",
         "--quiet",
         "--",
@@ -2162,8 +2230,15 @@ layer("GitHubCliLive", (it) => {
       });
 
       assert.equal(diff.patch, "diff --git a/a.ts b/a.ts\n");
-      expect(mockedRunProcess.mock.calls[4]?.[1]).toEqual(["rev-parse", "--is-shallow-repository"]);
+      expect(mockedRunProcess.mock.calls[4]?.[1]).toEqual([
+        "-c",
+        "core.fsmonitor=false",
+        "rev-parse",
+        "--is-shallow-repository",
+      ]);
       expect(mockedRunProcess.mock.calls[5]?.[1]).toEqual([
+        "-c",
+        "core.fsmonitor=false",
         "fetch",
         "--quiet",
         "--deepen=64",
@@ -2173,6 +2248,8 @@ layer("GitHubCliLive", (it) => {
         "main",
       ]);
       expect(mockedRunProcess.mock.calls[7]?.[1]).toEqual([
+        "-c",
+        "core.fsmonitor=false",
         "fetch",
         "--quiet",
         "--deepen=256",

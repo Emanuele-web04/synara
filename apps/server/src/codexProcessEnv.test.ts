@@ -411,6 +411,74 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
+  it("grants the selected profile's credential instead of the root provider's key", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-profile-key-"));
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      [
+        'model_provider = "openai"',
+        'profile = "work profile"',
+        '[profiles."work profile"]',
+        'model_provider = "azure"',
+        "[model_providers.azure]",
+        'env_key = "AZURE_OPENAI_API_KEY"',
+        "[model_providers.inactive]",
+        'env_key = "ACME_INACTIVE_CREDENTIAL"',
+      ].join("\n"),
+    );
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: {
+          CODEX_HOME: codexHome,
+          OPENAI_API_KEY: "synthetic-openai-secret",
+          AZURE_OPENAI_API_KEY: "synthetic-profile-secret",
+          ACME_INACTIVE_CREDENTIAL: "synthetic-inactive-secret",
+        },
+        skipHomeOverlay: true,
+        platform: "win32",
+      });
+      expect(env.AZURE_OPENAI_API_KEY).toBe("synthetic-profile-secret");
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.ACME_INACTIVE_CREDENTIAL).toBeUndefined();
+      expect(isProviderCredentialKey("ACME_INACTIVE_CREDENTIAL")).toBe(true);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an arbitrary active key and inherits the root provider when the profile omits it", async () => {
+    const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-profile-fallback-"));
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      [
+        'model_provider = "corp"',
+        'profile = "work"',
+        "[profiles.work]",
+        'model = "custom-model"',
+        "[model_providers.corp]",
+        'env_key = "ACME-ACTIVE.CREDENTIAL"',
+      ].join("\n"),
+    );
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: {
+          CODEX_HOME: codexHome,
+          OPENAI_API_KEY: "synthetic-openai-secret",
+          "ACME-ACTIVE.CREDENTIAL": "synthetic-corp-secret",
+        },
+        skipHomeOverlay: true,
+        platform: "win32",
+      });
+      expect(env["ACME-ACTIVE.CREDENTIAL"]).toBe("synthetic-corp-secret");
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(isProviderCredentialKey("ACME-ACTIVE.CREDENTIAL")).toBe(true);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it("pins CODEX_SQLITE_HOME to the source home for the session overlay", async () => {
     const codexHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-sqlite-home-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));

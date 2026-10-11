@@ -252,9 +252,16 @@ export function buildClaudeProcessEnv(input?: {
   const credentialInput = input?.homeDir ? { env, homeDir: input.homeDir } : { env };
   const hasLocalClaudeAuth =
     input?.hasClaudeCliCredentials ?? hasUsableClaudeCliCredentials(credentialInput);
+  // Account isolation happens in the instance helper. Keep Claude's supported
+  // cloud credential chains without granting another provider's keys.
+  const additionalCredentialKeys = Object.keys(env).filter(isClaudeAccountIsolationEnvKey);
 
   if (!hasLocalClaudeAuth || hasClaudeExternalAuthEnv(env)) {
-    return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });
+    return buildProviderChildEnvironment({
+      provider: "claude",
+      baseEnv: env,
+      additionalCredentialKeys,
+    });
   }
 
   // Claude gives direct request credentials precedence over local OAuth. Drop stale
@@ -265,7 +272,11 @@ export function buildClaudeProcessEnv(input?: {
     }
     delete env[key];
   }
-  return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });
+  return buildProviderChildEnvironment({
+    provider: "claude",
+    baseEnv: env,
+    additionalCredentialKeys,
+  });
 }
 
 /**

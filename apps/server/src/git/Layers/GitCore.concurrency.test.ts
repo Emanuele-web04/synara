@@ -658,7 +658,8 @@ it.layer(TestLayer)("GitCore command admission", (it) => {
         const spawner = ChildProcessSpawner.make((raw) =>
           Effect.gen(function* () {
             const cmd = raw as unknown as { args: ReadonlyArray<string> };
-            const label = cmd.args[1]!;
+            const label = cmd.args.at(-1)!;
+            expect(cmd.args).toEqual(["-c", "core.fsmonitor=false", "status", label]);
             const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
             exits.set(label, exit);
             started.push(label);

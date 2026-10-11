@@ -28,7 +28,11 @@ import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
 import { makeAcpNotificationDispatcher } from "./AcpNotificationDispatcher.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
-import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import {
+  buildProviderChildEnvironment,
+  isProviderCredentialKey,
+  providerCredentialKeysFor,
+} from "../../providerChildEnvironment.ts";
 import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
 import {
   teardownEffectProcessTree,
@@ -328,7 +332,24 @@ export function buildAcpSpawnProcessEnv(
     : spawn.env
       ? { ...env, ...overlay }
       : env;
-  return buildProviderChildEnvironment({ provider: "acp", baseEnv: accountIsolatedEnv });
+  const declaredDriverKeys = spawn.providerEnvironment
+    ? providerCredentialKeysFor(
+        spawn.providerEnvironment.driver === "gemini"
+          ? "antigravity"
+          : spawn.providerEnvironment.driver === "kilo"
+            ? "opencode"
+            : spawn.providerEnvironment.driver,
+      )
+    : [];
+  const selectedEnvironmentKeys = spawn.providerEnvironment
+    ? Object.keys(spawn.providerEnvironment.environment ?? {}).filter(isProviderCredentialKey)
+    : [];
+  const overlayKeys = Object.keys(overlay ?? {}).filter(isProviderCredentialKey);
+  return buildProviderChildEnvironment({
+    provider: "acp",
+    baseEnv: accountIsolatedEnv,
+    additionalCredentialKeys: [...declaredDriverKeys, ...selectedEnvironmentKeys, ...overlayKeys],
+  });
 }
 
 /**

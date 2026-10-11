@@ -26,6 +26,7 @@ import {
 import { runProcess } from "../../processRunner";
 import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache";
 import { GitHubCliError } from "../Errors.ts";
+import { gitHardenedConfigEnvironment, hardenGitInvocationArgs } from "../gitInvocationSecurity.ts";
 import { makeGitHubReadGate } from "../githubReadGate.ts";
 import {
   GitHubCli,
@@ -1764,7 +1765,12 @@ const makeGitHubCli = Effect.gen(function* () {
           signal,
           // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
           // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
-          env: { ...process.env, ...input.env, GH_HOST: GITHUB_HOST },
+          env: {
+            ...process.env,
+            ...input.env,
+            ...gitHardenedConfigEnvironment({ ...process.env, ...input.env }),
+            GH_HOST: GITHUB_HOST,
+          },
           ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
           ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
           ...(input.allowNonZeroExit !== undefined
@@ -1796,7 +1802,7 @@ const makeGitHubCli = Effect.gen(function* () {
   }) =>
     Effect.tryPromise({
       try: (signal) =>
-        runProcess("git", gitInput.args, {
+        runProcess("git", hardenGitInvocationArgs(gitInput.args), {
           cwd: gitInput.cwd,
           timeoutMs: gitInput.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           signal,
@@ -1881,7 +1887,7 @@ const makeGitHubCli = Effect.gen(function* () {
       }
       const diff = runGit({
         cwd,
-        args: ["diff", "--no-color", `${baseSha}...${headSha}`],
+        args: ["diff", "--no-color", "--no-ext-diff", "--no-textconv", `${baseSha}...${headSha}`],
         maxBufferBytes: PULL_REQUEST_DIFF_MAX_BYTES,
         outputMode: "truncate",
       });

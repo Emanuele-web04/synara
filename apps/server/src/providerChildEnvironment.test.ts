@@ -61,6 +61,26 @@ describe("buildProviderChildEnvironment", () => {
     });
   });
 
+  it("filters mixed-case control and native capability names", () => {
+    const env = buildProviderChildEnvironment({
+      provider: "codex",
+      baseEnv: {
+        PATH: "/usr/bin",
+        sYnArA_aUtH_tOkEn: "control",
+        nOdE_oPtIoNs: "--require=bad",
+      },
+    });
+    expect(env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it.each([undefined, ""])("does not trust an empty test harness marker: %s", (vitest) => {
+    const env = buildProviderChildEnvironment({
+      provider: "codex",
+      baseEnv: { VITEST: vitest, SYNARA_FAKE_PROVIDER_KEY: "secret" },
+    });
+    expect(env.SYNARA_FAKE_PROVIDER_KEY).toBeUndefined();
+  });
+
   it("does not let overlays bypass the capability policy", () => {
     const env = buildProviderChildEnvironment({
       provider: "opencode",
@@ -116,8 +136,8 @@ describe("buildProviderChildEnvironment", () => {
     },
   );
 
-  it.each(["codex", "opencode", "pi"] as const)(
-    "preserves upstream credential discovery for multi-provider %s",
+  it.each(["opencode-server", "kilo-server"] as const)(
+    "preserves upstream credential discovery for server %s",
     (provider) => {
       const env = buildProviderChildEnvironment({
         provider,
@@ -133,6 +153,44 @@ describe("buildProviderChildEnvironment", () => {
       expect(env.OPENAI_API_KEY).toBe("openai-secret");
     },
   );
+
+  it("scrubs known model-provider credentials from Pi probes while retaining ordinary state", () => {
+    const env = buildProviderChildEnvironment({
+      provider: "pi",
+      baseEnv: {
+        PATH: "/usr/bin",
+        HOME: "/home/test",
+        OPENROUTER_API_KEY: "openrouter",
+        PERPLEXITY_API_KEY: "perplexity",
+        COHERE_API_KEY: "cohere",
+        TOGETHER_AI_API_KEY: "together",
+      },
+    });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/home/test");
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.PERPLEXITY_API_KEY).toBeUndefined();
+    expect(env.COHERE_API_KEY).toBeUndefined();
+    expect(env.TOGETHER_AI_API_KEY).toBeUndefined();
+  });
+
+  it("requires explicit Codex custom-provider grants", () => {
+    const env = buildProviderChildEnvironment({
+      provider: "codex",
+      baseEnv: { OPENAI_API_KEY: "openai", ANTHROPIC_API_KEY: "custom" },
+      additionalCredentialKeys: ["ANTHROPIC_API_KEY"],
+    });
+    expect(env).toEqual({ ANTHROPIC_API_KEY: "custom" });
+  });
+
+  it("keeps Pi probe credentials isolated", () => {
+    const env = buildProviderChildEnvironment({
+      provider: "pi",
+      baseEnv: { OPENAI_API_KEY: "openai", ANTHROPIC_API_KEY: "anthropic" },
+    });
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
 
   it("keeps stripped authority absent in descendants", () => {
     const env = buildProviderChildEnvironment({

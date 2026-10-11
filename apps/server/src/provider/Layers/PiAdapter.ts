@@ -295,7 +295,7 @@ export function makePiBashProcessSupervisor(
           cwd,
           lowerPriority: options.lowerPriority ?? true,
           env: buildProviderChildEnvironment({
-            provider: "pi",
+            provider: "pi-shell",
             baseEnv: buildProviderProcessEnv({
               driver: PROVIDER,
               env: execution.env ?? process.env,

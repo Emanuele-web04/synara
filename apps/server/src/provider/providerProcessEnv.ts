@@ -52,6 +52,10 @@ export const MODEL_PROVIDER_API_KEY_ENV_MAPPINGS: ReadonlyArray<{
   { provider: "xiaomi-token-plan-sgp", envKeys: ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"] },
 ];
 
+export const MODEL_PROVIDER_API_KEY_ENV_NAMES: ReadonlySet<string> = new Set(
+  MODEL_PROVIDER_API_KEY_ENV_MAPPINGS.flatMap(({ envKeys }) => envKeys),
+);
+
 const MODEL_PROVIDER_ACCOUNT_ENV_KEYS = new Set<string>([
   ...MODEL_PROVIDER_API_KEY_ENV_MAPPINGS.flatMap(({ envKeys }) => envKeys),
   // Provider routing and alternate direct credentials used by Pi/OpenCode-compatible drivers.

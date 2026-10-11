@@ -210,7 +210,7 @@ export function buildOpenCodeServerProcessEnv(input: {
   readonly baseEnv?: NodeJS.ProcessEnv;
 }): NodeJS.ProcessEnv {
   const env = buildProviderChildEnvironment({
-    provider: "opencode",
+    provider: "opencode-server",
     baseEnv: input.baseEnv ?? process.env,
     overrides: input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {},
   });

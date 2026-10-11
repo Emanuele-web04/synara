@@ -8,9 +8,8 @@ import * as fs from "node:fs/promises";
 import { constants, lstatSync, readFileSync, readlinkSync, type BigIntStats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { parse as parseToml } from "smol-toml";
 
-import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
+import { readCodexConfigContent } from "@synara/shared/codexConfig";
 import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
@@ -34,10 +33,11 @@ import {
   codexPathsReferenceSameLocationIo,
   resolveCodexPathIdentity,
 } from "./codexPathIdentity.ts";
+import { buildProviderChildEnvironment } from "./providerChildEnvironment.ts";
 import {
-  buildProviderChildEnvironment,
-  registerProviderCredentialKey,
-} from "./providerChildEnvironment.ts";
+  parseManagedCodexConfig,
+  registerCodexProviderCredentials,
+} from "./codexProviderCredentials.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_SQLITE_HOME_ENV_NAME = "CODEX_SQLITE_HOME";
@@ -244,32 +244,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function parseManagedCodexConfig(config: string): {
-  readonly root: Record<string, unknown>;
-  readonly activeProfile?: Record<string, unknown>;
-} {
-  let root: Record<string, unknown>;
-  try {
-    root = parseToml(config) as Record<string, unknown>;
-  } catch (error) {
-    throw new Error(
-      "Codex config.toml must be valid TOML so Synara can verify managed account state safely.",
-      { cause: error },
-    );
-  }
-  if (root.profile === undefined) {
-    return { root };
-  }
-  if (typeof root.profile !== "string" || root.profile.trim().length === 0) {
-    throw new Error("Codex config profile must name a valid profile table.");
-  }
-  const activeProfile = asRecord(asRecord(root.profiles)?.[root.profile]);
-  if (!activeProfile) {
-    throw new Error(`Codex config profile '${root.profile}' does not name a valid profile table.`);
-  }
-  return { root, activeProfile };
 }
 
 function assertCodexSqliteHomeMatchesSource(input: {
@@ -2766,13 +2740,16 @@ export async function buildCodexProcessEnv(
     [CODEX_SQLITE_HOME_ENV_NAME]: path.resolve(sourceHomePath),
   };
   const platform = input.platform ?? process.platform;
+  const codexConfig = readCodexConfigContent(configuredEnv) ?? "";
+  const { activeProvider, providerEnvKey } = registerCodexProviderCredentials(codexConfig);
+  const grantedCredentialKey =
+    activeProvider === undefined || activeProvider === "openai" ? "OPENAI_API_KEY" : providerEnvKey;
   const effectiveEnv = buildProviderChildEnvironment({
     provider: "codex",
     baseEnv: configuredEnv,
+    additionalCredentialKeys: grantedCredentialKey ? [grantedCredentialKey] : [],
   });
-  const providerEnvKey = readActiveCodexProviderEnvKey(effectiveEnv);
   if (providerEnvKey) {
-    registerProviderCredentialKey(providerEnvKey);
     if (
       input.isolateProviderCredentials === true &&
       !Object.hasOwn(input.explicitProviderEnvironment ?? {}, providerEnvKey)
