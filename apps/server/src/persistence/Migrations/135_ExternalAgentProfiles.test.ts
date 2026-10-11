@@ -6,13 +6,13 @@ import { describe } from "vitest";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
-describe("133_ExternalAgentProfiles", () => {
+describe("135_ExternalAgentProfiles", () => {
   it.effect("creates both tables and stays idempotent on a partial replay", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 132 });
+      yield* runMigrations({ toMigrationInclusive: 134 });
 
-      yield* runMigrations({ toMigrationInclusive: 133 });
+      yield* runMigrations({ toMigrationInclusive: 135 });
 
       const profiles = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'external_agent_profiles'

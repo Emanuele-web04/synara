@@ -1,4 +1,8 @@
 import {
+  assertThreadDetailVerified,
+  isThreadDetailAwaitingVerification,
+} from "../threadDetailAuthority";
+import {
   PROVIDER_DISPLAY_NAMES,
   THREAD_GOAL_MAX_CHARS,
   type MessageId,
@@ -649,6 +653,7 @@ export function useComposerSlashCommands(input: {
           : ({ type: "uncommittedChanges" } as const);
 
       try {
+        if (isThreadDetailAwaitingVerification(activeThread.id)) return false;
         await api.orchestration.dispatchCommand({
           type: "thread.create",
           commandId: newCommandId(),
@@ -666,6 +671,7 @@ export function useComposerSlashCommands(input: {
           ...associatedWorktree,
           createdAt,
         });
+        assertThreadDetailVerified(activeThread.id);
         await api.orchestration.dispatchCommand({
           type: "thread.turn.start",
           commandId: newCommandId(),

@@ -1,3 +1,4 @@
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { MessageId, ThreadId, type ProviderKind, type TurnId } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -7,10 +8,13 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { newCommandId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { useComposerDraftStore, type QueuedComposerPlanFollowUp } from "../../composerDraftStore";
+import { useComposerDraftStore } from "../../composerDraftStore";
 import { formatOutgoingComposerPrompt } from "../../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../../lib/deletedThreadClientReconciliation";
-import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
+import {
+  armQueuedComposerSteerGate,
+  prepareQueuedComposerResumeAfterSend,
+} from "../../lib/queuedComposerDrain";
 import { appendOriginalComposerPromptBlocks } from "../../lib/terminalContext";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../../pendingTurnDispatch";
 import {
@@ -45,7 +49,7 @@ import { useChatTranscriptScroll } from "./useChatTranscriptScroll";
 import { useChatWorkLog } from "./useChatWorkLog";
 import { toastManager } from "../ui/toast";
 
-import type { LateComposerSendHandlers } from "./chatSendTypes";
+import type { LateComposerSendHandlers, PlanFollowUpSubmission } from "./chatSendTypes";
 interface ChatTurnFollowUpsInput {
   threadId: ThreadId;
   activeThread: Thread | undefined;
@@ -148,12 +152,8 @@ export function useChatTurnFollowUps({
     interactionMode: nextInteractionMode,
     dispatchMode,
     queuedTurn,
-  }: {
-    text: string;
-    interactionMode: "default" | "plan";
-    dispatchMode: "queue" | "steer";
-    queuedTurn?: QueuedComposerPlanFollowUp;
-  }): Promise<boolean> {
+    resumeQueueAfterSend: preparedQueueResume,
+  }: PlanFollowUpSubmission): Promise<boolean> {
     const api = readNativeApi();
     if (
       !api ||
@@ -161,6 +161,7 @@ export function useChatTurnFollowUps({
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
+      (activeThread && isThreadDetailAwaitingVerification(activeThread.id)) ||
       sendInFlightRef.current
     ) {
       return false;
@@ -172,6 +173,11 @@ export function useChatTurnFollowUps({
     }
 
     const threadIdForSend = activeThread.id;
+    const resumeQueueAfterSend =
+      preparedQueueResume ??
+      (!queuedTurn || dispatchMode === "steer"
+        ? prepareQueuedComposerResumeAfterSend(threadIdForSend)
+        : undefined);
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingComposerPrompt({
@@ -237,6 +243,8 @@ export function useChatTurnFollowUps({
           planDispatchSettings.modelSelection.provider,
         providerOptions: planDispatchSettings.providerOptions,
       });
+      if (isThreadDetailAwaitingVerification(threadIdForSend))
+        throw new Error("Wait for the conversation to reconnect before sending.");
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -291,6 +299,7 @@ export function useChatTurnFollowUps({
       await dispatchPlanFollowUpTurn();
       armLocalDispatchAckFallback(threadIdForSend);
       sendInFlightRef.current = false;
+      if (resumeQueueAfterSend) resumeQueueAfterSend();
       return true;
     } catch (err) {
       setOptimisticUserMessages((existing) =>
@@ -312,7 +321,13 @@ export function useChatTurnFollowUps({
   const onEditUserMessage = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
       const api = readNativeApi();
-      if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) {
+      if (
+        !api ||
+        !activeThread ||
+        !isServerThread ||
+        isRevertingCheckpoint ||
+        isThreadDetailAwaitingVerification(activeThread.id)
+      ) {
         return false;
       }
       const editTarget = resolveTailUserMessageEditTarget({
@@ -358,6 +373,7 @@ export function useChatTurnFollowUps({
           threadId: activeThread.id,
           createdAt: messageCreatedAt,
         });
+        if (isThreadDetailAwaitingVerification(activeThread.id)) return false;
         await api.orchestration.dispatchCommand({
           type: "thread.message.edit-and-resend",
           commandId: newCommandId(),
@@ -510,6 +526,7 @@ export function useChatTurnFollowUps({
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
+      (activeThread && isThreadDetailAwaitingVerification(activeThread.id)) ||
       sendInFlightRef.current
     ) {
       return;
@@ -561,6 +578,8 @@ export function useChatTurnFollowUps({
         createdAt,
       })
       .then(() => {
+        if (isThreadDetailAwaitingVerification(activeThread.id))
+          throw new Error("Wait for the conversation to reconnect before sending.");
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
           provider: implementationDispatchSettings.modelSelection.provider,

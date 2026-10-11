@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./turnStopActivity": {
+      "types": "./src/turnStopActivity.ts",
+      "import": "./src/turnStopActivity.ts"
+    },
     "./diagnosticIssue": {
       "types": "./src/diagnosticIssue.ts",
       "import": "./src/diagnosticIssue.ts"

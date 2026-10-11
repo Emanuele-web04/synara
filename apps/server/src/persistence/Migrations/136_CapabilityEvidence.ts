@@ -1,4 +1,4 @@
-// FILE: 134_CapabilityEvidence.ts
+// FILE: 136_CapabilityEvidence.ts
 // Purpose: Creates the append-only capability observation store for the
 // canonical capability/evidence model (KAR-523). Observations are immutable
 // facts about what an external agent runtime demonstrated or advertised; the

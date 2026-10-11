@@ -13,6 +13,7 @@ import { formatTimestamp } from "../../timestampFormat";
 import { deriveTimelineEntries, type TimelineEntry } from "../../workLog";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
+import { BackgroundTaskRow, BackgroundTaskStopContext } from "./BackgroundTaskRow";
 
 function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
   return (
@@ -109,8 +110,82 @@ async function settleLayout(): Promise<void> {
 }
 
 describe("MessagesTimeline tool details", () => {
+  it("updates one background row through completion and sends Stop to the running task", async () => {
+    const host = createTimelineHost();
+    const onStop = vi.fn();
+    const task = {
+      taskId: "background-command",
+      taskType: "local_bash",
+      description: "Delayed echo",
+      command: "sleep 20 && echo done",
+      status: "running" as const,
+      startedAt: "2026-10-10T00:00:00Z",
+      completedAt: null,
+      exitCode: null,
+    };
+    const view = (next: Parameters<typeof BackgroundTaskRow>[0]["task"]) => (
+      <BackgroundTaskStopContext.Provider value={onStop}>
+        <BackgroundTaskRow task={next} fontSizePx={13} />
+      </BackgroundTaskStopContext.Provider>
+    );
+    const screen = await render(view(task), { container: host });
+    try {
+      const row = host.querySelector("[data-background-task='background-command']");
+      const button = host.querySelector<HTMLButtonElement>("button");
+      expect(button?.textContent).toContain("Stop");
+      button?.click();
+      expect(onStop).toHaveBeenCalledWith("background-command");
+      await screen.rerender(
+        view({ ...task, status: "finished", completedAt: "2026-10-10T00:00:20Z", exitCode: 0 }),
+      );
+      expect(host.querySelector("[data-background-task='background-command']")).toBe(row);
+      expect(host.textContent).toContain("finished");
+      expect(host.textContent).toContain("20s");
+      expect(host.querySelector("button")).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("keeps Monitor notices compact and exposes multiline output only on disclosure", async () => {
+    const screen = await render(
+      <TimelineWorkEntryRow
+        workEntry={{
+          id: "monitor-ci-failure",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Monitor · CI checks failed",
+          detail: "Lint failed\nSecond diagnostic",
+          tone: "error",
+          monitorNotification: {
+            taskId: "ci",
+            name: "CI checks",
+            outcome: "failed",
+            output: "Lint failed\nSecond diagnostic",
+          },
+        }}
+        chatMetaFontSizePx={18}
+        textFontSizePx={22}
+        markdownCwd={undefined}
+        onImageExpand={() => {}}
+        timestampFormat="locale"
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Monitor · CI checks failed" });
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect.poll(() => document.querySelector("[data-tool-details-inline]")).toBeNull();
+    await trigger.click();
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect.element(screen.getByText(/Lint failed\s+Second diagnostic/)).toBeVisible();
+    await expect
+      .element(screen.getByText(formatTimestamp("2026-03-17T19:12:28.000Z", "locale")))
+      .toBeVisible();
+    await trigger.click();
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
   it("keeps historical tool disclosures above the next request after late updates", async () => {
