@@ -4,10 +4,12 @@
 
 import {
   MAX_PINNED_PROJECTS,
+  type ProjectAgentSummary,
   type ProjectId,
   type SpaceId,
   type ThreadId,
 } from "@synara/contracts";
+import { isGroupThreadRoute } from "./SidebarGroupsSurface.logic";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
@@ -1535,10 +1537,14 @@ export function groupSidebarThreadsByProjectId(
 }
 
 export function partitionSidebarThreadsByProjectIds<
-  T extends Pick<SidebarThreadSummary, "projectId">,
+  T extends Pick<SidebarThreadSummary, "id" | "projectId">,
 >(
   threads: readonly T[],
   groupProjectIds: ReadonlySet<ProjectId>,
+  summariesByProjectId: ReadonlyMap<
+    ProjectId,
+    Pick<ProjectAgentSummary, "memberThreadIds">
+  > = new Map(),
 ): {
   readonly groupThreads: T[];
   readonly nonGroupThreads: T[];
@@ -1546,7 +1552,14 @@ export function partitionSidebarThreadsByProjectIds<
   const groupThreads: T[] = [];
   const nonGroupThreads: T[] = [];
   for (const thread of threads) {
-    if (groupProjectIds.has(thread.projectId)) {
+    if (
+      isGroupThreadRoute({
+        threadId: thread.id,
+        projectId: thread.projectId,
+        groupProjectIds,
+        summariesByProjectId,
+      })
+    ) {
       groupThreads.push(thread);
     } else {
       nonGroupThreads.push(thread);

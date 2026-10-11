@@ -1,4 +1,4 @@
-// Stable build: Groups is off, so a group folder reads as an ordinary project.
+// A disabled Hubs feature leaves saved folders readable as ordinary projects.
 import { type ProjectId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -10,7 +10,7 @@ vi.mock(import("../betaFeatures"), async (importOriginal) => ({
 import type { Project } from "../types";
 import { isGroupContainerProject } from "./groupProjects";
 
-describe("isGroupContainerProject on Stable", () => {
+describe("isGroupContainerProject when Hubs is disabled", () => {
   it("treats a group folder as an ordinary project", () => {
     const project = {
       id: "project-group" as ProjectId,

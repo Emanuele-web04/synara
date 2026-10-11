@@ -9,7 +9,6 @@ import { newCommandId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
-import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
@@ -18,8 +17,6 @@ import {
 export function useAsyncUserInputResponse(threadId: ThreadId) {
   return useCallback(
     async (messageId: MessageId, answers: readonly string[]) => {
-      if (isThreadDetailAwaitingVerification(threadId))
-        throw new Error("Wait for the conversation to reconnect before answering.");
       const api = readNativeApi();
       const thread = getThreadFromState(useStore.getState(), threadId);
       const input = thread?.messages.find((message) => message.id === messageId)?.asyncUserInput;
