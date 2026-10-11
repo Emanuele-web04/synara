@@ -55,7 +55,8 @@ import { buildProviderProcessEnv } from "./providerProcessEnv.ts";
 import { readOpenCodeAuthFileUtf8 } from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
-  teardownProviderProcessTree,
+  prepareProviderProcessTeardown,
+  type ProviderProcessTeardownPreparationOptions,
 } from "./supervisedProcessTeardown.ts";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
 import { parseOpenCodeReasoningOptions } from "./openCodeReasoningOptions.ts";
@@ -925,8 +926,7 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-export interface OpenCodeRuntimeLiveOptions {
-  readonly teardownProcessTree?: typeof teardownProviderProcessTree;
+export interface OpenCodeRuntimeLiveOptions extends ProviderProcessTeardownPreparationOptions {
   readonly netService?: NetServiceShape;
   readonly fetchImpl?: (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 }
@@ -1071,21 +1071,33 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             });
           }),
         );
-        yield* Scope.addFinalizer(
-          runtimeScope,
-          Effect.tryPromise({
-            try: () =>
-              teardownEffectProcessTree(
-                child,
-                options?.teardownProcessTree ?? teardownProviderProcessTree,
-              ),
-            catch: (cause) =>
-              new OpenCodeRuntimeError({
-                operation: "stopOpenCodeServerProcess",
-                detail: `Failed to prove ${cliSpec.displayName} server process-tree exit: ${openCodeRuntimeErrorDetail(cause)}`,
-                cause,
-              }),
-          }).pipe(Effect.asVoid, Effect.orDie),
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            // Register ownership atomically, retain preparation through the
+            // pool idle hold, and release it only after teardown settles.
+            const preparedTeardown = prepareProviderProcessTeardown(options);
+            yield* Scope.addFinalizer(
+              runtimeScope,
+              Effect.tryPromise({
+                try: async () => {
+                  try {
+                    return await teardownEffectProcessTree(
+                      child,
+                      preparedTeardown.teardownProcessTree,
+                    );
+                  } finally {
+                    preparedTeardown.dispose();
+                  }
+                },
+                catch: (cause) =>
+                  new OpenCodeRuntimeError({
+                    operation: "stopOpenCodeServerProcess",
+                    detail: `Failed to prove ${cliSpec.displayName} server process-tree exit: ${openCodeRuntimeErrorDetail(cause)}`,
+                    cause,
+                  }),
+              }).pipe(Effect.asVoid, Effect.orDie),
+            );
+          }),
         );
 
         const stdoutRef = yield* Ref.make("");

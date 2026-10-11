@@ -414,6 +414,56 @@ export function createWindowsTeardownProcessSnapshotObserver(
   };
 }
 
+/** Prepares the owned worker while its runtime is alive; preparation is never exit evidence. */
+export function createPreparedWindowsTeardownProcessSnapshotObserver(
+  options: WindowsTeardownProcessSnapshotObserverOptions = {},
+): TeardownProcessChildrenSnapshotObserver {
+  const now = options.now ?? Date.now;
+  const observer = createWindowsTeardownProcessSnapshotObserver(options);
+  let disposed = false;
+  let preparationSettled = false;
+  const preparationWaiters = new Set<(prepared: boolean) => void>();
+  // Discard this process table. Descendants may start after preparation begins,
+  // so teardown must wait for it to drain before requesting a fresh snapshot.
+  const finishPreparation = () => {
+    preparationSettled = true;
+    for (const finish of preparationWaiters) finish(!disposed);
+  };
+  void observer.capture().then(finishPreparation, finishPreparation);
+
+  const captureWithin = async (timeoutMs: number): Promise<ProcessChildrenMap | null> => {
+    if (disposed || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return null;
+    const deadline = now() + timeoutMs;
+    const prepared =
+      preparationSettled ||
+      (await new Promise<boolean>((resolve) => {
+        const finish = (ready: boolean) => {
+          clearTimeout(timeout);
+          preparationWaiters.delete(finish);
+          resolve(ready);
+        };
+        const timeout = setTimeout(() => finish(false), timeoutMs);
+        preparationWaiters.add(finish);
+      }));
+    // Waiting for preparation consumes the original proof budget. Never add a
+    // second full window, or coalesce teardown with the older preparation map.
+    if (!prepared || disposed) return null;
+    return observer.captureWithin(deadline - now());
+  };
+
+  return {
+    capture: () => captureWithin(options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
+    captureWithin,
+    retryDelayMs: () => observer.retryDelayMs(),
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      for (const finish of preparationWaiters) finish(false);
+      observer.dispose();
+    },
+  };
+}
+
 /** One-shot fallback for callers that do not own a shared observer. */
 export async function captureWindowsProcessChildrenMap(): Promise<ProcessChildrenMap | null> {
   const observer = createWindowsProcessSnapshotObserver();
