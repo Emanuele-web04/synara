@@ -10,7 +10,6 @@ import type { CSSProperties, ReactNode } from "react";
 
 import type { TimestampFormat } from "../../appSettings";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
-import { formatDayAwareTimestamp } from "../../timestampFormat";
 import { BackgroundTrayIcon, CheckIcon, CircleAlertIcon, StopIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
@@ -125,9 +124,6 @@ export function TurnHeaderLine(
 
   const { header, disclosure } = props;
   const resumed = header.outcome === "completed" && (header.resumedBy?.length ?? 0) > 0;
-  const time = header.endedAt
-    ? formatDayAwareTimestamp(header.endedAt, props.timestampFormat)
-    : null;
   return (
     <HeaderShell
       fontSize={props.fontSize}
@@ -143,12 +139,6 @@ export function TurnHeaderLine(
         <>
           <Separator />
           <TurnModelChip model={header.modelChange} />
-        </>
-      ) : null}
-      {time ? (
-        <>
-          <Separator />
-          <span className="shrink-0 tabular-nums">{time}</span>
         </>
       ) : null}
       <OutcomeIcon outcome={header.outcome} />

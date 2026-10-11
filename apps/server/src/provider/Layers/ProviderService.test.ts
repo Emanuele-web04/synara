@@ -845,6 +845,9 @@ const piInteractionRouting = makeProviderServiceLayer(undefined, { includePi: tr
 const adapterConfirmedFreshRouting = makeProviderServiceLayer(undefined, {
   codexDidResumeSession: () => false,
 });
+const unboundStoppedOpenCodeRouting = makeProviderServiceLayer(undefined, {
+  includeOpenCode: true,
+});
 const stoppedOpenCodeRouting = makeProviderServiceLayer(undefined, { includeOpenCode: true });
 const stoppedOpenCodeDisabledRouting = makeProviderServiceLayer(
   { providerIsEnabled: (provider) => Effect.succeed(provider !== "opencode") },
@@ -8980,34 +8983,39 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
   );
 });
 
+unboundStoppedOpenCodeRouting.layer(
+  "ProviderServiceLive unbound OpenCode stopped retention",
+  (it) => {
+    it.effect("does not route an unbound stopped context through the live-startup fallback", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("thread-opencode-stopped-unbound");
+        yield* unboundStoppedOpenCodeRouting.openCode.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        unboundStoppedOpenCodeRouting.openCode.retainStopped(threadId);
+        unboundStoppedOpenCodeRouting.openCode.startSession.mockClear();
+        unboundStoppedOpenCodeRouting.openCode.sendTurn.mockClear();
+
+        const result = yield* Effect.result(provider.sendTurn({ threadId, input: "recover" }));
+        assertFailure(
+          result,
+          new ProviderValidationError({
+            operation: "ProviderService.sendTurn",
+            issue: `Cannot route thread '${threadId}' because no persisted provider binding exists.`,
+            reason: "runtime-unavailable",
+          }),
+        );
+        assert.equal(unboundStoppedOpenCodeRouting.openCode.startSession.mock.calls.length, 0);
+        assert.equal(unboundStoppedOpenCodeRouting.openCode.sendTurn.mock.calls.length, 0);
+      }),
+    );
+  },
+);
+
 stoppedOpenCodeRouting.layer("ProviderServiceLive OpenCode stopped retention", (it) => {
-  it.effect("does not route an unbound stopped context through the live-startup fallback", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const threadId = asThreadId("thread-opencode-stopped-unbound");
-      yield* stoppedOpenCodeRouting.openCode.startSession({
-        provider: "opencode",
-        threadId,
-        runtimeMode: "full-access",
-      });
-      stoppedOpenCodeRouting.openCode.retainStopped(threadId);
-      stoppedOpenCodeRouting.openCode.startSession.mockClear();
-      stoppedOpenCodeRouting.openCode.sendTurn.mockClear();
-
-      const result = yield* Effect.result(provider.sendTurn({ threadId, input: "recover" }));
-      assertFailure(
-        result,
-        new ProviderValidationError({
-          operation: "ProviderService.sendTurn",
-          issue: `Cannot route thread '${threadId}' because no persisted provider binding exists.`,
-          reason: "runtime-unavailable",
-        }),
-      );
-      assert.equal(stoppedOpenCodeRouting.openCode.startSession.mock.calls.length, 0);
-      assert.equal(stoppedOpenCodeRouting.openCode.sendTurn.mock.calls.length, 0);
-    }),
-  );
-
   it.effect("PR1160 TASK-06 recovers a stopped-retained OpenCode session for sendTurn", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
