@@ -777,7 +777,7 @@ export function useChatTurnFollowUps({
       sendInFlightRef.current = true;
       setIsRevertingCheckpoint(true);
       setThreadError(threadId, null);
-      try {
+      return await (async () => {
         const confirmed = await api.dialogs.confirm(
           buildRetryConfirmCopy({
             changedFileCount: availability.changedFileCount,
@@ -857,16 +857,18 @@ export function useChatTurnFollowUps({
           createdAt: new Date().toISOString(),
         });
         return true;
-      } catch (err: unknown) {
-        setThreadError(
-          threadId,
-          err instanceof Error ? err.message : "Failed to retry with a different effort.",
-        );
-        return false;
-      } finally {
-        sendInFlightRef.current = false;
-        setIsRevertingCheckpoint(false);
-      }
+      })()
+        .catch((err: unknown) => {
+          setThreadError(
+            threadId,
+            err instanceof Error ? err.message : "Failed to retry with a different effort.",
+          );
+          return false;
+        })
+        .finally(() => {
+          sendInFlightRef.current = false;
+          setIsRevertingCheckpoint(false);
+        });
     },
     [
       threadId,
