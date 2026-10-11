@@ -68,10 +68,10 @@ Follow these steps in order, asking one focused question at a time and waiting f
    <the Impact we agreed on>
 
    ### Version or commit
-   <app version from the diagnostics; add commit or branch if I provided one>
+   <app version, commit or branch only if I provided it; otherwise "Not provided.">
 
    ### Environment
-   <OS/platform, viewport, provider and model, modes, from the diagnostics plus anything I added>
+   <OS/platform, provider, model and modes only as I described them; mark missing details "Not provided.">
 
    ### Logs or stack traces
    <only what I pasted, sanitized; otherwise "None provided.">
