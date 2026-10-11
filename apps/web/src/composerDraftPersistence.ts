@@ -1080,7 +1080,6 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.modelSelectionByProvider &&
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
-      // v3 format
       modelSelectionByProvider = normalizePersistedModelSelectionMap(
         draftCandidate.modelSelectionByProvider,
       );
@@ -1511,7 +1510,11 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(hasModelData
         ? {
-            modelSelectionByProvider: draft.modelSelectionByProvider,
+            modelSelectionByProvider: Object.fromEntries(
+              Object.entries(draft.modelSelectionByProvider).filter(
+                (entry): entry is [string, ModelSelection] => entry[1] !== undefined,
+              ),
+            ),
             activeProvider: draft.activeProvider,
           }
         : {}),

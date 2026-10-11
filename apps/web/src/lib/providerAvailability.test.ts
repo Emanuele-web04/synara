@@ -623,3 +623,28 @@ describe("findProviderStatus", () => {
     });
   });
 });
+
+it("keeps a pinned external provider without substituting an installed built-in", () => {
+  expect(
+    resolveAvailableProviderPreference({ preferredProvider: "external", statuses: [READY_STATUS] }),
+  ).toBe("external");
+  expect(
+    resolveProviderSendAvailability({ provider: "external", instanceId: "external", statuses: [] })
+      .usable,
+  ).toBe(true);
+  expect(
+    resolveProviderSendAvailability({
+      provider: "external",
+      instanceId: "external_other",
+      statuses: [],
+    }).usable,
+  ).toBe(false);
+  expect(
+    resolveProviderSendAvailability({
+      provider: "external",
+      statuses: [
+        { ...BASE_STATUS, provider: "external", driver: "external", instanceId: "external" },
+      ],
+    }).usable,
+  ).toBe(false);
+});

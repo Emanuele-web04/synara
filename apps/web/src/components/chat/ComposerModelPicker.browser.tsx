@@ -42,6 +42,7 @@ const EMPTY_BY_PROVIDER: Record<ProviderKind, never[]> = {
   grok: [],
   droid: [],
   omp: [],
+  external: [],
   opencode: [],
   pi: [],
 };

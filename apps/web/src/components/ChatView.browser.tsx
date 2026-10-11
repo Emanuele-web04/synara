@@ -2211,6 +2211,8 @@ async function mountChatView(options: {
     }),
   );
 
+  await router.load();
+
   const content = options.onRender ? (
     <Profiler id="issue-550-root" onRender={options.onRender}>
       <RouterProvider router={router} />
@@ -4586,11 +4588,15 @@ describe("ChatView transcript geometry (full app)", () => {
           providerHandoff: true,
           modelSelection: { provider: "claudeAgent" },
         });
-        // The handoff waits for its durable outcome, not just command admission.
-        // Settle it before unmounting so its timeout cannot toast over a later test.
-        await vi.waitFor(() =>
-          expect(fixture.snapshot.threads[0]?.modelSelection.provider).toBe("claudeAgent"),
-        );
+        // Wait for both the updated selection and its durable handoff outcome.
+        await vi.waitFor(() => {
+          expect(fixture.snapshot.threads[0]?.modelSelection.provider).toBe("claudeAgent");
+          expect(
+            fixture.snapshot.threads[0]?.activities.some(
+              (activity) => activity.kind === "provider.handoff",
+            ),
+          ).toBe(true);
+        });
         // Same thread: no new thread, and the route stays put.
         expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
           false,
@@ -4655,8 +4661,8 @@ describe("ChatView transcript geometry (full app)", () => {
                   ...thread,
                   ...(outcome === "completed"
                     ? {
-                        modelSelection: {
-                          provider: targetProvider,
+                        modelSelection: modelSelection ?? {
+                          provider: "claudeAgent",
                           model: targetModel,
                         },
                         session: {
@@ -14879,7 +14885,7 @@ describe("ChatView transcript geometry (full app)", () => {
         () => {
           const settledTrigger = findInlineToolsTurnDisclosure();
           expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
-          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s$/);
           const transitionClone = document.querySelector(
             "[data-settled-turn-collapse-transition='true']",
           );
@@ -14928,7 +14934,7 @@ describe("ChatView transcript geometry (full app)", () => {
         () => {
           const settledTrigger = findInlineToolsTurnDisclosure();
           expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
-          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s$/);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -15086,7 +15092,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       // The turn must land folded, in one step, with no animated close replay.
       expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
-      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s$/);
       expect(transitionFrames).toBe(0);
       // One settle step is the floor: the fold itself changes the height once.
       expect(heightChangeFrames).toBeLessThanOrEqual(2);
@@ -15130,7 +15136,7 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
-      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+m \d+s·/);
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+m \d+s$/);
       expect(document.querySelector("[data-turn-header='live']")?.textContent).toMatch(
         /^Working \d/,
       );

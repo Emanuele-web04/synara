@@ -1043,7 +1043,7 @@ describe("hasLiveTurnTailWork", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("lists available providers", () => {
+  it("lists installable providers without a bare external profile choice", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     const devin = PROVIDER_OPTIONS.find((option) => option.value === "devin");

@@ -84,6 +84,20 @@ import {
   ProjectTask,
   ProjectThreadIndexEntry,
 } from "./projectAgent";
+import {
+  CapabilityEvidenceBadge,
+  CapabilityEvidenceBadgeResult,
+  CapabilityEvidenceDemoteInput,
+  CapabilityEvidenceDemoteResult,
+  CapabilityEvidenceInvalidateInput,
+  CapabilityEvidenceInvalidateResult,
+  CapabilityEvidenceQuery,
+  CapabilityEvidenceQueryResult,
+  CapabilityEvidenceRecordInput,
+  CapabilityEvidenceRecordResult,
+  RuntimeTurnFeedbackInput,
+  RuntimeTurnFeedbackResult,
+} from "./capabilityEvidence";
 import { OpenInEditorInput } from "./editor";
 import {
   ExternalMcpCreateIntegrationInput,
@@ -162,6 +176,29 @@ import {
   ThreadComputerState,
 } from "./computer";
 import { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
+import {
+  ExternalAgentProfileCreateInput,
+  ExternalAgentProfileCreateResult,
+  ExternalAgentProfileGetInput,
+  ExternalAgentProfileGetResult,
+  ExternalAgentProfileListResult,
+  ExternalAgentProfileQuarantineInput,
+  ExternalAgentProfileQuarantineResult,
+  ExternalAgentProfileRecertifyInput,
+  ExternalAgentProfileRecertifyResult,
+  ExternalAgentProfileTombstoneInput,
+  ExternalAgentProfileTombstoneResult,
+  ExternalAgentProfileUnquarantineInput,
+  ExternalAgentProfileUnquarantineResult,
+  ExternalAgentProfileUpdateInput,
+  ExternalAgentProfileUpdateResult,
+} from "./externalAgent";
+import {
+  ConnectionCandidateListInput,
+  ConnectionCandidateListResult,
+  ConnectionPlanResolveInput,
+  ConnectionPlanResolveResult,
+} from "./connectionPlan";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
   GitHubProjectProvisionInput,
@@ -1396,6 +1433,129 @@ export const WsServerRefreshExternalMcpPairingRpc = Rpc.make(
   },
 );
 
+export const WsCapabilityEvidenceRecordRpc = Rpc.make(WS_METHODS.capabilityEvidenceRecord, {
+  payload: CapabilityEvidenceRecordInput,
+  success: CapabilityEvidenceRecordResult,
+  error: WsRpcError,
+});
+
+export const WsCapabilityEvidenceQueryRpc = Rpc.make(WS_METHODS.capabilityEvidenceQuery, {
+  payload: CapabilityEvidenceQuery,
+  success: CapabilityEvidenceQueryResult,
+  error: WsRpcError,
+});
+
+export const WsCapabilityEvidenceInvalidateRpc = Rpc.make(WS_METHODS.capabilityEvidenceInvalidate, {
+  payload: CapabilityEvidenceInvalidateInput,
+  success: CapabilityEvidenceInvalidateResult,
+  error: WsRpcError,
+});
+
+export const WsCapabilityEvidenceDemoteRpc = Rpc.make(WS_METHODS.capabilityEvidenceDemote, {
+  payload: CapabilityEvidenceDemoteInput,
+  success: CapabilityEvidenceDemoteResult,
+  error: WsRpcError,
+});
+
+export const WsCapabilityEvidenceBadgeRpc = Rpc.make(WS_METHODS.capabilityEvidenceBadge, {
+  payload: CapabilityEvidenceBadge,
+  success: CapabilityEvidenceBadgeResult,
+  error: WsRpcError,
+});
+
+export const WsRuntimeTurnFeedbackRpc = Rpc.make(WS_METHODS.runtimeTurnFeedbackRecord, {
+  payload: RuntimeTurnFeedbackInput,
+  success: RuntimeTurnFeedbackResult,
+  error: WsRpcError,
+});
+
+export const WsServerListExternalAgentProfilesRpc = Rpc.make(
+  WS_METHODS.serverListExternalAgentProfiles,
+  {
+    payload: Schema.Struct({}),
+    success: ExternalAgentProfileListResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerGetExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverGetExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileGetInput,
+    success: ExternalAgentProfileGetResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerCreateExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverCreateExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileCreateInput,
+    success: ExternalAgentProfileCreateResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerUpdateExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverUpdateExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileUpdateInput,
+    success: ExternalAgentProfileUpdateResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerTombstoneExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverTombstoneExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileTombstoneInput,
+    success: ExternalAgentProfileTombstoneResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerListConnectionCandidatesRpc = Rpc.make(
+  WS_METHODS.serverListConnectionCandidates,
+  {
+    payload: ConnectionCandidateListInput,
+    success: ConnectionCandidateListResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerResolveConnectionPlanRpc = Rpc.make(WS_METHODS.serverResolveConnectionPlan, {
+  payload: ConnectionPlanResolveInput,
+  success: ConnectionPlanResolveResult,
+  error: WsRpcError,
+});
+
+export const WsServerQuarantineExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverQuarantineExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileQuarantineInput,
+    success: ExternalAgentProfileQuarantineResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerUnquarantineExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverUnquarantineExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileUnquarantineInput,
+    success: ExternalAgentProfileUnquarantineResult,
+    error: WsRpcError,
+  },
+);
+
+export const WsServerRecertifyExternalAgentProfileRpc = Rpc.make(
+  WS_METHODS.serverRecertifyExternalAgentProfile,
+  {
+    payload: ExternalAgentProfileRecertifyInput,
+    success: ExternalAgentProfileRecertifyResult,
+    error: WsRpcError,
+  },
+);
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -1900,7 +2060,172 @@ export const WsSubscribeProjectAgentEventsRpc = Rpc.make(WS_METHODS.subscribePro
 
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
-export const WsFeatureRpcGroup = RpcGroup.make(
+// Keep declaration emission bounded: serialize references, not every expanded RPC schema.
+export type WsFeatureRpc =
+  | typeof WsOrchestrationDispatchCommandRpc
+  | typeof WsOrchestrationSettleTurnDispatchRpc
+  | typeof WsOrchestrationImportThreadRpc
+  | typeof WsListProjectImportsRpc
+  | typeof WsImportProjectRpc
+  | typeof WsLoadProjectImportHistoryRpc
+  | typeof WsOrchestrationRegenerateThreadTitleRpc
+  | typeof WsOrchestrationGetSnapshotRpc
+  | typeof WsOrchestrationGetShellSnapshotRpc
+  | typeof WsOrchestrationGetThreadDetailSnapshotRpc
+  | typeof WsOrchestrationSearchThreadsRpc
+  | typeof WsOrchestrationRepairStateRpc
+  | typeof WsOrchestrationGetTurnDiffRpc
+  | typeof WsOrchestrationGetFullThreadDiffRpc
+  | typeof WsOrchestrationReplayEventsRpc
+  | typeof WsOrchestrationListProviderDeliveryBlockersRpc
+  | typeof WsOrchestrationReconcileProviderDeliveryRpc
+  | typeof WsOrchestrationPrepareQuitResumeRpc
+  | typeof WsOrchestrationSubscribeShellRpc
+  | typeof WsOrchestrationUnsubscribeShellRpc
+  | typeof WsOrchestrationSubscribeThreadRpc
+  | typeof WsOrchestrationUnsubscribeThreadRpc
+  | typeof WsOrchestrationSubscribeDomainEventsRpc
+  | typeof WsProjectsDiscoverScriptsRpc
+  | typeof WsProjectsListDirectoriesRpc
+  | typeof WsProjectsSearchEntriesRpc
+  | typeof WsProjectsSearchLocalEntriesRpc
+  | typeof WsProjectsSearchContentRpc
+  | typeof WsProjectsPrewarmSearchIndexRpc
+  | typeof WsProjectsReadFileRpc
+  | typeof WsProjectsSubscribeFileChangeRpc
+  | typeof WsProjectsResolveWorkspaceFileReferencesRpc
+  | typeof WsProjectsResolveOutOfRootFileReferenceRpc
+  | typeof WsProjectsCreateLocalFilePreviewGrantRpc
+  | typeof WsProjectsWriteFileRpc
+  | typeof WsProjectsRunDevServerRpc
+  | typeof WsProjectsStopDevServerRpc
+  | typeof WsProjectsListDevServersRpc
+  | typeof WsSubscribeProjectDevServerEventsRpc
+  | typeof WsProjectsProvisionFromGitHubRpc
+  | typeof WsStudioListThreadOutputsRpc
+  | typeof WsFilesystemBrowseRpc
+  | typeof WsShellOpenInEditorRpc
+  | typeof WsGitGithubRepositoryRpc
+  | typeof WsGitStatusRpc
+  | typeof WsGitReadWorkingTreeDiffRpc
+  | typeof WsGitBlameLineRpc
+  | typeof WsGitReadFileAtRevRpc
+  | typeof WsGitWorkingTreeDiffStatsRpc
+  | typeof WsGitSummarizeDiffRpc
+  | typeof WsGitPullRpc
+  | typeof WsGitRunStackedActionRpc
+  | typeof WsGitResolvePullRequestRpc
+  | typeof WsGitPullRequestSnapshotRpc
+  | typeof WsGitPreparePullRequestThreadRpc
+  | typeof WsGitHubInboxListRpc
+  | typeof WsGitHubInboxIssueDetailRpc
+  | typeof WsGitHubInboxIssueCommentRpc
+  | typeof WsPullRequestsDetailRpc
+  | typeof WsPullRequestsDiffRpc
+  | typeof WsPullRequestsActionRpc
+  | typeof WsPullRequestsCommentRpc
+  | typeof WsPullRequestsSetPinnedRpc
+  | typeof WsPullRequestsGetAutoFixRpc
+  | typeof WsPullRequestsSetAutoFixRpc
+  | typeof WsGitListBranchesRpc
+  | typeof WsGitListRecentCommitsRpc
+  | typeof WsGitCreateWorktreeRpc
+  | typeof WsGitCreateDetachedWorktreeRpc
+  | typeof WsGitRemoveWorktreeRpc
+  | typeof WsGitCreateBranchRpc
+  | typeof WsGitCheckoutRpc
+  | typeof WsGitStashAndCheckoutRpc
+  | typeof WsGitStashDropRpc
+  | typeof WsGitStashInfoRpc
+  | typeof WsGitRemoveIndexLockRpc
+  | typeof WsGitInitRpc
+  | typeof WsGitStageFilesRpc
+  | typeof WsGitUnstageFilesRpc
+  | typeof WsGitHandoffThreadRpc
+  | typeof WsTerminalOpenRpc
+  | typeof WsTerminalWriteRpc
+  | typeof WsTerminalAckOutputRpc
+  | typeof WsTerminalResizeRpc
+  | typeof WsTerminalClearRpc
+  | typeof WsTerminalRestartRpc
+  | typeof WsTerminalCloseRpc
+  | typeof WsSubscribeTerminalEventsRpc
+  | typeof WsServerGetRuntimeStatusRpc
+  | typeof WsServerGetConfigRpc
+  | typeof WsServerGetEnvironmentRpc
+  | typeof WsServerGetSettingsRpc
+  | typeof WsServerUpdateSettingsRpc
+  | typeof WsServerRefreshProvidersRpc
+  | typeof WsServerUpdateProviderRpc
+  | typeof WsServerListExternalMcpIntegrationsRpc
+  | typeof WsServerCreateExternalMcpIntegrationRpc
+  | typeof WsServerRevokeExternalMcpIntegrationRpc
+  | typeof WsServerRefreshExternalMcpPairingRpc
+  | typeof WsCapabilityEvidenceRecordRpc
+  | typeof WsCapabilityEvidenceQueryRpc
+  | typeof WsCapabilityEvidenceInvalidateRpc
+  | typeof WsCapabilityEvidenceDemoteRpc
+  | typeof WsCapabilityEvidenceBadgeRpc
+  | typeof WsRuntimeTurnFeedbackRpc
+  | typeof WsServerListExternalAgentProfilesRpc
+  | typeof WsServerGetExternalAgentProfileRpc
+  | typeof WsServerCreateExternalAgentProfileRpc
+  | typeof WsServerUpdateExternalAgentProfileRpc
+  | typeof WsServerTombstoneExternalAgentProfileRpc
+  | typeof WsServerListConnectionCandidatesRpc
+  | typeof WsServerResolveConnectionPlanRpc
+  | typeof WsServerQuarantineExternalAgentProfileRpc
+  | typeof WsServerUnquarantineExternalAgentProfileRpc
+  | typeof WsServerRecertifyExternalAgentProfileRpc
+  | typeof WsServerListWorktreesRpc
+  | typeof WsServerListLocalServersRpc
+  | typeof WsServerStopLocalServerRpc
+  | typeof WsServerGetProviderUsageSnapshotRpc
+  | typeof WsServerListProviderUsageRpc
+  | typeof WsServerConsumeCodexResetCreditRpc
+  | typeof WsStatsGetProfileStatsRpc
+  | typeof WsStatsGetProfileTokenStatsRpc
+  | typeof WsStatsGetRecapRpc
+  | typeof WsServerGetDiagnosticsRpc
+  | typeof WsServerReadThreadDiagnosticsRpc
+  | typeof WsServerPrewarmVoiceRpc
+  | typeof WsServerTranscribeVoiceRpc
+  | typeof WsServerGenerateThreadRecapRpc
+  | typeof WsServerGenerateAutomationIntentRpc
+  | typeof WsServerUpsertKeybindingRpc
+  | typeof WsServerEditKeybindingsRpc
+  | typeof WsSubscribeServerLifecycleRpc
+  | typeof WsSubscribeServerConfigRpc
+  | typeof WsSubscribeServerProviderStatusesRpc
+  | typeof WsSubscribeServerKeepAwakeRpc
+  | typeof WsSubscribeServerSettingsRpc
+  | typeof WsProviderGetComposerCapabilitiesRpc
+  | typeof WsProviderCompactThreadRpc
+  | typeof WsProviderListCommandsRpc
+  | typeof WsProviderListSkillsRpc
+  | typeof WsProviderListSkillsCatalogRpc
+  | typeof WsProviderListPluginsRpc
+  | typeof WsProviderReadPluginRpc
+  | typeof WsProviderListModelsRpc
+  | typeof WsProviderListAgentsRpc
+  | typeof WsAutomationListRpc
+  | typeof WsAutomationGetMemoryRpc
+  | typeof WsAutomationCreateRpc
+  | typeof WsAutomationUpdateRpc
+  | typeof WsAutomationDeleteRpc
+  | typeof WsAutomationRunNowRpc
+  | typeof WsAutomationCancelRunRpc
+  | typeof WsAutomationMarkRunReadRpc
+  | typeof WsAutomationArchiveRunRpc
+  | typeof WsAutomationResolveProposalRpc
+  | typeof WsSubscribeAutomationEventsRpc
+  | typeof WsTodoListRpc
+  | typeof WsTodoCreateRpc
+  | typeof WsTodoUpdateRpc
+  | typeof WsTodoDeleteRpc
+  | typeof WsSubscribeTodoEventsRpc;
+
+export const WsFeatureRpcGroup: RpcGroup.RpcGroup<WsFeatureRpc> = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationSettleTurnDispatchRpc,
   WsOrchestrationImportThreadRpc,
@@ -2000,6 +2325,22 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,
   WsServerRefreshExternalMcpPairingRpc,
+  WsCapabilityEvidenceRecordRpc,
+  WsCapabilityEvidenceQueryRpc,
+  WsCapabilityEvidenceInvalidateRpc,
+  WsCapabilityEvidenceDemoteRpc,
+  WsCapabilityEvidenceBadgeRpc,
+  WsRuntimeTurnFeedbackRpc,
+  WsServerListExternalAgentProfilesRpc,
+  WsServerGetExternalAgentProfileRpc,
+  WsServerCreateExternalAgentProfileRpc,
+  WsServerUpdateExternalAgentProfileRpc,
+  WsServerTombstoneExternalAgentProfileRpc,
+  WsServerListConnectionCandidatesRpc,
+  WsServerResolveConnectionPlanRpc,
+  WsServerQuarantineExternalAgentProfileRpc,
+  WsServerUnquarantineExternalAgentProfileRpc,
+  WsServerRecertifyExternalAgentProfileRpc,
   WsServerListWorktreesRpc,
   WsServerListLocalServersRpc,
   WsServerStopLocalServerRpc,
