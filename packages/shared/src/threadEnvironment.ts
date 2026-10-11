@@ -1,4 +1,5 @@
 import type { ThreadEnvironmentMode } from "@synara/contracts";
+import { isWorkspaceRootWithin } from "./threadWorkspace";
 
 export type ResolvedThreadWorkspaceState = "local" | "worktree-pending" | "worktree-ready";
 
@@ -39,6 +40,16 @@ export function resolveThreadWorkspaceCwd(input: {
 }): string | null {
   const mode = resolveThreadEnvironmentMode(input);
   if (mode === "worktree") {
+    // Imported conversations can start within a monorepo subproject. Keep that
+    // cwd on restart, but never reuse a stale cwd from another environment.
+    if (
+      input.worktreePath &&
+      input.workingDirectory &&
+      !input.workingDirectory.replace(/\\/g, "/").split("/").includes("..") &&
+      isWorkspaceRootWithin(input.workingDirectory, input.worktreePath)
+    ) {
+      return input.workingDirectory;
+    }
     return input.worktreePath ?? null;
   }
   return input.workingDirectory ?? input.projectCwd ?? null;

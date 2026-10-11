@@ -20,11 +20,15 @@ export function claudeTurnResultUsage(
           ...current,
           inputTokens: delta(current.inputTokens, before?.inputTokens),
           outputTokens: delta(current.outputTokens, before?.outputTokens),
+          ...(current.thinkingTokens !== undefined
+            ? { thinkingTokens: delta(current.thinkingTokens, before?.thinkingTokens) }
+            : {}),
           cacheReadInputTokens: delta(current.cacheReadInputTokens, before?.cacheReadInputTokens),
           cacheCreationInputTokens: delta(
             current.cacheCreationInputTokens,
             before?.cacheCreationInputTokens,
           ),
+          webSearchRequests: delta(current.webSearchRequests, before?.webSearchRequests),
           costUSD: delta(current.costUSD, before?.costUSD),
         },
       ];

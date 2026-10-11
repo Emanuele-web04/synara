@@ -66,8 +66,7 @@ const dialogFooterButtonClassName = dialogActionButtonClassName
   .join(" ");
 
 /** Shared label style for form fields inside dialogs (SpaceEditorDialog, CreateProjectDialog). */
-const dialogFieldLabelClassName =
-  "text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-foreground/80";
+const dialogFieldLabelClassName = "text-ui-sm font-medium text-foreground/80";
 
 const dialogPanelFieldClassName =
   "[&_[data-slot=textarea-control]]:min-h-24 [&_[data-slot=textarea-control]_[data-slot=textarea]]:px-2.5 [&_[data-slot=textarea-control]_[data-slot=textarea]]:py-2";
@@ -167,7 +166,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
 function DialogDescription({ className, ...props }: DialogPrimitive.Description.Props) {
   return (
     <DialogPrimitive.Description
-      className={cn("text-muted-foreground text-sm leading-snug", className)}
+      className={cn("text-muted-foreground text-ui leading-snug", className)}
       data-slot="dialog-description"
       {...props}
     />

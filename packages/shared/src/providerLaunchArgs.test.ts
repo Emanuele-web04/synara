@@ -61,3 +61,86 @@ describe("buildCodexAppServerArgs", () => {
     ]);
   });
 });
+
+// Regression coverage for literal argv preservation across the app-server boundary.
+describe("literal provider launch arguments", () => {
+  it.each(['-c "--"', "-c '--'", '-c -"-"', '-c --""', "-c \\--"])(
+    "keeps a protected separator as an option value: %s",
+    (input) => {
+      expect(buildCodexAppServerArgs(input)).toEqual(["-c", "--", "app-server"]);
+    },
+  );
+
+  it("splits only the first unquoted separator after quoted values", () => {
+    expect(buildCodexAppServerArgs('-c "--" -- --listen "stdio://" --')).toEqual([
+      "-c",
+      "--",
+      "app-server",
+      "--listen",
+      "stdio://",
+      "--",
+    ]);
+  });
+
+  it("preserves double-quoted backslashes that POSIX quoting does not escape", () => {
+    expect(buildCodexAppServerArgs('-c path="C:\\tools\\codex"')).toEqual([
+      "-c",
+      "path=C:\\tools\\codex",
+      "app-server",
+    ]);
+  });
+
+  it("unescapes only the supported characters inside double quotes", () => {
+    const input = '-c "\\$\\"\\\\\\`"';
+    expect(buildCodexAppServerArgs(input)).toEqual(["-c", '$"\\\x60', "app-server"]);
+  });
+
+  it.each(['-c ""', "-c ''", "-c \"\"''"])(
+    "retains an explicit empty option value: %s",
+    (input) => {
+      expect(buildCodexAppServerArgs(input)).toEqual(["-c", "", "app-server"]);
+    },
+  );
+
+  it("preserves empty suffix arguments and joins adjacent quoted fragments", () => {
+    expect(buildCodexAppServerArgs('a""b -- --name "" \'\'')).toEqual([
+      "ab",
+      "app-server",
+      "--name",
+      "",
+      "",
+    ]);
+  });
+
+  it("preserves escaped trailing spaces without trimming their argument", () => {
+    expect(buildCodexAppServerArgs("-c value\\ ")).toEqual(["-c", "value ", "app-server"]);
+  });
+
+  it("treats escaped newlines as continuations rather than argv characters", () => {
+    expect(buildCodexAppServerArgs('-c va\\\nlue -- "su\\\nffix"')).toEqual([
+      "-c",
+      "value",
+      "app-server",
+      "suffix",
+    ]);
+    expect(buildCodexAppServerArgs("\\\n")).toEqual(["app-server"]);
+  });
+
+  it("does not expand shell variables or execute shell substitutions", () => {
+    expect(buildCodexAppServerArgs('-c "$HOME" -c "$(literal)"')).toEqual([
+      "-c",
+      "$HOME",
+      "-c",
+      "$(literal)",
+      "app-server",
+    ]);
+  });
+
+  it("preserves every character between single quotes", () => {
+    expect(buildCodexAppServerArgs("-c 'C:\\tools\\$HOME'")).toEqual([
+      "-c",
+      "C:\\tools\\$HOME",
+      "app-server",
+    ]);
+  });
+});

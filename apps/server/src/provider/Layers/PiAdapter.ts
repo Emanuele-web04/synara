@@ -1,3 +1,4 @@
+import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import { refreshPiOpenCodeCatalog } from "../piOpenCodeCatalog";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -16,10 +17,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+import { resetApiProviders } from "@earendil-works/pi-ai/compat";
 import {
   ApprovalRequestId,
   type ChatAttachment,
   EventId,
+  type PiModelSelection,
   type ProviderComposerCapabilities,
   type ProviderListCommandsResult,
   type ProviderListModelsResult,
@@ -36,12 +39,17 @@ import {
   type UserInputQuestion,
 } from "@synara/contracts";
 import {
+  execShellCommandSync,
   spawnProcess as spawnPlatformProcess,
   type RuntimeSpawnOptions,
 } from "@synara/shared/processRuntime";
+import { stripTerminalControlSequences } from "@synara/shared/text";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
-import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
+import {
+  type SynaraHarnessPolicyDeliveryState,
+  takeSynaraHarnessPolicyForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import {
   callAgentGatewayMcpTool,
   listAgentGatewayMcpTools,
@@ -51,10 +59,13 @@ import {
   AgentGatewayCredentials,
   type AgentGatewayMcpConnection,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
+  captureAgentGatewayCapabilityInput,
   releaseAgentGatewaySessionLeaseOnInterrupt,
+  type AgentGatewayCapabilityInput,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
@@ -71,14 +82,21 @@ import {
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  resolveProviderSessionInstanceId,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
+import { makeKeyedLock } from "../keyedLock.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { fetchOpenRouterModels, OPENROUTER_BASE_URL } from "../OpenRouterDiscovery.ts";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
+import {
+  buildProviderProcessEnv,
+  MODEL_PROVIDER_API_KEY_ENV_MAPPINGS,
+  providerIsolatedHomePath,
+} from "../providerProcessEnv.ts";
 import {
   compactProviderRuntimeEventForIngress,
   isTerminalProviderRuntimeEvent,
@@ -94,6 +112,20 @@ import {
 } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "pi" as const;
+
+export function buildPiTurnPrompt(
+  state: SynaraHarnessPolicyDeliveryState,
+  input: { readonly text: string; readonly gatewayControlAvailable: boolean },
+): string {
+  const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable: input.gatewayControlAvailable,
+  });
+  return [harnessPolicy, input.text].filter(Boolean).join("\n\n");
+}
+
+export const resolvePiStartInstanceId = resolveProviderSessionInstanceId;
+
 const DEFAULT_PI_THINKING_LEVEL: ThinkingLevel = "medium";
 const PI_THINKING_OPTIONS: ReadonlyArray<{
   readonly value: ThinkingLevel;
@@ -196,7 +228,12 @@ export interface PiBashProcessSupervisor {
 }
 
 export interface PiBashProcessSupervisorOptions {
+  readonly lowerPriority?: boolean;
   readonly getShellConfig: (shellPath?: string) => PiShellConfig;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
   readonly spawnProcess?: (
     command: string,
     args: ReadonlyArray<string>,
@@ -256,9 +293,19 @@ export function makePiBashProcessSupervisor(
         commandFromStdin ? shell.args : [...shell.args, command],
         {
           cwd,
+          lowerPriority: options.lowerPriority ?? true,
           env: buildProviderChildEnvironment({
             provider: "pi",
-            baseEnv: execution.env ?? process.env,
+            baseEnv: buildProviderProcessEnv({
+              driver: PROVIDER,
+              env: execution.env ?? process.env,
+              ...(options.environment !== undefined ? { environment: options.environment } : {}),
+              ...(options.instanceId !== undefined ? { instanceId: options.instanceId } : {}),
+              ...(options.homeDir !== undefined ? { homeDir: options.homeDir } : {}),
+              ...(options.isolationRootDir !== undefined
+                ? { isolationRootDir: options.isolationRootDir }
+                : {}),
+            }),
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
         },
@@ -351,9 +398,30 @@ const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
-  readonly gatewayControlAvailable: boolean;
+  readonly enableComputerControl?: boolean;
+  /**
+   * Whether the CURRENT gateway rotation exposes Synara control. Recomputed on
+   * every credential rotation, never inherited blindly from session start.
+   */
+  gatewayControlAvailable: boolean;
+  /**
+   * Pi rotates its gateway credential when a turn completes, long after the
+   * start input is gone. Keep the shared capability projection so the re-lease
+   * derives from the same facts as the original lease. Refreshed from the
+   * session fact on every dispatched turn; rotation consumes this stashed
+   * value, not the start snapshot and not a fresh derivation.
+   */
+  gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   gatewayConnection?: AgentGatewayMcpConnection;
+  /**
+   * Installed Synara gateway tool definitions. Rotation rebuilds these in
+   * place (the Pi SDK exposes no post-construction registration API), so the
+   * array elements are the exact objects handed to the SDK at session start.
+   */
+  gatewayTools: ToolDefinition[];
+  /** Wraps rebuilt gateway tools exactly like session start does. */
+  readonly gatewayDefineTool: (tool: ToolDefinition) => ToolDefinition;
   readonly lifecycleGeneration?: string;
   runtime: PiAgentRuntime;
   readonly processSupervisor: PiBashProcessSupervisor;
@@ -361,6 +429,16 @@ interface PiSessionContext {
   session: ProviderSession;
   turns: PiStoredTurn[];
   activeTurnId: TurnId | undefined;
+  // The turn whose prompt() has been dispatched but has not committed a run
+  // yet — the SDK's isStreaming flag only flips deep inside prompt()'s async
+  // preflight, so a concurrent send must treat this as still-live rather than
+  // settled.
+  promptCommitting: TurnId | undefined;
+  promptCommit: Promise<void> | undefined;
+  // Set when an interrupt lands while the turn's prompt() is still in async
+  // preflight — nothing exists for abort() to reach yet. Fired on the next
+  // agent_start once the run commits; cleared when the turn completes.
+  pendingAbortTurnId: TurnId | undefined;
   activeTurnErrorMessage?: string;
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
@@ -369,12 +447,72 @@ interface PiSessionContext {
   stopped: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   unsubscribe: (() => void) | undefined;
+  readonly extensionsEnabled: boolean;
+}
+
+export function resolvePiExtensionMode(input: {
+  readonly isolatedAccount: boolean;
+  readonly hasExtensionEnabledDefault: boolean;
+  readonly hasIsolatedMode: boolean;
+}): { readonly noExtensions: boolean } {
+  if (input.isolatedAccount && input.hasExtensionEnabledDefault) {
+    throw new Error(
+      "Stop extension-enabled default Pi sessions before starting an isolated Pi account.",
+    );
+  }
+  return { noExtensions: input.isolatedAccount || input.hasIsolatedMode };
+}
+
+export function makePiExtensionModeCoordinator(
+  getActiveModes: () => {
+    readonly hasExtensionEnabledDefault: boolean;
+    readonly hasIsolatedMode: boolean;
+  },
+) {
+  let pendingExtensionEnabledOperations = 0;
+  let pendingIsolatedModeOperations = 0;
+  return {
+    reserve(
+      isolatedAccount: boolean,
+      activeOverride?: {
+        readonly hasExtensionEnabledDefault: boolean;
+        readonly hasIsolatedMode: boolean;
+      },
+    ) {
+      const active = activeOverride ?? getActiveModes();
+      const hasExtensionEnabledDefault =
+        pendingExtensionEnabledOperations > 0 || active.hasExtensionEnabledDefault;
+      const hasIsolatedMode = pendingIsolatedModeOperations > 0 || active.hasIsolatedMode;
+      if (!isolatedAccount && hasExtensionEnabledDefault && hasIsolatedMode) {
+        throw new Error(
+          "Wait for the Pi account-mode transition to finish before starting default work.",
+        );
+      }
+      const mode = resolvePiExtensionMode({
+        isolatedAccount,
+        hasExtensionEnabledDefault,
+        hasIsolatedMode,
+      });
+      if (mode.noExtensions) pendingIsolatedModeOperations += 1;
+      else pendingExtensionEnabledOperations += 1;
+      let released = false;
+      return {
+        noExtensions: mode.noExtensions,
+        release: () => {
+          if (released) return;
+          released = true;
+          if (mode.noExtensions) pendingIsolatedModeOperations -= 1;
+          else pendingExtensionEnabledOperations -= 1;
+        },
+      };
+    },
+  };
 }
 
 export function makePiRuntimeEventBase(
   context: {
     readonly lifecycleGeneration?: string;
-    readonly session: Pick<ProviderSession, "threadId">;
+    readonly session: Pick<ProviderSession, "threadId" | "providerInstanceId">;
     readonly activeTurnId: TurnId | undefined;
   },
   options?: { readonly includeTurnId?: boolean },
@@ -382,6 +520,9 @@ export function makePiRuntimeEventBase(
   return {
     eventId: EventId.makeUnsafe(crypto.randomUUID()),
     provider: PROVIDER,
+    ...(context.session.providerInstanceId !== undefined
+      ? { providerInstanceId: context.session.providerInstanceId }
+      : {}),
     threadId: context.session.threadId,
     createdAt: new Date().toISOString(),
     ...(context.lifecycleGeneration !== undefined
@@ -396,6 +537,7 @@ export function makePiRuntimeEventBase(
 interface PiStoredTurn {
   readonly id: TurnId;
   readonly items: unknown[];
+  readonly toolItemIndexes: Map<string, number>;
   leafId?: string | null;
 }
 
@@ -468,6 +610,19 @@ function piGatewayToolResult(result: unknown): AgentToolResult<unknown> {
 }
 
 /**
+ * Enabled Pi sessions retain direct routes to the hidden Computer specialists.
+ * Use this same projection when comparing a rotated catalog with installed
+ * tools; sessions without an advertised Computer tool get no family stubs.
+ */
+export function piInstalledGatewayToolNames(freshNames: Iterable<string>): Set<string> {
+  const installed = new Set(freshNames);
+  if (SYNARA_COMPUTER_TOOL_NAMES.some((name) => installed.has(name))) {
+    for (const name of SYNARA_COMPUTER_TOOL_NAMES) installed.add(name);
+  }
+  return installed;
+}
+
+/**
  * Project the canonical MCP catalog into Pi's native custom-tool API. Tool
  * schemas and execution both remain owned by the gateway; Pi only adapts the
  * provider boundary.
@@ -475,6 +630,7 @@ function piGatewayToolResult(result: unknown): AgentToolResult<unknown> {
 export async function buildPiAgentGatewayCustomTools(input: {
   readonly connection: AgentGatewayMcpConnection;
   readonly defineTool: (tool: ToolDefinition) => ToolDefinition;
+  readonly enableComputerControl?: boolean;
   readonly fetch?: AgentGatewayMcpFetch;
 }): Promise<ReadonlyArray<ToolDefinition>> {
   const tools = await listAgentGatewayMcpTools({
@@ -484,24 +640,49 @@ export async function buildPiAgentGatewayCustomTools(input: {
   if (tools.length === 0) {
     throw new Error("Synara MCP returned an empty tool catalog.");
   }
-  return tools.map((tool) =>
-    input.defineTool({
-      name: tool.name,
-      label: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema as ToolDefinition["parameters"],
+  const catalog = new Map(tools.map((tool) => [tool.name, tool]));
+  if (input.enableComputerControl === true) {
+    // These are always advertised by the shared Computer catalog. Check the
+    // negotiated definitions before compatibility forwarders fill hidden names;
+    // a help-only catalog must not masquerade as observation and action support.
+    const missing = [
+      "computer_get_state",
+      "computer_click",
+      "computer_press_key",
+      "computer_run",
+    ].filter((name) => !catalog.has(name));
+    if (missing.length > 0) {
+      throw new Error(
+        `Synara MCP catalog is missing required Computer tools: ${missing.join(", ")}.`,
+      );
+    }
+  }
+  return [...piInstalledGatewayToolNames(catalog.keys())].map((name) => {
+    const tool = catalog.get(name);
+    return input.defineTool({
+      name,
+      label: name,
+      description:
+        tool?.description ??
+        (name.startsWith("computer_browser_")
+          ? 'Read computer_help({topic:"browser"}) before calling. Gateway permissions apply.'
+          : `Read computer_help({tool:"${name}"}) for arguments. Gateway permissions apply.`),
+      parameters: (tool?.inputSchema ?? {
+        type: "object",
+        properties: {},
+      }) as ToolDefinition["parameters"],
       execute: async (_toolCallId, params, signal) =>
         piGatewayToolResult(
           await callAgentGatewayMcpTool({
             connection: input.connection,
-            name: tool.name,
+            name,
             arguments: params as Record<string, unknown>,
             ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
             ...(signal === undefined ? {} : { signal }),
           }),
         ),
-    }),
-  );
+    });
+  });
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -514,6 +695,10 @@ function toMessage(cause: unknown, fallback: string): string {
 function trimToUndefined(value: string | null | undefined): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function trimPiDisplayText(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : trimToUndefined(stripTerminalControlSequences(value));
 }
 
 function isPiThinkingLevel(value: string | null | undefined): value is ThinkingLevel {
@@ -767,6 +952,9 @@ function makeSessionSnapshot(context: PiSessionContext): ProviderSession {
   const resumeCursor = getSessionFile(context.runtime.session);
   return {
     provider: PROVIDER,
+    ...(context.session.providerInstanceId
+      ? { providerInstanceId: context.session.providerInstanceId }
+      : {}),
     status: context.stopped ? "closed" : context.activeTurnId ? "running" : "ready",
     runtimeMode: context.session.runtimeMode,
     threadId: context.session.threadId,
@@ -1039,20 +1227,20 @@ function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
 }
 
 function toolTitle(toolName: string, args: unknown): string {
-  const command = toolName === "bash" ? toolCommand(args) : undefined;
+  const command = toolName === "bash" ? trimPiDisplayText(toolCommand(args)) : undefined;
   if (command) return command;
-  const filePath = toolPath(args);
+  const filePath = trimPiDisplayText(toolPath(args));
   if (
     filePath &&
     (toolName === "read" || toolName === "edit" || toolName === "write" || toolName === "ls")
   ) {
     return `${toolName} ${filePath}`;
   }
-  const query = toolSearchQuery(toolName, args);
+  const query = trimPiDisplayText(toolSearchQuery(toolName, args));
   if (query && (toolName === "find" || toolName === "grep")) {
     return `${toolName} ${query}`;
   }
-  return toolName;
+  return toolName.trim() || "Tool";
 }
 
 function toolLifecycleData(input: {
@@ -1230,11 +1418,396 @@ function mapMessageHistory(session: PiAgentSession): unknown[] {
   return items;
 }
 
-function makeAgentDir(
-  agentDir: string | undefined,
-  piSdk: Pick<PiCodingAgentModule, "getAgentDir">,
-): string {
-  return trimToUndefined(agentDir) ?? piSdk.getAgentDir();
+export function makePiStoragePaths(input: {
+  readonly agentDir?: string | undefined;
+  readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly instanceId?: string | undefined;
+  readonly stateDir: string;
+  readonly homeDir: string;
+  readonly sdkAgentDir: string;
+}): { readonly agentDir: string; readonly sessionDir?: string } {
+  const boundary =
+    input.environment !== undefined ||
+    (input.instanceId !== undefined && input.instanceId !== PROVIDER);
+  const selectedAbsolutePath = (value: string | undefined) => {
+    const selected = trimToUndefined(value);
+    return selected && path.isAbsolute(selected) ? selected : undefined;
+  };
+  const selectedEnvironmentValue = (name: string) =>
+    Object.entries(input.environment ?? {}).find(
+      ([candidate]) => candidate.toUpperCase() === name,
+    )?.[1];
+  const selectedHome = selectedAbsolutePath(
+    selectedEnvironmentValue("HOME") ?? selectedEnvironmentValue("USERPROFILE"),
+  );
+  const isolatedHome = providerIsolatedHomePath({
+    driver: PROVIDER,
+    instanceId: input.instanceId,
+    homeDir: input.homeDir,
+    isolationRootDir: input.stateDir,
+  });
+  const expansionHome = boundary ? (selectedHome ?? isolatedHome) : (selectedHome ?? input.homeDir);
+  const expandHome = (value: string) =>
+    value === "~" || value.startsWith("~/")
+      ? path.join(expansionHome, value.slice(value === "~" ? 1 : 2))
+      : value;
+  const rawConfiguredAgentDir = trimToUndefined(input.agentDir);
+  const configuredAgentDir = rawConfiguredAgentDir
+    ? rawConfiguredAgentDir === "~" || rawConfiguredAgentDir.startsWith("~/")
+      ? expandHome(rawConfiguredAgentDir)
+      : !boundary || path.isAbsolute(rawConfiguredAgentDir)
+        ? rawConfiguredAgentDir
+        : undefined
+    : undefined;
+  const selectedAgentDir = selectedAbsolutePath(selectedEnvironmentValue("PI_CODING_AGENT_DIR"));
+  if (!boundary && !configuredAgentDir && !selectedAgentDir) {
+    return { agentDir: input.sdkAgentDir };
+  }
+  const agentDir =
+    configuredAgentDir ??
+    selectedAgentDir ??
+    path.join(selectedHome ?? isolatedHome, ".pi", "agent");
+  const selectedSessionDir = selectedAbsolutePath(
+    selectedEnvironmentValue("PI_CODING_AGENT_SESSION_DIR"),
+  );
+  return {
+    agentDir,
+    sessionDir: expandHome(selectedSessionDir ?? path.join(agentDir, "sessions")),
+  };
+}
+
+function readPiRuntimeApiKeyOverrides(
+  environment: Readonly<NodeJS.ProcessEnv> | undefined,
+): ReadonlyArray<readonly [provider: string, envKey: string, value: string]> {
+  if (!environment) {
+    return [];
+  }
+  return MODEL_PROVIDER_API_KEY_ENV_MAPPINGS.flatMap(({ provider, envKeys }) => {
+    const envKey = envKeys.find((key) => trimToUndefined(environment[key]) !== undefined);
+    if (!envKey) {
+      return [];
+    }
+    const value = trimToUndefined(environment[envKey]);
+    return value ? [[provider, envKey, value] as const] : [];
+  });
+}
+
+export async function applyPiRuntimeApiKeysFromEnvironment(
+  runtime: Pick<ModelRuntime, "setRuntimeApiKey">,
+  environment: Readonly<NodeJS.ProcessEnv> | undefined,
+): Promise<void> {
+  for (const [provider, _envKey, value] of readPiRuntimeApiKeyOverrides(environment)) {
+    await runtime.setRuntimeApiKey(provider, value);
+  }
+}
+
+interface PiModelRuntimeInternals {
+  readonly models?: {
+    authContext?: {
+      env(name: string): Promise<string | undefined>;
+      fileExists(path: string): Promise<boolean>;
+    };
+    refresh(options?: Record<string, unknown>): Promise<{
+      aborted: boolean;
+      errors: Map<string, Error>;
+    }>;
+  };
+  readonly credentials?: {
+    readonly store?: {
+      read(providerId: string, options?: unknown): Promise<unknown>;
+    };
+  };
+  readonly config?: {
+    readonly providers?: Map<string, PiRuntimeProviderConfig>;
+  };
+  readonly rebuildProviders?: () => void;
+  readonly recomposeProvider?: (providerId: string) => void;
+  readonly updateModelSnapshot?: () => void;
+  readonly queueAvailabilityRefresh?: (signal?: AbortSignal) => Promise<void>;
+  readonly refreshProviderAvailability?: (providerId: string, signal: AbortSignal) => Promise<void>;
+}
+
+interface PiRuntimeProviderConfig {
+  readonly apiKey?: string;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly models?: ReadonlyArray<
+    Readonly<Record<string, unknown>> & {
+      readonly headers?: Readonly<Record<string, string>>;
+    }
+  >;
+  readonly modelOverrides?: Readonly<
+    Record<
+      string,
+      Readonly<Record<string, unknown>> & {
+        readonly headers?: Readonly<Record<string, string>>;
+      }
+    >
+  >;
+  readonly [key: string]: unknown;
+}
+
+const PI_CONFIG_COMMAND_INHERITED_ENV_KEYS = new Set([
+  "ALL_PROXY",
+  "APPDATA",
+  "COMSPEC",
+  "HOME",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "LANG",
+  "LOCALAPPDATA",
+  "LOGNAME",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_PROXY",
+  "PATH",
+  "PATHEXT",
+  "SHELL",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "SYSTEMROOT",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "USER",
+  "USERPROFILE",
+  "WINDIR",
+]);
+
+function piConfigCommandEnvironment(
+  selectedEnvironment: Readonly<NodeJS.ProcessEnv>,
+): NodeJS.ProcessEnv {
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) =>
+        PI_CONFIG_COMMAND_INHERITED_ENV_KEYS.has(name.toUpperCase()) ||
+        name.toUpperCase().startsWith("LC_") ||
+        name.toUpperCase().startsWith("XDG_"),
+    ),
+  );
+  return buildProviderProcessEnv({
+    driver: PROVIDER,
+    env: inherited,
+    environment: Object.fromEntries(
+      Object.entries(selectedEnvironment).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    ),
+  });
+}
+
+function makePiConfigValueResolver(selectedEnvironment: Readonly<NodeJS.ProcessEnv>) {
+  const commandEnvironment = piConfigCommandEnvironment(selectedEnvironment);
+  const commandCache = new Map<string, string | undefined>();
+  return (config: string): string | undefined => {
+    if (config.startsWith("!")) {
+      if (!commandCache.has(config)) {
+        try {
+          const value = execShellCommandSync(config.slice(1), {
+            encoding: "utf8",
+            env: commandEnvironment,
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 10_000,
+          }).trim();
+          commandCache.set(
+            config,
+            value && value !== "undefined" && value !== "null" ? value : undefined,
+          );
+        } catch {
+          commandCache.set(config, undefined);
+        }
+      }
+      return commandCache.get(config);
+    }
+
+    let missing = false;
+    const resolved = config.replace(
+      /\$\$|\$!|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/gu,
+      (match, bracedName: string | undefined, plainName: string | undefined) => {
+        if (match === "$$") return "$";
+        if (match === "$!") return "!";
+        const value = selectedEnvironment[bracedName ?? plainName ?? ""];
+        if (value === undefined) {
+          missing = true;
+          return "";
+        }
+        return value;
+      },
+    );
+    return missing ? undefined : resolved;
+  };
+}
+
+function resolvePiConfigHeaders(
+  headers: Readonly<Record<string, string>> | undefined,
+  resolveValue: (config: string) => string | undefined,
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const resolved = Object.entries(headers).flatMap(([name, config]) => {
+    const value = resolveValue(config);
+    return value === undefined ? [] : [[name, value] as const];
+  });
+  return resolved.length > 0 ? Object.fromEntries(resolved) : undefined;
+}
+
+function isolatePiRuntimeConfig(
+  runtime: ModelRuntime,
+  selectedEnvironment: Readonly<NodeJS.ProcessEnv>,
+): void {
+  const internals = runtime as unknown as PiModelRuntimeInternals;
+  const providers = internals.config?.providers;
+  if (!providers) {
+    throw new Error("Pi ModelRuntime config is unavailable for account isolation.");
+  }
+  const resolveValue = makePiConfigValueResolver(selectedEnvironment);
+  for (const [providerId, provider] of providers) {
+    const apiKey = provider.apiKey === undefined ? undefined : resolveValue(provider.apiKey);
+    const headers = resolvePiConfigHeaders(provider.headers, resolveValue);
+    const models = provider.models?.map((model) => {
+      const resolvedHeaders = resolvePiConfigHeaders(model.headers, resolveValue);
+      const { headers: _modelHeaders, ...modelBase } = model;
+      return {
+        ...modelBase,
+        ...(resolvedHeaders !== undefined ? { headers: resolvedHeaders } : {}),
+      };
+    });
+    const modelOverrides = provider.modelOverrides
+      ? Object.fromEntries(
+          Object.entries(provider.modelOverrides).map(([modelId, model]) => {
+            const resolvedHeaders = resolvePiConfigHeaders(model.headers, resolveValue);
+            const { headers: _modelHeaders, ...modelBase } = model;
+            return [
+              modelId,
+              {
+                ...modelBase,
+                ...(resolvedHeaders !== undefined ? { headers: resolvedHeaders } : {}),
+              },
+            ];
+          }),
+        )
+      : undefined;
+    const {
+      apiKey: _apiKey,
+      headers: _headers,
+      models: _models,
+      modelOverrides: _modelOverrides,
+      ...providerBase
+    } = provider;
+    providers.set(providerId, {
+      ...providerBase,
+      ...(apiKey !== undefined ? { apiKey } : {}),
+      ...(headers !== undefined ? { headers } : {}),
+      ...(models !== undefined ? { models } : {}),
+      ...(modelOverrides !== undefined ? { modelOverrides } : {}),
+    });
+  }
+  internals.rebuildProviders?.();
+
+  const store = internals.credentials?.store;
+  if (store) {
+    const read = store.read.bind(store);
+    store.read = async (providerId, options) => {
+      const credential = await read(providerId, options);
+      if (
+        typeof credential !== "object" ||
+        credential === null ||
+        !("type" in credential) ||
+        credential.type !== "api_key" ||
+        !("key" in credential) ||
+        typeof credential.key !== "string" ||
+        !credential.key.startsWith("!")
+      ) {
+        return credential;
+      }
+      const key = resolveValue(credential.key);
+      return key === undefined ? undefined : { ...credential, key };
+    };
+  }
+
+  const models = internals.models;
+  if (
+    !models ||
+    !internals.rebuildProviders ||
+    !internals.recomposeProvider ||
+    !internals.updateModelSnapshot ||
+    !internals.queueAvailabilityRefresh ||
+    !internals.refreshProviderAvailability
+  ) {
+    throw new Error("Pi ModelRuntime refresh internals are unavailable for account isolation.");
+  }
+  runtime.refresh = async (options = {}) => {
+    if (options.providers) {
+      for (const providerId of new Set(options.providers)) internals.recomposeProvider!(providerId);
+      internals.updateModelSnapshot!();
+    } else {
+      internals.rebuildProviders!();
+    }
+    const result = await models.refresh({
+      ...options,
+      allowNetwork: options.allowNetwork ?? false,
+    });
+    internals.updateModelSnapshot!();
+    if (options.providers) {
+      await Promise.all(
+        [...new Set(options.providers)].map((providerId) =>
+          internals.refreshProviderAvailability!(
+            providerId,
+            options.signal ?? new AbortController().signal,
+          ),
+        ),
+      );
+    } else {
+      await internals.queueAvailabilityRefresh!(options.signal);
+    }
+    return result;
+  };
+}
+
+function isolatePiModelRuntimeFromAmbientEnvironment(
+  runtime: ModelRuntime,
+  environment: Readonly<NodeJS.ProcessEnv>,
+): void {
+  const models = (runtime as unknown as PiModelRuntimeInternals).models;
+  const authContext = models?.authContext;
+  if (!models || !authContext) {
+    throw new Error("Pi ModelRuntime auth context is unavailable for account isolation.");
+  }
+  models.authContext = {
+    ...authContext,
+    env: async (name) => trimToUndefined(environment[name]),
+    // Vertex is the only built-in provider that probes a credential file.
+    // An isolated account must not discover ADC under the real user home.
+    fileExists: async () => false,
+  };
+  isolatePiRuntimeConfig(runtime, environment);
+
+  const getAuth = runtime.getAuth.bind(runtime);
+  runtime.getAuth = (async (
+    providerOrModel: string | Model<Api>,
+    overrides?: Parameters<ModelRuntime["getAuth"]>[1],
+  ) => {
+    const provider =
+      typeof providerOrModel === "string" ? providerOrModel : providerOrModel.provider;
+    if (provider === "amazon-bedrock") {
+      throw new Error(
+        "Amazon Bedrock is disabled for isolated Pi accounts because the SDK falls back to the ambient AWS credential chain.",
+      );
+    }
+    if (provider === "azure-openai-responses") {
+      throw new Error(
+        "Azure OpenAI is disabled for isolated Pi accounts because the SDK reads process-level Azure routing.",
+      );
+    }
+    const result = await getAuth(providerOrModel as Model<Api>, overrides);
+    if (
+      provider === "google-vertex" &&
+      result &&
+      (!trimToUndefined(result.auth.apiKey) || result.auth.apiKey === "gcp-vertex-credentials")
+    ) {
+      throw new Error(
+        "Vertex ADC is disabled for isolated Pi accounts; configure a real instance-scoped API key.",
+      );
+    }
+    return result;
+  }) as ModelRuntime["getAuth"];
 }
 
 // Keep session runtimes isolated so project extension provider registrations
@@ -1243,19 +1816,50 @@ export async function createPiModelRuntime(
   agentDir: string,
   piSdk: Pick<PiCodingAgentModule, "ModelRuntime">,
   signal?: AbortSignal,
+  environment?: Readonly<Record<string, string>>,
+  instanceId?: string,
+  paths?: { readonly stateDir: string; readonly homeDir: string },
 ): Promise<ModelRuntime> {
+  const hasAccountBoundary =
+    environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
+  const runtimeEnvironment = hasAccountBoundary
+    ? buildProviderProcessEnv({
+        driver: PROVIDER,
+        env: {},
+        environment: environment ?? {},
+        ...(instanceId !== undefined ? { instanceId } : {}),
+        ...(paths ? { isolationRootDir: paths.stateDir, homeDir: paths.homeDir } : {}),
+      })
+    : environment;
   const runtime = await piSdk.ModelRuntime.create({
     authPath: path.join(agentDir, "auth.json"),
     modelsPath: path.join(agentDir, "models.json"),
+    ...(hasAccountBoundary ? { refreshOnCreate: false } : {}),
   });
-  await refreshPiOpenCodeCatalog(runtime, { signal });
+  if (hasAccountBoundary) {
+    isolatePiModelRuntimeFromAmbientEnvironment(runtime, runtimeEnvironment ?? {});
+  }
+  await applyPiRuntimeApiKeysFromEnvironment(runtime, runtimeEnvironment);
+  if (hasAccountBoundary) {
+    await runtime.refresh({ allowNetwork: false });
+  }
+  await refreshPiOpenCodeCatalog(runtime, { signal, environment: runtimeEnvironment });
   return runtime;
 }
 
-export async function refreshPiOpenRouterModels(runtime: ModelRuntime): Promise<void> {
+export async function refreshPiOpenRouterModels(
+  runtime: ModelRuntime,
+  options: {
+    readonly environment?: Readonly<NodeJS.ProcessEnv> | undefined;
+    readonly instanceId?: string | undefined;
+  } = {},
+): Promise<void> {
+  const environment =
+    options.environment ??
+    (options.instanceId !== undefined && options.instanceId !== PROVIDER ? {} : process.env);
   // Explicit extension catalogs and custom endpoints own their model metadata.
   if (
-    process.env.PI_OFFLINE !== undefined ||
+    environment.PI_OFFLINE !== undefined ||
     runtime.getRegisteredProviderIds().includes("openrouter") ||
     !runtime.hasConfiguredAuth("openrouter") ||
     runtime.getProvider("openrouter")?.baseUrl !== OPENROUTER_BASE_URL
@@ -1298,7 +1902,7 @@ function extensionDisplayName(extension: {
 }
 
 function makePiUserInputOption(label: string): UserInputQuestion["options"][number] {
-  const normalizedLabel = trimToUndefined(label) ?? "Option";
+  const normalizedLabel = trimPiDisplayText(label) ?? "Option";
   return { label: normalizedLabel, description: normalizedLabel };
 }
 
@@ -1307,7 +1911,7 @@ export function makePiUserInputOptions(
 ): ReadonlyArray<PiUserInputOptionMapping> {
   const labelCounts = new Map<string, number>();
   return labels.map((label, index) => {
-    const baseLabel = trimToUndefined(label) ?? `Option ${index + 1}`;
+    const baseLabel = trimPiDisplayText(label) ?? `Option ${index + 1}`;
     const count = (labelCounts.get(baseLabel) ?? 0) + 1;
     labelCounts.set(baseLabel, count);
     const displayLabel = count === 1 ? baseLabel : `${baseLabel} (${count})`;
@@ -1332,7 +1936,7 @@ function firstPiUserInputAnswer(
   return undefined;
 }
 
-export const PLAIN_PI_EXTENSION_THEME = {
+const PLAIN_PI_EXTENSION_THEME = {
   fg(_color: string, text: string) {
     return text;
   },
@@ -1382,6 +1986,56 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
     const sessions = new Map<ThreadId, PiSessionContext>();
+    const piExtensionModeCoordinator = makePiExtensionModeCoordinator(() => ({
+      hasExtensionEnabledDefault: [...sessions.values()].some(
+        (context) => context.extensionsEnabled,
+      ),
+      hasIsolatedMode: [...sessions.values()].some((context) => !context.extensionsEnabled),
+    }));
+    const reservePiExtensionMode = (isolatedAccount: boolean, replacingThreadId?: ThreadId) =>
+      piExtensionModeCoordinator.reserve(
+        isolatedAccount,
+        replacingThreadId === undefined
+          ? undefined
+          : {
+              hasExtensionEnabledDefault: [...sessions.entries()].some(
+                ([threadId, context]) =>
+                  threadId !== replacingThreadId && context.extensionsEnabled,
+              ),
+              hasIsolatedMode: [...sessions.entries()].some(
+                ([threadId, context]) =>
+                  threadId !== replacingThreadId && !context.extensionsEnabled,
+              ),
+            },
+      );
+    const preparePiDiscoveryMode = (
+      environment: Readonly<Record<string, string>> | undefined,
+      instanceId: string | undefined,
+    ) => {
+      const isolatedAccount =
+        environment !== undefined || (instanceId !== undefined && instanceId !== PROVIDER);
+      const reservation = reservePiExtensionMode(isolatedAccount);
+      if (isolatedAccount) {
+        resetApiProviders();
+      }
+      return reservation;
+    };
+    const withPiDiscoveryReservation = async <A>(
+      environment: Readonly<Record<string, string>> | undefined,
+      instanceId: string | undefined,
+      run: (noExtensions: boolean) => Promise<A>,
+    ): Promise<A> => {
+      const reservation = preparePiDiscoveryMode(environment, instanceId);
+      try {
+        return await run(reservation.noExtensions);
+      } finally {
+        reservation.release();
+      }
+    };
+    // Serializes session lifecycle and turn dispatch per thread. Dispatch also
+    // waits for a prior prompt's preflight decision before choosing prompt(),
+    // steer(), or followUp().
+    const dispatchLock = makeKeyedLock<ThreadId>();
     const ownsNativeEventLogger = options?.nativeEventLogger === undefined;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -1559,8 +2213,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     // pending user-input flow; terminal/TUI-only APIs remain no-op by design.
     const makePiExtensionUIContext = (context: PiSessionContext): ExtensionUIContext => {
       const unsupportedWarnings = new Set<string>();
-      const statusTexts = new Map<string, string>();
-      let workingMessage: string | undefined;
       const warnUnsupported = (method: string) => {
         if (unsupportedWarnings.has(method)) return;
         unsupportedWarnings.add(method);
@@ -1578,21 +2230,6 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           },
         } satisfies ProviderRuntimeEvent);
       };
-      const emitPluginProgress = (summary: string) => {
-        const normalized = trimToUndefined(summary);
-        if (!normalized) return;
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "tool.progress",
-          payload: { toolName: "Pi plugin", summary: normalized },
-          raw: {
-            source: "pi.sdk.event",
-            method: "extension/ui-progress",
-            payload: { summary: normalized },
-          },
-        } satisfies ProviderRuntimeEvent);
-      };
-
       const uiContext: ExtensionUIContext = {
         async select(title, options, opts) {
           const questionId = "selection";
@@ -1602,8 +2239,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             opts,
             question: {
               id: questionId,
-              header: trimToUndefined(title) ?? "Pi plugin",
-              question: trimToUndefined(title) ?? "Choose an option.",
+              header: trimPiDisplayText(title) ?? "Pi plugin",
+              question: trimPiDisplayText(title) ?? "Choose an option.",
               options: optionMappings.map((mapping) => mapping.option),
             },
             rawPayload: { title, options },
@@ -1618,9 +2255,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             opts,
             question: {
               id: questionId,
-              header: trimToUndefined(title) ?? "Pi plugin",
+              header: trimPiDisplayText(title) ?? "Pi plugin",
               question:
-                trimToUndefined(message) ?? trimToUndefined(title) ?? "Confirm this action?",
+                trimPiDisplayText(message) ?? trimPiDisplayText(title) ?? "Confirm this action?",
               options: [makePiUserInputOption("Yes"), makePiUserInputOption("No")],
             },
             rawPayload: { title, message },
@@ -1634,54 +2271,38 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             opts,
             question: {
               id: questionId,
-              header: trimToUndefined(title) ?? "Pi plugin",
+              header: trimPiDisplayText(title) ?? "Pi plugin",
               question:
-                trimToUndefined(placeholder) ?? trimToUndefined(title) ?? "Type a response.",
+                trimPiDisplayText(placeholder) ?? trimPiDisplayText(title) ?? "Type a response.",
               options: [],
             },
             rawPayload: { title, placeholder },
           });
           return firstPiUserInputAnswer(answers, questionId);
         },
-        notify(message, type) {
-          const normalized = trimToUndefined(message);
+        notify(message, type = "info") {
+          const normalized = trimPiDisplayText(message);
           if (!normalized) return;
-          if (type === "warning" || type === "error") {
-            offerRuntimeEvent({
-              ...makeEventBase(context),
-              type: "runtime.warning",
-              payload: { message: normalized, detail: { type: type ?? "info" } },
-              raw: {
-                source: "pi.sdk.event",
-                method: "extension/ui/notify",
-                payload: { message: normalized, type },
-              },
-            } satisfies ProviderRuntimeEvent);
-            return;
-          }
-          emitPluginProgress(normalized);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "runtime.warning",
+            payload: { message: normalized, detail: { type } },
+            raw: {
+              source: "pi.sdk.event",
+              method: "extension/ui/notify",
+              payload: { message: normalized, type },
+            },
+          } satisfies ProviderRuntimeEvent);
         },
         onTerminalInput() {
           warnUnsupported("onTerminalInput");
           return () => undefined;
         },
-        setStatus(key, text) {
-          const normalizedKey = trimToUndefined(key) ?? "status";
-          const normalizedText = trimToUndefined(text);
-          if (!normalizedText) {
-            statusTexts.delete(normalizedKey);
-            return;
-          }
-          if (statusTexts.get(normalizedKey) === normalizedText) return;
-          statusTexts.set(normalizedKey, normalizedText);
-          emitPluginProgress(`${normalizedKey}: ${normalizedText}`);
-        },
-        setWorkingMessage(message) {
-          const normalizedMessage = trimToUndefined(message);
-          if (!normalizedMessage || normalizedMessage === workingMessage) return;
-          workingMessage = normalizedMessage;
-          emitPluginProgress(normalizedMessage);
-        },
+        // Pi extensions use status and working-message callbacks for terminal
+        // chrome. Synara has its own working header; neither belongs in the
+        // transcript as a fake tool call.
+        setStatus() {},
+        setWorkingMessage() {},
         setWorkingVisible() {},
         setWorkingIndicator() {},
         setHiddenThinkingLabel() {},
@@ -1694,9 +2315,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         setHeader() {
           warnUnsupported("setHeader");
         },
-        setTitle(title) {
-          if (title) emitPluginProgress(title);
-        },
+        // The browser owns document/thread chrome; do not turn terminal title
+        // changes into transcript rows.
+        setTitle() {},
         async custom() {
           warnUnsupported("custom");
           return undefined as never;
@@ -1740,25 +2361,151 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return uiContext;
     };
 
-    const completePrompt = (
+    /**
+     * Reinstall the Synara gateway tools against the rotated credential. The
+     * bearer swap in completePrompt already keeps existing closures authorized;
+     * this tail only rebuilds definitions when the per-rotation tools/list
+     * catalog actually differs from what is installed. A diff that is only
+     * logged and never installed would leave the model calling stale tools.
+     */
+    const reinstallPiGatewayTools = (context: PiSessionContext): void => {
+      const lease = context.gatewaySessionLease;
+      const connection = context.gatewayConnection;
+      if (!lease || !connection) return;
+      const threadId = context.session.threadId;
+      Effect.runFork(
+        Effect.promise(async () => {
+          if (context.stopped || sessions.get(threadId) !== context) return;
+          if (context.gatewaySessionLease !== lease || context.gatewayConnection !== connection) {
+            return;
+          }
+          const fetchOptions =
+            options?.agentGatewayFetch === undefined ? {} : { fetch: options.agentGatewayFetch };
+          let freshNames: string[];
+          try {
+            const catalog = await listAgentGatewayMcpTools({ connection, ...fetchOptions });
+            freshNames = catalog.map((tool) => tool.name);
+          } catch {
+            // Catalog unreadable: the installed definitions stay valid through
+            // the rotated bearer, so keep them and stay available.
+            return;
+          }
+          const installedNames = new Set(context.gatewayTools.map((tool) => tool.name));
+          // Include enabled-session specialist forwarders in both sides of
+          // this comparison. Off sessions still install no Computer schemas;
+          // activation changes restart/resume at the reactor's turn boundary.
+          const freshNameSet = piInstalledGatewayToolNames(freshNames);
+          const sameCatalog =
+            installedNames.size === freshNameSet.size &&
+            [...freshNameSet].every((name) => installedNames.has(name));
+          if (sameCatalog) return;
+          let rebuilt: ReadonlyArray<ToolDefinition>;
+          try {
+            rebuilt = await buildPiAgentGatewayCustomTools({
+              connection,
+              defineTool: context.gatewayDefineTool,
+              enableComputerControl: context.enableComputerControl === true,
+              ...fetchOptions,
+            });
+          } catch (cause) {
+            // Rotation must never silently drop computer:*: the installed
+            // definitions stay valid through the rotated bearer, so keep them
+            // and stay available. Session start releases the lease on a bad
+            // catalog because nothing is installed yet; here clearing would
+            // revoke working control mid-session.
+            offerRuntimeEvent({
+              ...makeEventBase(context, { includeTurnId: false }),
+              type: "runtime.warning",
+              payload: {
+                message:
+                  "Pi could not refresh the Synara gateway tool catalog after rotation; keeping the previous tools.",
+                detail: { method: "gateway/rotate", cause: toMessage(cause, "refresh failed") },
+              },
+              raw: {
+                source: "pi.sdk.event",
+                method: "gateway/rotate",
+                payload: { cause: cause ?? null },
+              },
+            } satisfies ProviderRuntimeEvent);
+            return;
+          }
+          if (context.stopped || sessions.get(threadId) !== context) return;
+          if (context.gatewaySessionLease !== lease || context.gatewayConnection !== connection) {
+            return;
+          }
+          const rebuiltByName = new Map(rebuilt.map((tool) => [tool.name, tool]));
+          const nextInstalled: ToolDefinition[] = [];
+          for (const installed of context.gatewayTools) {
+            const fresh = rebuiltByName.get(installed.name);
+            if (!fresh) continue;
+            // Mutate in place: the Pi SDK holds these same definition objects
+            // and exposes no post-construction registration API.
+            for (const key of Object.keys(installed)) {
+              delete (installed as unknown as Record<string, unknown>)[key];
+            }
+            Object.assign(installed, fresh);
+            nextInstalled.push(installed);
+            rebuiltByName.delete(installed.name);
+          }
+          // Added tools cannot join the SDK's already-built registry; the
+          // context still tracks them truthfully for future rotations, and a
+          // warning names them so a newly-appearing computer:* is never a
+          // silent gap until the session restarts.
+          const addedNames = [...rebuiltByName.keys()];
+          for (const added of rebuiltByName.values()) nextInstalled.push(added);
+          context.gatewayTools = nextInstalled;
+          context.gatewayControlAvailable = nextInstalled.length > 0;
+          const removed = [...installedNames].filter((name) => !freshNameSet.has(name));
+          const droppedComputer = removed.filter((name) => name.startsWith("computer"));
+          const addedComputer = addedNames.filter((name) => name.startsWith("computer"));
+          if (addedNames.length > 0 || droppedComputer.length > 0) {
+            offerRuntimeEvent({
+              ...makeEventBase(context, { includeTurnId: false }),
+              type: "runtime.warning",
+              payload: {
+                message:
+                  "Pi gateway tool catalog changed after rotation; added tools need a session restart before the model can call them.",
+                detail: {
+                  method: "gateway/rotate",
+                  ...(addedNames.length > 0 ? { added: addedNames } : {}),
+                  ...(removed.length > 0 ? { removed } : {}),
+                  ...(addedComputer.length > 0 ? { addedComputer } : {}),
+                  ...(droppedComputer.length > 0 ? { droppedComputer } : {}),
+                },
+              },
+              raw: {
+                source: "pi.sdk.event",
+                method: "gateway/rotate",
+                payload: { added: addedNames, removed },
+              },
+            } satisfies ProviderRuntimeEvent);
+          }
+          if (removed.length > 0) {
+            try {
+              context.runtime.session.setActiveToolsByName(
+                context.runtime.session
+                  .getActiveToolNames()
+                  .filter((name) => !removed.includes(name)),
+              );
+            } catch {
+              // Best effort: the definitions are already dropped from the context.
+            }
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("pi.agent_gateway.tool_reinstall_failed", { threadId, cause }),
+          ),
+        ),
+      );
+    };
+
+    // SDK messages end independently of the prompt's retries and tool loop.
+    // Keep prompt settlement as a fallback for failures without message_end.
+    const completeMessageItems = (
       context: PiSessionContext,
-      turnId: TurnId,
-      errorMessage: string | undefined,
-      cause?: unknown,
+      failed: boolean,
+      raw: ProviderRuntimeEvent["raw"],
     ) => {
-      if (context.stopped || context.activeTurnId !== turnId) return;
-      const raw = {
-        source: "pi.sdk.event" as const,
-        method: "prompt",
-        payload: cause ?? {},
-      };
-      const stats = context.runtime.session.getSessionStats();
-      const usage = normalizeTokenUsage(stats, context.runtime.session.model?.contextWindow);
-      context.lastKnownTokenUsage = usage;
-      const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
-      const leafId = context.runtime.session.sessionManager.getLeafId();
-      const turn = context.turns.find((candidate) => candidate.id === turnId);
-      if (turn) turn.leafId = leafId;
       if (context.activeAssistantItemId) {
         offerRuntimeEvent({
           ...makeEventBase(context),
@@ -1766,7 +2513,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           type: "item.completed",
           payload: {
             itemType: "assistant_message",
-            status: errorMessage ? "failed" : "completed",
+            status: failed ? "failed" : "completed",
             title: "Assistant",
           },
           raw,
@@ -1779,12 +2526,37 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           type: "item.completed",
           payload: {
             itemType: "reasoning",
-            status: errorMessage ? "failed" : "completed",
+            status: failed ? "failed" : "completed",
             title: "Reasoning",
           },
           raw,
         } satisfies ProviderRuntimeEvent);
       }
+      context.activeAssistantItemId = undefined;
+      context.activeReasoningItemId = undefined;
+    };
+
+    const completePrompt = (
+      context: PiSessionContext,
+      turnId: TurnId,
+      errorMessage: string | undefined,
+      cause?: unknown,
+    ) => {
+      if (context.stopped || context.activeTurnId !== turnId) return;
+      if (context.pendingAbortTurnId === turnId) context.pendingAbortTurnId = undefined;
+      const raw = {
+        source: "pi.sdk.event" as const,
+        method: "prompt",
+        payload: cause ?? {},
+      };
+      const stats = context.runtime.session.getSessionStats();
+      const usage = normalizeTokenUsage(stats, context.runtime.session.model?.contextWindow);
+      context.lastKnownTokenUsage = usage;
+      const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
+      const leafId = context.runtime.session.sessionManager.getLeafId();
+      const turn = context.turns.find((candidate) => candidate.id === turnId);
+      if (turn) turn.leafId = leafId;
+      completeMessageItems(context, Boolean(errorMessage), raw);
       if (usage) {
         offerRuntimeEvent({
           ...makeEventBase(context),
@@ -1805,16 +2577,44 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const outgoingLease = context.gatewaySessionLease;
         const drainage = outgoingLease.retireTurn(turnId);
         outgoingLease.release();
+        // The replacement derives from the facts stashed at dispatch time, not
+        // the start snapshot and not a fresh derivation.
         const replacementLease = acquireAgentGatewaySessionLease(
           agentGatewayCredentials,
           context.session.threadId,
           PROVIDER,
+          context.gatewayCapabilityInput,
         );
         if (replacementLease) {
           context.gatewaySessionLease = replacementLease;
+          // Installed gateway tools close over this object, so mutating it in
+          // place keeps their bearer current without re-registration.
           Object.assign(context.gatewayConnection, replacementLease.connection);
+          // Published before turn.completed below: guidance for the next turn
+          // reads the new rotation's availability, never the retired one. The
+          // reinstall tail corrects this once the fresh catalog is known.
+          context.gatewayControlAvailable = true;
+          reinstallPiGatewayTools(context);
         } else {
           delete context.gatewaySessionLease;
+          delete context.gatewayConnection;
+          context.gatewayControlAvailable = false;
+          const rotationTurnId = TurnId.makeUnsafe(crypto.randomUUID());
+          offerRuntimeEvent({
+            ...makeEventBase(context, { includeTurnId: false }),
+            turnId: rotationTurnId,
+            type: "runtime.error",
+            payload: {
+              message:
+                "Pi could not rotate the Synara gateway credential after the turn; Synara tools are unavailable until the session restarts.",
+              class: classifyPiRuntimeError("gateway credential rotation failed"),
+            },
+            raw: {
+              source: "pi.sdk.event",
+              method: "gateway/rotate",
+              payload: { turnId },
+            },
+          } satisfies ProviderRuntimeEvent);
         }
         Effect.runFork(
           Effect.promise(() => drainage).pipe(
@@ -1853,19 +2653,223 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       images: ImageContent[],
     ) => {
       delete context.activeTurnErrorMessage;
+      // Marks the prompt as dispatched-but-not-yet-streaming: the SDK's
+      // isStreaming flag only flips deep inside prompt()'s async preflight, so
+      // a concurrent sendTurn/steerTurn must not read the gap as "settled".
+      context.promptCommitting = turnId;
+      let resolveCommit!: () => void;
+      const committed = new Promise<void>((resolve) => {
+        resolveCommit = resolve;
+      });
+      context.promptCommit = committed;
+      let commitSettled = false;
+      const settled = () => {
+        if (commitSettled) return;
+        commitSettled = true;
+        if (context.promptCommitting === turnId) context.promptCommitting = undefined;
+        if (context.promptCommit === committed) context.promptCommit = undefined;
+        resolveCommit();
+      };
       // A prompt owns all SDK retries, compaction and queued continuations.
       // agent_end is per attempt; agent_settled also fires before a rejection.
-      void context.runtime.session.prompt(text, images.length > 0 ? { images } : undefined).then(
-        () => completePrompt(context, turnId, context.activeTurnErrorMessage),
-        (cause) => completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause),
-      );
+      void context.runtime.session
+        .prompt(text, {
+          ...(images.length > 0 ? { images } : {}),
+          // Release a waiting dispatch once prompt() either commits its own
+          // run or handles the input without a run. A rejected preflight is
+          // released by the promise rejection path below.
+          preflightResult: (success) => {
+            if (success) settled();
+          },
+        })
+        .then(
+          () => {
+            settled();
+            completePrompt(context, turnId, context.activeTurnErrorMessage);
+          },
+          (cause) => {
+            settled();
+            completePrompt(context, turnId, toMessage(cause, "Pi turn failed."), cause);
+          },
+        );
     };
 
-    const recordItem = (context: PiSessionContext, item: unknown) => {
+    const awaitPromptCommit = (context: PiSessionContext) => {
+      const pending = context.promptCommit;
+      return pending === undefined
+        ? Effect.void
+        : Effect.promise(() => pending).pipe(Effect.uninterruptible);
+    };
+
+    // A turn whose run fully settled but whose completion is still queued on
+    // the prompt() promise is stale — close it out so the next dispatch starts
+    // clean instead of joining a dead turn. A still-committing prompt
+    // (isStreaming has not flipped yet) is live, not stale.
+    const closeSettledActiveTurn = (context: PiSessionContext) => {
+      const turnId = context.activeTurnId;
+      if (
+        turnId === undefined ||
+        context.runtime.session.isStreaming ||
+        context.promptCommitting === turnId
+      ) {
+        return;
+      }
+      completePrompt(context, turnId, context.activeTurnErrorMessage);
+    };
+
+    const buildProviderText = (context: PiSessionContext, text: string) =>
+      buildPiTurnPrompt(context, {
+        text,
+        gatewayControlAvailable: context.gatewayControlAvailable,
+      });
+
+    const sendTurnBusyError = () =>
+      new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "sendTurn",
+        issue: "A Pi turn is already active for this thread.",
+      });
+
+    const applyPiModelSelection = (context: PiSessionContext, selection: PiModelSelection) =>
+      Effect.gen(function* () {
+        const model = findModelInRegistry(context.modelRegistry, selection.model);
+        if (!model) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "model/set",
+            issue: `Pi model '${selection.model}' is not available. Use a discovered model or a provider-qualified custom model slug like 'openai/gpt-5.5'.`,
+          });
+        }
+        yield* Effect.tryPromise({
+          try: () => context.runtime.session.setModel(model),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "model/set",
+              detail: toMessage(cause, "Failed to set Pi model."),
+              cause,
+            }),
+        });
+        const thinkingLevel = normalizePiThinkingLevel(selection.options?.thinkingLevel);
+        if (thinkingLevel) {
+          context.runtime.session.setThinkingLevel(thinkingLevel);
+        }
+      });
+
+    // /reload only exists as a bare text command — attachments make it a prompt.
+    const isPiReloadPayload = (payload: { text: string; images: ImageContent[] }) =>
+      payload.images.length === 0 && isPiReloadCommand(payload.text);
+
+    const queuePiFollowUp = (
+      context: PiSessionContext,
+      payload: { text: string; images: ImageContent[] },
+    ) =>
+      Effect.tryPromise({
+        try: () =>
+          context.runtime.session.followUp(
+            buildProviderText(context, payload.text),
+            payload.images,
+          ),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/followUp",
+            detail: toMessage(cause, "Failed to queue Pi follow-up."),
+            cause,
+          }),
+      });
+
+    const steerPiTurn = (context: PiSessionContext, text: string, images: ImageContent[]) =>
+      Effect.tryPromise({
+        try: () => context.runtime.session.steer(text, images),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/steer",
+            detail: toMessage(cause, "Failed to steer Pi turn."),
+            cause,
+          }),
+      });
+
+    const runPiReload = (context: PiSessionContext, command: string) =>
+      Effect.gen(function* () {
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "turn.started",
+          payload: {
+            ...(context.runtime.session.model
+              ? {
+                  model: `${context.runtime.session.model.provider}/${context.runtime.session.model.id}`,
+                }
+              : {}),
+            effort: context.runtime.session.thinkingLevel,
+          },
+          raw: { source: "pi.sdk.event", method: "reload", payload: { command } },
+        } satisfies ProviderRuntimeEvent);
+        yield* Effect.tryPromise({
+          try: () => context.runtime.session.reload(),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/reload",
+              detail: toMessage(cause, "Failed to reload Pi resources."),
+              cause,
+            }),
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              const message = error.message;
+              offerRuntimeEvent({
+                ...makeEventBase(context),
+                type: "turn.completed",
+                payload: { state: "failed", stopReason: "error", errorMessage: message },
+                raw: { source: "pi.sdk.event", method: "reload", payload: error },
+              } satisfies ProviderRuntimeEvent);
+              offerRuntimeError(context, {
+                message,
+                method: "session/reload",
+                cause: error,
+              });
+              yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+              context.activeTurnId = undefined;
+              context.session = makeSessionSnapshot(context);
+              return yield* Effect.fail(error);
+            }),
+          ),
+        );
+        offerRuntimeEvent({
+          ...makeEventBase(context),
+          type: "turn.completed",
+          payload: { state: "completed", stopReason: "reload" },
+          raw: { source: "pi.sdk.event", method: "reload", payload: { command } },
+        } satisfies ProviderRuntimeEvent);
+        yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
+        context.activeTurnId = undefined;
+        context.session = makeSessionSnapshot(context);
+      });
+
+    const dispatchResult = (context: PiSessionContext, turnId: TurnId) => ({
+      threadId: context.session.threadId,
+      turnId,
+      resumeCursor: getSessionFile(context.runtime.session),
+    });
+
+    const recordItem = (context: PiSessionContext, item: unknown, toolCallId?: string) => {
       const turn = context.activeTurnId
         ? context.turns.find((candidate) => candidate.id === context.activeTurnId)
         : context.turns.at(-1);
-      turn?.items.push(item);
+      if (!turn) return;
+      if (toolCallId !== undefined) {
+        const index = turn.toolItemIndexes.get(toolCallId);
+        if (index !== undefined) {
+          const previous = turn.items[index];
+          turn.items[index] =
+            isRecord(previous) && isRecord(item) ? { ...previous, ...item } : item;
+          return;
+        }
+        turn.toolItemIndexes.set(toolCallId, turn.items.length);
+      }
+      turn.items.push(item);
     };
 
     const requireSession = Effect.fn("PiAdapter.requireSession")(function* (threadId: ThreadId) {
@@ -1883,6 +2887,24 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       // Otherwise the SDK can start a queued continuation after aborting backoff.
       context.runtime.session.clearQueue();
       return context.runtime.session.abort();
+    };
+
+    // prompt()'s async preflight leaves no run for abort() to reach — an
+    // interrupt in that window would no-op and the turn would start anyway.
+    // Defer it: agent_start fires the abort once the run actually commits.
+    const interruptActiveTurn = (context: PiSessionContext) => {
+      const turnId = context.activeTurnId;
+      if (
+        turnId !== undefined &&
+        context.promptCommitting === turnId &&
+        !context.runtime.session.isStreaming
+      ) {
+        context.pendingAbortTurnId = turnId;
+        // There is no agent run to abort yet, but prompt preflight may be
+        // compacting. Abort that work now and keep the deferred run abort.
+        return abortSessionTurn(context);
+      }
+      return abortSessionTurn(context);
     };
 
     const disposeSessionContext = async (context: PiSessionContext) => {
@@ -1990,6 +3012,20 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const handleSessionEvent = (context: PiSessionContext, event: AgentSessionEvent) => {
       switch (event.type) {
         case "agent_start":
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            // The committing prompt just started its run — land the interrupt
+            // that was deferred because abort() had nothing to reach yet.
+            void abortSessionTurn(context).catch((cause) => {
+              offerRuntimeError(context, {
+                message: toMessage(cause, "Failed to interrupt Pi turn."),
+                method: "turn/interrupt",
+                cause,
+              });
+            });
+          }
           offerRuntimeEvent({
             ...makeEventBase(context),
             type: "thread.state.changed",
@@ -2012,6 +3048,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
           } satisfies ProviderRuntimeEvent);
           return;
+        case "message_end":
+          if (event.message.role === "assistant") {
+            completeMessageItems(
+              context,
+              event.message.stopReason === "error" || event.message.stopReason === "aborted",
+              { source: "pi.sdk.event", messageType: event.type, payload: event },
+            );
+          }
+          return;
         case "message_update":
           handleMessageUpdate(context, event);
           return;
@@ -2026,12 +3071,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           };
           context.activeToolItems.set(event.toolCallId, tracked);
           const title = toolTitle(event.toolName, event.args);
-          recordItem(context, {
-            type: "tool_call",
-            status: "started",
-            toolName: event.toolName,
-            args: event.args,
-          });
+          recordItem(
+            context,
+            {
+              type: "tool_call",
+              callId: event.toolCallId,
+              status: "started",
+              toolName: event.toolName,
+              args: event.args,
+            },
+            event.toolCallId,
+          );
           offerRuntimeEvent({
             ...makeEventBase(context),
             itemId,
@@ -2055,12 +3105,18 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const tracked = context.activeToolItems.get(event.toolCallId);
           if (!tracked) return;
           const detail = textFromToolResult(event.partialResult);
-          recordItem(context, {
-            type: "tool_call",
-            status: "updated",
-            toolName: event.toolName,
-            output: detail,
-          });
+          recordItem(
+            context,
+            {
+              type: "tool_call",
+              callId: event.toolCallId,
+              status: "updated",
+              toolName: event.toolName,
+              args: tracked.args,
+              output: detail,
+            },
+            event.toolCallId,
+          );
           offerRuntimeEvent({
             ...makeEventBase(context),
             itemId: tracked.itemId,
@@ -2092,13 +3148,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           };
           context.activeToolItems.delete(event.toolCallId);
           const detail = textFromToolResult(event.result);
-          recordItem(context, {
-            type: "tool_call",
-            status: event.isError ? "failed" : "completed",
-            toolName: event.toolName,
-            output: detail,
-            result: event.result,
-          });
+          recordItem(
+            context,
+            {
+              type: "tool_call",
+              callId: event.toolCallId,
+              status: event.isError ? "failed" : "completed",
+              toolName: event.toolName,
+              ...(tracked.args !== undefined ? { args: tracked.args } : {}),
+              output: detail,
+              result: event.result,
+            },
+            event.toolCallId,
+          );
           offerRuntimeEvent({
             ...makeEventBase(context),
             itemId: tracked.itemId,
@@ -2187,14 +3249,24 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       sdk: PiCodingAgentModule;
       cwd: string;
       agentDir: string;
+      environment?: Readonly<Record<string, string>>;
+      instanceId?: string;
       sessionManager: SessionManager;
       modelId?: string;
       thinkingLevel?: ThinkingLevel;
       processSupervisor: PiBashProcessSupervisor;
       gatewayTools?: ReadonlyArray<ToolDefinition>;
       signal?: AbortSignal;
+      noExtensions?: boolean;
     }) => {
-      const modelRuntime = await createPiModelRuntime(input.agentDir, input.sdk, input.signal);
+      const modelRuntime = await createPiModelRuntime(
+        input.agentDir,
+        input.sdk,
+        input.signal,
+        input.environment,
+        input.instanceId,
+        { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
+      );
       input.signal?.throwIfAborted();
       const createRuntime: CreateAgentSessionRuntimeFactory = async ({
         cwd,
@@ -2206,6 +3278,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           cwd,
           agentDir,
           modelRuntime,
+          ...(input.noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
         });
         const registry = modelRegistryFacade(services.modelRuntime, input.sdk);
         const requested = parseModelReference(input.modelId);
@@ -2213,7 +3286,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           requested?.provider === "openrouter" &&
           !registry.find(requested.provider, requested.id)
         ) {
-          await refreshPiOpenRouterModels(services.modelRuntime);
+          await refreshPiOpenRouterModels(services.modelRuntime, {
+            environment: input.environment,
+            instanceId: input.instanceId,
+          });
         }
         const model = findModelInRegistry(registry, input.modelId);
         if (input.modelId && !model) {
@@ -2257,22 +3333,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       };
     };
 
-    const startSession: PiAdapterShape["startSession"] = (input) =>
+    const startSessionUnlocked = (
+      input: Parameters<PiAdapterShape["startSession"]>[0],
+      noExtensions: boolean,
+      providerInstanceId: ProviderSession["providerInstanceId"],
+    ) =>
       Effect.gen(function* () {
         const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-        const piSdk = yield* loadPiSdk("session/start");
-        const processSupervisor = makePiBashProcessSupervisor({
-          getShellConfig: () => piSdk.getShellConfig(),
-          ...(options?.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
-          ...(options?.teardownProcessTree
-            ? { teardownProcessTree: options.teardownProcessTree }
-            : {}),
-        });
-        const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir, piSdk);
+        const piOptions = input.providerOptions?.pi;
+        const piEnvironment = piOptions?.environment;
+        const isolatedAccount =
+          piEnvironment !== undefined ||
+          (providerInstanceId !== undefined && providerInstanceId !== PROVIDER);
         const sessionFile = extractResumeSessionFile(input.resumeCursor);
-        const sessionManager = sessionFile
-          ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
-          : piSdk.SessionManager.create(cwd);
         const modelId =
           input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
         const thinkingLevel =
@@ -2295,12 +3368,49 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             sessions.delete(input.threadId);
           }
         }
+        if (isolatedAccount) {
+          resetApiProviders();
+        }
+        const piSdk = yield* loadPiSdk("session/start");
+        const processSupervisor = makePiBashProcessSupervisor({
+          lowerPriority: yield* providerProcessPriorityEnabled,
+          getShellConfig: () => piSdk.getShellConfig(),
+          ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
+          ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
+          homeDir: serverConfig.homeDir,
+          isolationRootDir: serverConfig.stateDir,
+          ...(options?.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
+          ...(options?.teardownProcessTree
+            ? { teardownProcessTree: options.teardownProcessTree }
+            : {}),
+        });
+        const storagePaths = makePiStoragePaths({
+          agentDir: piOptions?.agentDir,
+          environment: piEnvironment,
+          instanceId: providerInstanceId,
+          stateDir: serverConfig.stateDir,
+          homeDir: serverConfig.homeDir,
+          sdkAgentDir: piSdk.getAgentDir(),
+        });
+        const agentDir = storagePaths.agentDir;
+        const sessionManager = sessionFile
+          ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
+          : piSdk.SessionManager.create(cwd, storagePaths.sessionDir);
         const agentGatewaySessionLease = acquireAgentGatewaySessionLease(
           agentGatewayCredentials,
           input.threadId,
           PROVIDER,
+          input,
         );
         const agentGatewayConnection = agentGatewaySessionLease?.connection;
+        if (input.enableComputerControl === true && !agentGatewayConnection) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/start",
+            detail:
+              "Computer Use could not start because Pi did not receive a thread-scoped Synara gateway connection.",
+          });
+        }
         const gatewayTools = agentGatewayConnection
           ? yield* releaseAgentGatewaySessionLeaseOnInterrupt(
               agentGatewaySessionLease,
@@ -2309,6 +3419,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                   buildPiAgentGatewayCustomTools({
                     connection: agentGatewayConnection,
                     defineTool: (tool) => piSdk.defineTool(tool),
+                    enableComputerControl: input.enableComputerControl === true,
                     ...(options?.agentGatewayFetch === undefined
                       ? {}
                       : { fetch: options.agentGatewayFetch }),
@@ -2319,10 +3430,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               Effect.catch((cause) =>
                 Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
                   Effect.andThen(
-                    Effect.logWarning(
-                      "Pi could not install thread-scoped Synara gateway tools",
-                      cause,
-                    ),
+                    input.enableComputerControl === true
+                      ? Effect.fail(
+                          new ProviderAdapterRequestError({
+                            provider: PROVIDER,
+                            method: "session/start",
+                            detail: `Computer Use could not start because Pi could not install Synara gateway tools: ${toMessage(cause, "Gateway setup failed.")}`,
+                            cause,
+                          }),
+                        )
+                      : Effect.logWarning(
+                          "Pi could not install thread-scoped Synara gateway tools",
+                          cause,
+                        ),
                   ),
                   Effect.as([] as ReadonlyArray<ToolDefinition>),
                 ),
@@ -2342,7 +3462,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 sdk: piSdk,
                 cwd,
                 agentDir,
+                ...(piEnvironment !== undefined ? { environment: piEnvironment } : {}),
+                ...(providerInstanceId !== undefined ? { instanceId: providerInstanceId } : {}),
                 sessionManager,
+                ...(noExtensions ? { noExtensions: true } : {}),
                 ...(modelId ? { modelId } : {}),
                 ...(thinkingLevel ? { thinkingLevel } : {}),
                 processSupervisor,
@@ -2370,6 +3493,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const resumeCursor = getSessionFile(runtime.session);
         const session: ProviderSession = {
           provider: PROVIDER,
+          ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
           status: "ready",
           runtimeMode: input.runtimeMode,
           cwd,
@@ -2380,6 +3504,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ...(resumeCursor ? { resumeCursor } : {}),
         };
         const context: PiSessionContext = {
+          enableComputerControl: input.enableComputerControl === true,
+          gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
@@ -2391,11 +3517,16 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 gatewayConnection: agentGatewayConnection!,
               }
             : {}),
+          gatewayTools: [...gatewayTools],
+          gatewayDefineTool: (tool) => piSdk.defineTool(tool),
           processSupervisor,
           modelRegistry,
           session,
           turns: [],
           activeTurnId: undefined,
+          promptCommitting: undefined,
+          promptCommit: undefined,
+          pendingAbortTurnId: undefined,
           activeAssistantItemId: undefined,
           activeReasoningItemId: undefined,
           activeToolItems: new Map(),
@@ -2403,6 +3534,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           stopped: false,
           lastKnownTokenUsage: undefined,
           unsubscribe: undefined,
+          extensionsEnabled: !noExtensions,
         };
         context.unsubscribe = runtime.session.subscribe((event) =>
           handleSessionEvent(context, event),
@@ -2413,7 +3545,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             runtime.session.bindExtensions({
               uiContext: makePiExtensionUIContext(context),
               abortHandler: () => {
-                void abortSessionTurn(context).catch((cause) => {
+                void interruptActiveTurn(context).catch((cause) => {
                   offerRuntimeError(context, {
                     message: toMessage(cause, "Failed to interrupt Pi turn."),
                     method: "turn/interrupt",
@@ -2457,7 +3589,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             type: "runtime.warning",
             payload: {
               message:
-                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input/notify/status are supported; TUI-only widgets and editor hooks are ignored.",
+                "Pi extensions are loaded with Synara's limited UI bridge. select/confirm/input and notifications are supported; terminal status, widgets, and editor hooks are ignored.",
               detail: {
                 extensionCount: loadedExtensions.length,
                 extensions: extensionNames,
@@ -2494,6 +3626,32 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         }
         return session;
       });
+
+    const startSession: PiAdapterShape["startSession"] = (input) => {
+      const piEnvironment = input.providerOptions?.pi?.environment;
+      const providerInstanceId = resolvePiStartInstanceId(input);
+      const isolatedAccount =
+        piEnvironment !== undefined ||
+        (providerInstanceId !== undefined && providerInstanceId !== PROVIDER);
+      return Effect.acquireUseRelease(
+        Effect.try({
+          try: () => reservePiExtensionMode(isolatedAccount, input.threadId),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/start",
+              detail: cause instanceof Error ? cause.message : String(cause),
+              cause,
+            }),
+        }),
+        (reservation) =>
+          dispatchLock.withLock(
+            input.threadId,
+            startSessionUnlocked(input, reservation.noExtensions, providerInstanceId),
+          ),
+        (reservation) => Effect.sync(reservation.release),
+      );
+    };
 
     const buildPromptPayload = (input: {
       readonly input?: string | undefined;
@@ -2549,153 +3707,127 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       });
 
     const sendTurn: PiAdapterShape["sendTurn"] = (input) =>
-      Effect.gen(function* () {
-        const context = yield* requireSession(input.threadId);
-        if (context.activeTurnId) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "A Pi turn is already active for this thread.",
+      dispatchLock.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const context = yield* requireSession(input.threadId);
+          // Snapshot the session's computer-control fact for the turn being
+          // dispatched. Credential rotation at completion consumes this stashed
+          // value, not the start snapshot and not a fresh derivation. Turns
+          // carry no per-turn override; the session fact is the only source.
+          context.gatewayCapabilityInput = captureAgentGatewayCapabilityInput({
+            enableComputerControl: context.enableComputerControl === true,
           });
-        }
-        if (input.modelSelection?.provider === "pi") {
-          const model = findModelInRegistry(context.modelRegistry, input.modelSelection.model);
-          if (!model) {
-            return yield* new ProviderAdapterValidationError({
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* sendTurnBusyError();
+          }
+          yield* awaitPromptCommit(context);
+          if (input.modelSelection?.provider === "pi") {
+            yield* applyPiModelSelection(context, input.modelSelection);
+          }
+          const payload = yield* buildPromptPayload(input);
+          if (context.stopped) {
+            return yield* new ProviderAdapterSessionClosedError({
               provider: PROVIDER,
-              operation: "model/set",
-              issue: `Pi model '${input.modelSelection.model}' is not available. Use a discovered model or a provider-qualified custom model slug like 'openai/gpt-5.5'.`,
+              threadId: input.threadId,
             });
           }
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.setModel(model),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "model/set",
-                detail: toMessage(cause, "Failed to set Pi model."),
-                cause,
-              }),
-          });
-          const thinkingLevel = normalizePiThinkingLevel(
-            input.modelSelection.options?.thinkingLevel,
-          );
-          if (thinkingLevel) {
-            context.runtime.session.setThinkingLevel(thinkingLevel);
+          closeSettledActiveTurn(context);
+          const liveTurnId = context.activeTurnId;
+          if (liveTurnId !== undefined) {
+            // A turn is active: route the send through the SDK's follow-up
+            // queue instead of prompt(), which would throw the raw "Agent is
+            // already processing" error mid-run.
+            if (context.pendingAbortTurnId === liveTurnId || isPiReloadPayload(payload)) {
+              return yield* sendTurnBusyError();
+            }
+            yield* queuePiFollowUp(context, payload);
+            return dispatchResult(context, liveTurnId);
           }
-        }
-        const payload = yield* buildPromptPayload(input);
-        const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        context.activeTurnId = turnId;
-        context.turns.push({ id: turnId, items: [] });
-        context.session = makeSessionSnapshot(context);
-        if (payload.images.length === 0 && isPiReloadCommand(payload.text)) {
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "turn.started",
-            payload: {
-              ...(context.runtime.session.model
-                ? {
-                    model: `${context.runtime.session.model.provider}/${context.runtime.session.model.id}`,
-                  }
-                : {}),
-              effort: context.runtime.session.thinkingLevel,
-            },
-            raw: { source: "pi.sdk.event", method: "reload", payload: { command: payload.text } },
-          } satisfies ProviderRuntimeEvent);
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.reload(),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/reload",
-                detail: toMessage(cause, "Failed to reload Pi resources."),
-                cause,
-              }),
-          }).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                const message = error.message;
-                offerRuntimeEvent({
-                  ...makeEventBase(context),
-                  type: "turn.completed",
-                  payload: { state: "failed", stopReason: "error", errorMessage: message },
-                  raw: { source: "pi.sdk.event", method: "reload", payload: error },
-                } satisfies ProviderRuntimeEvent);
-                offerRuntimeError(context, {
-                  message,
-                  method: "session/reload",
-                  cause: error,
-                });
-                yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
-                context.activeTurnId = undefined;
-                context.session = makeSessionSnapshot(context);
-                return yield* Effect.fail(error);
-              }),
-            ),
-          );
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "turn.completed",
-            payload: { state: "completed", stopReason: "reload" },
-            raw: { source: "pi.sdk.event", method: "reload", payload: { command: payload.text } },
-          } satisfies ProviderRuntimeEvent);
-          yield* cancelAgentGatewayTurn(context.gatewaySessionLease, context.activeTurnId);
-          context.activeTurnId = undefined;
+          if (context.runtime.session.isStreaming) {
+            // A run Synara did not dispatch is active (e.g. extension-triggered).
+            return yield* sendTurnBusyError();
+          }
+          const turnId = TurnId.makeUnsafe(crypto.randomUUID());
+          context.activeTurnId = turnId;
+          context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
           context.session = makeSessionSnapshot(context);
-          return {
-            threadId: input.threadId,
-            turnId,
-            resumeCursor: getSessionFile(context.runtime.session),
-          };
-        }
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
-        startPrompt(context, turnId, providerText, payload.images);
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: getSessionFile(context.runtime.session),
-        };
-      });
+          if (isPiReloadPayload(payload)) {
+            yield* runPiReload(context, payload.text);
+            return dispatchResult(context, turnId);
+          }
+          startPrompt(context, turnId, buildProviderText(context, payload.text), payload.images);
+          return dispatchResult(context, turnId);
+        }),
+      );
 
     const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
-      Effect.gen(function* () {
-        const context = yield* requireSession(input.threadId);
-        const payload = yield* buildPromptPayload(input);
-        const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        });
-        const providerText = [harnessPolicy, payload.text].filter(Boolean).join("\n\n");
-        const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
-        if (!context.activeTurnId) {
-          context.activeTurnId = turnId;
-          context.turns.push({ id: turnId, items: [] });
-        }
-        if (context.runtime.session.isStreaming) {
-          yield* Effect.tryPromise({
-            try: () => context.runtime.session.steer(providerText, payload.images),
-            catch: (cause) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "turn/steer",
-                detail: toMessage(cause, "Failed to steer Pi turn."),
-                cause,
-              }),
+      dispatchLock.withLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const context = yield* requireSession(input.threadId);
+          // Same dispatch-time snapshot as sendTurn, so a steered fresh turn
+          // rotates from current facts.
+          context.gatewayCapabilityInput = captureAgentGatewayCapabilityInput({
+            enableComputerControl: context.enableComputerControl === true,
           });
-        } else {
-          startPrompt(context, turnId, providerText, payload.images);
-        }
-        return {
-          threadId: input.threadId,
-          turnId,
-          resumeCursor: getSessionFile(context.runtime.session),
-        };
-      });
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
+          yield* awaitPromptCommit(context);
+          const payload = yield* buildPromptPayload(input);
+          if (context.stopped) {
+            return yield* new ProviderAdapterSessionClosedError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+            });
+          }
+          closeSettledActiveTurn(context);
+          if (
+            context.pendingAbortTurnId !== undefined &&
+            context.pendingAbortTurnId === context.activeTurnId
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
+          const joinedTurnId = context.activeTurnId;
+          if (joinedTurnId === undefined && context.runtime.session.isStreaming) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "steerTurn",
+              issue: "A Pi turn is already active for this thread.",
+            });
+          }
+          const providerText = buildProviderText(context, payload.text);
+          const turnId = joinedTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
+          if (joinedTurnId === undefined) {
+            context.activeTurnId = turnId;
+            context.turns.push({ id: turnId, items: [], toolItemIndexes: new Map() });
+          }
+          if (
+            joinedTurnId !== undefined &&
+            (context.runtime.session.isStreaming || context.promptCommitting === joinedTurnId)
+          ) {
+            yield* steerPiTurn(context, providerText, payload.images);
+          } else {
+            startPrompt(context, turnId, providerText, payload.images);
+          }
+          return dispatchResult(context, turnId);
+        }),
+      );
 
     const interruptTurn: PiAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
@@ -2713,7 +3845,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           context.gatewaySessionLease,
           activeTurnId,
           Effect.tryPromise({
-            try: () => abortSessionTurn(context),
+            try: () => interruptActiveTurn(context),
             catch: (cause) =>
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -2751,33 +3883,36 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       });
 
     const stopSession: PiAdapterShape["stopSession"] = (threadId) =>
-      Effect.gen(function* () {
-        const context = sessions.get(threadId);
-        if (!context) return;
-        yield* Effect.tryPromise({
-          try: () => disposeSessionContext(context),
-          catch: (cause) =>
-            new ProviderAdapterRequestError({
-              provider: PROVIDER,
-              method: "session/stop",
-              detail: toMessage(cause, "Failed to stop Pi session."),
-              cause,
-            }),
-        });
-        if (sessions.get(threadId) === context) {
-          sessions.delete(threadId);
-        }
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "thread.state.changed",
-          payload: { state: "closed", detail: { reason: "stopped" } },
-        } satisfies ProviderRuntimeEvent);
-        offerRuntimeEvent({
-          ...makeEventBase(context),
-          type: "session.exited",
-          payload: { reason: "stopped", exitKind: "graceful" },
-        } satisfies ProviderRuntimeEvent);
-      });
+      dispatchLock.withLock(
+        threadId,
+        Effect.gen(function* () {
+          const context = sessions.get(threadId);
+          if (!context) return;
+          yield* Effect.tryPromise({
+            try: () => disposeSessionContext(context),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/stop",
+                detail: toMessage(cause, "Failed to stop Pi session."),
+                cause,
+              }),
+          });
+          if (sessions.get(threadId) === context) {
+            sessions.delete(threadId);
+          }
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "thread.state.changed",
+            payload: { state: "closed", detail: { reason: "stopped" } },
+          } satisfies ProviderRuntimeEvent);
+          offerRuntimeEvent({
+            ...makeEventBase(context),
+            type: "session.exited",
+            payload: { reason: "stopped", exitKind: "graceful" },
+          } satisfies ProviderRuntimeEvent);
+        }),
+      );
 
     const listSessions: PiAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values()).map(makeSessionSnapshot));
@@ -2850,33 +3985,52 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const listModels: NonNullable<PiAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
-        try: async (signal) => {
-          const piSdk = await loadPiCodingAgentModule();
-          const agentDir = makeAgentDir(input.agentDir, piSdk);
-          const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
-          const modelRuntime = await createPiModelRuntime(agentDir, piSdk, signal);
-          const services = await piSdk.createAgentSessionServices({
-            cwd,
-            agentDir,
-            modelRuntime,
-          });
-          await refreshPiOpenRouterModels(services.modelRuntime);
-          const registry = modelRegistryFacade(services.modelRuntime, piSdk);
-          const extensionCount = services.resourceLoader.getExtensions().extensions.length;
-          const models = getPiDiscoverableModels(registry).flatMap((model) => {
-            const descriptor = toPiProviderModelDescriptor(
-              model,
-              registry.getProviderDisplayName.bind(registry),
+        try: (signal) =>
+          withPiDiscoveryReservation(input.environment, input.instanceId, async (noExtensions) => {
+            const piSdk = await loadPiCodingAgentModule();
+            const { agentDir } = makePiStoragePaths({
+              agentDir: input.agentDir,
+              environment: input.environment,
+              instanceId: input.instanceId,
+              stateDir: serverConfig.stateDir,
+              homeDir: serverConfig.homeDir,
+              sdkAgentDir: piSdk.getAgentDir(),
+            });
+            const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
+            const modelRuntime = await createPiModelRuntime(
+              agentDir,
+              piSdk,
+              signal,
+              input.environment,
+              input.instanceId,
+              { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
             );
-            return descriptor ? [descriptor] : [];
-          });
+            const services = await piSdk.createAgentSessionServices({
+              cwd,
+              agentDir,
+              modelRuntime,
+              ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
+            });
+            await refreshPiOpenRouterModels(services.modelRuntime, {
+              environment: input.environment,
+              instanceId: input.instanceId,
+            });
+            const registry = modelRegistryFacade(services.modelRuntime, piSdk);
+            const extensionCount = services.resourceLoader.getExtensions().extensions.length;
+            const models = getPiDiscoverableModels(registry).flatMap((model) => {
+              const descriptor = toPiProviderModelDescriptor(
+                model,
+                registry.getProviderDisplayName.bind(registry),
+              );
+              return descriptor ? [descriptor] : [];
+            });
 
-          return {
-            models,
-            source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
-            cached: false,
-          } satisfies ProviderListModelsResult;
-        },
+            return {
+              models,
+              source: extensionCount > 0 ? "pi.sdk+extensions" : "pi.sdk",
+              cached: false,
+            } satisfies ProviderListModelsResult;
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -2888,48 +4042,67 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const listSkills: NonNullable<PiAdapterShape["listSkills"]> = (input) =>
       Effect.tryPromise({
-        try: async () => {
-          const active = input.threadId
-            ? sessions.get(ThreadId.makeUnsafe(input.threadId))
-            : undefined;
-          const loader = active?.runtime.session.resourceLoader;
-          if (active && input.forceReload) {
-            await active.runtime.session.reload();
-          }
-          let services:
-            | Awaited<ReturnType<PiCodingAgentModule["createAgentSessionServices"]>>
-            | undefined;
-          if (!loader) {
-            const piSdk = await loadPiCodingAgentModule();
-            services = await piSdk.createAgentSessionServices({
-              cwd: input.cwd,
-              agentDir: makeAgentDir(input.agentDir, piSdk),
-            });
-          }
-          if (services && input.forceReload) {
-            await services.resourceLoader.reload();
-          }
-          const resourceLoader = loader ?? services?.resourceLoader;
-          if (!resourceLoader) {
-            throw new Error("Failed to create Pi resource loader.");
-          }
-          const result = resourceLoader.getSkills();
-          return {
-            skills: result.skills.map((skill) => {
-              const description = trimToUndefined(skill.description);
-              const scope = trimToUndefined(skill.sourceInfo.source);
-              return {
-                name: skill.name,
-                ...(description ? { description } : {}),
-                path: skill.filePath,
-                enabled: !skill.disableModelInvocation,
-                ...(scope ? { scope } : {}),
-              };
-            }),
-            source: "pi.sdk",
-            cached: false,
-          } satisfies ProviderListSkillsResult;
-        },
+        try: (signal) =>
+          withPiDiscoveryReservation(input.environment, input.instanceId, async (noExtensions) => {
+            const active = input.threadId
+              ? sessions.get(ThreadId.makeUnsafe(input.threadId))
+              : undefined;
+            const loader = active?.runtime.session.resourceLoader;
+            if (active && input.forceReload) {
+              await active.runtime.session.reload();
+            }
+            let services:
+              | Awaited<ReturnType<PiCodingAgentModule["createAgentSessionServices"]>>
+              | undefined;
+            if (!loader) {
+              const piSdk = await loadPiCodingAgentModule();
+              const { agentDir } = makePiStoragePaths({
+                agentDir: input.agentDir,
+                environment: input.environment,
+                instanceId: input.instanceId,
+                stateDir: serverConfig.stateDir,
+                homeDir: serverConfig.homeDir,
+                sdkAgentDir: piSdk.getAgentDir(),
+              });
+              const modelRuntime = await createPiModelRuntime(
+                agentDir,
+                piSdk,
+                signal,
+                input.environment,
+                input.instanceId,
+                { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
+              );
+              services = await piSdk.createAgentSessionServices({
+                cwd: input.cwd,
+                agentDir,
+                modelRuntime,
+                ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
+              });
+            }
+            if (services && input.forceReload) {
+              await services.resourceLoader.reload();
+            }
+            const resourceLoader = loader ?? services?.resourceLoader;
+            if (!resourceLoader) {
+              throw new Error("Failed to create Pi resource loader.");
+            }
+            const result = resourceLoader.getSkills();
+            return {
+              skills: result.skills.map((skill) => {
+                const description = trimToUndefined(skill.description);
+                const scope = trimToUndefined(skill.sourceInfo.source);
+                return {
+                  name: skill.name,
+                  ...(description ? { description } : {}),
+                  path: skill.filePath,
+                  enabled: !skill.disableModelInvocation,
+                  ...(scope ? { scope } : {}),
+                };
+              }),
+              source: "pi.sdk",
+              cached: false,
+            } satisfies ProviderListSkillsResult;
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -2941,61 +4114,85 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
     const listCommands: NonNullable<PiAdapterShape["listCommands"]> = (input) =>
       Effect.tryPromise({
-        try: async () => {
-          const active = input.threadId
-            ? sessions.get(ThreadId.makeUnsafe(input.threadId))
-            : undefined;
-          const session = active?.runtime.session;
-          const reloadCommand = {
-            name: "reload",
-            description: "Reload Pi extensions, skills, prompts, themes, tools, and settings",
-          };
-          if (session) {
-            if (input.forceReload) {
-              await session.reload();
-            }
-            const extensionCommands = session.extensionRunner
-              .getRegisteredCommands()
-              .map((command) => ({
-                name: command.invocationName,
-                description: trimToUndefined(command.description) ?? "Extension command",
+        try: (signal) =>
+          withPiDiscoveryReservation(input.environment, input.instanceId, async (noExtensions) => {
+            const active = input.threadId
+              ? sessions.get(ThreadId.makeUnsafe(input.threadId))
+              : undefined;
+            const session = active?.runtime.session;
+            const reloadCommand = {
+              name: "reload",
+              description: "Reload Pi extensions, skills, prompts, themes, tools, and settings",
+            };
+            if (session) {
+              if (input.forceReload) {
+                await session.reload();
+              }
+              const extensionCommands = session.extensionRunner
+                .getRegisteredCommands()
+                .map((command) => ({
+                  name: command.invocationName,
+                  description: trimToUndefined(command.description) ?? "Extension command",
+                }));
+              const promptCommands = session.promptTemplates.map((template) => ({
+                name: template.name,
+                description: trimToUndefined(template.description) ?? "Prompt template",
               }));
-            const promptCommands = session.promptTemplates.map((template) => ({
+              const skillCommands = session.resourceLoader.getSkills().skills.map((skill) => ({
+                name: `skill:${skill.name}`,
+                description: trimToUndefined(skill.description) ?? "Skill",
+              }));
+              return {
+                commands: [
+                  reloadCommand,
+                  ...extensionCommands,
+                  ...promptCommands,
+                  ...skillCommands,
+                ],
+                source: "pi.sdk",
+                cached: false,
+              } satisfies ProviderListCommandsResult;
+            }
+            const piSdk = await loadPiCodingAgentModule();
+            const { agentDir } = makePiStoragePaths({
+              agentDir: input.agentDir,
+              environment: input.environment,
+              instanceId: input.instanceId,
+              stateDir: serverConfig.stateDir,
+              homeDir: serverConfig.homeDir,
+              sdkAgentDir: piSdk.getAgentDir(),
+            });
+            const modelRuntime = await createPiModelRuntime(
+              agentDir,
+              piSdk,
+              signal,
+              input.environment,
+              input.instanceId,
+              { stateDir: serverConfig.stateDir, homeDir: serverConfig.homeDir },
+            );
+            const services = await piSdk.createAgentSessionServices({
+              cwd: input.cwd,
+              agentDir,
+              modelRuntime,
+              ...(noExtensions ? { resourceLoaderOptions: { noExtensions: true } } : {}),
+            });
+            if (input.forceReload) {
+              await services.resourceLoader.reload();
+            }
+            const promptCommands = services.resourceLoader.getPrompts().prompts.map((template) => ({
               name: template.name,
               description: trimToUndefined(template.description) ?? "Prompt template",
             }));
-            const skillCommands = session.resourceLoader.getSkills().skills.map((skill) => ({
+            const skillCommands = services.resourceLoader.getSkills().skills.map((skill) => ({
               name: `skill:${skill.name}`,
               description: trimToUndefined(skill.description) ?? "Skill",
             }));
             return {
-              commands: [reloadCommand, ...extensionCommands, ...promptCommands, ...skillCommands],
+              commands: [reloadCommand, ...promptCommands, ...skillCommands],
               source: "pi.sdk",
               cached: false,
             } satisfies ProviderListCommandsResult;
-          }
-          const piSdk = await loadPiCodingAgentModule();
-          const services = await piSdk.createAgentSessionServices({
-            cwd: input.cwd,
-            agentDir: makeAgentDir(input.agentDir, piSdk),
-          });
-          if (input.forceReload) {
-            await services.resourceLoader.reload();
-          }
-          const promptCommands = services.resourceLoader.getPrompts().prompts.map((template) => ({
-            name: template.name,
-            description: trimToUndefined(template.description) ?? "Prompt template",
-          }));
-          const skillCommands = services.resourceLoader.getSkills().skills.map((skill) => ({
-            name: `skill:${skill.name}`,
-            description: trimToUndefined(skill.description) ?? "Skill",
-          }));
-          return {
-            commands: [reloadCommand, ...promptCommands, ...skillCommands],
-            source: "pi.sdk",
-            cached: false,
-          } satisfies ProviderListCommandsResult;
-        },
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,

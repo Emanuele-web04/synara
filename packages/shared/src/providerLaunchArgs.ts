@@ -18,78 +18,97 @@ export interface ParsedProviderLaunchArgs {
 }
 
 /**
- * Tokenize a launch-args string with POSIX-style quoting.
+ * Tokenize a launch-args string with POSIX-style quoting, without shell expansion.
  *
- * An unquoted `--` splits global flags (inserted before the provider subcommand)
- * from subcommand flags (appended after it).
+ * Only a fully unquoted, unescaped -- token splits global flags (inserted before
+ * the provider subcommand) from subcommand flags (appended after it).
  */
 export function parseProviderLaunchArgs(input: string): ParsedProviderLaunchArgs {
   const tokens = tokenizeProviderLaunchArgs(input);
-  const separator = tokens.indexOf("--");
+  const separator = tokens.findIndex((token) => token.isSeparator);
+  const values = tokens.map((token) => token.value);
   if (separator === -1) {
-    return { prefix: tokens, suffix: [] };
+    return { prefix: values, suffix: [] };
   }
   return {
-    prefix: tokens.slice(0, separator),
-    suffix: tokens.slice(separator + 1),
+    prefix: values.slice(0, separator),
+    suffix: values.slice(separator + 1),
   };
 }
 
-/** Build `codex <prefix> app-server <suffix>` from an optional launch-args string. */
+/** Build codex <prefix> app-server <suffix> from an optional launch-args string. */
 export function buildCodexAppServerArgs(launchArgs?: string): string[] {
   const { prefix, suffix } = parseProviderLaunchArgs(launchArgs ?? "");
   return [...prefix, "app-server", ...suffix];
 }
 
-function tokenizeProviderLaunchArgs(input: string): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escapeNext = false;
+interface LaunchArgToken {
+  readonly value: string;
+  readonly isSeparator: boolean;
+}
 
-  for (const char of input.trim()) {
-    if (escapeNext) {
-      current += char;
-      escapeNext = false;
+function tokenizeProviderLaunchArgs(input: string): LaunchArgToken[] {
+  const tokens: LaunchArgToken[] = [];
+  let current = "";
+  let tokenStarted = false;
+  let protectedToken = false;
+  let quote: "'" | '"' | null = null;
+
+  const finishToken = () => {
+    if (!tokenStarted) return;
+    tokens.push({ value: current, isSeparator: current === "--" && !protectedToken });
+    current = "";
+    tokenStarted = false;
+    protectedToken = false;
+  };
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index]!;
+    if (quote === "'") {
+      if (char === quote) quote = null;
+      else current += char;
       continue;
     }
+
     if (char === "\\") {
-      escapeNext = quote !== "'";
-      if (!escapeNext) {
-        current += char;
+      const next = input[index + 1];
+      if (next === undefined) {
+        throw new ProviderLaunchArgsError("Codex launch args end with a dangling backslash.");
       }
+      if (quote === '"' && !["$", '"', "\\", "\x60", "\n"].includes(next)) {
+        current += char;
+        continue;
+      }
+      index += 1;
+      if (next === "\n") continue;
+      current += next;
+      tokenStarted = true;
+      protectedToken = true;
       continue;
     }
-    if (quote !== null) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
+
+    if (quote === '"') {
+      if (char === quote) quote = null;
+      else current += char;
       continue;
     }
     if (char === "'" || char === '"') {
       quote = char;
+      tokenStarted = true;
+      protectedToken = true;
       continue;
     }
     if (/\s/.test(char)) {
-      if (current.length > 0) {
-        tokens.push(current);
-        current = "";
-      }
+      finishToken();
       continue;
     }
     current += char;
+    tokenStarted = true;
   }
 
-  if (escapeNext) {
-    throw new ProviderLaunchArgsError("Codex launch args end with a dangling backslash.");
-  }
   if (quote !== null) {
-    throw new ProviderLaunchArgsError(`Codex launch args have an unmatched ${quote} quote.`);
+    throw new ProviderLaunchArgsError("Codex launch args have an unmatched " + quote + " quote.");
   }
-  if (current.length > 0) {
-    tokens.push(current);
-  }
+  finishToken();
   return tokens;
 }

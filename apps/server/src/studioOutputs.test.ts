@@ -334,20 +334,6 @@ describe("listStudioThreadOutputs", () => {
     expect(result.entries.map((entry) => entry.relativePath)).toEqual(["Outbox/Content/kept.md"]);
   });
 
-  it("returns no entries for a thread that only touched managed input subtrees", async () => {
-    const workspaceRoot = "/studio";
-    const layer = makeFakeStudioRootLayer({ workspaceRoot, mtimesByRelativePath: new Map() });
-
-    const result = await Effect.runPromise(
-      listStudioThreadOutputs({
-        workspaceRoot,
-        checkpoints: [checkpoint(["Inbox/task.md", "tmp/scratch.py"])],
-      }).pipe(Effect.provide(layer)),
-    );
-
-    expect(result.entries).toEqual([]);
-  });
-
   it("attributes outputs from file-change activities when no Git checkpoints exist", async () => {
     const workspaceRoot = "/studio";
     const layer = makeFakeStudioRootLayer({

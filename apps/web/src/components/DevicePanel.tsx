@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ensureNativeApi } from "~/nativeApi";
 import { addWsTransportStateListener } from "~/wsTransportEvents";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
-import { CheckIcon, ChevronDownIcon, LoaderCircleIcon, XIcon } from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, LoaderCircleIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { selectThreadDeviceState, useDeviceStateStore } from "../deviceStateStore";
@@ -56,6 +56,7 @@ import {
 import { useDeviceVideoStream } from "./device/useDeviceVideoStream";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { DockPaneHeader } from "./chat/DockPaneHeader";
 import { Button } from "./ui/button";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import {
@@ -621,61 +622,52 @@ export default function DevicePanel(props: {
   // shows the pane's name where the picker would be rather than a menu whose
   // every entry would be empty.
   const header = (
-    <div className="flex h-full w-full min-w-0 items-center gap-1.5">
-      {availabilityView.kind === "blocked" ? (
-        <span className="truncate px-2 font-medium text-muted-foreground text-xs">
-          iOS Simulator
-        </span>
-      ) : (
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button variant="ghost" size="sm" className="min-w-0 gap-1" disabled={busy}>
-                <span className="truncate">{attachedDevice?.name ?? "Choose a simulator"}</span>
-                <ChevronDownIcon />
-              </Button>
-            }
-          />
-          <ComposerPickerMenuPopup align="start">
-            {pickerEntries.length === 0 ? (
-              <MenuItem disabled>No simulators found</MenuItem>
-            ) : (
-              pickerEntries.map((entry) => (
-                <MenuItem
-                  key={entry.device.udid}
-                  disabled={entry.action.kind === "wait"}
-                  onClick={() => selectDevice(entry)}
-                >
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="truncate">{entry.device.name}</span>
-                    <span className="ml-auto shrink-0 text-muted-foreground text-xs">
-                      {entry.detail}
+    <DockPaneHeader
+      variant="embedded"
+      onClose={props.onClosePanel}
+      closeLabel="Close simulator panel"
+      title={
+        availabilityView.kind === "blocked" ? (
+          <span className="truncate px-2 font-medium text-muted-foreground text-ui leading-snug">
+            iOS Simulator
+          </span>
+        ) : (
+          <Menu>
+            <MenuTrigger
+              render={
+                <Button variant="ghost" size="sm" className="min-w-0 gap-1" disabled={busy}>
+                  <span className="truncate">{attachedDevice?.name ?? "Choose a simulator"}</span>
+                  <ChevronDownIcon />
+                </Button>
+              }
+            />
+            <ComposerPickerMenuPopup align="start">
+              {pickerEntries.length === 0 ? (
+                <MenuItem disabled>No simulators found</MenuItem>
+              ) : (
+                pickerEntries.map((entry) => (
+                  <MenuItem
+                    key={entry.device.udid}
+                    disabled={entry.action.kind === "wait"}
+                    onClick={() => selectDevice(entry)}
+                  >
+                    <span className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="truncate">{entry.device.name}</span>
+                      <span className="ml-auto shrink-0 text-muted-foreground text-ui leading-snug">
+                        {entry.detail}
+                      </span>
+                      {entry.attached ? <CheckIcon className="size-3.5 shrink-0" /> : null}
                     </span>
-                    {entry.attached ? <CheckIcon className="size-3.5 shrink-0" /> : null}
-                  </span>
-                </MenuItem>
-              ))
-            )}
-            {/* Detach and shut down live on the toolbar below the bezel, with
+                  </MenuItem>
+                ))
+              )}
+              {/* Detach and shut down live on the toolbar below the bezel, with
                 the rest of the device actions, rather than being duplicated here. */}
-          </ComposerPickerMenuPopup>
-        </Menu>
-      )}
-
-      {/* Screenshot moved to the control rail, where it sits with the other
-          device actions; the header keeps only picker and close. */}
-      <div className="ml-auto flex shrink-0 items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={props.onClosePanel}
-          title="Close"
-          aria-label="Close simulator panel"
-        >
-          <XIcon />
-        </Button>
-      </div>
-    </div>
+            </ComposerPickerMenuPopup>
+          </Menu>
+        )
+      }
+    />
   );
 
   // Every state renders on the phone's screen, so the pane reads as one object
@@ -714,26 +706,26 @@ export default function DevicePanel(props: {
       return <DeviceEmptyScreen message="Choose a simulator to start streaming it here." />;
     }
 
-    // Anything that is not yet a picture belongs on the boot screen, which
-    // names the device: the canvas has nothing to paint, and a blank rectangle
-    // for the length of a cold boot is what made the pane look broken.
-    if (videoStatus.kind !== "streaming" && attachStatusLabel) {
-      return <DeviceBootingScreen deviceName={attachedDevice.name} label={attachStatusLabel} />;
-    }
-
     return (
       <>
         {/*
+          Keep the canvas mounted under the attach overlay: the frame socket
+          can deliver the helper's only idle-screen frame before attach metadata
+          clears. Dropping that frame can leave the pane connecting forever.
           biome-ignore lint/a11y/noNoninteractiveElementInteractions: the canvas
           is the device surface; pointer and key handlers are the feature.
         */}
         <canvas
+          key={attachedDevice.udid}
           ref={canvasRef}
           tabIndex={0}
           aria-label={`${attachedDevice.name} screen`}
           // object-cover so the frame is filled edge to edge: the canvas already
           // carries the device's own aspect ratio, so nothing is actually cropped.
-          className="h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70"
+          className={cn(
+            "h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70",
+            videoStatus.kind !== "streaming" && "invisible",
+          )}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={() => {
@@ -742,7 +734,13 @@ export default function DevicePanel(props: {
           onKeyDown={(event) => handleKey(event, "down")}
           onKeyUp={(event) => handleKey(event, "up")}
         />
-        {videoStatus.kind !== "streaming" ? (
+        {runtimeMode === "live" &&
+        (videoStatus.kind === "idle" || videoStatus.kind === "connecting") &&
+        attachStatusLabel ? (
+          <div className="pointer-events-none absolute inset-0">
+            <DeviceBootingScreen deviceName={attachedDevice.name} label={attachStatusLabel} />
+          </div>
+        ) : videoStatus.kind !== "streaming" ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-[12%]">
             <DeviceVideoOverlay
               status={videoStatus}
@@ -759,7 +757,7 @@ export default function DevicePanel(props: {
         {availabilityView.kind === "degraded" ? (
           <p
             role="status"
-            className="absolute inset-x-[6%] top-[4%] rounded-full bg-black/70 px-2.5 py-1 text-center text-[9.5px] text-white/75 backdrop-blur-sm"
+            className="absolute inset-x-[6%] top-[4%] rounded-full bg-black/70 px-2.5 py-1 text-center text-ui-2xs text-white/75 backdrop-blur-sm"
           >
             {availabilityView.notice}
           </p>
@@ -815,7 +813,7 @@ export default function DevicePanel(props: {
       <p
         role="status"
         className={cn(
-          "line-clamp-2 flex shrink-0 items-center px-3 text-destructive text-xs transition-opacity duration-220 motion-reduce:transition-none",
+          "line-clamp-2 flex shrink-0 items-center px-3 text-destructive text-ui leading-snug transition-opacity duration-220 motion-reduce:transition-none",
           threadState?.lastError
             ? "border-border border-t opacity-100"
             : "border-transparent border-t opacity-0",
@@ -881,7 +879,7 @@ function DeviceVideoOverlay(props: {
     return (
       <button
         type="button"
-        className="pointer-events-auto rounded-full bg-white/95 px-3 py-1.5 font-medium text-[10px] text-black"
+        className="pointer-events-auto rounded-full bg-white/95 px-3 py-1.5 font-medium text-ui-xs text-black"
         onClick={props.onRequestLive}
       >
         Show the live simulator
@@ -891,7 +889,7 @@ function DeviceVideoOverlay(props: {
 
   if (status.kind === "unsupported") {
     return (
-      <p className="text-balance text-center text-[10px] text-white/70 leading-snug">
+      <p className="text-balance text-center text-ui-xs text-white/70 leading-snug">
         This browser cannot decode the simulator stream. Chrome, Edge, or Safari 17+ support the
         WebCodecs video decoder Synara uses.
       </p>
@@ -900,14 +898,14 @@ function DeviceVideoOverlay(props: {
 
   if (status.kind === "error") {
     return (
-      <p className="text-balance text-center text-[10px] text-white/70 leading-snug">
+      <p className="text-balance text-center text-ui-xs text-white/70 leading-snug">
         {status.message}
       </p>
     );
   }
 
   return (
-    <span className="flex items-center gap-1.5 text-[10px] text-white/45">
+    <span className="flex items-center gap-1.5 text-ui-xs text-white/45">
       <LoaderCircleIcon className="size-3 animate-spin motion-reduce:animate-none" />
       {props.label}
     </span>
@@ -953,7 +951,9 @@ function DeviceBootLimitDialog(props: {
                 onClick={() => props.onShutdown(candidate)}
               >
                 <span className="truncate">Shut down {candidate.name}</span>
-                <span className="shrink-0 text-muted-foreground text-xs">{candidate.runtime}</span>
+                <span className="shrink-0 text-muted-foreground text-ui leading-snug">
+                  {candidate.runtime}
+                </span>
               </Button>
             </li>
           ))}

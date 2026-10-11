@@ -18,6 +18,7 @@ import {
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   normalizeCursorModelOptions,
+  normalizeOmpModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
   resolveDevinModelVariant,
@@ -70,7 +71,9 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
       const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
       const nextOptions = {
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(fastModeEnabled ? { fastMode: true } : {}),
+        ...(fastModeEnabled || providerOptions?.fastMode === false
+          ? { fastMode: fastModeEnabled }
+          : {}),
       };
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;
@@ -188,6 +191,12 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
           : {}),
       };
       normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+      break;
+    }
+    case "omp": {
+      const providerOptions = modelOptions?.omp;
+      rawEffort = trimOrNull(providerOptions?.thinkingLevel);
+      normalizedOptions = normalizeOmpModelOptions(providerOptions);
       break;
     }
   }

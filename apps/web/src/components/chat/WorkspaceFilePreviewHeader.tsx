@@ -25,8 +25,10 @@ import {
   CopyIcon,
   EllipsisIcon,
   EyeOpenIcon,
+  PencilIcon,
   RefreshCwIcon,
 } from "~/lib/icons";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
@@ -56,8 +58,11 @@ interface WorkspaceFilePreviewHeaderProps {
   contentsForCopy?: string | null;
   /** Shown when the preview only holds a partial read of a large file. */
   truncated?: boolean;
+  onEditFile?: (() => void) | undefined;
   /** Marks the currently open source buffer as different from its saved version. */
   dirty?: boolean;
+  saveState?: string | undefined;
+  onSave?: (() => void) | undefined;
   /** Short reason the current source cannot be edited safely. */
   readOnlyReason?: string | null;
   /** Re-fetches the current file without discarding a dirty edit buffer. */
@@ -179,7 +184,7 @@ function CollapsingPathBreadcrumb(props: {
     <nav
       ref={navRef}
       aria-label="File path"
-      className="relative flex min-w-0 flex-1 items-center overflow-hidden text-[12px] leading-none"
+      className="relative flex min-w-0 flex-1 items-center overflow-hidden text-ui leading-none"
     >
       {/* Hidden mirror of the full breadcrumb at natural width, measured to
           decide how many directories fit. Absolutely positioned so it never
@@ -223,8 +228,8 @@ function CollapsingPathBreadcrumb(props: {
         {fileSegment}
       </span>
       {dirty ? (
-        <span
-          className="ml-1.5 size-1.5 shrink-0 rounded-full bg-foreground/75"
+        <StatusDot
+          className="ml-1.5 bg-foreground/75"
           role="status"
           aria-label="Unsaved changes"
           title="Unsaved changes"
@@ -293,19 +298,34 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
       />
 
       {props.truncated ? (
-        <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 @sm/header-actions:inline">
+        <span className="hidden shrink-0 text-ui-xs text-muted-foreground/70 @sm/header-actions:inline">
           Shown partially
         </span>
       ) : props.readOnlyReason ? (
         <span
-          className="hidden max-w-32 shrink-0 truncate text-[10px] text-muted-foreground/70 @sm/header-actions:inline"
+          className="hidden max-w-32 shrink-0 truncate text-ui-xs text-muted-foreground/70 @sm/header-actions:inline"
           title={props.readOnlyReason}
         >
           Read-only
         </span>
       ) : null}
 
+      {props.saveState ? (
+        <span role="status" className="shrink-0 text-ui-sm text-muted-foreground">
+          {props.saveState}
+        </span>
+      ) : null}
       <div className="flex shrink-0 items-center gap-1.5">
+        {props.onSave ? (
+          <button
+            type="button"
+            onClick={props.onSave}
+            disabled={!props.dirty || props.saveState === "Saving..."}
+            className="rounded-md px-2 py-1 text-ui-sm disabled:opacity-50"
+          >
+            Save
+          </button>
+        ) : null}
         {props.isMarkdown ? (
           <div
             role="radiogroup"
@@ -335,6 +355,18 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
               );
             })}
           </div>
+        ) : null}
+
+        {props.onEditFile ? (
+          <ChatHeaderIconButton
+            type="button"
+            tone="plain"
+            label="Edit file"
+            title="Edit file"
+            onClick={props.onEditFile}
+          >
+            <PencilIcon aria-hidden="true" className="size-3.5" />
+          </ChatHeaderIconButton>
         ) : null}
 
         {props.onReload ? (

@@ -5,23 +5,36 @@ import {
   type TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
-import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
+import {
+  createStalePendingInteractionMatcher,
+  isPendingInteractionResponseClaimable,
+} from "@synara/shared/pendingInteractions";
 import {
   approvalRequestKindFromRequestType,
   pendingRequestInstanceKey,
 } from "@synara/shared/threadSummary";
 
-import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
-import { orderedActivities } from "./workLog";
+import { orderedActivities, parseUserInputQuestions } from "./workLog";
 
 export interface PendingApproval {
   requestId: ApprovalRequestId;
   lifecycleGeneration?: string;
-  requestKind: "command" | "file-read" | "file-change" | "permissions";
+  /** Changes only when the durable retryable response attempt changes. */
+  responseAttemptKey?: string;
+  requestKind: "command" | "file-read" | "file-change" | "permissions" | "tool";
   createdAt: string;
   detail?: string;
   permissionProfile?: Record<string, unknown>;
   sessionApprovalAvailable?: boolean;
+  approvalScope?: "computer-task" | "computer-foreground" | "device-task";
+  toolName?: string;
+  toolParamsDisplay?: ReadonlyArray<PendingToolParamDisplay>;
+}
+
+export interface PendingToolParamDisplay {
+  name: string;
+  value: unknown;
+  displayName?: string;
 }
 
 export interface PendingUserInput {
@@ -51,7 +64,6 @@ interface PendingInteractionReplay<T extends { requestId: ApprovalRequestId }> {
   interactionKind: PendingInteractionKind;
   requestedActivityKind: string;
   resolvedActivityKind: string;
-  responseFailedActivityKind: string;
   parseRequested: (input: {
     activity: OrchestrationThreadActivity;
     payload: Record<string, unknown> | null;
@@ -131,7 +143,9 @@ function retainActionableSettlements<T extends { requestId: ApprovalRequestId }>
   }
 }
 
-function replayPendingInteractions<T extends { requestId: ApprovalRequestId; createdAt: string }>(
+function replayPendingInteractions<
+  T extends { requestId: ApprovalRequestId; createdAt: string; lifecycleGeneration?: string },
+>(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   settlements: ReadonlyArray<OrchestrationPendingInteraction> | undefined,
   replay: PendingInteractionReplay<T>,
@@ -185,16 +199,19 @@ function replayPendingInteractions<T extends { requestId: ApprovalRequestId; cre
       deletePendingInteraction(openByInstance, requestId, lifecycleGeneration);
       continue;
     }
-
-    const detail = typeof payload?.detail === "string" ? payload.detail : undefined;
-    if (
-      activity.kind === replay.responseFailedActivityKind &&
-      isStalePendingRequestFailureDetail(detail)
-    ) {
-      deletePendingInteraction(openByInstance, requestId, lifecycleGeneration);
-    }
   }
 
+  // Explicit stale-callback failures are terminal for their request instance.
+  // Apply them after replay: their orchestration sequence may be below an older
+  // request's runtime sequence, which must not resurrect an invalid callback.
+  if (openByInstance.size > 0) {
+    const isStale = createStalePendingInteractionMatcher(replayActivities);
+    for (const [key, pending] of openByInstance) {
+      if (isStale({ ...pending, interactionKind: replay.interactionKind })) {
+        openByInstance.delete(key);
+      }
+    }
+  }
   retainActionableSettlements(
     openByInstance,
     settlements,
@@ -234,72 +251,25 @@ function replayPendingInteractions<T extends { requestId: ApprovalRequestId; cre
   );
 }
 
-function parseUserInputQuestions(
-  payload: Record<string, unknown> | null,
-): ReadonlyArray<UserInputQuestion> | null {
-  const questions = payload?.questions;
-  if (!Array.isArray(questions)) {
-    return null;
-  }
-  const parsed = questions
-    .map<UserInputQuestion | null>((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const question = entry as Record<string, unknown>;
-      if (
-        typeof question.id !== "string" ||
-        typeof question.header !== "string" ||
-        typeof question.question !== "string" ||
-        !Array.isArray(question.options)
-      ) {
-        return null;
-      }
-      const options = question.options
-        .map<UserInputQuestion["options"][number] | null>((option) => {
-          if (!option || typeof option !== "object") return null;
-          const optionRecord = option as Record<string, unknown>;
-          if (
-            typeof optionRecord.label !== "string" ||
-            typeof optionRecord.description !== "string"
-          ) {
-            return null;
-          }
-          return {
-            label: optionRecord.label,
-            description: optionRecord.description,
-          };
-        })
-        .filter((option): option is UserInputQuestion["options"][number] => option !== null);
-      return {
-        id: question.id,
-        header: question.header,
-        question: question.question,
-        options,
-        ...(question.multiSelect === true ? { multiSelect: true } : {}),
-      };
-    })
-    .filter((question): question is UserInputQuestion => question !== null);
-  return parsed.length > 0 ? parsed : null;
-}
-
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   settlements?: ReadonlyArray<OrchestrationPendingInteraction>,
   options?: PendingInteractionDerivationOptions,
 ): PendingApproval[] {
-  return replayPendingInteractions(
+  const approvals = replayPendingInteractions(
     activities,
     settlements,
     {
       interactionKind: "approval",
       requestedActivityKind: "approval.requested",
       resolvedActivityKind: "approval.resolved",
-      responseFailedActivityKind: "provider.approval.respond.failed",
       parseRequested: ({ activity, payload, requestId, lifecycleGeneration }) => {
         const requestKind =
           payload?.requestKind === "command" ||
           payload?.requestKind === "file-read" ||
           payload?.requestKind === "file-change" ||
-          payload?.requestKind === "permissions"
+          payload?.requestKind === "permissions" ||
+          payload?.requestKind === "tool"
             ? payload.requestKind
             : approvalRequestKindFromRequestType(payload?.requestType);
         if (!requestKind) {
@@ -316,6 +286,8 @@ export function derivePendingApprovals(
           typeof payload?.sessionApprovalAvailable === "boolean"
             ? payload.sessionApprovalAvailable
             : undefined;
+        const toolName = typeof payload?.toolName === "string" ? payload.toolName : undefined;
+        const toolParamsDisplay = parseToolParamsDisplay(payload?.toolParamsDisplay);
         return {
           requestId,
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
@@ -324,11 +296,70 @@ export function derivePendingApprovals(
           ...(detail ? { detail } : {}),
           ...(permissionProfile ? { permissionProfile } : {}),
           ...(sessionApprovalAvailable !== undefined ? { sessionApprovalAvailable } : {}),
+          ...(payload?.approvalScope === "computer-task" || payload?.approvalScope === "device-task"
+            ? { approvalScope: payload.approvalScope as "computer-task" | "device-task" }
+            : payload?.approvalScope === "computer-foreground"
+              ? { approvalScope: "computer-foreground" as const }
+              : {}),
+          ...(toolName ? { toolName } : {}),
+          ...(toolParamsDisplay ? { toolParamsDisplay } : {}),
         };
       },
     },
     options,
   );
+  if (settlements === undefined) {
+    return approvals;
+  }
+
+  const retryableAttemptKeys = new Map<string, string>();
+  for (const settlement of settlements) {
+    if (settlement.interactionKind !== "approval" || settlement.status !== "retryable") {
+      continue;
+    }
+    retryableAttemptKeys.set(
+      pendingRequestInstanceKey(settlement.requestId, settlement.lifecycleGeneration ?? undefined),
+      JSON.stringify([settlement.responseCommandId, settlement.responseRequestedAt]),
+    );
+  }
+
+  return approvals.map((approval) => {
+    const responseAttemptKey = retryableAttemptKeys.get(
+      pendingRequestInstanceKey(approval.requestId, approval.lifecycleGeneration),
+    );
+    return responseAttemptKey === undefined ? approval : { ...approval, responseAttemptKey };
+  });
+}
+
+function parseToolParamsDisplay(
+  value: unknown,
+): ReadonlyArray<PendingToolParamDisplay> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = value.flatMap<PendingToolParamDisplay>((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.name !== "string" || !Object.hasOwn(record, "value")) {
+      return [];
+    }
+    const displayName =
+      typeof record.displayName === "string"
+        ? record.displayName
+        : typeof record.display_name === "string"
+          ? record.display_name
+          : undefined;
+    return [
+      {
+        name: record.name,
+        value: record.value,
+        ...(displayName ? { displayName } : {}),
+      },
+    ];
+  });
+  return entries.length > 0 ? entries : undefined;
 }
 
 export function derivePendingUserInputs(
@@ -343,7 +374,6 @@ export function derivePendingUserInputs(
       interactionKind: "userInput",
       requestedActivityKind: "user-input.requested",
       resolvedActivityKind: "user-input.resolved",
-      responseFailedActivityKind: "provider.user-input.respond.failed",
       parseRequested: ({ activity, payload, requestId, lifecycleGeneration }) => {
         const questions = parseUserInputQuestions(payload);
         if (!questions) {

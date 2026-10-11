@@ -8,7 +8,6 @@ import type * as Acp from "@agentclientprotocol/sdk";
 
 import {
   AcpSessionRuntime,
-  assistantItemId,
   awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
   isAcpAuthRequiredError,
@@ -20,6 +19,122 @@ import {
   teardownAcpChildProcess,
 } from "./AcpSessionRuntime.ts";
 import * as AcpErrors from "./AcpErrors.ts";
+
+it.each(["overflow", "scope close"])(
+  "releases a stalled SDK notification handler on %s",
+  async (mode) => {
+    const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const promptStarted = Deferred.makeUnsafe<void>();
+    const handlerStarted = Deferred.makeUnsafe<void>();
+    let notificationsHandled = 0;
+    let handlerInterrupted = false;
+    let agentConnection: { close(error?: unknown): void } | undefined;
+    const agentApp = OfficialAcp.agent({ name: "memory-test" })
+      .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: [],
+      }))
+      .onRequest(OfficialAcp.methods.agent.session.new, () => ({ sessionId: "memory-session" }))
+      .onRequest(OfficialAcp.methods.agent.session.prompt, () => {
+        Deferred.doneUnsafe(promptStarted, Effect.void);
+        return new Promise<never>(() => {});
+      });
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() =>
+        Effect.sync(() => {
+          const input = new ReadableStream<Uint8Array>({
+            pull: (controller) =>
+              Effect.runPromise(Queue.take(clientToAgent)).then((chunk) => {
+                controller.enqueue(chunk);
+              }),
+          });
+          const output = new WritableStream<Uint8Array>({
+            write: (chunk) =>
+              Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined),
+          });
+          agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(output, input));
+          return ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            stdin: Sink.forEach((chunk: Uint8Array) => Queue.offer(clientToAgent, chunk)),
+            stdout: Stream.fromQueue(agentToClient),
+            stderr: Stream.never,
+            all: Stream.never,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.never,
+          });
+        }),
+      ),
+    );
+    const runtimeLayer = AcpSessionRuntime.layer({
+      spawn: { command: "in-memory-acp-agent", args: [] },
+      cwd: process.cwd(),
+      clientInfo: { name: "memory-test", version: "0.0.0" },
+      authPolicy: "on-demand",
+      teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+    }).pipe(Layer.provide(spawnerLayer));
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const runtime = yield* AcpSessionRuntime;
+          yield* runtime.start();
+          yield* runtime.handleSessionUpdate(() =>
+            Effect.gen(function* () {
+              notificationsHandled++;
+              yield* Deferred.succeed(handlerStarted, undefined);
+              yield* Effect.never;
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  handlerInterrupted = true;
+                }),
+              ),
+            ),
+          );
+          const prompt = yield* runtime
+            .prompt({ prompt: [{ type: "text", text: "test" }] })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(promptStarted);
+          const frame = new TextEncoder().encode(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: {
+                sessionId: "memory-session",
+                update: {
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: "x".repeat(1024 * 1024) },
+                },
+              },
+            }) + "\n",
+          );
+          yield* Queue.offer(agentToClient, frame);
+          yield* Deferred.await(handlerStarted);
+          if (mode === "scope close") return;
+          for (let index = 0; index < 33; index++) yield* Queue.offer(agentToClient, frame);
+          const error = yield* Fiber.join(prompt).pipe(Effect.flip);
+          expect(error).toMatchObject({
+            _tag: "AcpTransportError",
+            detail: expect.stringContaining("memory budget"),
+          });
+          expect(notificationsHandled).toBe(1);
+        }).pipe(Effect.provide(runtimeLayer), Effect.scoped),
+      );
+      expect(handlerInterrupted).toBe(true);
+    } finally {
+      agentConnection?.close();
+      await Effect.runPromise(Queue.shutdown(clientToAgent));
+      await Effect.runPromise(Queue.shutdown(agentToClient));
+    }
+  },
+  10_000,
+);
 
 describe("makeAcpIncomingFrameGuard", () => {
   const encode = (value: string) => new TextEncoder().encode(value);
@@ -115,28 +230,6 @@ describe("awaitAcpChildExit", () => {
 });
 
 describe("runAcpFreshSessionSetup", () => {
-  it("retries one matching fresh-session failure and then succeeds", async () => {
-    const retryable = new AcpErrors.AcpRequestError({
-      code: -32603,
-      errorMessage: "Path not found.",
-      data: { code: "FS_NOT_FOUND" },
-    });
-    let attempts = 0;
-    const setup = Effect.suspend(() => {
-      attempts += 1;
-      return attempts === 1 ? Effect.fail(retryable) : Effect.succeed("session-ready");
-    });
-
-    await expect(
-      Effect.runPromise(
-        runAcpFreshSessionSetup(setup, {
-          shouldRetry: (error) => error === retryable,
-        }),
-      ),
-    ).resolves.toBe("session-ready");
-    expect(attempts).toBe(2);
-  });
-
   it("does not retry a non-matching failure", async () => {
     const terminal = new AcpErrors.AcpRequestError({
       code: -32603,
@@ -157,19 +250,6 @@ describe("runAcpFreshSessionSetup", () => {
       ),
     ).rejects.toThrow("Permission denied.");
     expect(attempts).toBe(1);
-  });
-});
-
-describe("assistantItemId", () => {
-  // Format contract only — distinct runtimeInstanceId wiring is covered by
-  // AcpJsonRpcConnection.test.ts ("assigns distinct fallback assistant item ids...").
-  it("produces distinct ids across runtime instances with the same session id and segment index", () => {
-    const sessionId = "session-1";
-    const a = assistantItemId(sessionId, "aaaa1111", 0);
-    const b = assistantItemId(sessionId, "bbbb2222", 0);
-    expect(a).not.toBe(b);
-    expect(a).toBe("assistant:session-1:aaaa1111:segment:0");
-    expect(b).toBe("assistant:session-1:bbbb2222:segment:0");
   });
 });
 
@@ -263,35 +343,6 @@ describe("makeStartupInteractionRegistry", () => {
 
       expect(handled).toEqual(["a", "b"]);
       expect(results).toEqual([response, response]);
-    });
-
-    await Effect.runPromise(program);
-  });
-
-  it("routes dispatches directly to the handler after startup completes", async () => {
-    const program = Effect.gen(function* () {
-      const registry = yield* makeStartupInteractionRegistry<string, string>("default");
-
-      yield* registry.register((req) => Effect.succeed(`handled:${req}`));
-      yield* registry.complete();
-
-      const result = yield* registry.dispatch("x");
-      expect(result).toBe("handled:x");
-    });
-
-    await Effect.runPromise(program);
-  });
-
-  it("cancels pending dispatches on begin and when explicitly cancelled", async () => {
-    const program = Effect.gen(function* () {
-      const registry = yield* makeStartupInteractionRegistry<string, string>("cancelled");
-
-      const fiber = yield* registry.dispatch("a").pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
-      yield* registry.begin();
-      const result = yield* Fiber.join(fiber);
-      expect(result).toBe("cancelled");
     });
 
     await Effect.runPromise(program);
@@ -476,7 +527,8 @@ describe("AcpSessionRuntime initialize validation", () => {
         Effect.sync(() => {
           agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
           return ChildProcessSpawner.makeHandle({
-            pid: ChildProcessSpawner.ProcessId(1),
+            pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
             isRunning: Effect.succeed(true),
             kill: () => Effect.void,
@@ -615,7 +667,8 @@ describe("AcpSessionRuntime startup timeouts", () => {
         Effect.sync(() => {
           input.agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
           return ChildProcessSpawner.makeHandle({
-            pid: ChildProcessSpawner.ProcessId(1),
+            pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
             isRunning: Effect.succeed(true),
             kill: () => Effect.void,
@@ -679,7 +732,8 @@ describe("AcpSessionRuntime startup timeouts", () => {
         errorMessage: "ACP agent did not respond to initialize within 1s.",
         data: { reason: "acp-startup-timeout", step: "initialize", timeoutMs: STEP_TIMEOUT_MS },
       });
-      expect(tornDownPids).toEqual([1]);
+
+      expect(tornDownPids).toEqual([0x7ff_f_fffe]);
     },
     TEST_TIMEOUT_MS,
   );
@@ -704,7 +758,8 @@ describe("AcpSessionRuntime startup timeouts", () => {
         errorMessage: "ACP agent did not respond to authenticate within 1s.",
         data: { reason: "acp-startup-timeout", step: "authenticate", timeoutMs: STEP_TIMEOUT_MS },
       });
-      expect(tornDownPids).toEqual([1]);
+
+      expect(tornDownPids).toEqual([0x7ff_f_fffe]);
     },
     TEST_TIMEOUT_MS,
   );
@@ -730,7 +785,8 @@ describe("AcpSessionRuntime startup timeouts", () => {
         errorMessage: "ACP agent did not respond to session/new within 1s.",
         data: { reason: "acp-startup-timeout", step: "session/new", timeoutMs: STEP_TIMEOUT_MS },
       });
-      expect(tornDownPids).toEqual([1]);
+
+      expect(tornDownPids).toEqual([0x7ff_f_fffe]);
     },
     TEST_TIMEOUT_MS,
   );

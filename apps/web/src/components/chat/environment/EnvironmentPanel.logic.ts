@@ -2,10 +2,10 @@
 // Purpose: Pure visibility policy for Environment panel actions.
 // Layer: Web UI logic
 
-export function shouldShowStudioFolderRow(input: {
-  isStudioChat: boolean;
-  studioFolderPath: string | null;
+export function shouldShowGroupFolderRow(input: {
+  isGroupChat: boolean;
+  groupFolderPath: string | null;
   nativeShellAvailable: boolean;
 }): boolean {
-  return input.isStudioChat && Boolean(input.studioFolderPath) && input.nativeShellAvailable;
+  return input.isGroupChat && Boolean(input.groupFolderPath) && input.nativeShellAvailable;
 }

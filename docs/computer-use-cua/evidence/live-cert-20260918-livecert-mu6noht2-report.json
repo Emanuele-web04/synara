@@ -1,0 +1,36 @@
+{
+  "run": "livecert-mu6noht2",
+  "date": "2026-09-18T07:47:36.512Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-xfMeJC/host.sock",
+  "elapsedMs": 5272,
+  "rows": [
+    {
+      "name": "hidden-screenshot",
+      "verdict": "pass",
+      "detail": "on_screen=false A=31212b B=87720b changed=true valid=true dimsMatch=true",
+      "evidence": {
+        "onScreen": false,
+        "aBytes": 31212,
+        "bBytes": 87720,
+        "changed": true,
+        "frameValid": true,
+        "dims": [586, 488],
+        "bounds": {
+          "height": 488,
+          "width": 586,
+          "x": 165,
+          "y": 86
+        }
+      },
+      "elapsedMs": 2791
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 1,
+    "fail": 0,
+    "skipped": 0,
+    "verdict": "pass"
+  }
+}

@@ -19,6 +19,7 @@ describe("providerStartOptionsFromServerSettings", () => {
         claudeAgent: {
           ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
           binaryPath: "",
+          homePath: "",
         },
         cursor: {
           ...DEFAULT_SERVER_SETTINGS.providers.cursor,
@@ -51,6 +52,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.devin,
           binaryPath: "",
         },
+        omp: {
+          ...DEFAULT_SERVER_SETTINGS.providers.omp,
+          binaryPath: "",
+          agentDir: "",
+        },
       },
     };
 
@@ -65,7 +71,7 @@ describe("providerStartOptionsFromServerSettings", () => {
       }),
     ).not.toThrow();
     expect(providerOptions.codex).toEqual({});
-    expect(providerOptions.claudeAgent).toEqual({});
+    expect(providerOptions.claudeAgent).toEqual({ enableArtifacts: false });
     expect(providerOptions.cursor).toEqual({});
     expect(providerOptions.antigravity).toEqual({});
     expect(providerOptions.grok).toEqual({});
@@ -73,6 +79,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.opencode).toEqual({ experimentalWebSockets: false });
     expect(providerOptions.pi).toEqual({});
     expect(providerOptions.devin).toEqual({});
+    expect(providerOptions.omp).toEqual({});
   });
 
   it("preserves configured launch settings", () => {
@@ -85,6 +92,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "/custom/bin/codex",
           homePath: "/custom/codex-home",
           launchArgs: '-c model_provider="apitoken"',
+        },
+        claudeAgent: {
+          ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+          binaryPath: "/custom/bin/claude",
+          homePath: "/custom/claude-home",
         },
         opencode: {
           ...DEFAULT_SERVER_SETTINGS.providers.opencode,
@@ -106,6 +118,11 @@ describe("providerStartOptionsFromServerSettings", () => {
       homePath: "/custom/codex-home",
       launchArgs: '-c model_provider="apitoken"',
     });
+    expect(providerOptions.claudeAgent).toEqual({
+      binaryPath: "/custom/bin/claude",
+      homePath: "/custom/claude-home",
+      enableArtifacts: false,
+    });
     expect(providerOptions.opencode).toEqual({
       binaryPath: "/custom/bin/opencode",
       serverUrl: "http://127.0.0.1:4096",
@@ -113,4 +130,60 @@ describe("providerStartOptionsFromServerSettings", () => {
     });
     expect(providerOptions.devin).toEqual({ binaryPath: "/custom/bin/devin" });
   });
+
+  it("uses the selected Codex account while preserving the shared provider binary", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: {
+          ...DEFAULT_SERVER_SETTINGS.providers.codex,
+          binaryPath: "/custom/bin/codex",
+          homePath: "/shared/codex-home",
+          accounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "/accounts/work",
+            },
+          ],
+          selectedAccountId: "work",
+        },
+      },
+    };
+
+    expect(providerStartOptionsFromServerSettings(settings).codex).toEqual({
+      binaryPath: "/custom/bin/codex",
+      homePath: "/shared/codex-home",
+      shadowHomePath: "/accounts/work",
+      accountId: "work",
+    });
+  });
+});
+
+it("preserves escaped whitespace through server settings and the provider request codec", () => {
+  const launchArgs = "--value trailing\\ ";
+  const providerOptions = providerStartOptionsFromServerSettings({
+    ...DEFAULT_SERVER_SETTINGS,
+    providers: {
+      ...DEFAULT_SERVER_SETTINGS.providers,
+      codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, launchArgs },
+    },
+  });
+  const decoded = decodeProviderSessionStartInput({
+    threadId: "launch-args-round-trip",
+    provider: "codex",
+    runtimeMode: "full-access",
+    providerOptions,
+  });
+  expect(decoded.providerOptions?.codex?.launchArgs).toBe(launchArgs);
+  expect(() =>
+    decodeProviderSessionStartInput({
+      threadId: "launch-args-limit",
+      provider: "codex",
+      runtimeMode: "full-access",
+      providerOptions: { codex: { launchArgs: "x".repeat(4097) } },
+    }),
+  ).toThrow();
 });

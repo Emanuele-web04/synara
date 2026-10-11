@@ -41,6 +41,8 @@ export interface AppState {
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
   threadDetailSyncById?: Record<ThreadId, ThreadDetailSyncState>;
+  /** Last rollback/revert incorporated by a detail snapshot or live event. */
+  threadDetailRevisionSequenceById?: Record<ThreadId, number>;
   /**
    * Deletion tombstones, keyed by id, valued by the snapshot sequence at (or after) which the
    * deletion is guaranteed to be visible server-side. They stop a snapshot generated before the
@@ -96,6 +98,7 @@ export const initialState: AppState = {
   turnDiffIdsByThreadId: {},
   turnDiffSummaryByThreadId: {},
   threadDetailSyncById: {},
+  threadDetailRevisionSequenceById: {},
   deletedProjectIdsById: {},
   deletedThreadIdsById: {},
 };

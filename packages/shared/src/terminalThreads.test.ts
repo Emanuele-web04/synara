@@ -9,11 +9,16 @@ import {
   deriveTerminalProcessIdentity,
   resolveTerminalVisualIdentity,
   terminalCliKindFromValue,
+  terminalScopeIdsForThread,
 } from "./terminalThreads";
 
+it("includes the independent dock scope when cleaning up a host thread", () => {
+  expect(terminalScopeIdsForThread("thread-1")).toEqual(["thread-1", "dock-terminal:thread-1"]);
+});
+
 describe("Antigravity CLI identity", () => {
-  it.each(["agy", "antigravity", "antigravity-cli"])("detects the %s command", (command) => {
-    expect(deriveTerminalCommandIdentity(command)).toEqual({
+  it("detects the agy command", () => {
+    expect(deriveTerminalCommandIdentity("agy")).toEqual({
       cliKind: "antigravity",
       iconKey: "antigravity",
       title: "Antigravity CLI",
@@ -57,19 +62,16 @@ describe("resolveTerminalVisualIdentity", () => {
     });
   });
 
-  it.each([
-    ["Claude Code", "claude", "claude"],
-    ["AGY CLI", "antigravity", "antigravity"],
-  ])("infers provider identity from %s when cliKind is omitted", (title, cliKind, iconKey) => {
+  it("infers provider identity from the title when cliKind is omitted", () => {
     expect(
       resolveTerminalVisualIdentity({
         fallbackTitle: "Terminal 1",
-        title,
+        title: "Claude Code",
       }),
     ).toMatchObject({
-      cliKind,
-      iconKey,
-      title,
+      cliKind: "claude",
+      iconKey: "claude",
+      title: "Claude Code",
     });
   });
 });

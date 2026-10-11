@@ -99,6 +99,7 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
     command === "debug" ||
     command === "default" ||
     command === "automation" ||
+    command === "computer-use" ||
     command === "export" ||
     command === "feedback" ||
     // /fork is app-owned everywhere: it creates a Synara thread with fork
@@ -120,6 +121,7 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
   const appCommandIsAvailable = options.availableAppCommands?.has(normalizedCommand) ?? true;
   return (
     normalizedCommand === "automation" ||
+    normalizedCommand === "computer-use" ||
     normalizedCommand === "debug" ||
     normalizedCommand === "default" ||
     (normalizedCommand === "export" && appCommandIsAvailable) ||
@@ -224,6 +226,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "subagents",
     label: "/subagents",
     description: "Insert a prompt that asks the assistant to delegate work",
+    source: "app",
+  },
+  "computer-use": {
+    command: "computer-use",
+    label: "/computer-use",
+    description: "Use Synara Computer for this request only",
     source: "app",
   },
   fast: {
@@ -424,17 +432,26 @@ export function parseFastSlashCommandAction(text: string): FastSlashCommandActio
   return "invalid";
 }
 
+/** Prefilled objectives are literal even when they match a `/goal` control word. */
+export function buildGoalSlashCommandPrompt(goal: string): string {
+  return `/goal -- ${goal.trim()}`;
+}
+
 export function parseGoalSlashCommandArgs(args: string): GoalSlashCommandAction {
-  const goal = args.trim();
+  const trimmed = args.trim();
+  const literal = /^--(?:\s|$)/.test(trimmed);
+  const goal = literal ? trimmed.slice(2).trim() : trimmed;
   if (!goal) {
     return { action: "show" };
   }
-  const control = goal.toLowerCase();
-  if (control === "clear") {
-    return { action: "clear" };
-  }
-  if (control === "pause" || control === "resume" || control === "edit") {
-    return { action: control };
+  if (!literal) {
+    const control = goal.toLowerCase();
+    if (control === "clear") {
+      return { action: "clear" };
+    }
+    if (control === "pause" || control === "resume" || control === "edit") {
+      return { action: control };
+    }
   }
   if (goal.length > THREAD_GOAL_MAX_CHARS) {
     return { action: "too-long" };
@@ -497,6 +514,7 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
+          "computer-use",
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "goal",
           "rename",
@@ -516,6 +534,7 @@ export function getAvailableComposerSlashCommands(input: {
           "goal",
           "rename",
           "debug",
+          "computer-use",
           "default",
           "feedback",
           "automation",
