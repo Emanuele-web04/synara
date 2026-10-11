@@ -10,15 +10,8 @@ import {
   activePointerPath,
   secretsDir,
 } from "@synara/shared/providerAccounts/accountPaths";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-const LAUNCHER_ENTRY = resolve(import.meta.dirname, "launcher.ts");
-
-const bunDir = () => {
-  const bunPath = spawnSync("which", ["bun"], { encoding: "utf8" }).stdout.trim();
-  expect(bunPath.length).toBeGreaterThan(0);
-  return dirname(bunPath);
-};
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { build } from "tsdown";
 
 /** Writes a connected API-key codex account directly into the account root. */
 const writeCodexAccount = (root: string, ordinal: number, apiKey: string) => {
@@ -38,12 +31,12 @@ const writeCodexAccount = (root: string, ordinal: number, apiKey: string) => {
 };
 
 /** Installs a `codex` shim into <root>/bin the way the CLI integration does. */
-const installShim = (root: string) => {
+const installShim = (root: string, launcherEntry: string) => {
   const shimDir = join(root, "bin");
   mkdirSync(shimDir, { recursive: true });
   writeFileSync(
     join(shimDir, "codex"),
-    `#!/bin/sh\nSYNARA_LAUNCHER_SHIM=codex exec bun "${LAUNCHER_ENTRY}" "$@"\n`,
+    `#!/bin/sh\nSYNARA_LAUNCHER_SHIM=codex exec "${process.execPath}" "${launcherEntry}" "$@"\n`,
     { mode: 0o755 },
   );
   return shimDir;
@@ -71,12 +64,27 @@ const installFakeCodex = (root: string) => {
 
 describe("standalone launcher end to end", () => {
   let root: string;
+  let bundleRoot: string;
+  let launcherEntry: string;
   let shimDir: string;
   let fakeBinDir: string;
 
+  beforeAll(async () => {
+    bundleRoot = mkdtempSync(join(tmpdir(), "synara-launcher-artifact-"));
+    await build({
+      cwd: resolve(import.meta.dirname, ".."),
+      config: resolve(import.meta.dirname, "../tsdown.config.ts"),
+      outDir: join(bundleRoot, "dist"),
+      logLevel: "silent",
+    });
+    launcherEntry = join(bundleRoot, "dist", "launcher.mjs");
+  });
+
+  afterAll(() => rmSync(bundleRoot, { recursive: true, force: true }));
+
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "synara-launcher-e2e-"));
-    shimDir = installShim(root);
+    shimDir = installShim(root, launcherEntry);
     fakeBinDir = installFakeCodex(root);
     writeCodexAccount(root, 1, "sk-launcher-1");
     writeCodexAccount(root, 2, "sk-launcher-2");
@@ -88,7 +96,8 @@ describe("standalone launcher end to end", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  const pathWithShims = () => [shimDir, fakeBinDir, bunDir(), "/usr/bin", "/bin"].join(delimiter);
+  const pathWithShims = () =>
+    [shimDir, fakeBinDir, dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter);
 
   it("runs the codex shim with the active account's home and key", () => {
     const result = spawnSync(join(shimDir, "codex"), ["--flag", "value"], {
@@ -112,8 +121,8 @@ describe("standalone launcher end to end", () => {
 
   it("selects an explicit ordinal in run mode over the active pointer", () => {
     const result = spawnSync(
-      "bun",
-      [LAUNCHER_ENTRY, "run", "codex", "--ordinal", "1", "--", "exec"],
+      process.execPath,
+      [launcherEntry, "run", "codex", "--ordinal", "1", "--", "exec"],
       {
         encoding: "utf8",
         env: { PATH: pathWithShims(), SYNARA_ACCOUNT_HOME: root },
@@ -145,10 +154,13 @@ describe("standalone launcher end to end", () => {
   });
 
   it("does not recurse into itself when the real binary is missing", () => {
-    // PATH exposes only the shim (and bun): the shim is the sole `codex`.
+    // PATH exposes only the shim and its Node runtime: the shim is the sole `codex`.
     const result = spawnSync(join(shimDir, "codex"), [], {
       encoding: "utf8",
-      env: { PATH: [shimDir, bunDir()].join(delimiter), SYNARA_ACCOUNT_HOME: root },
+      env: {
+        PATH: [shimDir, dirname(process.execPath)].join(delimiter),
+        SYNARA_ACCOUNT_HOME: root,
+      },
       timeout: 30_000,
     });
     expect(result.status).toBe(127);
