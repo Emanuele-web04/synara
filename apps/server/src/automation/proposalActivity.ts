@@ -1,3 +1,6 @@
+// FILE: proposalActivity.ts
+// Purpose: Builds the durable transcript activity for an automation proposal lifecycle.
+
 import {
   EventId,
   type AutomationDefinition,

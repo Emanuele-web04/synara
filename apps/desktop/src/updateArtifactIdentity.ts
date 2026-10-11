@@ -1,3 +1,7 @@
+// FILE: updateArtifactIdentity.ts
+// Purpose: Fingerprints a downloaded updater payload and detects path/byte replacement.
+// Layer: Desktop update utility
+
 import { createHash } from "node:crypto";
 import { lstat, open } from "node:fs/promises";
 import { resolve } from "node:path";

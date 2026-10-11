@@ -221,7 +221,10 @@ import {
   GitHubProjectProvisionProgressEvent,
 } from "./githubProjectProvisioning";
 
+// ── WebSocket RPC Method Names ───────────────────────────────────────
+
 export const WS_METHODS = {
+  // Project registry methods
   projectsDiscoverScripts: "projects.discoverScripts",
   projectsListDirectories: "projects.listDirectories",
   projectsSearchEntries: "projects.searchEntries",
@@ -240,12 +243,16 @@ export const WS_METHODS = {
   subscribeProjectDevServerEvents: "projects.subscribeDevServerEvents",
   projectsProvisionFromGitHub: "projects.provisionFromGitHub",
 
+  // Studio methods
   studioListThreadOutputs: "studio.listThreadOutputs",
 
+  // Filesystem browse methods
   filesystemBrowse: "filesystem.browse",
 
+  // Shell methods
   shellOpenInEditor: "shell.openInEditor",
 
+  // Git methods
   gitPull: "git.pull",
   gitGithubRepository: "git.githubRepository",
   gitStatus: "git.status",
@@ -286,6 +293,7 @@ export const WS_METHODS = {
   pullRequestsGetAutoFix: "pullRequests.getAutoFix",
   pullRequestsSetAutoFix: "pullRequests.setAutoFix",
 
+  // Terminal methods
   terminalOpen: "terminal.open",
   terminalWrite: "terminal.write",
   terminalAckOutput: "terminal.ackOutput",
@@ -329,9 +337,11 @@ export const WS_METHODS = {
   subscribeServerKeepAwake: "server.subscribeKeepAwake",
   subscribeServerSettings: "server.subscribeSettings",
 
+  // Streaming subscriptions
   subscribeTerminalEvents: "terminal.subscribeEvents",
   subscribeOrchestrationDomainEvents: "orchestration.subscribeDomainEvents",
 
+  // Provider discovery
   providerGetComposerCapabilities: "provider.getComposerCapabilities",
   providerCompactThread: "provider.compactThread",
   providerListCommands: "provider.listCommands",
@@ -342,6 +352,7 @@ export const WS_METHODS = {
   providerListModels: "provider.listModels",
   providerListAgents: "provider.listAgents",
 
+  // Automation methods
   automationList: "automation.list",
   automationGetMemory: "automation.getMemory",
   automationCreate: "automation.create",
@@ -400,6 +411,8 @@ export const WS_METHODS = {
   subscribeProjectAgentEvents: "projectAgent.subscribe",
 } as const;
 
+// ── Push Event Channels ──────────────────────────────────────────────
+
 export const WS_CHANNELS = {
   automationEvent: "automation.event",
   todoEvent: "todo.event",
@@ -417,17 +430,20 @@ export const WS_CHANNELS = {
   serverSettingsUpdated: "server.settingsUpdated",
 } as const;
 
+// -- Tagged Union of all request body schemas ─────────────────────────
+
 const tagRequestBody = <const Tag extends string, const Fields extends Schema.Struct.Fields>(
   tag: Tag,
   schema: Schema.Struct<Fields>,
 ) =>
   schema.mapFields(
     Struct.assign({ _tag: Schema.tag(tag) }),
-    // PreserveChecks is safe here — no existing schema should have checks depending on the tag
+    // PreserveChecks is safe here. No existing schema should have checks depending on the tag
     { unsafePreserveChecks: true },
   );
 
 const WebSocketRequestBody = Schema.Union([
+  // Orchestration methods
   tagRequestBody(
     ORCHESTRATION_WS_METHODS.dispatchCommand,
     Schema.Struct({ command: ClientOrchestrationCommand }),
@@ -457,6 +473,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(ORCHESTRATION_WS_METHODS.subscribeThread, OrchestrationSubscribeThreadInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.unsubscribeThread, OrchestrationUnsubscribeThreadInput),
 
+  // Project Search
   tagRequestBody(WS_METHODS.projectsDiscoverScripts, ProjectDiscoverScriptsInput),
   tagRequestBody(WS_METHODS.projectsListDirectories, ProjectListDirectoriesInput),
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
@@ -484,11 +501,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.subscribeProjectDevServerEvents, Schema.Struct({})),
   tagRequestBody(WS_METHODS.projectsProvisionFromGitHub, GitHubProjectProvisionInput),
 
+  // Filesystem browse
+  // Studio
   tagRequestBody(WS_METHODS.studioListThreadOutputs, StudioListThreadOutputsInput),
 
   tagRequestBody(WS_METHODS.filesystemBrowse, FilesystemBrowseInput),
 
-  // the server refuses these off darwin
+  // Device pane (macOS only; the server refuses these off darwin)
   tagRequestBody(DEVICE_WS_METHODS.list, DeviceListInput),
   tagRequestBody(DEVICE_WS_METHODS.boot, DeviceBootInput),
   tagRequestBody(DEVICE_WS_METHODS.shutdown, DeviceShutdownInput),
@@ -510,8 +529,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(DEVICE_WS_METHODS.scrollToElement, DeviceScrollToElementInput),
   tagRequestBody(DEVICE_WS_METHODS.subscribeEvents, Schema.Struct({})),
 
+  // Shell methods
   tagRequestBody(WS_METHODS.shellOpenInEditor, OpenInEditorInput),
 
+  // Git methods
   tagRequestBody(WS_METHODS.gitPull, GitPullInput),
   tagRequestBody(WS_METHODS.gitGithubRepository, GitHubRepositoryInput),
   tagRequestBody(WS_METHODS.gitStatus, GitStatusInput),
@@ -554,6 +575,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.githubInboxIssueDetail, GitHubIssueDetailInput),
   tagRequestBody(WS_METHODS.githubInboxIssueComment, GitHubIssueCommentInput),
 
+  // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),
   tagRequestBody(WS_METHODS.terminalWrite, TerminalWriteInput),
   tagRequestBody(WS_METHODS.terminalAckOutput, TerminalAckOutputInput),
@@ -592,6 +614,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
   tagRequestBody(WS_METHODS.serverEditKeybindings, ServerEditKeybindingsInput),
 
+  // Provider discovery
   tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),
   tagRequestBody(WS_METHODS.providerCompactThread, ProviderCompactThreadInput),
   tagRequestBody(WS_METHODS.providerListCommands, ProviderListCommandsInput),
@@ -602,6 +625,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
   tagRequestBody(WS_METHODS.providerListAgents, ProviderListAgentsInput),
 
+  // Automation methods
   tagRequestBody(WS_METHODS.automationList, AutomationListInput),
   tagRequestBody(WS_METHODS.automationGetMemory, AutomationGetMemoryInput),
   tagRequestBody(WS_METHODS.automationCreate, AutomationCreateInput),
@@ -845,6 +869,8 @@ export const WsPushEnvelopeBase = Schema.Struct({
   data: Schema.Unknown,
 });
 export type WsPushEnvelopeBase = typeof WsPushEnvelopeBase.Type;
+
+// ── Union of all server → client messages ─────────────────────────────
 
 export const WsResponse = Schema.Union([WebSocketResponse, WsPush]);
 export type WsResponse = typeof WsResponse.Type;

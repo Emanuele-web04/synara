@@ -1,5 +1,15 @@
+// FILE: chatTypography.ts
+// Purpose: Centralizes transcript typography tokens shared by chat message renderers.
+// Layer: Web chat presentation constants
+// Exports: transcript measurement helpers and inline styles for chat text
+
 import type { CSSProperties } from "react";
 import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../../appSettings";
+
+// Inline mono chip for a command quoted inside a work-row sentence ("Ran `ls`"),
+// matching inline code in chat markdown.
+export const INLINE_COMMAND_CHIP_CLASS_NAME =
+  "rounded-[0.4rem] bg-[var(--app-user-message-background)] px-[0.35rem] py-[0.05rem] font-chat-code text-chat-code text-foreground/80";
 
 // index.css shares composer corner smoothing; keep the radius as the browser fallback.
 export const USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME =
@@ -11,7 +21,10 @@ export const USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME = [
   USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME,
 ].join(" ");
 
-// temporary chats disappear when focus leaves — dashed primary outline; non-temporary bubbles keep a transparent border of the same width so switching threads never shifts geometry
+// Temporary chats disappear when focus leaves them, so their bubbles wear a dashed
+// primary outline: the transcript itself says "this conversation is throwaway".
+// Non-temporary bubbles keep a transparent border of the same width so switching
+// threads never shifts the bubble geometry by a pixel.
 const USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME = "border";
 const USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME = [
   USER_MESSAGE_BUBBLE_BORDER_WIDTH_CLASS_NAME,
@@ -39,7 +52,8 @@ export function userMessageBubbleBorderClassName(isTemporaryThread: boolean): st
     ? USER_MESSAGE_BUBBLE_TEMPORARY_BORDER_CLASS_NAME
     : USER_MESSAGE_BUBBLE_PLAIN_BORDER_CLASS_NAME;
 }
-// Matches Tailwind `leading-relaxed` (1.625). Shared by the assistant transcript text, user message bubbles, and the composer input so every chat surface reads at one leading.
+// Matches Tailwind `leading-relaxed` (1.625). Shared by the assistant transcript text,
+// user message bubbles, and the composer input so every chat surface reads at one leading.
 const CHAT_TRANSCRIPT_LINE_HEIGHT_RATIO = 1.625;
 
 export function getChatTranscriptLineHeightPx(chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX): number {

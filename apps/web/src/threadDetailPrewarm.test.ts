@@ -1,3 +1,7 @@
+// FILE: threadDetailPrewarm.test.ts
+// Purpose: Verifies short-lived prewarming for fast thread-detail navigation.
+// Layer: Web subscription utility test
+
 import { ThreadId } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createThreadDetailPrewarmController } from "./threadDetailPrewarm";
@@ -120,7 +124,8 @@ describe("thread detail prewarm", () => {
 
     controller.prewarmThreadDetails([coldThread, cachedThread]);
 
-    // cold threads would pay a full-history snapshot stream — only the cursor-resumable thread is retained
+    // Cold threads would pay a full-history snapshot stream, so only the
+    // cursor-resumable thread is retained.
     expect(retain.retainedThreadIds).toEqual([cachedThread]);
 
     controller.prewarmThreadDetail(coldThread);
@@ -158,7 +163,9 @@ describe("thread detail prewarm", () => {
       releaseMs: 1000,
     });
 
-    // the limit must apply after eligibility filtering — the cold prefix would consume every slot and the cached thread would never prewarm
+    // More cold threads than the limit precede the one cached thread. The
+    // limit must apply after eligibility filtering, or the cold prefix would
+    // consume every slot and the cached thread would never prewarm.
     controller.prewarmThreadDetails([...coldThreadIds, cachedThread]);
 
     expect(retain.retainedThreadIds).toEqual([cachedThread]);

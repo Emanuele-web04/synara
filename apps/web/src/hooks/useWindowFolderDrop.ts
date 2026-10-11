@@ -1,4 +1,9 @@
-// a stray drop outside a small zone would vanish silently — listeners bind on `window` in the capture phase
+// FILE: useWindowFolderDrop.ts
+// Purpose: Accept a folder dropped anywhere in the window while a modal surface is open.
+//          A small drop zone is easy to miss and a stray drop outside it would otherwise
+//          vanish silently, so listeners bind on `window` in the capture phase.
+// Layer: Web hook
+// Exports: useWindowFolderDrop
 
 import { useEffect, useRef, useState } from "react";
 
@@ -10,6 +15,7 @@ export function useWindowFolderDrop(options: {
   readonly onError: (message: string) => void;
 }): boolean {
   const [isDropTarget, setIsDropTarget] = useState(false);
+  // Latest callbacks through refs so the listeners bind once per `enabled` flip.
   const onFolderRef = useRef(options.onFolder);
   const onErrorRef = useRef(options.onError);
   onFolderRef.current = options.onFolder;

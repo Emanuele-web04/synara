@@ -339,7 +339,8 @@ export function useChatComposerCommands({
       if (activePendingQuestion && activePendingUserInput) {
         const interruptedNavigation = promptHistoryNavigationRef.current;
         if (interruptedNavigation !== null) {
-          // an active question ended the history browse while the persisted prompt held a recalled entry — put the real draft back
+          // An active question ended the history browse while the persisted
+          // prompt still held a recalled entry; put the real draft back.
           promptHistoryNavigationRef.current = null;
           restoreComposerDraftPromptHistorySavedDraft(threadId);
           promptRef.current = interruptedNavigation.draft;
@@ -360,7 +361,8 @@ export function useChatComposerCommands({
         if (nextPrompt === expectedPromptHistoryPrompt) {
           expectedPromptHistoryPromptRef.current = null;
         } else {
-          // the user edited past the recalled entry: the edited text is the draft now, so the saved pre-browse draft must not be restored
+          // The user edited past the recalled entry: the edited text is the
+          // draft now, so the saved pre-browse draft must not be restored.
           promptHistoryNavigationRef.current = null;
           expectedPromptHistoryPromptRef.current = null;
           setComposerDraftPromptHistorySavedDraft(threadId, null);
@@ -443,7 +445,9 @@ export function useChatComposerCommands({
           : null;
 
       if (slashTriggerText === "/" && snapshot.expandedCursor === trigger?.rangeEnd) {
-        // only wipe the draft when the slash IS the whole prompt; a mid-line slash must keep surrounding content
+        // Pressing `/` again on a lone `/` dismisses the picker. Only wipe the
+        // draft when the slash IS the whole prompt; a mid-line slash (e.g. after
+        // an existing chip) must keep surrounding content, so let it type through.
         if (trigger.rangeStart === 0 && trigger.rangeEnd === snapshot.value.length) {
           clearComposerSlashDraft();
           return true;
@@ -527,7 +531,8 @@ export function useChatComposerCommands({
         direction,
         history: promptHistory,
         currentPrompt: snapshot.value,
-        // line-boundary math needs raw string offsets; the collapsed cursor undercounts inline token chips
+        // Line-boundary math needs raw string offsets; the collapsed cursor
+        // undercounts inline token chips (mentions, links, slash commands).
         currentExpandedCursor: snapshot.expandedCursor,
         selectionCollapsed: snapshot.selectionCollapsed,
         state: previousNavigationState,
@@ -552,7 +557,9 @@ export function useChatComposerCommands({
         promptRef.current = result.prompt;
         setPrompt(result.prompt);
         setComposerCursor(collapseExpandedComposerCursor(result.prompt, result.expandedCursor));
-        // recalled text replaces the whole prompt; suppress trigger detection so an entry ending in a token can't pop a menu that captures the next arrow keypress
+        // Recalled text replaces the whole prompt; suppress trigger detection
+        // so an entry ending in a mention/slash token cannot pop a menu that
+        // would capture the next arrow keypress.
         setComposerTrigger(null);
         window.requestAnimationFrame(() => {
           applyingPromptHistoryNavigationRef.current = false;
@@ -563,7 +570,9 @@ export function useChatComposerCommands({
 
     if (key === "Enter" && !event.shiftKey) {
       if (promptHistoryNavigationRef.current !== null) {
-        // sending commits the recalled text; drop the saved draft here too so it can't resurrect a stale draft if the send is rejected
+        // Sending commits the recalled text as the prompt; drop the saved
+        // draft here (not just in the send path) so it cannot linger and
+        // resurrect a stale draft if the send is rejected.
         promptHistoryNavigationRef.current = null;
         setComposerDraftPromptHistorySavedDraft(threadId, null);
       }

@@ -70,7 +70,8 @@ interface ComposerPullRequestContextCardProps {
   onRemove: () => void;
 }
 
-// Composer attachment: the card is the whole affordance — there is no inline text to edit, the prompt rides along hidden and is dropped by removing the card.
+// Composer attachment: the card is the whole affordance — there is no inline text to edit,
+// the prompt rides along hidden and is dropped by removing the card.
 export function ComposerPullRequestContextCard(props: ComposerPullRequestContextCardProps) {
   return <PullRequestContextCardShell {...props} />;
 }
@@ -83,7 +84,8 @@ interface UserMessagePullRequestContextCardProps {
   text: string;
 }
 
-// Transcript echo: clicking the card reveals the exact prompt the agent received so the user can audit what "Repair" asked for.
+// Transcript echo: clicking the card reveals the exact prompt the agent received so the
+// user can audit what "Repair" asked for.
 export function UserMessagePullRequestContextCard({
   scope,
   itemKind,

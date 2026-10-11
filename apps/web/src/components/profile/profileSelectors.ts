@@ -1,3 +1,8 @@
+// FILE: profileSelectors.ts
+// Purpose: Shared profile selectors that combine fast core stats with slower
+// token telemetry for profile surfaces and export cards.
+// Layer: web profile feature (pure selection logic, no I/O).
+
 import type {
   ProfileHeatmapCell,
   ProfileStats,
@@ -73,7 +78,9 @@ export function selectProfileTopProvider(
   };
 }
 
-// prefer the token-based model mix (tokens attributed to the model each turn ran with); fall back to turn counts while stats load
+// Prefer the token-based model mix (tokens are attributed to the model each turn
+// actually ran with) and fall back to turn counts while token stats load or when
+// no provider emitted token telemetry.
 export function selectProfileModelUsage(
   stats: ProfileStats,
   tokenStats: ProfileTokenStats | null,

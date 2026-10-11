@@ -2,7 +2,8 @@ import type { BrowserAnnotationMarker } from "@synara/contracts";
 
 import type { AnnotationGuestCommand } from "./protocol";
 
-// dependency-free mirror for the sandboxed preload; a focused test keeps these values aligned with the public contracts
+// Literal, dependency-free mirror for the sandboxed preload. A focused test
+// keeps these values aligned with the public contracts.
 export const GUEST_ANNOTATION_PROTOCOL_VERSION = 1 as const;
 export const GUEST_ANNOTATION_MAX_COMMENT_LENGTH = 4_000;
 export const GUEST_ANNOTATION_MAX_NAME_LENGTH = 256;

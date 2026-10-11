@@ -1,3 +1,7 @@
+// FILE: BrowserPanel.annotations.browser.tsx
+// Purpose: Browser-runtime coverage for annotation toolbar and session orchestration.
+// Layer: BrowserPanel browser tests
+
 import "../index.css";
 
 import { useCallback, useState } from "react";

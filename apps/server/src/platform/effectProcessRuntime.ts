@@ -37,7 +37,8 @@ export function spawnProviderProcess(
 
 type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "lowerPriority">;
 
-// the pinned Effect revision predates these Node-only Windows options — the platform-node-shared patch reads them at runtime
+// The pinned Effect revision predates these Node-only Windows options. The
+// tracked platform-node-shared patch reads them from the command at runtime.
 type EffectWindowsCommandOptions = ChildProcess.CommandOptions & {
   readonly windowsHide?: boolean;
   readonly windowsVerbatimArguments?: boolean;

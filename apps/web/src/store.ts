@@ -1,6 +1,14 @@
+// FILE: store.ts
+// Purpose: Public Zustand facade for normalized orchestration state and local UI actions.
+// Exports: Stable store API plus pure transitions re-exported from focused modules.
+
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
   type OrchestrationEvent,
+  type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadHistory,
+  type OrchestrationThreadHistoryCursor,
+  type OrchestrationThreadActivityHistoryCursor,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
@@ -18,6 +26,10 @@ import {
 } from "./lib/projectAppearance";
 import { resolveCreateBranchFlowCompletedMerge } from "./storeNormalization";
 import {
+  restoreCachedThreadDetail,
+  mergeThreadHistoryPage,
+  applyThreadHistoryMetadata,
+  confirmThreadDetailReplay,
   applySpaceOrder,
   applyShellEvent,
   applyThreadUpdate,
@@ -278,10 +290,27 @@ export function setThreadWorkspace(
   });
 }
 
+// ── Zustand store ────────────────────────────────────────────────────
+
 interface AppStore extends AppState {
+  restoreCachedThreadDetail: (snapshot: OrchestrationThreadDetailSnapshot) => void;
+  mergeThreadHistoryPage: (
+    snapshot: OrchestrationThreadDetailSnapshot,
+    expectedCursor: OrchestrationThreadHistoryCursor | null,
+    expectedActivityCursor?: OrchestrationThreadActivityHistoryCursor | null,
+  ) => void;
+  applyThreadHistoryMetadata: (
+    id: ThreadId,
+    history: OrchestrationThreadHistory | undefined,
+  ) => void;
+  confirmThreadDetailReplay: (id: ThreadId) => void;
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
-  syncServerThreadDetailHotPath: (thread: ReadModelThread, snapshotSequence?: number) => void;
+  syncServerThreadDetailHotPath: (
+    thread: ReadModelThread,
+    snapshotSequence?: number,
+    history?: OrchestrationThreadHistory,
+  ) => void;
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
   applyShellEvent: (event: OrchestrationShellStreamEvent) => void;
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
@@ -311,10 +340,17 @@ interface AppStore extends AppState {
 
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(initialState),
+  restoreCachedThreadDetail: (snapshot) =>
+    set((state) => restoreCachedThreadDetail(state, snapshot)),
+  mergeThreadHistoryPage: (snapshot, cursor, activityCursor) =>
+    set((state) => mergeThreadHistoryPage(state, snapshot, cursor, activityCursor)),
+  applyThreadHistoryMetadata: (id, history) =>
+    set((state) => applyThreadHistoryMetadata(state, id, history)),
+  confirmThreadDetailReplay: (id) => set((state) => confirmThreadDetailReplay(state, id)),
   syncServerShellSnapshot: (snapshot) => set((state) => syncServerShellSnapshot(state, snapshot)),
   syncServerThreadDetail: (thread) => set((state) => syncServerThreadDetail(state, thread)),
-  syncServerThreadDetailHotPath: (thread, snapshotSequence) =>
-    set((state) => syncServerThreadDetailHotPath(state, thread, snapshotSequence)),
+  syncServerThreadDetailHotPath: (thread, snapshotSequence, history) =>
+    set((state) => syncServerThreadDetailHotPath(state, thread, snapshotSequence, history)),
   syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
   applyShellEvent: (event) => set((state) => applyShellEvent(state, event)),
   applyOrchestrationEvents: (events) => set((state) => applyOrchestrationEvents(state, events)),
@@ -326,7 +362,9 @@ export const useStore = create<AppStore>((set) => ({
     ),
   evictThreadDetail: (threadId) =>
     set((state) => evictThreadDetailFromClientState(state, threadId)),
-  // fold batch lease drops into one write — every update re-runs the retention reconcile
+  // Dropping a batch of leases evicts several threads at once. Every store update
+  // re-runs the retention reconcile, so folding them into one write keeps that at
+  // a single pass instead of one per thread.
   evictThreadDetails: (threadIds) =>
     set((state) => {
       let nextState: AppState = state;
@@ -369,8 +407,9 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => setThreadWorkspace(state, threadId, patch)),
 }));
 
-// debounced persistence avoids localStorage thrashing
-// debounce persists to avoid localStorage thrashing; project snapshots depend only on `state.projects` (immutable), so skip them on the streaming hot path
+// Persist state changes with debouncing to avoid localStorage thrashing.
+// Project snapshots only depend on `state.projects` (immutable — every project mutation
+// produces a new array), so skip them on the streaming hot path where only thread slices move.
 let lastRememberedProjects: readonly Project[] | undefined;
 useStore.subscribe((state) => {
   if (state.projects !== lastRememberedProjects) {
@@ -380,7 +419,7 @@ useStore.subscribe((state) => {
   debouncedPersistState.maybeExecute(state);
 });
 
-// project snapshots depend only on immutable state.projects — skip them on the streaming hot path where only thread slices move
+// Flush pending writes synchronously before page unload to prevent data loss.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
     persistAppStateNow();

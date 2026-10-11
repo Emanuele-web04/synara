@@ -1,3 +1,8 @@
+// FILE: NodePTY.ts
+// Purpose: Provides the Node.js-backed PTY adapter used by terminal sessions.
+// Layer: Terminal infrastructure
+// Depends on: node-pty native bindings, Effect layers, PTY service contract
+
 import { createRequire } from "node:module";
 
 import { Effect, FileSystem, Layer, Path } from "effect";
@@ -51,7 +56,7 @@ export const ensureNodePtySpawnHelperExecutable = Effect.fn(function* (explicitP
     return;
   }
 
-  // avoid FileSystem.stat in packaged mode where fs metadata can be missing
+  // Best-effort: avoid FileSystem.stat in packaged mode where some fs metadata can be missing.
   yield* fs.chmod(helperPath, 0o755).pipe(Effect.orElseSucceed(() => undefined));
 });
 
@@ -102,7 +107,7 @@ class NodePtyProcess implements PtyProcess {
   }
 }
 
-// injectable loader keeps startup/lazy-load behavior testable
+// Creates the adapter layer with an injectable loader so startup/lazy-load behavior is testable.
 export const makeNodePtyLayer = (loadNodePtyModule: NodePtyLoader = () => import("node-pty")) =>
   Layer.effect(
     PtyAdapter,
@@ -110,7 +115,7 @@ export const makeNodePtyLayer = (loadNodePtyModule: NodePtyLoader = () => import
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
 
-      // lazy-load node-pty so a bad packaged native binding can't crash server startup
+      // Load node-pty lazily so a bad packaged native binding cannot crash server startup.
       const loadNodePty = yield* Effect.cached(
         Effect.tryPromise({
           try: loadNodePtyModule,

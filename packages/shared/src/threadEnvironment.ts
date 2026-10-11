@@ -31,7 +31,7 @@ export function isPendingThreadWorktree(input: {
   return resolveThreadWorkspaceState(input) === "worktree-pending";
 }
 
-// runtime-facing operations should only target a materialized worktree path
+// Runtime-facing operations should only target a materialized worktree path.
 export function resolveThreadWorkspaceCwd(input: {
   projectCwd?: string | null | undefined;
   envMode?: ThreadEnvironmentMode | null | undefined;
@@ -40,7 +40,8 @@ export function resolveThreadWorkspaceCwd(input: {
 }): string | null {
   const mode = resolveThreadEnvironmentMode(input);
   if (mode === "worktree") {
-    // keep an imported conversation's monorepo-subproject cwd on restart, but never reuse a stale cwd from another environment
+    // Imported conversations can start within a monorepo subproject. Keep that
+    // cwd on restart, but never reuse a stale cwd from another environment.
     if (
       input.worktreePath &&
       input.workingDirectory &&
@@ -54,7 +55,7 @@ export function resolveThreadWorkspaceCwd(input: {
   return input.workingDirectory ?? input.projectCwd ?? null;
 }
 
-// branch discovery can still use the project root before a worktree exists
+// Branch discovery can still use the project root before a worktree exists.
 export function resolveThreadBranchSourceCwd(input: {
   projectCwd?: string | null | undefined;
   worktreePath?: string | null | undefined;

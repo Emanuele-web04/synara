@@ -25,7 +25,8 @@ function toGithubAlert(node: Blockquote, source: string): void {
   }
 
   text.value = text.value.slice(match[0].length);
-  // keep find/wiki-link offsets aligned with source after dropping the marker — the next line's `>` continuation prefix isn't in the text value
+  // Keep find/wiki-link offsets aligned with the source after dropping the
+  // marker; the next line's `>` continuation prefix is not in the text value.
   const start = text.position?.start;
   if (start && start.offset !== undefined) {
     const removed = match[0];
@@ -65,7 +66,8 @@ function visit(node: Parent, source: string): void {
   }
 }
 
-// Renders GitHub's `> [!NOTE]` blockquote alerts; the marker is left as plain text by remark-gfm, so tag the blockquote for the renderer and strip it.
+// Renders GitHub's `> [!NOTE]` blockquote alerts; the marker is left as plain
+// text by remark-gfm, so tag the blockquote for the renderer and strip it.
 export function remarkGithubAlerts() {
   return (tree: Root, file: { value: unknown }) => visit(tree, String(file.value));
 }

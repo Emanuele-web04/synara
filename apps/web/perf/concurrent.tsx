@@ -1,4 +1,5 @@
-// production-component probe: synthetic store ingress, no providers or WebSocket; fixed history + delta cadence per thread (see concurrent-runner.mjs)
+// Production-component probe; synthetic store ingress, no providers or WebSocket.
+// Fixed history and delta cadence PER thread. See concurrent-runner.mjs for paired runs.
 import "../src/index.css";
 import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { Profiler, useMemo, useRef } from "react";

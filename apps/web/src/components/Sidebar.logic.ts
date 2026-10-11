@@ -1,3 +1,7 @@
+// FILE: Sidebar.logic.ts
+// Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
+// Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
+
 import {
   MAX_PINNED_PROJECTS,
   type ProjectId,
@@ -135,12 +139,16 @@ export function resolveSidebarThreadPullRequest<
   readonly livePullRequest: T | null;
   readonly persistedPullRequest: T | null;
 }): T | null {
-  // a shared local checkout can move because another thread works in the same project root — its live PR must never overwrite the durable PR explicitly associated with this thread
+  // A shared local checkout can move because another thread is working in the same project root.
+  // Its live PR must never overwrite the durable PR explicitly associated with this thread.
   if (!input.hasDedicatedWorktree) {
     return input.persistedPullRequest;
   }
 
-  // a settled (merged/closed) PR is the thread's outcome, not a claim about the current checkout — it stays visible after the checkout moves on; switching back to main after merging must flip the badge to "merged", not drop it
+  // A settled (merged/closed) PR is the thread's outcome, not a claim about the current
+  // checkout, so it stays visible after the checkout moves on — e.g. switching back to
+  // main after merging must flip the badge to "merged", not drop it and let stale
+  // metadata elsewhere keep it "open".
   const settledPersistedPullRequest =
     input.persistedPullRequest !== null && input.persistedPullRequest.state !== "open"
       ? input.persistedPullRequest
@@ -182,7 +190,9 @@ type SidebarThreadSortInput = {
   latestUserMessageAt?: string | null | undefined;
   snoozeReminderAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
-  // Present on real thread summaries; lets finished-but-unseen threads float to the top of the sort (see sortThreadsForSidebar). Optional so minimal test fixtures and legacy shapes keep plain timestamp ordering.
+  // Present on real thread summaries; lets finished-but-unseen threads float to
+  // the top of the sort (see sortThreadsForSidebar). Optional so minimal test
+  // fixtures and legacy shapes keep plain timestamp ordering.
   latestTurn?: Thread["latestTurn"] | undefined;
   lastVisitedAt?: Thread["lastVisitedAt"] | undefined;
   hasLiveTailWork?: boolean | undefined;
@@ -586,7 +596,9 @@ export function resolveThreadRowClassName(input: {
   );
 }
 
-// Single definition of "this thread is actively doing work" shared by the Working status pill and the sidebar sort, so a thread's position and its pill never disagree.
+// Single definition of "this thread is actively doing work" shared by the
+// Working status pill and the sidebar sort, so a thread's position and its
+// pill never disagree.
 export function isThreadActivelyWorking(thread: {
   hasLiveTailWork?: boolean | undefined;
   session?: Thread["session"] | undefined;
@@ -609,7 +621,9 @@ export function resolveThreadStatusPill(input: {
   isPreparingWorktree?: boolean;
 }): ThreadStatusPill | null {
   const { thread } = input;
-  // A dead session can't receive approval/input answers anymore — drop the actionable pills instead of advertising a request nobody can fulfill. Mirrored by the kanban board's deriveKanbanColumn.
+  // A dead session can't receive approval/input answers anymore — drop the
+  // actionable pills instead of advertising a request nobody can fulfill.
+  // Mirrored by the kanban board's deriveKanbanColumn.
   const canAnswerPendingRequests = canSessionAnswerPendingRequests(thread.session);
   const hasPendingApprovals = input.hasPendingApprovals && canAnswerPendingRequests;
   const hasPendingUserInput = input.hasPendingUserInput && canAnswerPendingRequests;
@@ -767,7 +781,10 @@ export function findWorkspaceRootMatch<T>(
   return items.find((item) => workspaceRootsEqual(getWorkspaceRoot(item), targetWorkspaceRoot));
 }
 
-// deepest matching root wins — a dev server running from a monorepo subdirectory attributes to the nested project, not its parent
+// Finds the item whose workspace root most specifically contains `targetPath`
+// (equal to it, or its closest ancestor). Used to attribute a dev server's cwd
+// to a project even when it runs from a monorepo subdirectory; the deepest root
+// wins so a nested project beats its parent.
 export function findDeepestWorkspaceRootMatch<T>(
   items: readonly T[],
   targetPath: string,
@@ -843,7 +860,8 @@ export async function recoverExistingAddProjectTarget(input: {
   return "create";
 }
 
-// Translates low-level add-project failures into a short explanation without hiding the original error text that developers may need for diagnosis.
+// Translates low-level add-project failures into a short explanation without
+// hiding the original error text that developers may need for diagnosis.
 export function describeAddProjectError(message: string): string | null {
   if (isDuplicateProjectCreateError(message)) {
     return "This usually means the folder is already linked to an existing project. On Windows, the same folder can arrive with a different path format, so it looks new even when it is not.";
@@ -859,9 +877,13 @@ export function describeAddProjectError(message: string): string | null {
   return null;
 }
 
-// requested page count clamps to what the list can use so stale persisted values (or shrinking lists) self-heal instead of requiring dead "Show less" clicks
+// One "Show more" click reveals one extra page of rows; "Show less" hides one page again.
+// The requested page count is clamped to what the list can actually use, so stale persisted
+// values (or shrinking thread lists) self-heal instead of requiring dead "Show less" clicks.
 export type SidebarThreadListPaging = {
+  /** Requested pages clamped to what `totalCount` can actually consume. */
   effectiveExtraPages: number;
+  /** Row cap to render: `baseLimit + effectiveExtraPages * pageSize`. */
   previewLimit: number;
   canShowMore: boolean;
   canShowLess: boolean;
@@ -898,15 +920,41 @@ export interface SidebarThreadTreeRow<
   rootThreadId: T["id"];
 }
 
-function collectActiveThreadAncestorIds<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(threadById: Map<T["id"], T>, forceVisibleThreadId: T["id"] | undefined): Set<T["id"]> {
+type SidebarTreeThread = Pick<SidebarThreadSummary, "id" | "parentThreadId"> &
+  Partial<Pick<SidebarThreadSummary, "sourceThreadId">>;
+
+// A nested subagent hangs off the main thread but was launched by another
+// subagent (its sourceThreadId); the tree shows it under that subagent when
+// the launcher is in the list.
+function treeParentThreadId<T extends SidebarTreeThread>(
+  thread: T,
+  threadById: Map<T["id"], T>,
+): T["id"] | null {
+  const parentThreadId = thread.parentThreadId ?? null;
+  const sourceThreadId = thread.sourceThreadId ?? null;
+  if (
+    parentThreadId &&
+    sourceThreadId &&
+    sourceThreadId !== parentThreadId &&
+    sourceThreadId !== thread.id &&
+    threadById.get(sourceThreadId)?.parentThreadId === parentThreadId
+  ) {
+    return sourceThreadId;
+  }
+  return parentThreadId;
+}
+
+function collectActiveThreadAncestorIds<T extends SidebarTreeThread>(
+  threadById: Map<T["id"], T>,
+  forceVisibleThreadId: T["id"] | undefined,
+): Set<T["id"]> {
   const ancestorIds = new Set<T["id"]>();
   let currentThreadId = forceVisibleThreadId;
 
   while (currentThreadId) {
-    const parentThreadId = threadById.get(currentThreadId)?.parentThreadId ?? undefined;
-    if (!parentThreadId) {
+    const current = threadById.get(currentThreadId);
+    const parentThreadId = current ? treeParentThreadId(current, threadById) : null;
+    if (!parentThreadId || ancestorIds.has(parentThreadId)) {
       break;
     }
     ancestorIds.add(parentThreadId);
@@ -917,9 +965,8 @@ function collectActiveThreadAncestorIds<
 }
 
 // Build the project-local parent/child thread tree while preserving sort order from the input list.
-export function buildProjectThreadTree<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(input: {
+// Subagent rows show under the open thread and its ancestors, finished or not.
+export function buildProjectThreadTree<T extends SidebarTreeThread>(input: {
   threads: readonly T[];
   forceVisibleThreadId?: T["id"] | undefined;
 }): SidebarThreadTreeRow<T>[] {
@@ -929,12 +976,14 @@ export function buildProjectThreadTree<
   const roots: T[] = [];
 
   for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
+    const parentThreadId = treeParentThreadId(thread, threadById);
     if (!parentThreadId) {
       roots.push(thread);
       continue;
     }
-    // subagent threads are only reachable through their parent — when the parent isn't in the list (archived/deleted) its subtree stays hidden instead of being promoted to top-level rows
+    // Subagent threads are only reachable through their parent. When the parent
+    // is not in the list (archived or deleted), its subtree stays hidden instead
+    // of being promoted to top-level rows.
     if (!threadById.has(parentThreadId)) {
       continue;
     }
@@ -946,10 +995,13 @@ export function buildProjectThreadTree<
   const activeThreadAncestorIds = collectActiveThreadAncestorIds(threadById, forceVisibleThreadId);
   const orderedRows: SidebarThreadTreeRow<T>[] = [];
 
-  const visit = (thread: T, depth: number, rootThreadId: T["id"]) => {
+  // The open thread's ancestors reveal the path down to it; the open thread
+  // reveals its whole subtree (its subagents and the ones they launched).
+  const visit = (thread: T, depth: number, rootThreadId: T["id"], inOpenSubtree: boolean) => {
     const childThreads = childrenByParentId.get(thread.id) ?? [];
-    const revealsActiveDescendant =
-      childThreads.length > 0 && activeThreadAncestorIds.has(thread.id);
+    const opensSubtree = inOpenSubtree || thread.id === forceVisibleThreadId;
+    const revealsChildren =
+      childThreads.length > 0 && (opensSubtree || activeThreadAncestorIds.has(thread.id));
 
     orderedRows.push({
       thread,
@@ -957,17 +1009,17 @@ export function buildProjectThreadTree<
       rootThreadId,
     });
 
-    if (!revealsActiveDescendant) {
+    if (!revealsChildren) {
       return;
     }
 
     for (const child of childThreads) {
-      visit(child, depth + 1, rootThreadId);
+      visit(child, depth + 1, rootThreadId, opensSubtree);
     }
   };
 
   for (const root of roots) {
-    visit(root, 0, root.id);
+    visit(root, 0, root.id, false);
   }
 
   return orderedRows;
@@ -1103,7 +1155,11 @@ export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
   return orderPinnedItemsFirst(projects, pinnedProjectIds);
 }
 
-// pinned rows hide from per-project lists — EXCEPT a pinned parent whose children are in the list stays in the tree, since the pinned section renders flat and hiding the parent would orphan its descendants
+// Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.
+// Exception: a pinned parent whose children are in the list stays in the tree.
+// The pinned section renders flat rows only, and buildProjectThreadTree hides
+// children with a missing parent — hiding such a parent would make its
+// descendants unreachable anywhere in the sidebar.
 export function getUnpinnedThreadsForSidebar<
   T extends Pick<Thread, "id"> & Partial<Pick<SidebarThreadSummary, "parentThreadId">>,
 >(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T[] {
@@ -1261,7 +1317,10 @@ function getThreadSortTimestamp(
   return Math.max(reminderAt, getLatestUserMessageTimestamp(thread));
 }
 
-// a finished-but-unseen chat floats above plain timestamp order; opening it (or dismissing its Completed pill) updates lastVisitedAt and it falls back into place; live tail work isn't finished
+// A finished chat the user hasn't opened yet floats above the plain timestamp
+// order so it gets seen. Opening it (or dismissing its Completed pill, which
+// marks it visited) updates lastVisitedAt and the thread falls back into place.
+// A thread with live tail work isn't finished, so it stays in plain order.
 function isUnseenFinishedThread(thread: SidebarThreadSortInput): boolean {
   if (thread.hasLiveTailWork === true) {
     return false;
@@ -1275,7 +1334,10 @@ function isUnseenFinishedThread(thread: SidebarThreadSortInput): boolean {
   );
 }
 
-// live work first, finished-but-unseen next, then by timestamp — mirrors THREAD_STATUS_PRIORITY where Working/Connecting outrank Completed
+// Attention groups for the sidebar order: threads doing live work first so you
+// can watch what's going on, then finished-but-unseen ones so they get noticed,
+// then everything else by timestamp. Mirrors THREAD_STATUS_PRIORITY, where
+// Working/Connecting outrank Completed.
 function threadSortAttentionRank(thread: SidebarThreadSortInput): number {
   if (isThreadActivelyWorking(thread) || thread.session?.status === "connecting") {
     return 2;
@@ -1571,7 +1633,8 @@ export function deriveSidebarProjectData(input: {
       input.threadListExtraPagesByProjectCwd.get(input.normalizeProjectCwd(project.cwd)) ?? 0;
     const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
 
-    // Collapsed folders should not build or render their full tree; large projects can contain hundreds of rows and folder toggles are on the sidebar hot path.
+    // Collapsed folders should not build or render their full tree; large projects can
+    // contain hundreds of rows and folder toggles are on the sidebar hot path.
     if (!project.expanded) {
       const activeThread =
         input.activeSidebarThreadId === undefined
@@ -1641,7 +1704,8 @@ export function deriveSidebarProjectData(input: {
       orderedProjectThreadIds,
       visibleEntries: renderedEntries,
       threadListExtraPages: paging.effectiveExtraPages,
-      // The active-thread reveal can force rows beyond the page cap; only offer "Show more" while rows are genuinely hidden.
+      // The active-thread reveal can force rows beyond the page cap; only offer "Show more"
+      // while rows are genuinely hidden.
       canShowMoreThreads: paging.canShowMore && renderedEntries.length < orderedEntries.length,
       canShowLessThreads: paging.canShowLess,
       activeEntryId: activeEntry?.rowId ?? null,
@@ -1651,3 +1715,7 @@ export function deriveSidebarProjectData(input: {
 
   return byProjectId;
 }
+
+// PR-state presentation (label/color/glyph) moved to
+// ~/components/pullRequest/pullRequestStatePresentation so the sidebar badge, kanban chip,
+// and the pull request feature surfaces all share one mapping.

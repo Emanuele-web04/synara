@@ -31,7 +31,11 @@ export function createBrowserTestServerConfig(checkedAt: string): ServerConfig {
   };
 }
 
-/** onboarding marker set so the first-run welcome tour doesn't open over the surface under test */
+/**
+ * Server settings for full-app browser fixtures. The onboarding marker is set so the
+ * first-run welcome tour (which gates on "no projects and never completed") does not open
+ * over the surface under test; the tour has its own coverage.
+ */
 export function createBrowserTestServerSettings(completedAt: string): ServerSettingsView {
   return { ...DEFAULT_SERVER_SETTINGS_VIEW, onboardingCompletedAt: completedAt };
 }

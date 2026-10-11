@@ -1,3 +1,7 @@
+// FILE: trustedOrigins.test.ts
+// Purpose: Pins which browser origins can use local-data HTTP/WS surfaces.
+// Layer: Server utility tests
+
 import { describe, expect, it } from "vitest";
 
 import type { ServerConfigShape } from "./config";

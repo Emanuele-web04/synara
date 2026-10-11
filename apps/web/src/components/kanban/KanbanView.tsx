@@ -1,3 +1,9 @@
+// FILE: KanbanView.tsx
+// Purpose: Kanban control-center page shell — header chrome plus the nested
+//          overview (all projects) / single-project board navigation.
+// Layer: Kanban route surface
+// Exports: KanbanView (default)
+
 import type { ProjectId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -45,7 +51,9 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
   );
   const nowMs = useNowMs(hasActiveCardWork);
 
-  // PR badges resolve like the sidebar's: live git status validates the persisted PR instead of trusting stale lastKnownPr metadata; scoped to rendered cards
+  // PR badges resolve like the sidebar's: live git status per checkout validates the
+  // persisted PR instead of trusting stale lastKnownPr metadata. Scoped to the cards the
+  // current surface renders (one board, or each overview column's capped list).
   const allProjects = useStore((state) => state.projects);
   const projectCwdById = useMemo(
     () => new Map(allProjects.map((project) => [project.id, project.cwd] as const)),
@@ -89,7 +97,8 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
   const handleNewTaskInProjectBoard = () => {
     handleNewTask(projectBoardId);
   };
-  // the Draft column's "+" implies "add a card here" — seed the dialog's "Send as draft" toggle so the task parks in Draft
+  // The Draft column's "+" implies "add a card here" — seed the dialog's
+  // "Send as draft" toggle so the task parks in Draft instead of dispatching.
   const handleNewDraftInProjectBoard = () => {
     handleNewTask(projectBoardId, { sendAsDraft: true });
   };
@@ -98,7 +107,10 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     name: project.projectName,
   }));
 
-  // a ref mirrors the open state so a repeat press doesn't remount an already-open dialog and wipe a half-typed prompt
+  // Kanban-scoped ⌥⌘T: open the New task dialog targeting the current board (or
+  // unscoped on the overview). A ref mirrors the open state so a repeat press
+  // doesn't remount an already-open dialog and wipe a half-typed prompt — and so
+  // the listener stays registered once instead of re-binding on every open/close.
   const isNewTaskDialogOpenRef = useRef(false);
   useEffect(() => {
     isNewTaskDialogOpenRef.current = newTaskDialog !== null;
@@ -121,7 +133,8 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
   }, [handleNewTask, newTaskProjectOptions.length, projectBoardId]);
 
   useEffect(() => {
-    // unknown/stale project id: fall back to the overview instead of a blank board — but only once hydration can tell stale from loading
+    // Unknown/stale project id (deleted project, old link): fall back to the overview
+    // instead of a blank board — but only once hydration can tell stale from loading.
     if (projectId !== null && projectBoard === null && threadsHydrated) {
       void navigate({ to: "/kanban", replace: true });
     }

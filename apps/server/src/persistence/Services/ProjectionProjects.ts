@@ -1,3 +1,11 @@
+/**
+ * ProjectionProjectRepository - Projection repository interface for projects.
+ *
+ * Owns persistence operations for project rows in the orchestration projection
+ * read model.
+ *
+ * @module ProjectionProjectRepository
+ */
 import {
   IsoDateTime,
   ModelSelection,
@@ -47,30 +55,50 @@ export const ClearProjectionProjectSpaceAssignmentsInput = Schema.Struct({
 export type ClearProjectionProjectSpaceAssignmentsInput =
   typeof ClearProjectionProjectSpaceAssignmentsInput.Type;
 
+/**
+ * ProjectionProjectRepositoryShape - Service API for projected project records.
+ */
 export interface ProjectionProjectRepositoryShape {
-  /** upserts by projectId; scripts persisted through JSON encoding */
+  /**
+   * Insert or replace a projected project row.
+   *
+   * Upserts by `projectId` and persists scripts through JSON encoding.
+   */
   readonly upsert: (row: ProjectionProject) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  /**
+   * Read a projected project row by id.
+   */
   readonly getById: (
     input: GetProjectionProjectInput,
   ) => Effect.Effect<Option.Option<ProjectionProject>, ProjectionRepositoryError>;
 
-  /** deterministic creation order */
+  /**
+   * List all projected project rows.
+   *
+   * Returned in deterministic creation order.
+   */
   readonly listAll: () => Effect.Effect<
     ReadonlyArray<ProjectionProject>,
     ProjectionRepositoryError
   >;
 
+  /**
+   * Soft-delete a projected project row by id.
+   */
   readonly deleteById: (
     input: DeleteProjectionProjectInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /** clears project assignments for a deleted space */
+  /** Clear every active or soft-deleted project assignment for a deleted space. */
   readonly clearSpaceAssignments: (
     input: ClearProjectionProjectSpaceAssignmentsInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
+/**
+ * ProjectionProjectRepository - Service tag for project projection persistence.
+ */
 export class ProjectionProjectRepository extends ServiceMap.Service<
   ProjectionProjectRepository,
   ProjectionProjectRepositoryShape

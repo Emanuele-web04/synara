@@ -1,3 +1,10 @@
+// FILE: AppSnapWelcomeDialog.tsx
+// Purpose: Introduce AppSnap once on supported desktop installs and route users
+// directly to its opt-in setup panel.
+// Layer: Root web overlay
+//
+// Rendered through the shared AnnouncementSheet.
+
 import { Schema } from "effect";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
@@ -48,7 +55,8 @@ export function AppSnapWelcomeDialog({ children }: { children?: ReactNode }) {
         if (!disposed && state.supported) setOpen(true);
       })
       .catch((error) => {
-        // do not acknowledge a failed probe — a transient desktop startup issue must not permanently hide the introduction
+        // Do not acknowledge a failed probe: a transient desktop startup issue
+        // should not permanently hide the introduction on the next launch.
         console.warn("[appsnap] Could not check welcome-dialog support", error);
       })
       .finally(() => {
@@ -70,7 +78,8 @@ export function AppSnapWelcomeDialog({ children }: { children?: ReactNode }) {
     void navigate({ to: "/settings", search: { section: "appsnap" } });
   };
 
-  // derived instead of synced: acknowledging closes the dialog in the same render, so the effect never needs a synchronous setOpen(false)
+  // Derived instead of synced: acknowledging closes the dialog in the same
+  // render, so the effect never needs a synchronous setOpen(false).
   const dialogOpen = open && !storage.acknowledged && !onboardingBlocking;
 
   return (

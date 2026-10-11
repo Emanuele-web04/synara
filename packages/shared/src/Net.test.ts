@@ -10,7 +10,7 @@ const closeServer = (server: Net.Server) =>
     try {
       server.close();
     } catch {
-      // ignore cleanup failures in tests
+      // Ignore cleanup failures in tests.
     }
   });
 

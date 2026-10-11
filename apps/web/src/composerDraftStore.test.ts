@@ -163,6 +163,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       "ship the snake game",
     );
 
+    // Unrelated context updates keep the staged goal.
     store.setDraftThreadContext(threadId, { branch: "feature/goal" });
     expect(useComposerDraftStore.getState().getDraftThread(threadId)?.goal).toBe(
       "ship the snake game",

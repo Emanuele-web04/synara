@@ -35,12 +35,14 @@ export function useChatTimelineMessages({
 }: ChatTimelineMessagesInput) {
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
-  // mirror during the commit, before events or async continuations observe the new UI with the previous render's preview URLs
+  // Mirror during the commit, before events or async continuations can observe
+  // the new UI with the previous render's preview URLs.
   useLayoutEffect(() => {
     optimisticUserMessagesRef.current = optimisticUserMessages;
   }, [optimisticUserMessages]);
 
-  // the pane stays mounted across thread switches — clear outgoing optimistic messages before paint so they never appear in the newly selected thread
+  // The pane stays mounted across thread switches. Clear outgoing optimistic
+  // messages before paint so they never appear in the newly selected thread.
   useLayoutEffect(() => {
     setOptimisticUserMessages((existing) => {
       if (existing.length === 0) return existing;
@@ -113,7 +115,8 @@ export function useChatTimelineMessages({
         return next;
       });
       delete attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId];
-      // let React swap the transcript back to persisted /attachments URLs before invalidating blob previews still mounted in the old row
+      // Let React swap the transcript back to persisted /attachments URLs before
+      // invalidating blob previews that may still be mounted in the old row.
       if (currentPreviewUrls) {
         revokeBlobPreviewUrlsAfterPaint(currentPreviewUrls);
       }
@@ -128,7 +131,9 @@ export function useChatTimelineMessages({
     const serverMessagesWithPreviewHandoff =
       Object.keys(attachmentPreviewHandoffByMessageId).length === 0
         ? messages
-        : // spread only fires for the few messages that changed; in-place mutation would break React's immutable state contract
+        : // Spread only fires for the few messages that actually changed;
+          // unchanged ones early-return their original reference.
+          // In-place mutation would break React's immutable state contract.
           // oxlint-disable-next-line no-map-spread
           messages.map((message) => {
             if (
@@ -164,12 +169,16 @@ export function useChatTimelineMessages({
             return changed ? { ...message, attachments } : message;
           });
 
-    // ephemeral setup bubbles render at the tail, gated on the originating thread — the reset effect runs after first render so the guard must be here too
+    // Ephemeral automation-setup bubbles render after everything else, at the tail.
+    // Gated on the originating thread so a same-pane switch never leaks the previous
+    // thread's setup into the newly rendered conversation (the reset effect runs after
+    // the first render, so the guard must be here too).
     const setupBubbles =
       pendingAutomationConversation && pendingAutomationConversation.threadId === threadId
         ? pendingAutomationConversation.bubbles
         : [];
-    // optimistic messages exist only briefly after a send; skip the full-transcript id Set on the common streaming-flush path
+    // Optimistic messages exist only briefly after a send; skip the full-transcript
+    // id Set on the common (streaming-flush) path where there is nothing to reconcile.
     let pendingMessages = optimisticUserMessages;
     if (optimisticUserMessages.length > 0) {
       const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
@@ -194,7 +203,8 @@ export function useChatTimelineMessages({
     if (activeThread.messages.length === 0) {
       return;
     }
-    // no optimistic messages → skip rebuilding the id Set on every streaming flush
+    // No optimistic messages → nothing to reconcile; skip the full-transcript id Set
+    // this effect would otherwise rebuild on every streaming flush.
     if (optimisticUserMessages.length === 0) {
       return;
     }

@@ -7,6 +7,6 @@ export function resolveCodexServiceTier(
     return undefined;
   }
 
-  // omitting the tier preserves Codex's previous value, including Fast mode
+  // Omitting the tier preserves Codex's previous value, including Fast mode.
   return modelSelection.options.fastMode ? "fast" : "default";
 }

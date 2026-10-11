@@ -18,7 +18,11 @@ export type DeferredDesktopQuitFailureOutcome =
   | "resumed-app"
   | "already-replaying";
 
-// keeps the first quit request while the updater owns shutdown — consuming before replay makes repeated failure signals idempotent and prevents multiple app.quit() chains
+/**
+ * Keeps the first quit request that arrives while the updater owns app
+ * shutdown. Consuming the intent before replay makes repeated updater failure
+ * signals idempotent and prevents multiple app.quit() chains.
+ */
 export function makeDeferredDesktopQuitIntentCoordinator(): DeferredDesktopQuitIntentCoordinator {
   let pending: DeferredDesktopQuitIntent | null = null;
   let replayStarted = false;
@@ -31,6 +35,7 @@ export function makeDeferredDesktopQuitIntentCoordinator(): DeferredDesktopQuitI
       pending = { reason };
       return true;
     },
+    /** A valid updater before-quit may still be followed by watchdog failure. */
     observeUpdaterQuitAttempt(): boolean {
       return pending !== null;
     },
@@ -49,6 +54,7 @@ export function makeDeferredDesktopQuitIntentCoordinator(): DeferredDesktopQuitI
   };
 }
 
+/** Routes one updater failure signal without coupling the state machine to Electron globals. */
 export function settleDeferredDesktopQuitAfterUpdaterFailure(
   coordinator: DeferredDesktopQuitIntentCoordinator,
   actions: {

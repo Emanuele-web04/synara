@@ -1,3 +1,8 @@
+// FILE: threadCreatePromotion.ts
+// Purpose: Makes draft-to-server thread promotion idempotent across racing UI callers.
+// Layer: Web orchestration helper
+// Exports: promoteThreadCreate, isDuplicateThreadCreateError
+
 import type { ClientOrchestrationCommand, NativeApi, ThreadId } from "@synara/contracts";
 import { markPromotedDraftThreads } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
@@ -8,6 +13,7 @@ type ThreadCreateCommand = Extract<ClientOrchestrationCommand, { type: "thread.c
 
 type PromoteThreadCreateResult = "created" | "exists" | "unavailable";
 interface PromoteThreadCreateOptions {
+  // Draft-aware callers use this when React knows the route is still local.
   readonly force?: boolean;
 }
 
@@ -35,7 +41,8 @@ async function recoverPromotedThreadFromShellSnapshot(
   const snapshot = await api.orchestration.getShellSnapshot();
   useStore.getState().syncServerShellSnapshot(snapshot);
   markPromotedDraftThreads(new Set(snapshot.threads.map((thread) => thread.id)));
-  return getThreadFromState(useStore.getState(), threadId) !== null;
+  // getThreadFromState returns undefined for an unknown thread, never null.
+  return getThreadFromState(useStore.getState(), threadId) !== undefined;
 }
 
 async function dispatchPromoteThreadCreate(

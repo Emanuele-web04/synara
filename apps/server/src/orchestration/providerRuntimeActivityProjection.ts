@@ -28,7 +28,22 @@ const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
 
 type ActivityPayload = OrchestrationThreadActivity["payload"];
 
-/** activity payloads splice in raw provider values never decoded — they can carry undefined members, bigints, functions, symbols, non-finite numbers, cycles, any of which fails the enclosing command's schema; semantics match JSON.stringify, Dates keep their timestamp, already-safe values returned by reference */
+/**
+ * Project a value onto exactly what `Schema.Json` admits: `null`, finite numbers,
+ * booleans, strings, arrays and records of the same.
+ *
+ * Activity payloads splice in raw provider values - `Schema.Unknown` payload
+ * fields, rate-limit blobs, usage records, workflow snapshots - that are built in
+ * adapter code and never decoded. Those can carry explicitly-present `undefined`
+ * members, bigints, functions, symbols, non-finite numbers or cycles, and any one
+ * of them makes the enclosing `thread.activity.append` command fail its own schema.
+ *
+ * Primitive, array and object-member semantics match `JSON.stringify`
+ * (undefined/function/symbol members dropped from objects and nulled inside
+ * arrays, non-finite numbers nulled), Dates keep their JSON timestamp, and bigint
+ * plus cycle handling matches {@link stringifyJsonLike}. Already-safe values are
+ * returned by reference: a payload built from literals is walked but never copied.
+ */
 function jsonSafeValue(value: unknown, ancestors: Set<object>): unknown {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     return value;
@@ -40,7 +55,7 @@ function jsonSafeValue(value: unknown, ancestors: Set<object>): unknown {
     return value.toString();
   }
   if (typeof value !== "object") {
-    // undefined, function, symbol: no JSON representation at all
+    // undefined, function, symbol: no JSON representation at all.
     return undefined;
   }
   if (ancestors.has(value)) {
@@ -56,7 +71,8 @@ function jsonSafeValue(value: unknown, ancestors: Set<object>): unknown {
       const retained: unknown[] = new Array<unknown>(value.length);
       for (let index = 0; index < value.length; index += 1) {
         const entry = value[index];
-        // array positions are meaningful — an unrepresentable entry becomes null rather than shifting everything after it
+        // Array positions are meaningful: an unrepresentable entry becomes null
+        // rather than shifting everything after it.
         const safe = jsonSafeValue(entry, ancestors) ?? null;
         changed ||= !Object.is(safe, entry);
         retained[index] = safe;
@@ -76,7 +92,8 @@ function jsonSafeValue(value: unknown, ancestors: Set<object>): unknown {
       changed ||= !Object.is(safe, entry);
       retained[key] = safe;
     }
-    // class instances, Dates, Maps, typed arrays aren't Schema.Json even when their entries are safe
+    // Class instances, Dates, Maps, typed arrays, and other exotic objects are
+    // not Schema.Json even when their enumerable entries happen to be safe.
     return changed || !canReuseObject ? retained : value;
   } finally {
     ancestors.delete(value);
@@ -88,7 +105,8 @@ function toActivityPayload(payload: unknown): ActivityPayload {
 }
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
-  // a blank turn id means "no turn" — TurnId.makeUnsafe throws on blank and untrimmed input
+  // A blank runtime turn id means "no turn", not a turn named "". Trimming here
+  // is not cosmetic: `TurnId.makeUnsafe` throws on both blank and untrimmed input.
   const trimmed = value === undefined ? undefined : nonEmptyTrimmed(String(value));
   return trimmed === undefined ? undefined : TurnId.makeUnsafe(trimmed);
 }
@@ -316,12 +334,12 @@ function boundActivityData(value: unknown): unknown {
     : hardFallback();
 }
 
-// tool payloads power the timeline but must stay small enough for snapshots
+// Tool payloads power the timeline, but they must stay small enough for snapshots.
 function activityDataField(data: unknown): { readonly data?: unknown } {
   return data === undefined ? {} : { data: boundActivityData(data) };
 }
 
-// keep MCP progress payloads so the timeline renders the specific tool call
+// Keep MCP progress payloads available to the web timeline so it can render the specific tool call.
 function buildToolProgressActivityPayload(
   event: Extract<ProviderRuntimeEvent, { type: "tool.progress" }>,
 ): ActivityPayload {
@@ -373,15 +391,20 @@ function buildContextWindowActivityPayload(
   if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow && !hasProcessedTokens) {
     return undefined;
   }
-  // stamp the emitting provider so token stats attribute usage to the provider that processed the turn, not the thread's persisted selection
+  // Stamp the emitting provider so token stats can attribute usage to the
+  // provider that actually processed the turn, not the thread's persisted
+  // model selection (which can drift, e.g. across future per-turn providers).
+  const providerThreadId = event.providerRefs?.providerThreadId;
+  const usageSessionId =
+    providerThreadId === undefined
+      ? undefined
+      : event.provider === "cursor" || event.provider === "codex"
+        ? providerThreadId
+        : `${providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`;
   return toActivityPayload({
     ...usage,
     provider: event.provider,
-    ...(event.providerRefs?.providerThreadId
-      ? {
-          usageSessionId: `${event.providerRefs.providerThreadId}${event.lifecycleGeneration ? `:${event.lifecycleGeneration}` : ""}`,
-        }
-      : {}),
+    ...(usageSessionId !== undefined ? { usageSessionId } : {}),
   });
 }
 
@@ -397,7 +420,10 @@ interface CompactModelUsage {
   readonly totalTokens: number;
 }
 
-// Claude reports a per-model breakdown on the turn result (subagent models included) — persist a compact copy so multi-model turns attribute exactly; cache reads/writes fold into inputTokens
+// Claude's SDK reports a per-model token breakdown on the turn result (subagent
+// models included). Persist a compact copy on the turn.completed activity so
+// token stats can attribute multi-model turns exactly; cache reads/writes fold
+// into inputTokens, matching how the adapters build context-window snapshots.
 function compactTurnModelUsage(
   modelUsage: Record<string, unknown> | undefined,
 ): Record<string, CompactModelUsage> | undefined {
@@ -419,6 +445,7 @@ function compactTurnModelUsage(
     if (totalTokens <= 0) {
       continue;
     }
+    // Preserve reported zeroes; missing cache counters must remain unknown.
     const cacheReadInputTokens = usage.cacheReadInputTokens;
     const cacheCreationInputTokens = usage.cacheCreationInputTokens;
     compact[model] = {
@@ -440,7 +467,7 @@ function compactTurnModelUsage(
   return Object.keys(compact).length > 0 ? compact : undefined;
 }
 
-// convert Claude window labels into the max-token shape the web meter uses
+// Convert session-configured Claude window labels into the max-token shape the web meter uses.
 function buildConfiguredContextWindowPayload(
   event: ProviderRuntimeEvent,
 ): ActivityPayload | undefined {
@@ -466,6 +493,21 @@ function buildConfiguredContextWindowPayload(
     maxTokens,
     ...(configuredWindow ? { contextWindow: configuredWindow } : {}),
   });
+}
+
+// Claude Code reports whether fast mode actually serves requests; the requested
+// option alone cannot tell the composer that the account refused it.
+function buildFastModeStatePayload(event: ProviderRuntimeEvent): ActivityPayload | undefined {
+  if (event.type !== "session.configured") {
+    return undefined;
+  }
+  const config = asObject(event.payload.config);
+  const state = asString(config?.fast_mode_state);
+  if (state !== "on" && state !== "off" && state !== "cooldown") {
+    return undefined;
+  }
+  const disabledReason = asString(config?.fast_mode_disabled_reason);
+  return toActivityPayload({ state, ...(disabledReason ? { disabledReason } : {}) });
 }
 
 export function runtimePayloadRecord(
@@ -629,7 +671,8 @@ export function projectProviderRuntimeActivities(
   event: ProviderRuntimeEvent,
   sessionSequence?: number,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  // activity `sequence` is NonNegativeInt — a fractional or negative counter invalidates the whole command, so drop it
+  // Activity `sequence` is a NonNegativeInt. A fractional or negative runtime
+  // counter has to be dropped: carrying it invalidates the whole command.
   const maybeSequence =
     typeof sessionSequence === "number" && Number.isInteger(sessionSequence) && sessionSequence >= 0
       ? { sequence: sessionSequence }
@@ -637,7 +680,9 @@ export function projectProviderRuntimeActivities(
   // Claude previews are coalesced by ingestion; other providers publish their
   // readable reasoning only at completion. Empty/encrypted boundaries stay hidden.
   if (
-    (((event.provider === "codex" || event.provider === "antigravity") &&
+    (((event.provider === "codex" ||
+      event.provider === "antigravity" ||
+      event.provider === "opencode") &&
       event.type === "item.completed") ||
       (event.provider === "claudeAgent" &&
         (event.type === "item.updated" || event.type === "item.completed"))) &&
@@ -672,21 +717,36 @@ export function projectProviderRuntimeActivities(
   switch (event.type) {
     case "session.configured": {
       const payload = buildConfiguredContextWindowPayload(event);
-      if (!payload) {
-        return [];
-      }
-
+      const fastModePayload = buildFastModeStatePayload(event);
       return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "info",
-          kind: "context-window.configured",
-          summary: "Context window configured",
-          payload,
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
+        ...(payload
+          ? [
+              {
+                id: event.eventId,
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "context-window.configured",
+                summary: "Context window configured",
+                payload,
+                turnId: toTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
+        ...(fastModePayload
+          ? [
+              {
+                id: payload ? EventId.makeUnsafe(`${event.eventId}:fast-mode`) : event.eventId,
+                createdAt: event.createdAt,
+                tone: "info" as const,
+                kind: "fast-mode.state",
+                summary: "Fast mode state reported",
+                payload: fastModePayload,
+                turnId: toTurnId(event.turnId) ?? null,
+                ...maybeSequence,
+              },
+            ]
+          : []),
       ];
     }
 
@@ -724,7 +784,8 @@ export function projectProviderRuntimeActivities(
                         ? "Tool approval requested"
                         : "Approval requested",
           payload: toActivityPayload({
-            // omitted, never `undefined` — Schema.Json rejects a member explicitly present and undefined
+            // Omitted, never `undefined`: `Schema.Json` rejects a member that is
+            // explicitly present and undefined.
             ...(requestId ? { requestId: ApprovalRequestId.makeUnsafe(requestId) } : {}),
             ...(event.lifecycleGeneration !== undefined
               ? { lifecycleGeneration: event.lifecycleGeneration }
@@ -777,10 +838,14 @@ export function projectProviderRuntimeActivities(
     case "runtime.warning": {
       const raw = asObject((event as { raw?: unknown }).raw);
       const nativeType = asString(asObject(raw?.payload)?.type);
-      // Claude backgrounding notices arrive as warnings whose detail is the SDK message — they present as a plain info line, not a runtime warning
+      // Claude backgrounding notices arrive as warnings whose detail is the
+      // SDK background_tasks_changed message; they present as a plain info
+      // line ("Moved to background: <work>"), not as a runtime warning.
       const detailSubtype = asString(asObject(event.payload.detail)?.subtype);
       const isBackgroundMove = detailSubtype === "background_tasks_changed";
       const isClaudeRetry = event.provider === "claudeAgent" && detailSubtype === "api_retry";
+      // Claude Monitor events that woke the agent, read back from its transcript.
+      const isMonitorEvent = event.provider === "claudeAgent" && detailSubtype === "monitor_event";
       const willRetry =
         event.payload.willRetry === true || asObject(event.payload.detail)?.willRetry === true;
       const isPiInfoNotification =
@@ -795,7 +860,10 @@ export function projectProviderRuntimeActivities(
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: "info",
+          tone:
+            isMonitorEvent && asObject(event.payload.detail)?.outcome === "failed"
+              ? "error"
+              : "info",
           kind: "runtime.warning",
           summary: isPiInfoNotification
             ? "Pi extension"
@@ -805,16 +873,18 @@ export function projectProviderRuntimeActivities(
                 ? message
                 : isBackgroundMove
                   ? "Moved to background"
-                  : event.provider === "opencode" &&
-                      (nativeType === "session.next.retried" || nativeType === "session.status")
-                    ? "OpenCode retrying"
-                    : "Runtime warning",
+                  : isMonitorEvent
+                    ? "Monitor event"
+                    : event.provider === "opencode" &&
+                        (nativeType === "session.next.retried" || nativeType === "session.status")
+                      ? "OpenCode retrying"
+                      : "Runtime warning",
           // Keep the user-visible message even when raw detail is structured.
           payload: toActivityPayload({
             message,
             detail: message,
             ...(willRetry ? { willRetry: true } : {}),
-            ...(isBackgroundMove || isClaudeRetry
+            ...(isBackgroundMove || isClaudeRetry || isMonitorEvent
               ? { nativeEventType: detailSubtype }
               : nativeType
                 ? { nativeEventType: nativeType }
@@ -933,17 +1003,27 @@ export function projectProviderRuntimeActivities(
     }
 
     case "task.progress": {
+      // A subagent's own progress is that subagent's current step, attributed
+      // to it, never the launcher's reasoning. Other task progress (Codex's
+      // legacy agent_reasoning, workflow updates) keeps its compact grouping.
+      const summary =
+        event.payload.toolUseId !== undefined ? "Subagent progress" : "Reasoning update";
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.progress",
-          summary: "Reasoning update",
+          summary,
           payload: toActivityPayload({
             taskId: event.payload.taskId,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.subagentTitle
+              ? { subagentTitle: truncateDetail(event.payload.subagentTitle) }
+              : {}),
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
-            // kept verbatim next to detail — workflow progress encodes "<phase>: <agent>" here and the panel parses it back out
+            // Kept verbatim next to detail: workflow progress encodes
+            // "<phase>: <agent label>" here and the panel parses it back out.
             description: truncateDetail(event.payload.description),
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
@@ -977,6 +1057,7 @@ export function projectProviderRuntimeActivities(
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             status: event.payload.status,
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
             ...(event.payload.summary
               ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
               : {}),
@@ -1034,7 +1115,10 @@ export function projectProviderRuntimeActivities(
     }
 
     case "turn.steered": {
-      // a steer of the thread's own turn is already visible as the user message — only a subagent delivery needs its own marker since the child never renders the message
+      // A steer of the thread's own turn is already visible as the sent user
+      // message that produced it, so an activity row would just repeat the text
+      // under the bubble. Only a subagent delivery needs its own marker: it
+      // lands on the child thread, which never renders the message otherwise.
       if (event.payload.target === "turn") {
         return [];
       }
@@ -1128,7 +1212,8 @@ export function projectProviderRuntimeActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
-      // a provider sending a blank title must not become a blank summary — `??` falls back on undefined only, so normalize first
+      // A provider that sends a blank title must not turn into a blank summary:
+      // `??` falls back on undefined only, so normalize before choosing.
       const itemTitle = nonEmptyTrimmed(event.payload.title);
       return [
         {
@@ -1230,6 +1315,28 @@ export function projectProviderRuntimeActivities(
       ];
     }
 
+    case "turn.started": {
+      // A quiet lifecycle record of the model the provider ran the turn on, so
+      // transcripts can mark where the model changed between turns. Clients
+      // never render it as a work row.
+      const model = nonEmptyTrimmed(event.payload.model);
+      if (!model) {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "turn.started",
+          summary: "Turn started",
+          payload: toActivityPayload({ model, provider: event.provider }),
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "turn.completed": {
       const state = runtimeTurnState(event);
       const modelUsage = compactTurnModelUsage(event.payload.modelUsage);
@@ -1272,12 +1379,14 @@ export function projectProviderRuntimeActivities(
 
     case "hook.started":
     case "hook.progress":
-      // hook lifecycle is operational evidence, not transcript content — the runtime journal retains it
+      // Hook lifecycle is operational evidence, not transcript content. The
+      // canonical runtime journal retains it for replay and diagnostics.
       return [];
 
     case "hook.completed": {
       const status = event.payload.status;
-      // successful hooks are routine and cancelled hooks usually reflect an interrupted turn — neither should add rows or height churn
+      // Successful hooks are routine, and cancelled hooks normally reflect an
+      // interrupted turn. Neither should add rows or transcript height churn.
       if (
         event.payload.outcome === "success" ||
         (event.payload.outcome === "cancelled" && !status)
@@ -1334,7 +1443,7 @@ export function projectProviderRuntimeActivities(
         return [];
       }
       const status = rl.status;
-      // normalize resetsAt: Claude SDK sends Unix seconds, Codex may send ISO string
+      // Normalize resetsAt: Claude SDK sends Unix seconds (number), Codex may send ISO string
       const resetsAtRaw = rl.resetsAt;
       const resetsAt =
         typeof resetsAtRaw === "number"
@@ -1342,7 +1451,9 @@ export function projectProviderRuntimeActivities(
           : typeof resetsAtRaw === "string"
             ? resetsAtRaw
             : undefined;
-      // preserve per-window rate limit breakdown when the provider sends a `limits` array
+      // Preserve per-window rate limit breakdown when the provider sends it.
+      // Claude SDK may include a `limits` array with per-window entries
+      // (e.g. { window: "5h", utilization: 0.06, resetsAt: ... }).
       const rawLimits = Array.isArray(rl.limits) ? rl.limits : undefined;
       const limits = rawLimits
         ?.filter(

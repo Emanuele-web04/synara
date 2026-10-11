@@ -42,7 +42,8 @@ vi.mock("../nativeApi", () => ({ readNativeApi: () => api, ensureNativeApi: () =
 
 const SYNTHETIC_WEBVIEW_TAG = "synthetic-browser-webview";
 
-// a positive webContents id gives the attach path a real lease to hold, so the no-detach assertions can catch a stale Electron lease
+// A positive webContents id gives the attach path a real lease to hold, so the
+// no-detach assertions below can actually catch a stale Electron lease.
 class SyntheticBrowserWebview extends HTMLElement {
   getWebContentsId(): number {
     return 4242;

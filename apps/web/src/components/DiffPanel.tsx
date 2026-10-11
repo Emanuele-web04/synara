@@ -1,8 +1,11 @@
+// FILE: DiffPanel.tsx
+// Purpose: Coordinates diff-panel data sources, toolbar state, and patch body rendering.
+// Layer: Diff panel container
+
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ThreadId, type ResolvedKeybindingsConfig, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import * as Schema from "effect/Schema";
 import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon } from "~/lib/icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -25,6 +28,13 @@ import { useVisibleDiffFilePath } from "../hooks/useVisibleDiffFilePath";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { shortcutLabelForCommand } from "../keybindings";
 import { useLocalStorage } from "../hooks/useLocalStorage";
+import {
+  DEFAULT_DIFF_RENDER_MODE,
+  DIFF_RENDER_MODE_STORAGE_KEY,
+  DiffRenderModeSchema,
+  type DiffRenderMode,
+} from "../diffRenderMode";
+import { useDiffRenderModeStore } from "../diffRenderModeStore";
 import {
   buildFileDiffRenderKey,
   getRenderablePatch,
@@ -55,7 +65,6 @@ import { createProjectSelector } from "../storeSelectors";
 import { inferCheckpointTurnCountByTurnId } from "../session-logic";
 import { type TimestampFormat, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
-import type { DiffRenderMode } from "./chat/chatHeaderControls";
 import {
   areAllRenderableFilesCollapsed,
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
@@ -125,7 +134,6 @@ import type { TurnDiffSummary } from "../types";
 
 const EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-const DiffRenderModeSchema = Schema.Literals(["stacked", "split"]);
 
 function EditorDiffOptionsCountBadge(props: { count: number | undefined }) {
   if (typeof props.count !== "number" || props.count <= 0) {
@@ -455,9 +463,9 @@ export default function DiffPanel({
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
-  const [diffRenderMode, setDiffRenderMode] = useLocalStorage(
-    "synara:diff-render-mode:v1",
-    "split",
+  const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
+    DIFF_RENDER_MODE_STORAGE_KEY,
+    DEFAULT_DIFF_RENDER_MODE,
     DiffRenderModeSchema,
   );
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
@@ -471,7 +479,10 @@ export default function DiffPanel({
   const setRepoDiffCompareRef = useRepoDiffScopeStore((store) => store.setCompareRef);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const [fileTreeOpen, setFileTreeOpen] = useState(false);
-  // lazy-mount the review file tree on first open so a closed diff panel never pays to filter/build/render it; keep mounted afterward so open/close animates and filter+expand state persist
+  // Lazy-mount the review file tree on first open so a closed diff panel never
+  // pays to filter/build/render the side tree (the common case). Keep it mounted
+  // afterward so the open/close animation plays and the filter + expand state
+  // persist across toggles.
   const [fileTreeMounted, setFileTreeMounted] = useState(false);
   const toggleFileTree = useCallback(() => {
     setFileTreeOpen((previous) => !previous);
@@ -482,7 +493,9 @@ export default function DiffPanel({
   }, []);
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const diffSelectAllArmedRef = useRef(false);
-  // Cmd/Ctrl+A targets document.activeElement; clicks on non-focusable diff chrome leave focus outside the viewport — remember the last pointer hit so a later select-all still counts as inside the diff
+  // Cmd/Ctrl+A keydown targets document.activeElement; clicks on non-focusable diff
+  // chrome leave focus outside the viewport. Remember the last pointer hit so a
+  // subsequent select-all still counts as "inside the diff".
   const lastPointerInDiffViewportRef = useRef(false);
   const previousDiffOpenRef = useRef(false);
   const routeThreadId = useParams({
@@ -508,6 +521,17 @@ export default function DiffPanel({
     [diffQueriesEnabled, scopePickerOpen],
   );
   const activeThreadId = controlledThreadId ?? routeThreadId;
+  const diffRenderMode = useDiffRenderModeStore((store) =>
+    store.getModeForThread(activeThreadId, defaultDiffRenderMode),
+  );
+  const setModeForThread = useDiffRenderModeStore((store) => store.setModeForThread);
+  const setDiffRenderMode = useCallback(
+    (nextMode: DiffRenderMode) => {
+      if (activeThreadId) setModeForThread(activeThreadId, nextMode);
+      else setDefaultDiffRenderMode(nextMode);
+    },
+    [activeThreadId, setDefaultDiffRenderMode, setModeForThread],
+  );
   const serverThreadCatalog = useStore(
     useMemo(() => createDiffPanelThreadCatalogSelector(activeThreadId), [activeThreadId]),
   );
@@ -712,7 +736,9 @@ export default function DiffPanel({
   const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
-  // counts come from the stats endpoint rather than four full patches — only the selected scope's patch is rendered, so fetching the other three moved megabytes per refresh for four integers
+  // The scope picker shows a file count per scope. Counts come from the stats endpoint rather
+  // than four full patches: only the selected scope's patch is ever rendered, so fetching the
+  // other three in full moved megabytes per refresh on a large working tree for four integers.
   const unstagedDiffStatsQuery = useQuery(
     gitWorkingTreeDiffStatsQueryOptions({
       cwd: activeCwd ?? null,
@@ -804,7 +830,10 @@ export default function DiffPanel({
   }, [activeCheckpointDiffQuery, diffViewKind, repoDiffQuery]);
   const activeReviewHasNoChanges = diffViewKind === "repo" ? hasNoRepoChanges : hasNoNetChanges;
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
-  // the parsed patch is theme-agnostic — theming applies via the themed row key + buildDiffPanelUnsafeCSS (cached per theme); keeping resolvedTheme out of the parse cache avoids re-parsing the whole patch per light/dark toggle
+  // The parsed patch is structural and theme-agnostic — theming is applied
+  // separately via the themed row key and buildDiffPanelUnsafeCSS (cached per
+  // theme). Keeping `resolvedTheme` out of the parse cache scope and these deps
+  // avoids re-parsing the whole patch on every light/dark toggle.
   const renderablePatch = useMemo(() => getRenderablePatch(activeReviewPatch), [activeReviewPatch]);
   const diffCopyText = useMemo(
     () => resolveDiffCopyText(activeReviewPatch, activeReviewTruncated),
@@ -841,7 +870,8 @@ export default function DiffPanel({
     onRenderableFilesChange?.(renderableFiles, activeReviewIsLoading);
   }, [activeReviewIsLoading, onRenderableFilesChange, renderableFiles]);
 
-  // virtualized shadow-DOM diffs only mount ~150 rows — arm on Cmd/Ctrl+A inside the viewport, then hijack the document copy event to write the full raw patch
+  // Virtualized shadow-DOM diffs only mount ~150 rows. Arm on Cmd/Ctrl+A inside
+  // the viewport, then hijack the document `copy` event to write the full raw patch.
   useEffect(() => {
     const isEventWithinDiffViewport = (event: Event) => {
       const viewport = patchViewportRef.current;
@@ -949,7 +979,9 @@ export default function DiffPanel({
     () => areAllRenderableFilesCollapsed(renderableFiles, collapsedFiles),
     [collapsedFiles, renderableFiles],
   );
-  // timeout-0 keeps the sync writes asynchronous (no wasted pre-paint render) and keeps the component compiler-eligible; the panel opens behind a 300ms slide so one tick is invisible
+  // Timeout-0 keeps these two sync writes asynchronous (no wasted pre-paint
+  // render), which also keeps this component eligible for React Compiler; the
+  // panel opens behind a 300ms slide, so one tick is invisible.
   useEffect(() => {
     const wasOpen = previousDiffOpenRef.current;
     previousDiffOpenRef.current = diffOpen;
@@ -1053,6 +1085,7 @@ export default function DiffPanel({
     [diffViewKind, onEditFile, repoDiffCompareRef, repoDiffScope],
   );
 
+  // Per-file header actions that talk to the active thread's composer draft.
   const diffFileChatActions = useMemo(
     () =>
       activeThreadId
@@ -1076,7 +1109,9 @@ export default function DiffPanel({
   const closeLineBlame = useCallback(() => {
     setBlameTarget(null);
   }, []);
-  // blame reads the working tree (or HEAD for deletions), so it's only offered where the diff's line numbers describe those trees: turn diffs are checkpoint snapshots, index-backed scopes number by the index
+  // Blame reads the working tree (or HEAD for deletions), so it is only offered
+  // where the diff's line numbers describe those trees: turn diffs are
+  // checkpoint snapshots, and index-backed scopes number lines by the index.
   const blameEnabled =
     diffViewKind === "repo" && repoDiffScope !== "staged" && repoDiffScope !== "unstaged";
   useEffect(() => {
@@ -1097,7 +1132,9 @@ export default function DiffPanel({
     [activeThreadId],
   );
 
-  // the diff body renders inside the @pierre/diffs shadow root, so selection ancestors resolve through shadow boundaries
+  // Highlight diff code -> floating "Add to chat" -> mention + quoted snippet.
+  // The diff body renders inside the @pierre/diffs shadow root, so selection
+  // ancestors are resolved through shadow boundaries.
   const readDiffSelection = useCallback((container: HTMLElement) => {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
@@ -1109,7 +1146,8 @@ export default function DiffPanel({
       return null;
     }
     const filePath = anchorRow.getAttribute("data-diff-file-path") ?? "";
-    // read text from the selection not its range — ranges are retargeted at the shadow host so range.toString() would be empty
+    // Read the text from the selection rather than its range: ranges are
+    // retargeted at the shadow host, so `range.toString()` would be empty.
     const text = normalizeSelectionSnippet(selection.toString());
     if (filePath.length === 0 || text === null) {
       return null;
@@ -1335,7 +1373,8 @@ export default function DiffPanel({
     () =>
       hideHeader ? null : showDiffToolbar ? (
         <DiffPanelToolbar
-          // Remount per thread so per-thread view state (e.g. the expanded turn-list page size) does not leak across thread navigations.
+          // Remount per thread so per-thread view state (e.g. the expanded
+          // turn-list page size) does not leak across thread navigations.
           key={activeThreadId ?? "no-thread"}
           activeCwd={activeCwd}
           activeThreadId={activeThreadId}

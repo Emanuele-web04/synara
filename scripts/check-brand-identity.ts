@@ -1,3 +1,6 @@
+// FILE: check-brand-identity.ts
+// Purpose: Prevents retired first-party identities from returning to tracked files.
+
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -69,11 +72,13 @@ const approvedIdentityLines: readonly ApprovedIdentityLine[] = [
     line: `"A review of the Synara codebase found an analytics configuration that came from the original ${retiredFirstSpacedDisplayName} codebase when Synara was created as a clone in March.",`,
   },
   {
+    // The website's copy of the same published disclosure as CHANGELOG.md.
     path: "apps/marketing/src/data/changelog.ts",
     line: `"A review of the Synara codebase found an analytics configuration that came from the original ${retiredFirstDisplayName.slice(0, 2)} Code codebase when Synara was created as a clone in March.",`,
   },
   {
-    // retired name here refers to someone else's product, not Synara
+    // A real user's words, quoted verbatim on the homepage. The retired name
+    // here refers to someone else's product, not to Synara's own identity.
     path: "apps/marketing/src/data/testimonials.ts",
     line: `"I've been using @trySynara for a few hours now. I'm really impressed. I'd already tried ${retiredFirstDisplayName.slice(0, 2)} Chat, Orca, and Terax, but none of them managed to grab my attention quite like Synara did.",`,
   },
@@ -307,7 +312,8 @@ export function readTrackedFiles(cwd = process.cwd()): BrandIdentityBinaryFile[]
   const entries = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd, encoding: "utf8" })
     .split("\0")
     .filter(Boolean);
-  // gitlinks name another repo and may be absent without submodule init
+  // Gitlinks name another repository, not a file owned by this checkout. They may
+  // exist as directories or be absent when submodules have not been initialized.
   const paths = entries
     .filter((entry) => !entry.startsWith("160000 "))
     .map((entry) => entry.slice(entry.indexOf("\t") + 1));

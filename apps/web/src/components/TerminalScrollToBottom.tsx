@@ -1,3 +1,8 @@
+// FILE: TerminalScrollToBottom.tsx
+// Purpose: Shows a floating terminal action when output has scrolled away from the bottom.
+// Layer: Terminal presentation component
+// Exports: TerminalScrollToBottom
+
 import type { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 import { IconButton } from "~/components/ui/icon-button";
@@ -9,7 +14,8 @@ interface TerminalScrollToBottomProps {
 }
 
 export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps) {
-  // Keyed by terminal: swapping terminals derives back to hidden in the same render (no state-resetting effect); the rAF check re-evaluates right after.
+  // Keyed by terminal: swapping terminals derives back to hidden in the same
+  // render (no state-resetting effect); the rAF check re-evaluates right after.
   const [visibility, setVisibility] = useState<{
     terminal: Terminal;
     visible: boolean;

@@ -1,3 +1,9 @@
+// FILE: useStableValue.ts
+// Purpose: Keep a value's referential identity stable across renders while its
+//          contents stay equal, so downstream memoization is spared rebuilds.
+// Layer: Web hook
+// Exports: useStableValue
+
 import { useRef } from "react";
 
 /**

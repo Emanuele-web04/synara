@@ -26,6 +26,7 @@ import {
   ThreadTurnDiff,
   ThreadHandoff,
   ThreadTurnStartRequestedPayload,
+  ThreadTurnInterruptRequestedPayload,
 } from "./orchestration";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
@@ -46,6 +47,35 @@ const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrches
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeThreadPullRequest = Schema.decodeUnknownEffect(OrchestrationThreadPullRequest);
 const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
+
+it.effect(
+  "preserves explicit interrupt provenance and accepts historical requests without it",
+  () =>
+    Effect.gen(function* () {
+      const input = {
+        type: "thread.turn.interrupt",
+        commandId: "stop-command",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        requestedBy: "user",
+      };
+      const command = yield* decodeClientOrchestrationCommand(input);
+      assert.deepStrictEqual(command, input);
+      const payload = {
+        threadId: input.threadId,
+        turnId: input.turnId,
+        createdAt: input.createdAt,
+        requestedBy: "user",
+      };
+      assert.deepStrictEqual(
+        yield* Schema.decodeUnknownEffect(ThreadTurnInterruptRequestedPayload)(payload),
+        payload,
+      );
+      const { requestedBy: _actor, ...legacy } = input;
+      assert.deepStrictEqual(yield* decodeClientOrchestrationCommand(legacy), legacy);
+    }),
+);
 
 it.effect("preserves account-scoped model selections through the JSON codec", () =>
   Effect.gen(function* () {
@@ -550,7 +580,9 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
 
 it.effect("strips client-sent dispatchOrigin from thread.turn.start commands", () =>
   Effect.gen(function* () {
-    // dispatchOrigin is server-assigned — the client schema omits it, so a spoofed value must not survive decoding
+    // dispatchOrigin is server-assigned (automation engine only). The client command
+    // schema deliberately omits it, so a spoofed value must not survive decoding —
+    // otherwise any WS client could fake the "Sent via Automation" label.
     const command = yield* decodeClientOrchestrationCommand({
       type: "thread.turn.start",
       commandId: "cmd-turn-start-origin",
@@ -574,7 +606,8 @@ it.effect("strips client-sent dispatchOrigin from thread.turn.start commands", (
 
 it.effect("strips client-sent agent dispatchOrigin from thread.turn.start commands", () =>
   Effect.gen(function* () {
-    // "agent" origin is gateway-reserved — WS clients must not spoof it either
+    // The "agent" origin is reserved for turns dispatched through the Synara
+    // agent gateway; WS clients must not be able to spoof it either.
     const command = yield* decodeClientOrchestrationCommand({
       type: "thread.turn.start",
       commandId: "cmd-turn-start-agent-origin",

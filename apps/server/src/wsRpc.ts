@@ -252,7 +252,10 @@ export function canManageExternalMcp(role: "owner" | "client"): boolean {
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
 
-// covers subscribe-vs-projection races on freshly created threads — a truly missing thread still fails, just this much later
+// Bounded window a thread subscription waits for the projector to commit the
+// thread's detail read model before failing with THREAD_SNAPSHOT_NOT_FOUND.
+// Covers subscribe-vs-projection races on freshly created threads; a thread
+// that truly does not exist still fails, just this much later.
 const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS = 5_000;
 const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS = 100;
 
@@ -275,7 +278,9 @@ const wsRequestAdmissionMiddlewareLayer = Layer.effect(
     const admission = yield* makeWsRequestAdmission;
     const connectionSessions = yield* WsConnectionSessions;
     return ((effect, options) => {
-      // handler fibers descend from the layer-build RPC fiber, not the connection's upgrade fiber — connection-scoped services must be re-provided here from the session registry
+      // Handler fibers descend from the RPC server fiber (forked at layer build),
+      // not from the connection's HTTP upgrade fiber, so connection-scoped
+      // services must be re-provided here from the connection-session registry.
       const scoped = provideWsConnectionSession(
         effect,
         connectionSessions.lookup(Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER)),
@@ -287,6 +292,8 @@ const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   }),
 );
 
+// Relative subdirectories scaffolded under a freshly created chat container workspace root.
+// The Studio layout lives in studioWorkspaceScaffold.ts alongside its instruction files.
 const CHAT_WORKSPACE_SUBDIRECTORIES = ["work", "outputs"] as const;
 
 interface ProcessTableRow {
@@ -378,7 +385,9 @@ export function toWsRpcError(cause: unknown, fallbackMessage: string) {
       cause,
     });
   }
-  // missing projector cursors make the snapshot fence underivable — mark non-retryable with its own code so clients surface a diagnosable fault instead of restarting forever
+  // Missing projector cursors make the snapshot fence underivable. Mark the
+  // failure non-retryable with its own code so clients surface a diagnosable
+  // fault instead of restarting the stream into the same condition forever.
   if (Schema.is(ProjectionStateIncompleteError)(cause)) {
     return new WsRpcError({
       message: cause.message,
@@ -393,7 +402,9 @@ export function toWsRpcError(cause: unknown, fallbackMessage: string) {
   });
 }
 
-// process-wide so a subscriber's restart chain survives its own reconnects, keyed per subscriber inside the tracker
+// Process-wide so a subscriber's restart chain survives its own reconnects
+// (the client id is stable across a socket reconnect), but keyed per
+// subscriber inside the tracker — see makeResnapshotEscalationTracker.
 const resnapshotEscalationTracker = makeResnapshotEscalationTracker();
 
 // Legacy/native callers may pin a text-generation model via the model-only
@@ -444,7 +455,9 @@ const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
     }),
   );
 
-// must mirror toShellStreamEvent's cases — events rejected here are dropped before the live-UI buffer so the window only holds projectable events
+// Must mirror the cases of toShellStreamEvent: events rejected here are dropped
+// before the live-UI buffer so the sliding window only holds events that can
+// actually project to a shell update.
 function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   return (
     event.type === "space.created" ||
@@ -662,12 +675,24 @@ const makeWsRpcHandlersLayer = () =>
             ),
           );
 
-      // a subscription can race the projector — failing straight away tears the stream down for a thread the server is actively running; waiting is safe because the stream attaches its live tap before evaluating the snapshot effect
-      const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
+      // A thread subscription can race the projector: the client subscribes the
+      // moment a create/turn RPC resolves, while the detail read model commits
+      // asynchronously behind the journal. Failing straight away with
+      // THREAD_SNAPSHOT_NOT_FOUND tears the stream down for a thread the server
+      // is actively running. Waiting here is safe because the cursor-safe
+      // stream attaches its live tap before evaluating the snapshot effect, so
+      // no event that commits during the wait is lost.
+      const loadThreadDetailSnapshotWithBootstrapWait = (
+        threadId: ThreadId,
+        messageWindow?: import("@synara/contracts").OrchestrationThreadMessageWindow,
+      ) =>
         Effect.gen(function* () {
           const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
           while (true) {
-            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
+            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(
+              threadId,
+              messageWindow,
+            );
             if (Option.isSome(detail) || Date.now() >= deadline) {
               return detail;
             }
@@ -783,7 +808,8 @@ const makeWsRpcHandlersLayer = () =>
       });
       const prepareChatWorkspaceRoot = (workspaceRoot: string) =>
         prepareWorkspaceSubdirectories(workspaceRoot, CHAT_WORKSPACE_SUBDIRECTORIES);
-      // instruction files are best-effort — must never fail or retry-loop the container create that scaffolds the folders
+      // Instruction files are best-effort: they steer agents toward the Outbox layout but
+      // must never fail (or retry-loop) the container create that scaffolds the folders.
       const prepareStudioWorkspaceRoot = (workspaceRoot: string) =>
         prepareWorkspaceSubdirectories(workspaceRoot, STUDIO_WORKSPACE_SUBDIRECTORIES).pipe(
           Effect.andThen(
@@ -882,11 +908,13 @@ const makeWsRpcHandlersLayer = () =>
           );
         });
 
-      // terminal-first threads get a "New terminal" placeholder — the tracker buffers input and auto-renames on the first meaningful command
+      // Terminal-first threads are created with the generic "New terminal" placeholder.
+      // The tracker buffers per-terminal input and, once a meaningful command is submitted,
+      // surfaces a safe title used to auto-rename the thread on its first command.
       const terminalTitleTracker = new TerminalThreadTitleTracker();
       const resetTerminalTitleBuffer = (threadId: string, terminalId: string | null) =>
         Effect.sync(() => terminalTitleTracker.reset(threadId, terminalId));
-      // terminal auto-titles are best-effort metadata — must never block or fail terminal writes
+      // Terminal auto-titles are best-effort metadata and must never block or fail terminal writes.
       const maybeAutoRenameTerminalThread = Effect.fnUntraced(function* (input: {
         threadId: string;
         terminalId: string;
@@ -1050,7 +1078,8 @@ const makeWsRpcHandlersLayer = () =>
         snapshotQuery: projectionReadModelQuery,
         git,
       }).pipe(
-        // a retention failure must not present as an empty inventory — fall back to a plain scan so callers still see real worktrees
+        // A retention failure must not present as an empty inventory: fall back
+        // to a plain scan so listing callers still see the real worktrees.
         Effect.catchCause((cause) =>
           Effect.logWarning("managed worktree retention failed", {
             cause: String(cause),
@@ -1313,7 +1342,9 @@ const makeWsRpcHandlersLayer = () =>
                 });
               }
               const result = yield* dispatchOrchestrationCommand(normalizedCommand);
-              // scaffold managed workspace subdirs only AFTER the decider accepts — a rejected dispatch must never mutate the filesystem
+              // Only scaffold managed workspace-root subdirectories (Inbox/Outbox/work/outputs)
+              // AFTER the decider has accepted the command. A rejected dispatch (e.g. a
+              // cross-kind workspace-root ownership conflict) must never mutate the filesystem.
               if (prepareWorkspaceRoot) {
                 yield* prepareWorkspaceRoot;
               }
@@ -1353,7 +1384,7 @@ const makeWsRpcHandlersLayer = () =>
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
           rpcEffect(
             projectionReadModelQuery
-              .getThreadDetailSnapshotById(input.threadId)
+              .getThreadDetailSnapshotById(input.threadId, input.messageWindow)
               .pipe(Effect.map(Option.getOrNull)),
             "Failed to load orchestration thread detail snapshot",
           ),
@@ -1398,7 +1429,8 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.prepareQuitResume]: (input) =>
           rpcEffect(
-            // gated as a whole (not just its dispatches) so the record can never be written while startup is claiming the previous quit's record
+            // Gated as a whole (not just its dispatches) so the record can never be
+            // written while startup is still claiming the previous quit's record.
             runtimeStartup.enqueueCommand(
               prepareQuitResume({
                 request: input,
@@ -1438,7 +1470,8 @@ const makeWsRpcHandlersLayer = () =>
             clientId,
             { key: "orchestration.shell" },
             makeCursorSafeSnapshotLiveStream({
-              // keyed per subscriber — concurrent clients hitting the same stale fence are independent first offenses, not one chain
+              // Keyed per subscriber: concurrent clients hitting the same
+              // stale fence are independent first offenses, not one chain.
               resnapshotEscalation: {
                 streamKey: `${clientId}:orchestration.shell`,
                 tracker: resnapshotEscalationTracker,
@@ -1494,12 +1527,15 @@ const makeWsRpcHandlersLayer = () =>
               threadId: input.threadId,
             },
             makeCursorSafeSnapshotLiveStream({
-              // keyed per subscriber — concurrent clients hitting the same stale fence are independent first offenses, not one chain
+              // Keyed per subscriber: concurrent clients hitting the same
+              // stale fence are independent first offenses, not one chain.
               resnapshotEscalation: {
                 streamKey: `${clientId}:orchestration.thread:${input.threadId}`,
                 tracker: resnapshotEscalationTracker,
               },
-              // cursor resume replays only the gap — out-of-range cursors (negative or overflowing) fall back to the snapshot inside the stream factory
+              // Cursor resume: a client holding cached detail replays only the
+              // gap. Out-of-range cursors (negative or overflowing gap) fall
+              // back to the snapshot inside the stream factory.
               resumeFromSequence: input.afterSequence,
               // Opted-in clients get the whole gap as one item and apply it in a
               // single store update, so a stale cached turn does not replay its
@@ -1532,7 +1568,10 @@ const makeWsRpcHandlersLayer = () =>
                 label: "orchestration.thread-detail",
                 onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
               },
-              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
+              snapshot: loadThreadDetailSnapshotWithBootstrapWait(
+                input.threadId,
+                input.messageWindow,
+              ).pipe(
                 Effect.flatMap(
                   Option.match({
                     onNone: () =>
@@ -1580,6 +1619,7 @@ const makeWsRpcHandlersLayer = () =>
                   return Stream.succeed<OrchestrationThreadStreamItem>({
                     kind: "replay",
                     events: item.events,
+                    threadId: input.threadId,
                   });
                 }
                 // A silently empty snapshot would leave the client waiting forever
@@ -1760,7 +1800,9 @@ const makeWsRpcHandlersLayer = () =>
                   const existingProjectId = yield* findRegisteredProjectId(
                     normalizedCommand.workspaceRoot,
                   );
-                  // re-adding an existing checkout opens the project as-is — must not silently move it between Spaces; newProjectSpaceId applies only when project.create runs below
+                  // Re-adding an existing checkout opens the existing project as-is. In
+                  // particular, it must not silently move that project between Spaces;
+                  // newProjectSpaceId applies only when project.create runs below.
                   const registration = existingProjectId
                     ? { projectId: existingProjectId, created: false }
                     : yield* dispatchOrchestrationCommand(normalizedCommand).pipe(
@@ -1775,7 +1817,8 @@ const makeWsRpcHandlersLayer = () =>
                           ),
                         ),
                       );
-                  // synchronous assignment — a pending interruption can't run recovery between a successful dispatch and recording that fact
+                  // This assignment is synchronous, so a pending interruption cannot run
+                  // recovery between a successful dispatch and recording that fact.
                   registrationCommitted = true;
                   if (registration.created && prepareWorkspaceRoot) {
                     yield* prepareWorkspaceRoot;
@@ -1797,7 +1840,9 @@ const makeWsRpcHandlersLayer = () =>
                         fileSystem.rename(workspaceRoot, recoveryPath),
                     }),
                   ),
-                  // promotion and registration form one critical section — if the client cancels after cloning, finish registration so its workspace is never moved out from under a committed project; recovery shares the guarantee
+                  // Promotion and registration form one critical section. If the client cancels
+                  // after cloning, finish registration first so its workspace is never moved out
+                  // from under a committed project. Recovery must share the same guarantee.
                   Effect.uninterruptible,
                 );
 
@@ -2176,7 +2221,8 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to close terminal",
           ),
         [WS_METHODS.subscribeTerminalEvents]: (_, { clientId }) =>
-          // terminal output is an ordered byte stream with renderer ACK accounting — keep lossless; dropping chunks creates holes until reattach
+          // Terminal output is an ordered byte stream with renderer ACK accounting.
+          // Keep this lossless: dropping chunks would create holes until reattach.
           streamAdmission.guard(
             clientId,
             { key: "terminal.events" },
@@ -3034,9 +3080,24 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: "device.events" },
-            // device pushes are lossy by design — thread state is a versioned full snapshot so a behind client converges on the next one rather than needing every intermediate
-            // `Stream.never`, not `Stream.empty`, where no device engine can run — the client treats a completed infinite subscription as a zombie socket and forces a reconnect, so empty completes instantly and the pair loops, churning every other subscription (this is how unrelated RPCs began missing replies on Linux CI); staying open and silent is what "no events will ever arrive" means
-            // gated on `supported`, not just the service existing — off darwin it resolves to a service whose backend reports unsupported-platform, same branch as makeWsDeviceHandlers
+            // Device pushes are lossy by design: thread state is a versioned
+            // full snapshot, so a client that falls behind converges on the
+            // next one rather than needing every intermediate state.
+            //
+            // `Stream.never`, not `Stream.empty`, where no device engine can
+            // run. This is an infinite subscription, and the client treats one
+            // that completes as a zombie socket: it forces a full reconnect to
+            // recover it, and an empty stream completes instantly, so the pair
+            // loops. That churn restarts every other subscription with it,
+            // which is how unrelated RPCs began missing their replies on Linux
+            // CI. Staying open and silent is what "no events will ever arrive"
+            // actually means.
+            //
+            // Gated on `supported`, not just on the service existing: the layer
+            // is provided on every platform so callers need not branch on null,
+            // and off darwin it resolves to a service whose backend reports
+            // unsupported-platform. `makeWsDeviceHandlers` already branches the
+            // same way.
             deviceService?.supported !== true
               ? Stream.never
               : bufferLiveUiStream(
@@ -3166,7 +3227,12 @@ export function authenticateRpcWebSocketUpgrade(input: {
   return input.serverAuth.authenticateWebSocketUpgrade(input.request);
 }
 
-/** the desktop bridge still supplies the loopback-only legacy ?token= credential — share the same compatibility rule as the RPC socket rather than calling ServerAuth directly */
+/**
+ * Apply the feature socket's authentication policy to the separate device
+ * frame socket. The desktop bridge still supplies the loopback-only legacy
+ * `?token=` credential, so this path must share the same compatibility rule as
+ * the RPC socket rather than calling ServerAuth directly.
+ */
 export function authorizeDeviceFrameWebSocketUpgrade(input: {
   readonly config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">;
   readonly legacyToken: string | null;
@@ -3198,7 +3264,12 @@ export function makeWebsocketRpcRouteLayer<R>(
       const rpcWebSocketHttpEffect = yield* rpcWebSocketHttpEffectSource;
       const connectionSessions = yield* WsConnectionSessions;
       const router = yield* HttpRouter.HttpRouter;
-      // RPC handlers run on fibers forked from the layer-build scope — the authenticated session can't be provided as a plain service, so it's registered for the connection's lifetime and injected as a synthetic upgrade header the admission middleware resolves back on every request
+      // RPC handlers run on fibers forked from the layer-build scope, not from
+      // this per-connection fiber, so the authenticated session cannot be
+      // provided as a plain service around rpcWebSocketHttpEffect. Instead the
+      // session is registered for the connection's lifetime and its key is
+      // injected as a synthetic upgrade header; the admission middleware
+      // resolves it back into handler-scoped services on every request.
       const runWithConnectionSession = (
         request: HttpServerRequest.HttpServerRequest,
         session: WsConnectionSession,
@@ -3277,7 +3348,10 @@ export function makeWebsocketRpcRouteLayer<R>(
   );
 }
 
-// negotiation over plain HTTP — a connect costs one upgrade instead of the legacy bootstrap-socket round trip; the WS_BOOTSTRAP_PATH socket stays available for older clients during rollout
+// Negotiation over plain HTTP: a connect costs exactly one WebSocket upgrade
+// instead of the legacy bootstrap-socket round trip. Advertised to clients via
+// the "transport.http-negotiate" capability; the WS_BOOTSTRAP_PATH socket stays
+// available for older clients during rollout.
 function makeWsNegotiateHttpRouteLayer() {
   return Layer.effectDiscard(
     Effect.gen(function* () {
@@ -3290,13 +3364,15 @@ function makeWsNegotiateHttpRouteLayer() {
           const config = yield* ServerConfig;
           const url = trustedWebSocketRequestUrl(request, config);
           if (!url) {
-            // same no-store discipline as negotiated responses — an intermediary must never cache a refusal keyed on our behalf
+            // Same no-store discipline as the negotiated responses: an
+            // intermediary must never cache a refusal keyed on our behalf.
             return HttpServerResponse.text("Forbidden", {
               status: 403,
               headers: { "Cache-Control": "no-store", Vary: "Origin" },
             });
           }
-          // the desktop app fetches cross-origin (synara://app) — reflect only origins the WS upgrade itself would trust
+          // The desktop app fetches cross-origin (synara://app); reflect only
+          // origins the WS upgrade itself would trust.
           const origin = normalizeCorsOrigin(request.headers.origin);
           const corsHeaders =
             origin && isTrustedAppOrigin({ origin, requestOrigin: url.origin, config })
@@ -3351,14 +3427,20 @@ function makeWebsocketBootstrapRouteLayer<R>(
   );
 }
 
-// both negotiation surfaces exported separately so route tests can mount them beside a custom RPC group
+// Both negotiation surfaces: the single-handshake HTTP endpoint and the legacy
+// bootstrap socket kept for older clients during rollout. Exported separately
+// so route-level tests can mount them beside a custom feature RPC group.
 export const makeWebsocketNegotiationRouteLayer = () =>
   Layer.merge(
     makeWsNegotiateHttpRouteLayer(),
     makeWebsocketBootstrapRouteLayer(makeBootstrapWebSocketHttpEffect),
   );
 
-/** video rides a second WebSocket admitted by the same rules as the RPC upgrade — trusted origin, then whatever auth the config requires */
+/**
+ * Video rides a second WebSocket (see `deviceFrameRoute`), so it is admitted by
+ * the same rules as the RPC upgrade: trusted origin, then whatever
+ * authentication the config requires.
+ */
 const deviceFrameRouteLayer = makeDeviceFrameRouteLayer({
   authorizeUpgrade: (request) =>
     Effect.gen(function* () {
@@ -3395,7 +3477,8 @@ export const websocketRpcRouteLayer = Layer.mergeAll(
   deviceFrameRouteLayer,
   computerFrameRouteLayer,
   makeWebsocketNegotiationRouteLayer(),
-  // the registry must be provided here so the upgrade route and RPC middleware share one instance
+  // The registry must be provided here so the upgrade route and the RPC
+  // middleware (built from the same source effect) share one instance.
   makeWebsocketRpcRouteLayer(makeRpcWebSocketHttpEffect).pipe(
     Layer.provide(WsConnectionSessionsLive),
   ),

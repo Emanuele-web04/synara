@@ -57,6 +57,7 @@ function getServerSnapshot(): boolean {
 export type MediaQueryInput = {
   min?: Breakpoint | number;
   max?: Breakpoint | number;
+  /** Touch-like input (finger). Use "fine" for mouse/trackpad. */
   pointer?: "coarse" | "fine";
 };
 

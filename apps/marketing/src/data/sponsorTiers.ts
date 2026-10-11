@@ -1,10 +1,19 @@
-// amount/perks mirror the live GitHub tiers — change there first; `label` is presentation-only (GitHub only shows the price)
+// FILE: data/sponsorTiers.ts
+// Purpose: Shared sponsorship copy — the GitHub Sponsors tiers and the public
+//          sponsor roll used by /sponsor and its structured data.
+// Layer: static content (server/client importable).
+// Note: `amount` and `perks` mirror the live tiers on
+//       https://github.com/sponsors/Emanuele-web04. GitHub is the source of
+//       truth — if a tier changes there, change it here too. `label` is
+//       presentation only; GitHub itself only shows the price.
 
 export type SponsorTier = {
   /** Stable key + GitHub's `?frequency=` deep link discriminator. */
   id: string;
+  /** Monthly price in whole USD. */
   amount: number;
   label: string;
+  /** Group heading on /sponsors, e.g. "Backers". */
   plural: string;
   tagline: string;
   perks: string[];
@@ -68,7 +77,11 @@ export const SPONSOR_TIERS: readonly SponsorTier[] = [
   },
 ];
 
-// GitHub always offers a custom amount alongside published tiers — there are no fixed one-time tiers; that's what a "One time (custom)" sponsorship is
+/**
+ * GitHub always offers a custom amount alongside the published tiers, on both
+ * the monthly and the one-time frequency — there are no fixed one-time tiers.
+ * This is what a "One time (custom)" sponsorship in the dashboard means.
+ */
 export const ONE_TIME_SPONSORSHIP = {
   label: "One-time",
   tagline:

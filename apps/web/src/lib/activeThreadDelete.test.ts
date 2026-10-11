@@ -1,3 +1,7 @@
+// FILE: activeThreadDelete.test.ts
+// Purpose: Characterizes shared active-thread deletion ordering and failure boundaries.
+// Layer: Web orchestration helper tests
+
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

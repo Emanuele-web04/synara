@@ -1,4 +1,22 @@
-/** DEVICE_E2E=1 live-simulator E2E (macOS+Xcode, never in CI). Speaks Effect-RPC JSON over WS directly: only requirement is echoing serverInstanceId from /ws/negotiate on the /ws upgrade. */
+/**
+ * Device pane end-to-end verification against a live Synara server.
+ *
+ * Gated on `DEVICE_E2E=1` because it boots a real iOS simulator, which needs
+ * macOS with Xcode and takes tens of seconds. CI never runs it.
+ *
+ * The RPC socket is spoken directly rather than through a generated client:
+ * the transport is Effect RPC's JSON framing over WebSocket, and the only
+ * pre-connect requirement is the HTTP negotiation at `/ws/negotiate`, whose
+ * `serverInstanceId` must be echoed back on the `/ws` upgrade (see
+ * `validateWsFeatureCompatibility`). A loopback server with no auth token
+ * admits the connection as owner without a session, so no bootstrap credential
+ * is needed here.
+ *
+ * Point it at an already-running server with `DEVICE_E2E_ORIGIN`
+ * (default http://127.0.0.1:3899).
+ *
+ * @module integration/device
+ */
 import {
   DEVICE_FRAME_RESYNC_MESSAGE,
   DEVICE_FRAME_WS_PATH,
@@ -43,6 +61,8 @@ const THREAD_ID = `device-e2e-${Date.now()}`;
 
 const describeE2e = ENABLED ? describe : describe.skip;
 
+/** PNG magic: the eight bytes every PNG starts with. */
+/** Every label in an accessibility tree, in document order. */
 function labelsOf(node: unknown, out: string[] = []): string[] {
   const record = node as { label?: unknown; children?: unknown } | null;
   if (record && typeof record.label === "string") out.push(record.label);
@@ -52,7 +72,10 @@ function labelsOf(node: unknown, out: string[] = []): string[] {
   return out;
 }
 
-/** dismiss button of a system permission alert — fresh boots raise these over the app under test */
+/**
+ * A system permission alert's dismiss button, if one is on screen. Fresh
+ * simulator boots raise these over the app under test.
+ */
 function alertDismissButton(node: unknown): { readonly x: number; readonly y: number } | null {
   const record = node as {
     label?: unknown;
@@ -77,7 +100,11 @@ function alertDismissButton(node: unknown): { readonly x: number; readonly y: nu
   return null;
 }
 
-/** tap target = centre of the first labelled row, so the tap lands on something real regardless of screen */
+/**
+ * Centre of the first list row the accessibility tree reports: a labelled node
+ * with a row-shaped frame. Used instead of a fixed coordinate so the tap lands
+ * on something real regardless of which screen is showing.
+ */
 function firstTappableRow(node: unknown): { readonly x: number; readonly y: number } | null {
   const record = node as {
     label?: unknown;
@@ -111,7 +138,11 @@ function firstTappableRow(node: unknown): { readonly x: number; readonly y: numb
 
 const SETTINGS_BUNDLE_ID = "com.apple.Preferences";
 
-/** simctl-level reboot; nothing tells the server, so the helper keeps an attachment bound to the dead boot */
+/**
+ * Reboot the simulator behind Synara's back, the way `simctl` from a terminal,
+ * Simulator.app, or an agent's own shell does. Nothing tells the server, so the
+ * long-running helper is left holding an attachment bound to the dead boot.
+ */
 function simctl(args: readonly string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile("xcrun", ["simctl", ...args], { timeout: 180_000 }, (error) =>
@@ -123,16 +154,21 @@ function simctl(args: readonly string[]): Promise<void> {
 async function externalReboot(udid: string): Promise<void> {
   await simctl(["shutdown", udid]);
   await simctl(["boot", udid]);
-  // `bootstatus -b` returns once CoreSimulator reports boot complete
+  // `bootstatus -b` returns once CoreSimulator reports the boot complete.
   await simctl(["bootstatus", udid, "-b"]);
 }
 
-/** kill so a later `launch` starts the app at its root screen */
+/** Kill an app so a later `launch` starts it at its root screen. */
 function terminateApp(udid: string, bundleId: string): Promise<void> {
   return simctl(["terminate", udid, bundleId]);
 }
 
-/** simctl screenshot, not device.screenshot — server calls route through the attach path that rebinds stale attachments, which this test must not trigger */
+/**
+ * Capture the screen without going through the server. `device.screenshot`
+ * would do, but every server-side device call routes through the attach path
+ * that transparently rebinds a stale helper attachment — which is the very
+ * recovery a reboot test must not trigger before its tap.
+ */
 async function screenshotViaSimctl(udid: string): Promise<Buffer> {
   const path = join(tmpdir(), `synara-device-e2e-${randomUUID()}.png`);
   try {
@@ -161,7 +197,11 @@ async function negotiate(): Promise<WsBootstrapNegotiateResult> {
   return (await response.json()) as WsBootstrapNegotiateResult;
 }
 
-/** Effect RPC answers a Request with Chunk frame(s) then Exit; non-streaming device methods emit at most one chunk */
+/**
+ * Open the feature socket and expose a promise-returning `call`. Effect RPC
+ * answers a `Request` with one or more `Chunk` frames followed by an `Exit`;
+ * for the non-streaming device methods there is at most one chunk.
+ */
 async function connectRpc(negotiation: WsBootstrapNegotiateResult): Promise<RpcSocket> {
   const url = new URL(WS_FEATURE_PATH, ORIGIN);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -209,7 +249,8 @@ async function connectRpc(negotiation: WsBootstrapNegotiateResult): Promise<RpcS
     pending.delete(String(frame.requestId));
     const exit = frame.exit as { _tag?: string; value?: unknown; cause?: unknown } | undefined;
     if (exit?._tag === "Success") {
-      // non-streaming RPCs carry the result inline on Exit; streaming ones arrive as Chunk frames first
+      // Non-streaming RPCs carry the result inline on the Exit; streaming ones
+      // arrive as Chunk frames first and exit with no value.
       entry.resolve(exit.value === undefined ? entry.chunk : exit.value);
       return;
     }
@@ -247,7 +288,11 @@ interface CollectedFrames {
   readonly keyframes: number;
 }
 
-/** count frames while `drive` forces screen damage — capture is damage-driven, the taps make it deterministic */
+/**
+ * Open the frame socket and count frames while `drive` forces screen damage.
+ * Capture is damage-driven, so an idle SpringBoard emits nothing after the
+ * initial codec config and IDR; the taps are what make this deterministic.
+ */
 async function collectFrames(
   udid: string,
   drive: () => Promise<void>,
@@ -267,7 +312,10 @@ async function collectFrames(
     });
   });
 
-  // codec-config + first IDR are emitted at attach, before this socket exists; the pane's resync request restarts capture for this connection
+  // The codec-config frame and first IDR are emitted when the capture session
+  // starts, which happens at attach — before this socket exists. The pane
+  // handles that with the same resync request, which restarts capture and
+  // guarantees a fresh config + keyframe on this connection.
   socket.send(JSON.stringify({ type: DEVICE_FRAME_RESYNC_MESSAGE }));
 
   let total = 0;
@@ -333,7 +381,9 @@ describeE2e("device pane end-to-end", () => {
     const result = await rpc.call<DeviceListResult>(DEVICE_WS_METHODS.list, {
       includeShutdown: true,
     });
-    // helper isn't compiled before first attach — "setup-required" is expected with only build-device-helper outstanding
+    // Before the first attach the helper binary is not compiled yet, so
+    // "setup-required" is expected here as long as build-device-helper is the
+    // only outstanding step; everything else must already be satisfied.
     if (result.availability.kind === "setup-required") {
       const outstanding = result.availability.steps
         .filter((step) => !step.done)
@@ -412,7 +462,10 @@ describeE2e("device pane end-to-end", () => {
   it("re-attaches and streams again after the simulator is rebooted", async () => {
     if (!target) throw new Error("no target device");
 
-    // the helper outlives the simulator holding a dead-boot descriptor — before the fix every post-reboot call failed "display has no framebuffer surface yet"
+    // The helper process outlives the simulator, and its attachment holds a
+    // display descriptor bound to one boot. Before this was fixed, every call
+    // after a reboot failed permanently with "display has no framebuffer
+    // surface yet".
     await rpc.call(DEVICE_WS_METHODS.shutdown, { udid: target.udid });
     const afterShutdown = await rpc.call<DeviceListResult>(DEVICE_WS_METHODS.list, {
       includeShutdown: true,
@@ -433,7 +486,7 @@ describeE2e("device pane end-to-end", () => {
     expect(reattached.attachedDeviceUdid).toBe(target.udid);
     expect(reattached.lastError).toBeNull();
 
-    // input and video must both work against the new boot, not just attach
+    // Input and video must both work against the new boot, not just attach.
     const frames = await collectFrames(
       target.udid,
       async () => {
@@ -458,13 +511,22 @@ describeE2e("device pane end-to-end", () => {
     if (!target) throw new Error("no target device");
     const udid = target.udid;
 
-    // regression: helper held a dead-boot HID client and injected events vanished with Success acks — only the a11y tree proves a tap landed
+    // Regression: the helper outlives the simulator and held a HID client bound
+    // to one boot. Injecting into a dead boot does not error — events are
+    // accepted and vanish — so every tap after an external reboot was acked as
+    // Success with zero effect. Reads kept working, which hid it completely.
+    // A "Success" ack is therefore worthless here: the only proof is the
+    // accessibility tree changing.
     const describeUi = () =>
       rpc
         .call<{ root: unknown }>(DEVICE_WS_METHODS.describeUi, { udid })
         .then((result) => result.root);
 
-    /** poll rather than sleep: a fresh boot leaves SpringBoard settling and raises permission alerts */
+    /**
+     * Put Settings on screen and return the labels showing plus a row to tap.
+     * Polls rather than sleeping: a fresh boot leaves SpringBoard settling and
+     * raises permission alerts over whatever is running.
+     */
     const settleOnATappableScreen = async (): Promise<{
       readonly labels: readonly string[];
       readonly tapAt: { readonly x: number; readonly y: number };
@@ -503,16 +565,22 @@ describeE2e("device pane end-to-end", () => {
         before.labels,
       );
 
-      // nothing tells the server this happened; the helper keeps its attachment
+      // Nothing tells the server this happened; the helper keeps its attachment.
       await externalReboot(udid);
 
-      // everything from here to the tap runs through simctl, never the server
-      // any server call rebinds the dead descriptor and hides the bug — the tap must be the first helper call; simctl screenshots observe the screen
+      // Everything from here to the tap runs through simctl, never the server.
+      // `device.describeUi` and `device.launchApp` both route through the same
+      // attach path, which recovers a dead descriptor on its own — so a single
+      // read standing between the reboot and the tap rebinds the HID client and
+      // hides exactly the bug under test. The tap has to be the first helper
+      // call against the new boot, which also means the screen it changes must
+      // be observed without the helper: simctl screenshots do that.
       await simctl(["launch", udid, SETTINGS_BUNDLE_ID]);
       await new Promise((resolve) => setTimeout(resolve, 10_000));
 
       const beforeShot = await screenshotViaSimctl(udid);
-      // same row as before the reboot: Settings relaunched at root, point from that screen's own tree
+      // The same row as before the reboot: Settings relaunched at its root, and
+      // the point came from that screen's own accessibility tree.
       await rpc.call(DEVICE_WS_METHODS.tap, { udid, x: before.tapAt.x, y: before.tapAt.y });
       await new Promise((resolve) => setTimeout(resolve, 4_000));
       const afterShot = await screenshotViaSimctl(udid);
@@ -522,17 +590,23 @@ describeE2e("device pane end-to-end", () => {
         "the tap must change the screen after an external reboot, not just be acked",
       ).toBe(false);
 
-      // the helper must be healthy afterwards, not merely lucky once
+      // And the helper is healthy afterwards rather than merely lucky once.
       expect(labelsOf(await describeUi()).length).toBeGreaterThan(6);
     } finally {
-      // `simctl launch` on a live process is a no-op — leave Settings dead or a later launch inherits whatever screen it was on
+      // Leave Settings dead, not parked on whatever sub-screen the taps
+      // reached: `simctl launch` on a live process is a no-op, so a later case
+      // launching Settings would silently inherit this screen instead of its
+      // root and tap a row that goes nowhere.
       await terminateApp(udid, SETTINGS_BUNDLE_ID).catch(() => undefined);
       await rpc.call(DEVICE_WS_METHODS.detach, { threadId: THREAD_ID }).catch(() => undefined);
     }
   }, 600_000);
 
   it("drives the device through the MCP tools with no pane and no stream", async () => {
-    // agent path: MCP handlers only — a tap used to be acked while the HID bridge failed silently
+    // The agent path: MCP tool handlers only, nothing attached, no frame
+    // stream. A tap here used to be acked while the screen never changed,
+    // because the helper's HID bridge failed silently and the RPC layer
+    // reported success anyway.
     const backend = new IosSimulatorBackend({ platform: process.platform });
     const manager = new DeviceManager({ backend });
     const openPaneRequests: Array<{ readonly reason: string }> = [];
@@ -575,11 +649,15 @@ describeE2e("device pane end-to-end", () => {
         listed.devices.find((entry) => entry.state === "booted") ??
         listed.devices.find((entry) => entry.name.startsWith("iPhone"));
       expect(device, "expected a simulator to drive").toBeDefined();
-      // an earlier case shuts the device down — re-check live state and wait for boot before launching
+      // An earlier case in this file shuts the device down, so re-check the
+      // live state rather than trusting the listing, and wait for the boot to
+      // finish before launching into it.
       const booted = (await call("device_boot", { udid: device!.udid })) as { kind?: string };
       expect(booted.kind, "expected the device to boot").toBe("booted");
 
-      // device_boot returns at Booted but SpringBoard keeps initializing — wait for a home-screen tree, then launch
+      // device_boot returns once CoreSimulator reports Booted, but SpringBoard
+      // keeps initializing after that and an app launched too early never
+      // paints. Wait for the home screen to serve a tree at all, then launch.
       for (let attempt = 0; attempt < 20; attempt += 1) {
         const root = (
           (await call("device_describe_ui", { udid: device!.udid })) as {
@@ -590,12 +668,18 @@ describeE2e("device pane end-to-end", () => {
         await new Promise((resolve) => setTimeout(resolve, 3_000));
       }
 
-      // relaunch rather than launch: an earlier case may have left Settings running and launch on a live process is a no-op
+      // Relaunch rather than launch: an earlier case in this file may have left
+      // Settings running, and simctl launch on a live process is a no-op that
+      // would leave whatever screen it was on.
       await call("device_launch", { udid: device!.udid, bundleId: SETTINGS_BUNDLE_ID });
-      // driving through MCP must ask the pane to open; already surfaced as "agent-tool", so this launch is a no-op
+      // Driving the device through MCP must ask the pane to open. The polling
+      // describe above already surfaced it as "agent-tool", so this launch is
+      // correctly a no-op: one request for the turn, not one per tool call.
       expect(openPaneRequests).toHaveLength(1);
       expect(openPaneRequests[0]!.reason).toBe("agent-tool");
-      // Settings paints async and a preceding reboot leaves SpringBoard settling — poll for a populated tree
+      // Settings paints its root asynchronously, and a preceding reboot can
+      // leave SpringBoard still settling. Poll for a populated tree rather than
+      // sleeping a fixed time and comparing two shots of a launch placeholder.
       let before: string[] = [];
       let target: { readonly x: number; readonly y: number } | null = null;
       for (let attempt = 0; attempt < 15; attempt += 1) {
@@ -606,7 +690,9 @@ describeE2e("device pane end-to-end", () => {
           }
         ).root;
         before = labelsOf(root);
-        // fresh boots raise permission alerts over whatever runs — dismiss one and resample rather than comparing alert shots
+        // A freshly booted runtime raises system permission alerts ("Allow
+        // Wallet to use your location?") over whatever is running. Dismiss one
+        // and resample rather than comparing two shots of the alert.
         const dismiss = alertDismissButton(root);
         if (dismiss) {
           await call("device_tap", { udid: device!.udid, x: dismiss.x, y: dismiss.y });
@@ -618,7 +704,8 @@ describeE2e("device pane end-to-end", () => {
       expect(before.length, "expected a populated accessibility tree").toBeGreaterThan(6);
       expect(target, "expected a tappable row in the accessibility tree").not.toBeNull();
 
-      // tap a row the tree reports, not a fixed point that may land on padding
+      // Tapping a row the tree actually reports, rather than a fixed point that
+      // may land on padding, is what makes this deterministic.
       await call("device_tap", { udid: device!.udid, x: target!.x, y: target!.y });
       await new Promise((resolve) => setTimeout(resolve, 3_000));
 

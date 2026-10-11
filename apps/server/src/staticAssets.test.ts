@@ -1,4 +1,6 @@
-// pins the pure serving-policy logic; HTTP-level behavior lives in http.test.ts
+// Unit coverage for static-serving policy: encoding negotiation edge cases,
+// cache-control tiers, sidecar path detection, and ETag shape. The HTTP-level
+// behavior is covered in http.test.ts; this table pins the pure logic.
 
 import { describe, expect, it } from "vitest";
 
@@ -38,7 +40,8 @@ describe("negotiateStaticEncodingPreference sidecar ordering", () => {
   it("ignores unknown encodings and rejects malformed q parameters", () => {
     expect(encodings("x-gzip, deflate")).toEqual([]);
     expect(encodings("identity")).toEqual([]);
-    // out-of-grammar weights aren't valid qvalues — ignored rather than treated as fully acceptable
+    // Out-of-grammar weights are not valid qvalues, so the entry is ignored
+    // rather than treated as fully acceptable.
     expect(encodings("gzip;q=")).toEqual([]);
     expect(encodings("gzip;q=2")).toEqual([]);
     expect(encodings("gzip;q=bogus")).toEqual([]);
@@ -48,9 +51,9 @@ describe("negotiateStaticEncodingPreference sidecar ordering", () => {
   it("ranks by client weight before server preference", () => {
     expect(encodings("br;q=0.1, gzip;q=1")).toEqual(["gzip", "br"]);
     expect(encodings("br;q=1, gzip;q=0.5")).toEqual(["br", "gzip"]);
-    // equal weights fall back to server preference (brotli first)
+    // Equal weights fall back to server preference (brotli first).
     expect(encodings("gzip;q=0.5, br;q=0.5")).toEqual(["br", "gzip"]);
-    // an explicit weight beats the wildcard for the same encoding
+    // An explicit weight beats the wildcard for the same encoding.
     expect(encodings("*;q=1, br;q=0.2")).toEqual(["gzip", "br"]);
   });
 
@@ -69,15 +72,17 @@ describe("negotiateStaticEncodingPreference identity handling", () => {
     );
 
   it("ranks identity among the codings rather than as a fallback", () => {
-    // a client preferring identity must not be handed a lower-ranked sidecar
+    // A client preferring identity must not be handed a lower-ranked sidecar.
     expect(ranking("gzip;q=0.1, identity;q=1")).toEqual(["identity", "gzip"]);
     expect(ranking("gzip;q=1, identity;q=0.1")).toEqual(["gzip", "identity"]);
+    // Equal weights keep the smaller body first.
     expect(ranking("gzip;q=1, identity;q=1")).toEqual(["gzip", "identity"]);
     expect(ranking(undefined)).toEqual(["identity"]);
   });
 
   it("rejects q parameters with whitespace around the equals sign", () => {
-    // `q =0` is not a q-parameter — defaulting it to 1 would serve the encoding the client was refusing
+    // `q =0` is not a q-parameter: defaulting it to 1 would serve the very
+    // encoding the client was trying to refuse.
     expect(ranking("gzip;q =0")).toEqual(["identity"]);
     expect(ranking("gzip;q= 0.5")).toEqual(["identity"]);
   });
@@ -87,7 +92,7 @@ describe("negotiateStaticEncodingPreference identity handling", () => {
     expect(identityOk("gzip, br")).toBe(true);
     expect(identityOk("identity;q=0")).toBe(false);
     expect(identityOk("*;q=0")).toBe(false);
-    // an explicit identity weight outranks a zero wildcard
+    // An explicit identity weight outranks a zero wildcard.
     expect(identityOk("*;q=0, identity;q=1")).toBe(true);
   });
 });
@@ -110,7 +115,7 @@ describe("isSidecarRequestPath", () => {
   it("flags sidecar extensions and nothing else", () => {
     expect(isSidecarRequestPath("assets/app.js.br")).toBe(true);
     expect(isSidecarRequestPath("assets/app.js.gz")).toBe(true);
-    // case-insensitive filesystems resolve .BR/.GZ to the real sidecar
+    // Case-insensitive filesystems resolve .BR/.GZ to the real sidecar.
     expect(isSidecarRequestPath("assets/app.js.BR")).toBe(true);
     expect(isSidecarRequestPath("assets/app.js.Gz")).toBe(true);
     expect(isSidecarRequestPath("assets/app.js")).toBe(false);
@@ -123,7 +128,7 @@ describe("ifNoneMatchSatisfies", () => {
 
   it("matches a single tag, a list member, and the wildcard", () => {
     expect(ifNoneMatchSatisfies(etag, etag)).toBe(true);
-    // RFC 9110 weak comparison ignores the W/ prefix on either side
+    // RFC 9110 weak comparison ignores the W/ prefix on either side.
     expect(ifNoneMatchSatisfies(etag.slice(2), etag)).toBe(true);
     expect(ifNoneMatchSatisfies(`W/"other", ${etag.slice(2)}`, etag)).toBe(true);
     expect(ifNoneMatchSatisfies(`W/"other", ${etag}`, etag)).toBe(true);

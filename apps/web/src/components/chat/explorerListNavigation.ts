@@ -1,6 +1,16 @@
+// FILE: explorerListNavigation.ts
+// Purpose: Arrow-key roving focus across the workspace explorer rows (file tree
+//          + search results) so ArrowUp/ArrowDown walk the visible items one by
+//          one, in display order — folders (open or closed) and files alike —
+//          and keep the focused row scrolled into view.
+// Layer: Chat workspace-browsing UI primitives
+// Exports: EXPLORER_ROW_PROPS, useExplorerListNavigation
+
 import { type KeyboardEvent as ReactKeyboardEvent } from "react";
 
-// rows tag themselves with this so the navigator collects them in DOM (= visual) order without knowing tree shape or expansion
+// Tree rows and search-result rows tag themselves with this so the navigator can
+// collect them in DOM (= visual) order without knowing the tree's shape or which
+// directories are currently expanded/loaded.
 export const EXPLORER_ROW_PROPS = { "data-explorer-row": "" } as const;
 const EXPLORER_ROW_SELECTOR = "[data-explorer-row]";
 
@@ -35,7 +45,9 @@ function isTextEntryElement(element: Element | null): boolean {
 
 function focusExplorerRow(row: HTMLElement): void {
   row.focus();
-  // `nearest` scrolls minimally; optional-chained so a non-browser env without the method can't throw
+  // `nearest` keeps the active row on screen while scrolling as little as possible.
+  // Optional-chained so a non-browser env (node/jsdom tests) that omits the method
+  // can't throw — focus is the part that matters.
   row.scrollIntoView?.({ block: "nearest" });
 }
 

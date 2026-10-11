@@ -2173,7 +2173,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(ghCalls).toContain(
         `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},headRefOid,statusCheckRollup`,
       );
-      // owner/repo come from the PR URL, not the local checkout's remotes
+      // Owner/repo come from the PR URL, not the local checkout's remotes.
       expect(ghCalls).toContain(
         "api graphql reviewThreads github.enterprise.test/example-org/sample-repo#42",
       );
@@ -2825,7 +2825,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const repoDir = yield* makeTempDir("synara-git-manager-");
         yield* initRepo(repoDir);
 
-        // exercise the stash-by-SHA path — `git stash pop` needs stash@{N} but `git rev-parse refs/stash` returns a commit SHA
+        // Create uncommitted working-tree changes so handoffThread takes the stash path.
+        // This is the path that previously failed with:
+        //   "<sha>" is not a stash reference
+        // because git rev-parse refs/stash returns a commit SHA, but `git stash pop`
+        // requires a `stash@{N}` reference.
         const workingFile = path.join(repoDir, "uncommitted.txt");
         fs.writeFileSync(workingFile, "draft change\n");
 
@@ -2847,13 +2851,16 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.changesTransferred).toBe(true);
         expect(result.conflictsDetected).toBe(false);
 
+        // The uncommitted change should now live inside the new worktree.
         const transferredPath = path.join(result.worktreePath as string, "uncommitted.txt");
         expect(fs.existsSync(transferredPath)).toBe(true);
         expect(fs.readFileSync(transferredPath, "utf8")).toBe("draft change\n");
 
+        // The original local checkout should be clean again.
         expect(fs.existsSync(workingFile)).toBe(false);
 
-        // the stash entry must be dropped after a successful apply — else every handoff leaks stash@{0}
+        // The stash entry must have been dropped after a successful apply — otherwise
+        // we would leak `stash@{0}` on every handoff that carries uncommitted work.
         const stashList = (yield* runGit(repoDir, ["stash", "list"])).stdout.trim();
         expect(stashList).toBe("");
       }),

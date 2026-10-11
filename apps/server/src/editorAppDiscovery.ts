@@ -1,3 +1,10 @@
+// FILE: editorAppDiscovery.ts
+// Purpose: Shared helpers for resolving installed editor apps/packages without
+//          duplicating platform-specific search rules across launch and icons.
+// Layer: Server runtime utility
+// Exports: app/package search helpers used by open.ts and editorAppIcons.ts
+// Depends on: EDITORS metadata plus filesystem stat checks.
+
 import { execFileSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { join } from "node:path";
@@ -55,7 +62,7 @@ export function normalizeMacApplicationBundleName(appName: string): string {
   return appName.endsWith(".app") ? appName : `${appName}.app`;
 }
 
-// checks standard user/system app locations incl. JetBrains Toolbox installs
+// Checks the standard user/system app locations, including JetBrains Toolbox installs.
 export function resolveMacApplicationSearchPaths(
   appName: string,
   env: NodeJS.ProcessEnv,
@@ -90,7 +97,9 @@ export function resolveMacApplicationBundlePath(
     for (const candidate of resolveMacApplicationSearchPaths(appName, env)) {
       try {
         if (statSync(candidate).isDirectory()) return candidate;
-      } catch {}
+      } catch {
+        // Keep probing the remaining standard locations.
+      }
     }
   }
 

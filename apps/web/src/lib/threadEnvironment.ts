@@ -1,3 +1,8 @@
+// FILE: threadEnvironment.ts
+// Purpose: Shared helpers for deriving thread environment intent and fork targets.
+// Layer: Web domain helpers
+// Exports: thread env resolution + `/fork` target planning
+
 import type { ThreadEnvironmentMode } from "@synara/contracts";
 import {
   isPendingThreadWorktree,
@@ -86,7 +91,8 @@ export function resolveDiffEnvironmentState(input: {
   };
 }
 
-// "local" stays attached to the current local checkout — for worktree-backed threads that means reusing the existing worktree, while "worktree" always plans a new one
+// Fork planning keeps "local" attached to the current local checkout. For worktree-backed
+// threads that means reusing the existing worktree, while "worktree" always plans a new one.
 export function resolveForkThreadEnvironment(input: {
   target: ForkThreadTarget;
   activeRootBranch: string | null;
@@ -128,7 +134,8 @@ export function resolveForkThreadEnvironment(input: {
     };
   }
 
-  // Codex-style "Fork Into Local" stays in the current local checkout, which for a worktree-backed thread means reusing that worktree rather than bouncing to root.
+  // Codex-style "Fork Into Local" stays in the current local checkout, which for a
+  // worktree-backed thread means reusing that worktree rather than bouncing to root.
   if (sourceEnvMode === "worktree" && sourceWorktreePath) {
     const associatedWorktree = deriveAssociatedWorktreeMetadata({
       branch: sourceBranch,

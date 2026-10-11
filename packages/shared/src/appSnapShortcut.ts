@@ -1,3 +1,6 @@
+// FILE: appSnapShortcut.ts
+// Purpose: Normalize AppSnap's portable two-key shortcut model for desktop and web clients.
+
 import type {
   DesktopAppSnapKeyChord,
   DesktopAppSnapShortcut,
@@ -70,7 +73,8 @@ const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {
   ArrowRight: "Right",
 };
 
-// chords the globalShortcut probe reports as free even though reserving them would hijack typing or a universal action in every foreground app
+// Chords Electron's globalShortcut probe reports as free even though reserving
+// them would hijack typing or a universal action in every foreground app.
 const SYSTEM_CONTROL_CHORD_ACTIONS: Readonly<Record<string, string>> = {
   KeyC: "interrupts the running program",
   KeyD: "ends input",
@@ -127,7 +131,11 @@ export function appSnapModifierFromEventCode(code: string): DesktopAppSnapShortc
   return MODIFIER_BY_EVENT_CODE[code] ?? null;
 }
 
-/** why a chord must not be reserved globally even when macOS reports it free */
+/**
+ * Reason a chord must not be reserved globally even though macOS reports it as
+ * free, e.g. ⌘C or ⇧S: reserving it would break typing or a universal action
+ * in every foreground app.
+ */
 export function appSnapShortcutSystemConflict(chord: DesktopAppSnapKeyChord): string | null {
   if (chord.modifier === "shift") {
     return "⇧ combinations are used for typing and text selection — combine with ⌘, ⌃ or ⌥ instead.";

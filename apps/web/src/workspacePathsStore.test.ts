@@ -1,3 +1,7 @@
+// FILE: workspacePathsStore.test.ts
+// Purpose: Verifies persisted server workspace paths and hydration behavior.
+// Layer: Server configuration state tests
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 function installMemoryLocalStorage() {

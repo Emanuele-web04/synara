@@ -1,3 +1,8 @@
+// FILE: useTheme.ts
+// Purpose: Persists the Codex-style theme store and projects the active pack into DOM CSS variables.
+// Layer: Web appearance state hook
+// Exports: useTheme for mode, resolved variant, theme-pack import/export, and active theme metadata.
+
 import { useEffect, useSyncExternalStore } from "react";
 import { isElectron } from "../env";
 import { isMacNavigatorPlatform } from "../lib/utils";
@@ -49,6 +54,8 @@ let currentSnapshot: ThemeSnapshot | null = null;
 let lastDesktopTheme: ThemeMode | null = null;
 let lastDesktopWindowMaterial: string | null = null;
 let desktopBlurUnavailable = false;
+
+// ─── Store wiring ─────────────────────────────────────────────────────────
 
 function emitChange() {
   refreshSnapshot();
@@ -150,6 +157,8 @@ function subscribe(listener: () => void): () => void {
     window.removeEventListener("storage", handleStorage);
   };
 }
+
+// ─── DOM projection ───────────────────────────────────────────────────────
 
 function applyThemeState(state: ThemeState, suppressTransitions = false) {
   if (typeof document === "undefined" || typeof window === "undefined") {
@@ -260,6 +269,8 @@ function syncDesktopWindowMaterial(cssMaterial: WindowMaterial, blur: number | n
 if (typeof document !== "undefined") {
   applyThemeState(readStoredThemeState());
 }
+
+// ─── Public hook ──────────────────────────────────────────────────────────
 
 function setTheme(nextTheme: ThemeMode) {
   updateStoredThemeState((state) => ({

@@ -78,7 +78,8 @@ let gitMode: "nonRepo" | "worktree" = "nonRepo";
 let gitStatusHook: ((cwd: string) => Effect.Effect<void>) | null = null;
 let createWorktreeHook: ((input: GitCreateDetachedWorktreeInput) => Effect.Effect<void>) | null =
   null;
-// shell returned by the ProjectionSnapshotQuery mock; reconcile tests set it to drive latest-turn outcome
+// Configurable thread shell returned by the ProjectionSnapshotQuery mock; reconcile
+// tests set it to drive the run's latest-turn outcome.
 let threadShell: Option.Option<OrchestrationThreadShell> = Option.none();
 let threadDetail: Option.Option<unknown> = Option.none();
 let completionEvaluation: {
@@ -96,7 +97,8 @@ let completionEvaluationGate: {
   readonly started: () => void;
   readonly wait: Promise<void>;
 } | null = null;
-// when set, the dispatch mock fails on that command type
+// When set, the orchestration dispatch mock fails on the matching command type so we
+// can exercise the failed-run / advance-after-dispatch paths.
 let failDispatchType: OrchestrationCommand["type"] | null = null;
 let dispatchHook:
   | ((command: OrchestrationCommand) => Effect.Effect<void, OrchestrationCommandInternalError>)
@@ -157,7 +159,7 @@ function resetHarness() {
   threadShellLookupHook = null;
 }
 
-// only the fields reconcileThread reads are populated
+// Build a partial thread shell; only the fields reconcileThread reads are populated.
 function makeThreadShell(overrides: {
   readonly id?: ThreadId;
   readonly projectId?: ProjectId;
@@ -278,7 +280,7 @@ function reconcileAutomationRun(input: {
   return input.service.reconcileThread({ threadId });
 }
 
-// completes an automation turn and exposes the transcript for AI stop-condition checks
+// Completes an automation turn and exposes the transcript used by AI stop-condition checks.
 function completeAutomationRun(input: {
   readonly run: AutomationRun;
   readonly threadId: ThreadId;
@@ -375,7 +377,7 @@ function waitForPromise(input: {
   );
 }
 
-// polls until a background stop-check write becomes visible
+// Polls the automation list until a background stop-check write becomes visible.
 function waitForAutomationList(input: {
   readonly service: AutomationServiceShape;
   readonly description: string;
@@ -656,7 +658,7 @@ layer("AutomationService", (it) => {
           mode: "dedicated",
           heartbeatCooldownSeconds: 0,
         });
-        // before any run, the automation has no provider-owned task to preserve
+        // Before any run, the automation has no provider-owned task to preserve.
         const selected = yield* service.update({
           id: created.id,
           modelSelection: { provider: "claudeAgent", model: "claude-sonnet-5" },
@@ -669,7 +671,7 @@ layer("AutomationService", (it) => {
           threadId: ownedThreadId,
           turnId: TurnId.makeUnsafe("dedicated-provider-first"),
         });
-        // a closed/missing session doesn't erase a task's already-run provider
+        // A closed/missing session does not erase a task's already-run provider.
         threadShell = Option.some(
           makeThreadShell({
             id: ownedThreadId,
@@ -760,7 +762,7 @@ layer("AutomationService", (it) => {
           modelSelection: { provider: "claudeAgent", model: "claude-sonnet-5" },
         });
         assert.strictEqual(unstarted.targetThreadId, ownedThreadId);
-        // the actual session wins over a stale stored automation/model selection
+        // The actual session wins over a stale stored automation/model selection.
         threadShell = Option.some({
           ...makeThreadShell({ id: ownedThreadId, modelSelection: unstarted.modelSelection }),
           session: {
@@ -1233,7 +1235,7 @@ layer("AutomationService", (it) => {
       }
       assert.strictEqual(threadCreate.envMode, "local");
       assert.strictEqual(threadCreate.runtimeMode, "approval-required");
-      // a standalone run thread is throwaway — the marker lets the sidebar hide it
+      // A standalone run thread is a throwaway artifact; the marker lets the sidebar hide it.
       assert.strictEqual(threadCreate.creationSource, "automation_run");
       assert.include(turnStart.message.text, "Automation: Nightly maintenance");
       assert.include(turnStart.message.text, "Memory (persistent across runs");
@@ -1255,7 +1257,7 @@ layer("AutomationService", (it) => {
         mode: "dedicated",
         heartbeatCooldownSeconds: 0,
       });
-      // a dedicated automation starts without a thread — the server assigns its own
+      // A dedicated automation starts without a thread: the server assigns its own.
       assert.strictEqual(created.targetThreadId, null);
 
       const first = yield* service.runNow({ automationId: created.id });
@@ -1263,9 +1265,9 @@ layer("AutomationService", (it) => {
       if (threadCreate?.type !== "thread.create") {
         assert.fail("Expected the first dedicated run to open a thread.");
       }
-      // the thread outlives the run — titled for the automation, not the occurrence
+      // The thread outlives this run, so it is titled for the automation, not the occurrence.
       assert.strictEqual(threadCreate.title, "Nightly maintenance");
-      // a dedicated thread is a persistent conversation — no marker
+      // A dedicated thread is a persistent conversation, not a run artifact: no marker.
       assert.strictEqual(threadCreate.creationSource, undefined);
       const dedicatedThreadId = threadCreate.threadId;
       assert.strictEqual(first.run.threadId, dedicatedThreadId);
@@ -1293,7 +1295,7 @@ layer("AutomationService", (it) => {
 
       const second = yield* service.runNow({ automationId: created.id });
 
-      // the second run continues the claimed thread instead of opening a new one
+      // The second run continues the claimed thread instead of opening a new one.
       assert.strictEqual(second.run.threadId, dedicatedThreadId);
       assert.strictEqual(second.run.threadCreateCommandId, null);
       assert.strictEqual(
@@ -1316,7 +1318,7 @@ layer("AutomationService", (it) => {
         targetThreadId: foreignThreadId,
       });
 
-      // only heartbeat may target an existing thread; dedicated always opens its own
+      // Only heartbeat may be pointed at an existing thread; dedicated always opens its own.
       assert.strictEqual(created.targetThreadId, null);
     }),
   );
@@ -1659,7 +1661,7 @@ layer("AutomationService", (it) => {
       const service = yield* AutomationService;
       const repository = yield* AutomationRepository;
       const automationId = AutomationId.makeUnsafe("automation-fullaccess-runnow");
-      // inserted directly (API/DB), bypassing create-time validation
+      // Inserted directly (e.g. via the API/DB), bypassing create-time validation.
       yield* repository.createDefinition({
         id: automationId,
         input: {
@@ -1739,7 +1741,8 @@ layer("AutomationService", (it) => {
       const targetThreadId = ThreadId.makeUnsafe("local-heartbeat-ack-thread");
       threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
 
-      // heartbeat reuses its target thread, which can itself be on the local checkout — worktreeMode:"local" still requires the ack
+      // A heartbeat reuses its target thread, but that thread can itself be on the local
+      // checkout, so `worktreeMode: "local"` must still require the acknowledgement.
       const error = yield* service
         .create({
           ...createInput("local"),
@@ -1759,7 +1762,7 @@ layer("AutomationService", (it) => {
       const service = yield* AutomationService;
       const repository = yield* AutomationRepository;
       const automationId = AutomationId.makeUnsafe("automation-fast-interval-dispatch");
-      // sub-minute schedule inserted directly, bypassing validateSchedulePolicy
+      // Sub-minute schedule inserted directly, bypassing validateSchedulePolicy.
       yield* repository.createDefinition({
         id: automationId,
         input: {
@@ -1786,7 +1789,8 @@ layer("AutomationService", (it) => {
       const service = yield* AutomationService;
       const repository = yield* AutomationRepository;
       const automationId = AutomationId.makeUnsafe("automation-fast-interval-uncapped");
-      // acknowledged sub-minute schedule without the cap — inserted around the ack+cap pair enforcement
+      // Acknowledged sub-minute schedule with the iteration cap removed, inserted around the
+      // create/update policy that enforces the ack + cap as a pair.
       yield* repository.createDefinition({
         id: automationId,
         input: {
@@ -2193,6 +2197,7 @@ layer("AutomationService", (it) => {
       const { run } = yield* service.runNow({ automationId: created.id });
       assert.isNotNull(run.messageId);
 
+      // The run's own turn is registered and running.
       yield* projectionTurns.upsertByTurnId({
         threadId: targetThreadId,
         turnId: automationTurnId,
@@ -2209,6 +2214,7 @@ layer("AutomationService", (it) => {
         checkpointStatus: null,
         checkpointFiles: [],
       });
+      // Pending approval on the run's own turn -> waiting-for-approval.
       threadShell = Option.some(
         makeThreadShell({
           id: targetThreadId,
@@ -2222,7 +2228,8 @@ layer("AutomationService", (it) => {
         "waiting-for-approval",
       );
 
-      // a foreign newer turn owns latest — the run must NOT be resumed back to running
+      // An unrelated newer turn becomes the thread's latest and approvals clear. The run
+      // no longer owns the latest turn, so it must NOT be resumed back to running.
       threadShell = Option.some(
         makeThreadShell({
           id: targetThreadId,
@@ -2257,7 +2264,8 @@ layer("AutomationService", (it) => {
       const { run } = yield* service.runNow({ automationId: created.id });
       assert.isNotNull(run.messageId);
 
-      // the run's turn never settled — the session was taken over by a manual user turn
+      // The run's own turn started but never settled — the provider session was
+      // taken over by a manual user turn before this turn reached a terminal state.
       yield* projectionTurns.upsertByTurnId({
         threadId: targetThreadId,
         turnId: automationTurnId,
@@ -2319,7 +2327,8 @@ layer("AutomationService", (it) => {
       const { run } = yield* service.runNow({ automationId: created.id });
       assert.isNotNull(run.messageId);
 
-      // the run's turn is queued behind an older running user turn — normal queueing, not supersession
+      // The run's turn is queued behind an older, still-running user turn. The
+      // older turn owning the thread is normal queueing, not supersession.
       yield* projectionTurns.upsertByTurnId({
         threadId: targetThreadId,
         turnId: automationTurnId,
@@ -2553,7 +2562,7 @@ layer("AutomationService", (it) => {
 
       const { run } = yield* service.runNow({ automationId: created.id });
 
-      // heartbeat continues an existing thread: exactly one turn start, no thread create
+      // Heartbeat continues an existing thread: exactly one turn start, no thread create.
       assert.strictEqual(dispatchedCommands.length, 1);
       const command = dispatchedCommands[0];
       assert.strictEqual(command?.type, "thread.turn.start");
@@ -3056,7 +3065,7 @@ layer("AutomationService", (it) => {
         mode: "standalone",
         completionPolicy: aiCompletionPolicy("the PR is merged"),
       });
-      // the stop clause must survive creation — it used to be coerced away for standalone
+      // The stop clause must survive creation: it used to be coerced away for standalone.
       assert.deepStrictEqual(created.completionPolicy, aiCompletionPolicy("the PR is merged"));
 
       const { run } = yield* service.runNow({ automationId: created.id });
@@ -3108,7 +3117,7 @@ layer("AutomationService", (it) => {
 
       assert.strictEqual(updated.mode, "standalone");
       assert.deepStrictEqual(updated.completionPolicy, aiCompletionPolicy("the PR is merged"));
-      // an untouched policy must not bump the version or in-flight runs go stale for nothing
+      // An untouched policy must not bump the version, or in-flight runs go stale for nothing.
       assert.strictEqual(updated.completionPolicyVersion, created.completionPolicyVersion);
     }),
   );
@@ -3125,7 +3134,7 @@ layer("AutomationService", (it) => {
         confidence: 0.99,
         reason: "Should never be read because the evaluation hangs.",
       };
-      // hold the AI evaluation open so the only way out is the timeout
+      // Hold the AI evaluation open so the only way out is the timeout.
       const evaluationGate = holdCompletionEvaluation();
 
       const created = yield* service.create({
@@ -3149,7 +3158,7 @@ layer("AutomationService", (it) => {
         description: "hung stop evaluation to start",
       });
 
-      // fire the 30s evaluation timeout via virtual time
+      // Fire the 30s evaluation timeout via virtual time.
       yield* TestClock.adjust(Duration.seconds(31));
 
       const listed = yield* waitForAutomationList({
@@ -3167,7 +3176,8 @@ layer("AutomationService", (it) => {
       });
       const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      // the hung check times out without retrying; the failure is visible and the heartbeat stays enabled
+      // The hung check times out without retrying, the failure is visible, and the
+      // heartbeat stays enabled rather than being silently stopped.
       assert.strictEqual(updatedDefinition?.enabled, true);
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
       assert.include((updatedRun?.result?.summary ?? "").toLowerCase(), "timed out");
@@ -4574,7 +4584,7 @@ layer("AutomationService", (it) => {
         },
         now: "2026-06-16T10:00:00.000Z",
       });
-      // push iterationCount to the cap so the next due run must stop
+      // Push iterationCount up to the cap so the next due run must stop.
       yield* repository.incrementDefinitionIterationCount({
         id: automationId,
         now: "2026-06-16T10:00:00.000Z",
@@ -4591,7 +4601,7 @@ layer("AutomationService", (it) => {
       const reloaded = yield* service.list({ projectId });
       const definition = reloaded.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.enabled, false);
-      // no run row was created for the capped occurrence
+      // No run row was created for the capped occurrence.
       assert.strictEqual(
         reloaded.runs.filter((entry) => entry.automationId === automationId).length,
         0,
@@ -5120,7 +5130,7 @@ layer("AutomationService", (it) => {
         },
         now: "2026-06-16T10:00:00.000Z",
       });
-      // first due tick creates+dispatches a run that stays running (no reconcile)
+      // First due tick creates + dispatches a run that stays running (no reconcile).
       const first = yield* service.runDueOnce({
         now: "2026-06-16T10:00:00.000Z",
         limit: 10,
@@ -5142,7 +5152,7 @@ layer("AutomationService", (it) => {
         1,
       );
 
-      // second due tick records the blocked occurrence durably without dispatching it
+      // Second due tick records the blocked occurrence durably without dispatching it.
       const second = yield* service.runDueOnce({
         now: "2026-06-16T10:05:00.000Z",
         limit: 10,
@@ -5374,7 +5384,8 @@ layer("AutomationService", (it) => {
           assistantMessageId: null,
         }) as unknown as OrchestrationThreadShell["latestTurn"];
 
-      // the latest turn inside the cooldown belongs to this automation's own finished run — dispatch immediately
+      // The latest turn completed inside the cooldown window, but it belongs to this
+      // automation's own finished run, so the next run must dispatch immediately.
       threadShell = Option.some(
         makeThreadShell({
           id: targetThreadId,
@@ -5392,7 +5403,7 @@ layer("AutomationService", (it) => {
       });
       yield* service.reconcileThread({ threadId: targetThreadId });
 
-      // activity from anything else inside the cooldown still defers
+      // Activity from anything else inside the cooldown window still defers.
       threadShell = Option.some(
         makeThreadShell({
           id: targetThreadId,
@@ -5785,7 +5796,7 @@ layer("AutomationService", (it) => {
         input: {
           ...createInput("local"),
           schedule: { type: "interval", everySeconds: 300 },
-          // no failure threshold — the failure doesn't also disable the automation here
+          // No failure threshold so the failure does not also disable the automation here.
           stopAfterConsecutiveFailures: null,
         },
         now: "2026-06-16T10:00:00.000Z",
@@ -5798,7 +5809,7 @@ layer("AutomationService", (it) => {
         leaseOwnerId: "test-scheduler",
       });
 
-      // the run was created durably and surfaces as failed despite dispatch blowing up
+      // The run was created durably and surfaces as failed despite dispatch blowing up.
       assert.strictEqual(results.length, 1);
       assert.strictEqual(results[0]?.run.status, "failed");
 
@@ -5806,7 +5817,7 @@ layer("AutomationService", (it) => {
       const runs = reloaded.runs.filter((entry) => entry.automationId === automationId);
       assert.strictEqual(runs.length, 1);
       assert.strictEqual(runs[0]?.status, "failed");
-      // the occurrence isn't silently lost — the schedule advanced to the next slot
+      // The occurrence is not silently lost: the schedule advanced to the next slot.
       const definition = reloaded.definitions.find((entry) => entry.id === automationId);
       assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:05:00.000Z");
     }),
@@ -6086,7 +6097,9 @@ layer("AutomationService", (it) => {
           now: scheduledFor,
         });
 
-        // simulate a prior process that created the run then crashed before advancing the schedule — orphaned run marked interrupted
+        // Simulate a prior process that created the scheduled run, then crashed before it
+        // advanced the schedule or counted the iteration. Recovery marked the orphaned run
+        // interrupted; nextRunAt and iterationCount were never updated.
         const crashed = yield* repository.createRun({
           id: AutomationRunId.makeUnsafe("run-crashed"),
           automationId,
@@ -6117,12 +6130,14 @@ layer("AutomationService", (it) => {
           leaseOwnerId: "test-scheduler",
         });
 
-        // the recorded occurrence is not re-dispatched, the schedule still advances past it, and the count isn't double-incremented
+        // The already-recorded occurrence is not re-dispatched (no orphan thread)...
         assert.strictEqual(results.length, 0);
         assert.strictEqual(dispatchedCommands.length, 0);
         const reloaded = yield* service.list({ projectId });
         const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+        // ...but the schedule still advances past it...
         assert.strictEqual(definition?.nextRunAt, "2026-06-16T10:05:00.000Z");
+        // ...and the iteration count is not double-incremented for the deduped occurrence.
         assert.strictEqual(definition?.iterationCount, 0);
         assert.strictEqual(
           reloaded.runs.filter((entry) => entry.automationId === automationId).length,
@@ -6194,7 +6209,7 @@ layer("AutomationService", (it) => {
       const service = yield* AutomationService;
       const created = yield* service.create(createInput("local"));
 
-      // standalone runs spawn independent threads — a second manual run is fine
+      // Standalone runs spawn independent threads, so a second manual run is fine.
       const first = yield* service.runNow({ automationId: created.id });
       const second = yield* service.runNow({ automationId: created.id });
 

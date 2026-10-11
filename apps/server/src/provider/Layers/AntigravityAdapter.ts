@@ -61,7 +61,10 @@ import {
   PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
-import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
+import {
+  createAntigravityPrintResultParser,
+  isAntigravityPostResponseTimeout,
+} from "../antigravityPrintResult.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -72,8 +75,8 @@ import {
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
   type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
-import { signalOwnedChildProcess } from "../../platform/processTreeController.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
+import { capHistoryBytes } from "../../terminal/terminalHistory.ts";
 
 const PROVIDER = "antigravity" as const;
 const DEFAULT_MODEL = "Gemini 3.5 Flash";
@@ -81,7 +84,7 @@ const PRINT_TIMEOUT = "30m";
 const POLL_INTERVAL_MS = 75;
 const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 const PLUGIN_INSTALL_TIMEOUT_MS = 45_000;
-const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
+export const ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES = 128 * 1024;
 const WINDOWS_PROMPT_MAX_CHARS = 24_000;
 
 type TranscriptStep = {
@@ -100,9 +103,15 @@ type TranscriptStep = {
 type PendingTool = {
   readonly stepIndex: number;
   readonly itemId: RuntimeItemId;
-  readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
+  readonly itemType:
+    | "command_execution"
+    | "file_change"
+    | "dynamic_tool_call"
+    | "web_search"
+    | "image_generation";
   readonly name: string;
   readonly args?: Record<string, unknown>;
+  /** Set when the transcript already reported this call as a background task. */
   backgroundedByTranscript?: boolean;
 };
 
@@ -124,7 +133,9 @@ type BackgroundTaskTerminal = { readonly taskId: string } & (
 );
 
 type ToolSurfaceCounters = {
+  /** Highest occurrence already rendered for each `${stepIndex}:${toolName}` pair. */
   surfacedToolCallCounts: Map<string, number>;
+  /** Occurrence order observed specifically from pre-tool hook events. */
   hookToolCallCounts: Map<string, number>;
 };
 
@@ -169,20 +180,36 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   pendingBackgroundTasks: Map<string, AntigravityTrackedBackgroundTask>;
   pendingAnonymousBackgroundTasks: AntigravityBackgroundCallKey[];
   pendingBackgroundTaskTerminals: BackgroundTaskTerminal[];
-  /** late post-tool hooks must not re-register settled/killed task ids */
+  /** Recently settled or killed task ids, so a late post-tool hook cannot re-register them. */
   settledBackgroundTaskIds: string[];
+  /** Calls the transcript backgrounded before their pre-tool hook was seen. */
   transcriptBackgroundedCalls: AntigravityBackgroundCallKey[];
   backgroundCompletionSequence: number;
   latestBackgroundCompletionStepIndex?: number;
-  /** subagent CLIs inherit SYNARA_ANTIGRAVITY_EVENTS and write into this session's hook stream; their events must never rebind the session — forward as child-thread events carrying providerParentThreadId */
+  /**
+   * Conversations owned by spawned subagents, keyed by conversation id.
+   * The capture hook is installed globally, so a subagent CLI spawned by the
+   * session's own CLI inherits `SYNARA_ANTIGRAVITY_EVENTS` and writes its
+   * pre-invocation/tool/stop events into this session's hook stream. Those
+   * events describe a different process and conversation and must never
+   * rebind the session; they are forwarded as child-thread events carrying
+   * `providerParentThreadId` so the ingestion layer materializes a visible
+   * subagent thread.
+   */
   foreignConversations: Map<string, ForeignConversationState>;
-  /** hook events and transcript tool_calls share occurrence counters so each call renders exactly once regardless of which source arrives first */
+  /**
+   * Both the capture-hook stream (pre-tool events) and the transcript body
+   * (PLANNER_RESPONSE.tool_calls) feed occurrence counters so the same call is
+   * rendered exactly once regardless of which source arrives first, while two
+   * calls with the same name in one planner step still render independently.
+   */
   sawAssistant: boolean;
   interrupted: boolean;
   stopped: boolean;
   /** Guards against double turn.completed (process close + interrupt/stop). */
   turnTerminalEmitted: boolean;
   stopTeardownRequested?: boolean;
+  stopTeardownPromise?: ReturnType<typeof teardownChildProcessTree>;
 };
 
 function messageFromCause(cause: unknown, fallback: string): string {
@@ -241,7 +268,30 @@ function shellQuote(value: string, platform: NodeJS.Platform = process.platform)
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-/** inactive-hook output: Antigravity treats {} PreToolUse/PreInvocation as denial (blocks tools, kills subagent launches), and an active Stop returning "stop" hangs the print process (#465, #490) — "ask"/"allow"/{} stay neutral per hook point */
+/**
+ * Hook output when capture is inactive (the session is not Synara-managed).
+ * Antigravity requires PreToolUse output to carry a `decision`: an empty
+ * object is treated as a denial with an empty reason, which blocks every tool
+ * call because the hook is installed globally with `matcher: "*"` (#490).
+ * "ask" preserves the permission flow the user would have without the hook.
+ *
+ * PreInvocation fires immediately before an LLM invocation and is a veto
+ * point with the same decision semantics: an empty object is treated as a
+ * denial that aborts the invocation. The CLI raises a PreInvocation for the
+ * subagent's first model call when the parent agent invokes a subagent, so
+ * `{}` there denies the subagent launch and the parent CLI exits with code 1
+ * ("Antigravity CLI exited with code 1."). Synara-managed sessions spawn
+ * subagents deliberately, so pre-invocation must answer "allow".
+ *
+ * `{}` stays correct for the other hook points, including Stop, where an
+ * inactive hook must not force a decision over Antigravity's default.
+ *
+ * Active Stop hooks must also stay neutral (`{}`). Returning
+ * `{"decision":"stop"}` is not a valid Antigravity/Claude stop decision
+ * (only `"block"` is recognized to prevent exit) and can leave the print
+ * process hung after the assistant has already finished, so the UI stays
+ * "Working" and Cancel has nothing left to kill (#465).
+ */
 function inactiveHookOutput(event: string): string {
   if (event === "pre-tool") return '{"decision":"ask"}';
   if (event === "pre-invocation") return '{"decision":"allow"}';
@@ -270,7 +320,13 @@ export function buildAntigravityCaptureCommand(
 ): string {
   const fallback = inactiveHookOutput(event);
   if (platform === "win32") {
-    // the CLI passes hook commands to cmd.exe without decoding JSON escapes — `"` arrives as `\"` and breaks quoted paths; keep the invocation quote-free (helper paths are space-free in every install layout)
+    // The Antigravity CLI passes hook command strings to cmd.exe without
+    // decoding JSON escapes, so any `"` in the command arrives as `\"` and
+    // breaks cmd's quote handling: a quoted program path is executed literally
+    // ("...exe" is not recognized as an internal or external command) and the
+    // hook never runs. Keep the invocation free of double quotes; the helper
+    // paths are space-free in every supported install layout (dev bun/electron
+    // binaries and packaged apps under %LOCALAPPDATA%\Programs).
     const invocation = `${executablePath} ${scriptPath} ${event}`;
     return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command ${win32FallbackHookJson(event)}) else (set ELECTRON_RUN_AS_NODE=1&& ${invocation})`;
   }
@@ -375,9 +431,63 @@ export function buildAntigravityHookConfig(
   };
 }
 
-function appendBoundedOutput(current: string, chunk: unknown): string {
-  const next = current + String(chunk);
-  return next.length > HELPER_OUTPUT_MAX_CHARS ? next.slice(-HELPER_OUTPUT_MAX_CHARS) : next;
+type BoundedOutputStream = "stdout" | "stderr";
+
+type BoundedOutputChunk = {
+  readonly stream: BoundedOutputStream;
+  readonly text: string;
+  readonly bytes: number;
+};
+
+/**
+ * Keep diagnostics bounded across both pipes while preserving their original
+ * stream labels. A provider can write to stdout and stderr concurrently, so
+ * separate per-stream caps would exceed the shared retention budget.
+ */
+export function createBoundedProcessOutput(maxBytes = ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES) {
+  const chunks: BoundedOutputChunk[] = [];
+  let byteLength = 0;
+
+  const append = (stream: BoundedOutputStream, chunk: unknown): void => {
+    const text = String(chunk);
+    if (text.length === 0 || maxBytes <= 0) return;
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (bytes > maxBytes) {
+      const tail = capHistoryBytes(text, maxBytes, 0);
+      chunks.push({ stream, text: tail, bytes: Buffer.byteLength(tail, "utf8") });
+      byteLength += chunks[chunks.length - 1]!.bytes;
+    } else {
+      chunks.push({ stream, text, bytes });
+      byteLength += bytes;
+    }
+    while (byteLength > maxBytes && chunks.length > 0) {
+      const first = chunks[0]!;
+      const overflow = byteLength - maxBytes;
+      if (first.bytes <= overflow) {
+        chunks.shift();
+        byteLength -= first.bytes;
+        continue;
+      }
+      const retained = capHistoryBytes(first.text, first.bytes - overflow, 0);
+      chunks[0] = { ...first, text: retained, bytes: Buffer.byteLength(retained, "utf8") };
+      byteLength -= first.bytes - chunks[0].bytes;
+      break;
+    }
+  };
+
+  const read = (stream: BoundedOutputStream): string =>
+    chunks
+      .filter((chunk) => chunk.stream === stream)
+      .map((chunk) => chunk.text)
+      .join("");
+
+  return {
+    append,
+    snapshot: () => ({ stdout: read("stdout"), stderr: read("stderr") }),
+    get byteLength() {
+      return byteLength;
+    },
+  };
 }
 
 export async function runAntigravityHelperProcess(
@@ -403,9 +513,9 @@ export async function runAntigravityHelperProcess(
       stdio: ["ignore", "pipe", "pipe"],
       requireExecutable: true,
     }) as AntigravityChildProcess;
-    let stdout = "";
-    let stderr = "";
+    const output = createBoundedProcessOutput();
     let settled = false;
+    let timedOut = false;
     const timeoutMs = options.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
     const finish = (callback: () => void) => {
       if (settled) return;
@@ -414,21 +524,48 @@ export async function runAntigravityHelperProcess(
       callback();
     };
     const timer = setTimeout(() => {
-      signalOwnedChildProcess(child, "SIGKILL");
-      finish(() =>
-        reject(
-          new Error(
-            `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+      timedOut = true;
+      // Do not return until the supervised tree teardown has observed the
+      // root exit and verified captured descendants are gone. A direct signal
+      // can leave an updater/helper descendant alive on Windows.
+      void teardownChildProcessTree(child).then(
+        (result) =>
+          finish(() =>
+            reject(
+              result.signalErrors.length > 0
+                ? new Error(
+                    `Antigravity helper timed out after ${timeoutMs}ms and teardown was unproven: ${result.signalErrors.map((error) => error.message).join("; ")}`,
+                    { cause: result.signalErrors[0] },
+                  )
+                : new Error(
+                    `Antigravity helper timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`,
+                  ),
+            ),
           ),
-        ),
+        (cause) =>
+          finish(() =>
+            reject(
+              new Error(
+                `Antigravity helper timed out after ${timeoutMs}ms and teardown was unproven: ${messageFromCause(cause, "unknown teardown failure")}`,
+                { cause },
+              ),
+            ),
+          ),
       );
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => (stdout = appendBoundedOutput(stdout, chunk)));
-    child.stderr.on("data", (chunk) => (stderr = appendBoundedOutput(stderr, chunk)));
-    child.once("error", (cause) => finish(() => reject(cause)));
-    child.once("close", (code) => finish(() => resolve({ stdout, stderr, code: code ?? 1 })));
+    child.stdout.on("data", (chunk) => output.append("stdout", chunk));
+    child.stderr.on("data", (chunk) => output.append("stderr", chunk));
+    child.once("error", (cause) => {
+      if (timedOut) return;
+      finish(() => reject(cause));
+    });
+    child.once("close", (code) => {
+      if (timedOut) return;
+      const { stdout, stderr } = output.snapshot();
+      finish(() => resolve({ stdout, stderr, code: code ?? 1 }));
+    });
   });
 }
 
@@ -596,7 +733,9 @@ export function parseAntigravityCliModelLabel(
   const stripped = value.replace(/\x1b\[[0-9;]*m/g, "").trim();
   if (!stripped) return null;
 
-  // newer `agy models` rows are slug<TAB>Name (Effort); prefer the display column so slug\tName is never treated as one model id
+  // Newer `agy models` rows are `slug<TAB>Display Name (Effort)`. Older builds
+  // printed only the display label. Prefer the display column when present so
+  // Synara never treats `slug\tName` as a single model id at dispatch.
   const tabIndex = stripped.indexOf("\t");
   const labelColumn =
     tabIndex >= 0 ? stripped.slice(tabIndex + 1).trim() : stripped.replace(/^(?:[*•-]\s+)+/u, "");
@@ -639,7 +778,9 @@ export function parseAntigravityModelLines(output: string): ProviderListModelsRe
         (rightIndex < 0 ? EFFORT_ORDER.length : rightIndex)
       );
     });
-    const defaultEffort = DEFAULT_EFFORT_BY_MODEL[model] ?? efforts[0];
+    const preferredEffort = DEFAULT_EFFORT_BY_MODEL[model];
+    const defaultEffort =
+      preferredEffort && efforts.includes(preferredEffort) ? preferredEffort : efforts[0];
     return {
       slug: model,
       name: model,
@@ -668,7 +809,8 @@ export function resolveAntigravityCliModelLabel(
     options?.reasoningEffort?.trim().toLowerCase() ??
     discoveredDefaultEffort?.trim().toLowerCase() ??
     DEFAULT_EFFORT_BY_MODEL[parsed.model];
-  // always rebuild the display label — raw input preserves corrupted `slug\tName (Effort)` rows from older parsing
+  // Always rebuild the CLI display label. Returning the raw input would preserve
+  // corrupted `slug\tName (Effort)` rows from older discovery parsing.
   return effort ? `${parsed.model} (${effortLabel(effort)})` : parsed.model;
 }
 
@@ -678,6 +820,7 @@ function parseModelLines(output: string): ProviderListModelsResult["models"] {
 
 function toolItemType(name: string): PendingTool["itemType"] {
   if (name === "run_command") return "command_execution";
+  if (name === "generate_image") return "image_generation";
   if (
     name === "write_to_file" ||
     name === "replace_file_content" ||
@@ -874,7 +1017,11 @@ export function parseAntigravityBackgroundTaskStep(
   return { taskId, ...(description ? { description } : {}) };
 }
 
-/** tool-call identity = planner step + command line; unspecified commands match only when the caller permits */
+/**
+ * Identifies one tool call across the transcript and the hook file: the
+ * planner step it belongs to, plus its command line when several calls share
+ * that step. Unspecified commands match only when the caller permits it.
+ */
 export type AntigravityBackgroundCallKey = {
   readonly stepIndex: number | undefined;
   readonly command?: string;
@@ -1154,7 +1301,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }).pipe(Effect.asVoid);
     };
 
-    /** a post-tool hook can arrive after the transcript settled the task; re-registering it would leave it unsettleable forever */
+    /**
+     * Ids of tasks that already reached a terminal state. A post-tool hook can
+     * arrive after the transcript settled, killed, or force-completed a task;
+     * it must not re-register it, or nothing would ever settle it again.
+     */
     const rememberSettledBackgroundTask = (
       context: AntigravitySessionContext,
       taskId: string,
@@ -1251,7 +1402,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         )
       )
         return false;
-      // retain every unmatched terminal until its start arrives or the turn ends — a history cap can lose the only finish, and a foreign terminal must not settle an anonymous call or let Stop tear down early
+      // Retain every unmatched terminal until its start arrives or the turn ends,
+      // even if no capture hooks were read. A history cap can lose the only finish.
+      // An unmatched terminal may belong to a different task, so it cannot settle
+      // an anonymous call or allow Stop to tear down the process before that match.
       context.pendingBackgroundTaskTerminals.push(terminal);
       return true;
     };
@@ -1263,7 +1417,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     ): boolean => {
       const tasks = context.pendingAnonymousBackgroundTasks;
       if (takeAntigravityBackgroundCallKey(tasks, stepIndex, command)) return true;
-      // a malformed/lost hook index reconciles only when its command uniquely identifies one anonymous call — never guess between duplicates
+      // A malformed/lost hook index can still be reconciled when its command
+      // uniquely identifies one anonymous call. Do not guess between duplicates.
       const unindexed = tasks.filter(
         (task) => task.stepIndex === undefined && command !== undefined && task.command === command,
       );
@@ -1282,7 +1437,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         readonly stepIndex?: number;
       },
     ): void => {
-      // a poll/read in flight when the turn settled must not register a task nobody will settle
+      // A hook poll or transcript read still in flight when the turn was
+      // interrupted or settled must not register a task nobody will settle.
       if (context.stopped || context.interrupted || context.turnTerminalEmitted) return;
       if (!start.taskId) {
         const command = normalizeAntigravityCommandLine(source.args?.CommandLine);
@@ -1301,6 +1457,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         terminalIndex < 0
           ? undefined
           : context.pendingBackgroundTaskTerminals.splice(terminalIndex, 1)[0];
+      // Naming a killed anonymous call removes only its own occurrence and
+      // terminal; it must not reopen it or settle another running command.
       if (
         terminal?.kind === "killed" ||
         matchAntigravityTrackedTaskId(taskId, context.settledBackgroundTaskIds)
@@ -1339,14 +1497,21 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
       const child = context.activeProcess;
       context.stopTeardownRequested = true;
-      void teardownProcessTree(child).catch(() => {
+      context.stopTeardownPromise = teardownProcessTree(child);
+      void context.stopTeardownPromise.catch(() => {
         try {
           child.kill("SIGKILL");
-        } catch {}
+        } catch {
+          // Process may already be gone.
+        }
       });
     };
 
-    /** idempotent single terminal turn.completed so process-close, interrupt, and stop-hook paths can all call it (#465) */
+    /**
+     * Emit a single terminal turn.completed for the active turn and mark the
+     * session idle. Idempotent so process-close, interrupt, and stop-hook
+     * paths can all call it without double-settling (#465).
+     */
     const settleActiveTurn = (
       context: AntigravitySessionContext,
       input: {
@@ -1462,7 +1627,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       if (itemType === "assistant_message") context.sawAssistant = true;
     };
 
-    /** fallback for calls the capture hook never reported; occurrence counters dedupe against the hook stream */
+    /**
+     * Surface tool calls recorded in the transcript body as tool lifecycle
+     * items. This is the fallback for calls the capture hook never reported
+     * (plugin not installed this session, hook payload missing stepIdx, ...).
+     * Occurrence counters dedupe against the hook stream so a call the hook
+     * already rendered — or will render — is not emitted twice.
+     */
     const emitTranscriptToolCalls = (
       context: AntigravitySessionContext,
       stepIndex: number,
@@ -1555,10 +1726,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           ? parseAntigravityBackgroundTaskStep(step.content)
           : null;
       if (backgroundStart) {
-        // the background step directly follows its call's planner step; with several calls in one step the task description names the backgrounded command
+        // The background step always directly follows its tool call's planner
+        // step. When that step issued several calls, the task description names
+        // the command that was backgrounded.
         const toolStep = stepIndex === undefined ? undefined : stepIndex - 1;
         const candidates = context.pendingTools.filter((tool) => tool.stepIndex === toolStep);
         const wantedCommand = normalizeAntigravityCommandLine(backgroundStart.description);
+        // A lone pending call may just be the first hook read from a multi-call
+        // planner step. Without a command match, defer ownership to the post-hook.
         const pending = candidates.find(
           (tool) =>
             wantedCommand !== undefined &&
@@ -1686,7 +1861,16 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
     };
 
-    /** forward hook events belonging to a spawned subagent conversation — they must never rebind this session (cursor/transcript/thread) */
+    /**
+     * Forward a hook event that belongs to a subagent conversation spawned by
+     * the session's own CLI. The capture hook is installed globally, so the
+     * subagent CLI inherits `SYNARA_ANTIGRAVITY_EVENTS` and writes its
+     * events into this session's hook stream. Those events describe a
+     * different process and conversation: they must never rebind the session
+     * (cursor, transcript, thread) — instead they are surfaced as child-thread
+     * events carrying `providerParentThreadId` so the ingestion layer
+     * materializes a visible subagent thread.
+     */
     const handleForeignHookEvent = async (
       context: AntigravitySessionContext,
       input: {
@@ -1833,7 +2017,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           );
         }
       } else if (eventName === "stop") {
-        // a foreign Stop settles the subagent's child turn — never tear down the session's own CLI for it
+        // The subagent finished; settle its child turn. Never tear down the
+        // session's own CLI process for a foreign stop.
         settleForeignConversation(context, conversationId, ownConversationId, child, {
           state: "completed",
           raw: raw(eventName, payload),
@@ -1844,7 +2029,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
     const pollHookFileOnce = async (context: AntigravitySessionContext) => {
       if (context.stopped) return;
       if (!context.eventFile) return;
-      // a read that outlives its turn must not feed stale hooks into the next turn
+      // A read that outlives its turn (interrupt, next sendTurn) must not feed
+      // stale hooks into whatever turn is active once it resumes.
       const turnAtStart = context.activeTurnId;
       const completionSequenceBeforePoll = context.backgroundCompletionSequence;
       let latestStopStepIndex: number | undefined;
@@ -1879,6 +2065,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           ownConversationId !== undefined &&
           conversationId !== ownConversationId
         ) {
+          // The session's CLI spawned a subagent that writes into the same
+          // hook stream. Forward the event to the subagent's child thread and
+          // never rebind this session.
           await handleForeignHookEvent(context, {
             eventName,
             payload,
@@ -1929,6 +2118,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             const surfaceKey = `${stepIndex}:${name}`;
             const occurrence = nextToolOccurrence(context.hookToolCallCounts, surfaceKey);
             if (!claimToolOccurrence(context.surfacedToolCallCounts, surfaceKey, occurrence)) {
+              // The transcript already surfaced this call as a completed item;
+              // there is no pending lifecycle to open or close for it.
               continue;
             }
             const itemId = RuntimeItemId.makeUnsafe(
@@ -1942,7 +2133,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               name,
               ...(toolArgs ? { args: toolArgs } : {}),
             };
-            // only a command match identifies a late pre-hook; a step-only marker waits for post-hook confirmation of background execution
+            // Only a command match can identify a late pre-hook. A step-only
+            // marker must wait until a post-hook confirms background execution.
             if (
               takeAntigravityBackgroundCallKey(
                 context.transcriptBackgroundedCalls,
@@ -1976,7 +2168,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             toolCall?.args && typeof toolCall.args === "object"
               ? (toolCall.args as Record<string, unknown>)
               : undefined;
-          // same-name calls sharing a step can finish out of order: prefer matching command line, then FIFO
+          // Several same-name calls can share a step and finish out of order:
+          // prefer the pending call with the same command line, then FIFO.
           const matchesHook = (candidate: PendingTool) =>
             candidate.stepIndex === stepIndex && (!name || candidate.name === name);
           const hookCommand = normalizeAntigravityCommandLine(hookArgs?.CommandLine);
@@ -2030,7 +2223,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             !failed && toolName
               ? detectAntigravityBackgroundTaskStart(toolName, toolArgs, payload)
               : null;
-          // consume an unspecified command only for background output so a foreground call sharing the step cannot take another's marker
+          // An unmarked pending call can still own a transcript marker. Consume
+          // an unspecified command only for background output, so a foreground
+          // call sharing the step cannot take another call's marker.
           const transcriptOwned =
             pending?.backgroundedByTranscript === true ||
             takeAntigravityBackgroundCallKey(
@@ -2044,7 +2239,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             );
           if (!failed && toolName && !transcriptOwned) {
             if (bgStart?.isBackground) {
-              // without a pre-tool entry the marker can't help; a post-settle hook must not re-register the task, and a lone tracked id would silently drop a genuine anonymous start
+              // Without a pre-tool entry the marker above cannot help: a hook that
+              // arrives after the transcript already settled the task must not
+              // re-register it, or nothing would ever settle it again.
+              // Only a named start can be matched against settled ids: with no
+              // candidate the matcher returns a lone tracked id, which would
+              // silently drop a genuine anonymous background start.
               const settled =
                 bgStart.taskId !== undefined &&
                 matchAntigravityTrackedTaskId(bgStart.taskId, context.settledBackgroundTaskIds) !==
@@ -2089,7 +2289,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             }
           }
         }
-        // agent finished: tear down a lingering print process so close/interrupt settles the turn — but not while background tasks are pending (the CLI stays alive to stream them; killing it fails the turn, #752)
+        // Agent finished: if the print process lingers, tear it down so the
+        // close handler (or interrupt fallback) can settle the turn (#465).
+        // Skip the teardown while background tasks are pending: the CLI stays
+        // alive by design to wait for the background completion and stream the
+        // follow-up response; killing it aborts the task and fails the turn
+        // with "Error: timeout waiting for response" (#752).
         if (eventName === "stop") {
           if (stepIndex === undefined) {
             sawStopWithoutStepIndex = true;
@@ -2370,6 +2575,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         context.interrupted = false;
         context.turnTerminalEmitted = false;
         delete context.stopTeardownRequested;
+        delete context.stopTeardownPromise;
         context.turns.push({ id: turnId, items: [] });
         context.session = {
           ...context.session,
@@ -2443,16 +2649,33 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             context.harnessPolicyDelivered = true;
           }
         });
-        let stdout = "";
-        let stderr = "";
+        const output = createBoundedProcessOutput();
+        // Keep the complete stdout stream for legacy plain-text responses. The
+        // bounded capture above is reserved for diagnostics/raw process-exit
+        // events; applying that cap to the response would silently truncate a
+        // valid provider answer.
+        const responseStdout: string[] = [];
+        // Recovery needs evidence from the whole stderr stream, even when its
+        // diagnostic tail evicts an earlier failure. Keep a short prefix plus
+        // an overflow marker; the exact benign timeout is much shorter than it.
+        let stderrEvidence = "";
+        let stderrEvidenceOverflow = false;
         const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
         child.stdout.on("data", (chunk) => {
-          outputParser.write(String(chunk));
-          stdout += chunk;
+          const text = String(chunk);
+          responseStdout.push(text);
+          outputParser.write(text);
+          output.append("stdout", chunk);
         });
-        child.stderr.on("data", (chunk) => (stderr += chunk));
+        child.stderr.on("data", (chunk) => {
+          output.append("stderr", chunk);
+          if (stderrEvidenceOverflow) return;
+          const evidence = (stderrEvidence + String(chunk)).trimStart();
+          stderrEvidenceOverflow = evidence.trimEnd().length > 128;
+          stderrEvidence = evidence.slice(0, 129);
+        });
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
         }, POLL_INTERVAL_MS);
@@ -2477,6 +2700,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
+            // Another path may already have settled (interrupt / stop-hook kill).
+            // Still drain hooks/stdout before deciding, but never double-complete.
             const completedTurnId = turnId;
             await Effect.runPromise(cancelAgentGatewayTurn(gatewaySessionLease, completedTurnId));
             if (!ownsTurn()) {
@@ -2484,7 +2709,10 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            // each `agy -p` owns a fresh gateway session — revoke it at process exit before the next turn so an unconsumed bootstrap cannot cross into the next turn's authority
+            // Each `agy -p` invocation owns a fresh gateway session. Revoke it as
+            // soon as that process exits, before post-processing or a later turn
+            // can begin, so an unconsumed bootstrap from this turn cannot cross
+            // into the next turn's authority.
             releaseTurnGatewayLease(context, gatewaySessionLease);
             const pollInFlightAtClose = context.hookPollPromise;
             if (pollInFlightAtClose) {
@@ -2499,8 +2727,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
+            const { stdout: boundedStdout, stderr } = output.snapshot();
+            const hasStderrEvidence = stderrEvidenceOverflow || stderrEvidence.trim().length > 0;
+            const stderrOnlyExactTimeout =
+              !stderrEvidenceOverflow && isAntigravityPostResponseTimeout(stderrEvidence);
             const printResult = outputParser.finish();
-            const responseText = printResult?.response ?? stdout.trim();
+            const responseText = printResult?.response ?? responseStdout.join("").trim();
             if (!context.sawAssistant && responseText) {
               emitTextItem(
                 context,
@@ -2518,23 +2750,64 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
             }
-            // Only our stop-hook teardown may replace a missing clean process exit.
-            // A provider ERROR is authoritative even when earlier response steps are DONE.
+            // Only our stop-hook teardown may replace a missing clean process exit. A
+            // provider ERROR is authoritative unless it is the exact timeout emitted
+            // after a durable final response (agy can report this after the reply is visible).
             const completedAfterStopTeardown =
               context.stopTeardownRequested === true &&
               printResult?.completedResponse === true &&
               context.sawAssistant &&
-              !stderr.trim() &&
+              !hasStderrEvidence &&
               context.pendingTools.length === 0 &&
               context.pendingBackgroundTasks.size === 0 &&
               context.pendingAnonymousBackgroundTasks.length === 0;
+            const exactPostResponseTimeout =
+              isAntigravityPostResponseTimeout(printResult?.terminalError) ||
+              (printResult?.hasExplicitResultError !== true &&
+                printResult?.terminalError === undefined &&
+                stderrOnlyExactTimeout);
+            const benignPostResponseTimeout =
+              context.stopTeardownPromise !== undefined &&
+              !context.interrupted &&
+              printResult?.hasConflictingResultError !== true &&
+              signal === null &&
+              (printResult?.resultStatus === undefined || printResult.resultStatus === "ERROR") &&
+              (printResult?.streamError === undefined ||
+                isAntigravityPostResponseTimeout(printResult.streamError)) &&
+              (!hasStderrEvidence || stderrOnlyExactTimeout) &&
+              exactPostResponseTimeout &&
+              printResult?.hasCompleteAssistantResponse === true &&
+              context.sawAssistant &&
+              context.pendingTools.length === 0 &&
+              context.pendingBackgroundTasks.size === 0 &&
+              context.pendingAnonymousBackgroundTasks.length === 0;
+            // Only the existing stop-hook teardown can have captured helpers
+            // while their parent was alive. A snapshot after close is insufficient.
+            let completedAfterBenignPostResponseTimeout = false;
+            if (benignPostResponseTimeout) {
+              try {
+                const teardown = await context.stopTeardownPromise;
+                completedAfterBenignPostResponseTimeout =
+                  teardown?.capturedBeforeRootExit === true && teardown.signalErrors.length === 0;
+              } catch {
+                // Keep the provider failure when process exit cannot be proven.
+              }
+              if (!ownsTurn()) {
+                await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
+                return;
+              }
+            }
+            const completedAfterExpectedPostResponseExit =
+              completedAfterStopTeardown || completedAfterBenignPostResponseTimeout;
             const interrupted =
               context.interrupted ||
               printResult?.state === "interrupted" ||
-              (signal !== null && printResult?.state !== "failed" && !completedAfterStopTeardown);
+              (signal !== null &&
+                printResult?.state !== "failed" &&
+                !completedAfterExpectedPostResponseExit);
             const failed =
               !interrupted &&
-              !completedAfterStopTeardown &&
+              !completedAfterExpectedPostResponseExit &&
               ((code ?? 1) !== 0 ||
                 (printResult !== undefined && printResult.state !== "completed"));
             if (failed && stderr.trim()) {
@@ -2559,7 +2832,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                       `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
-              raw: raw("process-exit", { code, signal, stdout, stderr }),
+              raw: raw("process-exit", {
+                code,
+                signal,
+                stdout: boundedStdout,
+                stderr,
+              }),
             });
             await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
           })();
@@ -2591,7 +2869,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             context.interrupted = true;
             const hadProcess = context.activeProcess !== undefined;
             if (hadProcess) {
-              // prefer process close for settlement so stdout/hooks drain; if teardown can't prove exit, force-settle so Cancel never no-ops (#465)
+              // Prefer process close for settlement so stdout/hooks still drain.
+              // If teardown cannot prove exit, force-settle so Cancel never no-ops (#465).
               yield* teardownActiveProcess(context, "turn/interrupt").pipe(
                 Effect.catch((error) =>
                   Effect.gen(function* () {
@@ -2612,7 +2891,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 ),
               );
             }
-            // process gone but turn still open — Cancel must still unlock the composer
+            // Process already gone (or never attached) but turn still open — Cancel
+            // must still unlock the composer.
             if (!context.turnTerminalEmitted && context.activeTurnId !== undefined) {
               settleActiveTurn(context, {
                 state: "interrupted",

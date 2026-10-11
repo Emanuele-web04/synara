@@ -1,3 +1,5 @@
+// Opt-in native control-only probe: compare live settings with fresh spawn settings.
+// Uses temporary state and a rejecting loopback endpoint; never enqueues a prompt.
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";

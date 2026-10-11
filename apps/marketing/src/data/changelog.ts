@@ -1,5 +1,11 @@
-// prepend new entries; `date` is rendered verbatim so keep the format consistent
+// FILE: data/changelog.ts
+// Purpose: Curated Synara release notes powering the public /changelog page.
+// Layer: static data (server-importable). Mirrors the in-app "What's new"
+//        changelog from the Synara desktop app, newest release first.
+// Note: To add a release, prepend a new entry. `date` is rendered verbatim,
+//       so keep the format consistent (e.g. "Jun 4").
 
+/** A single highlight inside a release. */
 export interface ChangelogFeature {
   readonly id: string;
   readonly title: string;
@@ -9,6 +15,7 @@ export interface ChangelogFeature {
   readonly details?: string;
 }
 
+/** One released version, with its date label and feature highlights. */
 export interface ChangelogEntry {
   readonly version: string;
   readonly date: string;
@@ -18,6 +25,84 @@ export interface ChangelogEntry {
 }
 
 export const CHANGELOG_ENTRIES: readonly ChangelogEntry[] = [
+  {
+    version: "1.0.2-beta.1",
+    date: "Oct 11",
+    features: [
+      {
+        id: "subagents",
+        title: "Follow subagents without losing the conversation",
+        description:
+          "Claude and Codex child agents now have their own conversations, with compact launch cards and a roster in Environment and the right dock.",
+        details:
+          "Inspect each brief, current step, elapsed time and result; open, message, background or stop supported runs. Nested and repeated invocations keep their own identity. Background results remain visible after the parent finishes; stopped work is shown as stopped rather than completed.",
+      },
+      {
+        id: "turns",
+        title: "A clearer record of each turn",
+        description:
+          "Turn headers and compact work groups make long conversations easier to scan, including interrupted turns and background tasks.",
+        details:
+          "Claude Monitor wake-ups appear as compact disclosures. Tool groups use clearer action summaries and icons, while assistant text and activity retain their chronological order. Live follow survives layout changes and thread switches; scrolling away keeps you in control.",
+      },
+      {
+        id: "history",
+        title: "Reopen long conversations faster",
+        description:
+          "Recent messages load first, with Load earlier messages for older history and a private local cache for quicker reopening.",
+        details:
+          "Search, pinned messages and message links load the pages they need. Cached approvals, questions and queued sends wait for authoritative synchronization. Paging does not truncate saved history or exports; unavailable browser storage falls back to normal loading.",
+      },
+      {
+        id: "queue",
+        title: "Stop also pauses your queued follow-ups",
+        description:
+          "Queued messages stay put after you stop a turn, encounter an error or hit a usage limit.",
+        details:
+          "Use Resume when you are ready. The pause survives reload, and an older rate-limit event does not pause an unrelated turn. Draft edits, attachments and failed sends remain recoverable instead of disappearing during thread creation or synchronization.",
+      },
+      {
+        id: "todos",
+        title: "Ask your agent to maintain Tasks",
+        description:
+          "Supported agent sessions can create, list and update the to-dos in your Tasks list directly from a chat.",
+        details:
+          "Set notes, priority, due date and project, mark a to-do complete or reopen it. Retried creates use a request ID to avoid duplicates. These tools maintain the list; they do not dispatch the to-do to an agent. Synara permissions still apply.",
+      },
+      {
+        id: "hub-approvals",
+        title: "Resolve Hub worker approvals in one place",
+        description:
+          "In Synara Beta, pending worker approvals appear above the coordinator composer, with links to the worker conversation.",
+        details:
+          "Approve once, allow the session when supported, decline or cancel the worker turn. Answering in either conversation clears the request in both. Only you can approve; the coordinator has no approval tool. Queued Hub tasks inherit the coordinator access mode unless explicitly overridden.",
+      },
+      {
+        id: "fork-diff",
+        title: "Branch from the message you chose",
+        description:
+          "Provider session forks now respect the selected message, and each chat remembers its own stacked or split diff layout.",
+        details:
+          "Choose a default Diff layout in Settings without overwriting existing chat choices. Checkpoint initialization survives restart; Undo refuses to run while another chat is editing the same workspace. Detached Git status and automatic branch publication are handled more reliably.",
+      },
+      {
+        id: "providers",
+        title: "More dependable provider sessions",
+        description:
+          "OpenCode v2 reconnects avoid duplicate text, Pi gets more time for its first startup, and Claude shows whether Fast mode is actually serving.",
+        details:
+          "Oh My Pi preserves explicit model choices and hides internal roles. Droid custom answers, Cursor prompt usage and completed OpenCode reasoning are retained. Antigravity preserves quota and OAuth failures, bounds helper cleanup and chooses effort only from discovered capabilities.",
+      },
+      {
+        id: "polish",
+        title: "Small improvements throughout the workspace",
+        description:
+          "Readable chat tabs, higher-contrast light terminals, a steadier context gauge and a working Create project action improve everyday use.",
+        details:
+          "Composer panels no longer cover the transcript on glass. Linked right-to-left text keeps its direction, the voice waveform fills wide tracks, and hidden browser panels release stale bounds. Beta data import preserves this installation’s runtime identity.",
+      },
+    ],
+  },
   {
     version: "0.9.1",
     date: "Sep 22",

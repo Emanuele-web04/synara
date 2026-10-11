@@ -1,3 +1,7 @@
+// FILE: codexProjectImport.ts
+// Purpose: Discover local Codex projects and thread metadata without loading provider sessions.
+// Layer: Provider metadata discovery
+
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -53,6 +57,7 @@ async function realpathIfPresent(value: string): Promise<string> {
   }
 }
 
+/** Resolve the same source identity for discovery and preview validation, including home overlays. */
 export async function resolveCodexProjectImportHome(
   input: CodexProjectImportInput = {},
 ): Promise<string> {

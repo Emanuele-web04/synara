@@ -24,6 +24,32 @@ import {
 } from "./lib/terminalContext";
 
 describe("composerDraftStore persisted-state hydration", () => {
+  it("keeps the queue stop and resume markers only while the queue has entries", () => {
+    resetComposerDraftStore();
+    const threadId = ThreadId.makeUnsafe("thread-queue-resume");
+    const store = useComposerDraftStore.getState();
+    store.enqueueQueuedTurn(threadId, makeQueuedChatTurn("resume-queue"));
+    const roundTrip = () => {
+      const persisted = normalizeCurrentPersistedComposerDraftStoreState(
+        JSON.parse(
+          JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+        ),
+      );
+      return toHydratedThreadDraft(threadId, persisted.draftsByThreadId[threadId]!);
+    };
+
+    store.pauseQueuedTurnsAfterStop(threadId, "turn-stopped");
+    expect(roundTrip().queueStoppedTurnId).toBe("turn-stopped");
+
+    store.resumeQueuedTurns(threadId, "turn-failed");
+    const resumed = roundTrip();
+    expect(resumed.queueStoppedTurnId).toBeUndefined();
+    expect(resumed.queueResumedTurnId).toBe("turn-failed");
+
+    store.removeQueuedTurn(threadId, "resume-queue");
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+
   it.each([true, false])(
     "restores a Computer-only choice of %s after serialization and hydration",
     (enabled) => {
@@ -836,6 +862,7 @@ describe("createDeferredPersistStorage", () => {
 
     storage.flush();
 
+    // Serialization happens exactly once, over the latest captured state.
     expect(partialize).toHaveBeenCalledTimes(1);
     expect(partialize).toHaveBeenCalledWith({ value: 3 });
     expect(base.setItem).toHaveBeenCalledTimes(1);
@@ -853,10 +880,12 @@ describe("createDeferredPersistStorage", () => {
       partialize: (state) => ({ a: state.a }),
     });
 
+    // zustand passes the full state as value.state at runtime (no config partialize).
     const fullState: FullState = { a: 7, secret: "drop" };
     storage.setItem("key", { state: fullState, version: 5 });
     storage.flush();
 
+    // Identical to createJSONStorage(setItem)(name, JSON.stringify({ state: partialize(s), version })).
     expect(base.setItem).toHaveBeenCalledWith(
       "key",
       JSON.stringify({ state: { a: 7 }, version: 5 }),
@@ -953,7 +982,9 @@ describe("flushStorageBeforePageHide", () => {
   });
 
   it("no-ops on partial DOM stubs without listener APIs", () => {
-    // SSR-style test envs stub window/document with only the fields under test — wiring must not crash module evaluation at import time
+    // SSR-style test environments stub `window`/`document` with only the
+    // fields under test (e.g. `{ documentElement }`); wiring must not crash
+    // module evaluation of stores that call this at import time.
     expect(() =>
       flushStorageBeforePageHide(vi.fn(), {
         window: {} as unknown as NonNullable<FlushBeforePageHideEnv["window"]>,

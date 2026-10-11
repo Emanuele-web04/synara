@@ -1,3 +1,7 @@
+// FILE: chatProjects.ts
+// Purpose: Reuse one hidden home-scoped chat project as the backing container for chat rows.
+// Layer: Web orchestration helper
+
 import { type ProjectId } from "@synara/contracts";
 import { matchesLegacyHomeChatWorkspaceRoot } from "@synara/shared/projectContainers";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
@@ -230,7 +234,10 @@ export async function ensureHomeChatProject(
     return null;
   }
 
-  // never decide the container doesn't exist against an unhydrated store: a prewarm firing before the first shell snapshot (persisted paths make homeDir truthy on reload) would dispatch a duplicate/misrooted project.create; bound the wait so a stuck connection surfaces an error instead of hanging new chat forever
+  // Never decide "the container doesn't exist" against an unhydrated store: a prewarm firing
+  // before the first shell snapshot (persisted paths make homeDir truthy immediately on reload)
+  // would otherwise dispatch a duplicate or misrooted project.create. Bound the wait so a stuck
+  // connection surfaces a user-visible error instead of hanging "new chat" forever.
   const hydrated = await waitForProjectSnapshotHydration({
     timeoutMs: PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS,
   });

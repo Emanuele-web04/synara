@@ -15,6 +15,13 @@ import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useLocalStorage } from "../hooks/useLocalStorage";
+import {
+  DEFAULT_DIFF_RENDER_MODE,
+  DIFF_RENDER_MODE_STORAGE_KEY,
+  DiffRenderModeSchema,
+  type DiffRenderMode,
+} from "../diffRenderMode";
 
 import {
   type AppSettings,
@@ -128,6 +135,8 @@ import {
 } from "../settingsNavigation";
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 import { isAudioLevelAvailable } from "../lib/audioLevel";
+
+// ── Settings taxonomy ──────────────────────────────────────────────────────
 
 const UI_DENSITY_OPTIONS = [
   {
@@ -323,7 +332,14 @@ type BooleanSettingKey = {
   [Key in keyof AppSettings]-?: AppSettings[Key] extends boolean ? Key : never;
 }[keyof AppSettings];
 
+// ── Route screen ───────────────────────────────────────────────────────────
+
 function SettingsRouteView() {
+  const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
+    DIFF_RENDER_MODE_STORAGE_KEY,
+    DEFAULT_DIFF_RENDER_MODE,
+    DiffRenderModeSchema,
+  );
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
@@ -536,6 +552,7 @@ function SettingsRouteView() {
     ...(settings.lowerProviderProcessPriority !== defaults.lowerProviderProcessPriority
       ? ["Keep Synara responsive"]
       : []),
+    ...(defaultDiffRenderMode !== DEFAULT_DIFF_RENDER_MODE ? ["Diff layout"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
       ? ["Open pull requests and issues"]
@@ -595,10 +612,15 @@ function SettingsRouteView() {
 
     setTheme("system");
     resetAllThemes();
+    setDefaultDiffRenderMode(DEFAULT_DIFF_RENDER_MODE);
     await resetSettings();
     setResetEpoch((current) => current + 1);
   }
 
+  // Shared on/off settings row: a labelled Switch bound to a boolean AppSettings
+  // key, with the standard "reset to default" affordance shown only when changed.
+  // Rows with bespoke controls (e.g. the desktop-notifications Test button) keep
+  // their own markup instead of using this helper.
   const renderBooleanSettingRow = (config: {
     settingKey: BooleanSettingKey;
     title: string;
@@ -879,6 +901,15 @@ function SettingsRouteView() {
         </SettingsSection>
 
         <SettingsSection title="Code and status">
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentSubagents",
+            title: "Subagents",
+            description:
+              "Show a compact summary of the chat's subagents in the Environment panel. Click it to open the full list, running and done, in the right dock.",
+            resetLabel: "subagents section",
+            ariaLabel: "Show the Subagents section in the Environment panel",
+          })}
+
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentUsage",
             title: "Usage",
@@ -1497,6 +1528,31 @@ function SettingsRouteView() {
       />
 
       <SettingsSection title="Review">
+        <SettingsRow
+          title="Diff layout"
+          description="Default stacked or split layout for threads without a saved choice. Each thread remembers its review-panel changes independently."
+          resetAction={
+            defaultDiffRenderMode !== DEFAULT_DIFF_RENDER_MODE ? (
+              <SettingResetButton
+                label="diff layout"
+                onClick={() => setDefaultDiffRenderMode(DEFAULT_DIFF_RENDER_MODE)}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={defaultDiffRenderMode}
+              onValueChange={setDefaultDiffRenderMode}
+              ariaLabel="Diff layout"
+              options={
+                [
+                  { value: "stacked", label: "Stacked" },
+                  { value: "split", label: "Split" },
+                ] satisfies ReadonlyArray<{ value: DiffRenderMode; label: string }>
+              }
+            />
+          }
+        />
         <SettingsRow
           title="Open pull requests and issues"
           description="Choose where a pull request or issue link in a chat opens: the built-in review view, the in-app browser, or your external browser. Ctrl/Cmd+click always opens the external browser."

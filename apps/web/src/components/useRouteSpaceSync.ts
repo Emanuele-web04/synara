@@ -1,3 +1,6 @@
+// FILE: useRouteSpaceSync.ts
+// Purpose: Synchronize the selected Space only when route identity actually changes.
+
 import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 import { useEffect } from "react";
 
@@ -14,7 +17,9 @@ export function useRouteSpaceSync(input: {
   const rememberSpaceThread = useSpacesUiStore((store) => store.rememberThread);
   const rememberSpaceProject = useSpacesUiStore((store) => store.rememberProject);
 
-  // deliberately excludes activeSpaceId: a tab click updates selection before navigation lands and the still-current route must not overwrite that intent
+  // Deliberately exclude activeSpaceId: a tab click updates selection before navigation lands,
+  // and the still-current route must not immediately overwrite that user intent. Primitive route
+  // inputs rerun this effect once navigation really changes identity.
   useEffect(() => {
     if (routeProjectId === null || routeSpaceId === undefined) return;
     if (useSpacesUiStore.getState().activeSpaceId !== routeSpaceId) {

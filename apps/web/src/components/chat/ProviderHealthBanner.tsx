@@ -1,3 +1,8 @@
+// FILE: ProviderHealthBanner.tsx
+// Purpose: Surfaces provider availability warnings above the active chat.
+// Layer: Chat status presentation
+// Exports: ProviderHealthBanner
+
 import { PROVIDER_DISPLAY_NAMES, type ServerProviderStatus } from "@synara/contracts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";

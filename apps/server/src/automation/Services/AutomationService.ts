@@ -50,7 +50,7 @@ export interface AutomationServiceShape {
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<AutomationRun>, AutomationServiceError>;
   readonly updateMemory: (input: {
-    /** null resolves to the automation that dispatched the caller's active turn */
+    /** null resolves to the automation that dispatched the caller's active turn. */
     readonly automationId: AutomationDefinition["id"] | null;
     readonly content: string;
     readonly callerThreadId: ThreadId;
@@ -63,7 +63,11 @@ export interface AutomationServiceShape {
     readonly title?: string;
     readonly summary?: string;
   }) => Effect.Effect<AutomationRun, AutomationServiceError>;
-  /** standalone runs execute in per-run threads — this is their only claim to their own automation */
+  /**
+   * The automation run that dispatched the caller's active turn, when there is one.
+   * Standalone runs execute in a per-run thread, so this is their only claim to their
+   * own automation; ownership by source/target thread never matches for them.
+   */
   readonly resolveCallerRun: (input: {
     readonly callerThreadId: ThreadId;
     readonly callerTurnId: TurnId | null;
@@ -85,13 +89,16 @@ export interface AutomationServiceShape {
     readonly limit?: number;
     readonly leaseOwnerId?: string;
   }) => Effect.Effect<ReadonlyArray<AutomationRunNowResult>, AutomationServiceError>;
-  /** reconcile one automation thread's latest turn outcome into its run; safe to call repeatedly */
+  /**
+   * Reconcile a single automation-owned thread's latest turn outcome into its run
+   * (succeeded / failed / interrupted / waiting-for-approval). Safe to call repeatedly.
+   */
   readonly reconcileThread: (input: {
     readonly threadId: ThreadId;
   }) => Effect.Effect<void, AutomationServiceError>;
-  /** reconcile every in-flight run against its thread state (scheduler backstop) */
+  /** Reconcile every in-flight run against its thread state (scheduler backstop). */
   readonly reconcileActiveRuns: () => Effect.Effect<void, AutomationServiceError>;
-  /** recover runs orphaned by a crash/restart */
+  /** Recover runs orphaned by a crash/restart, closing or re-reconciling them. */
   readonly recoverPendingRuns: () => Effect.Effect<void, AutomationServiceError>;
   readonly streamEvents: Stream.Stream<AutomationStreamEvent, never, never>;
 }

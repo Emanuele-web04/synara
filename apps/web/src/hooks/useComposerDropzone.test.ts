@@ -1,3 +1,7 @@
+// FILE: useComposerDropzone.test.ts
+// Purpose: Covers file capability decisions for shared composer paste/drop handling.
+// Layer: Web hook tests
+
 import { describe, expect, it, test } from "vitest";
 
 import { CHAT_FILE_REFERENCE_DRAG_TYPE } from "~/lib/chatReferences";

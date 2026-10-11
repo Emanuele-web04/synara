@@ -1,3 +1,8 @@
+// FILE: backendReadiness.test.ts
+// Purpose: Covers desktop backend readiness polling and abort behavior.
+// Layer: Desktop startup tests
+// Depends on: backendReadiness.ts, vitest
+
 import { describe, expect, it, vi } from "vitest";
 
 import {

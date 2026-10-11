@@ -2,7 +2,11 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import { BROWSER_IPC_CHANNELS } from "../ipcChannels";
 
-// installs the WebMCP compat API and Synara's bridge in the main world before app scripts run — Electron serializes this function, so every helper intentionally lives inside it
+/**
+ * Install the page-facing WebMCP compatibility API and Synara's private bridge
+ * in the main world before application scripts run. This function is
+ * serialized by Electron, so every helper intentionally lives inside it.
+ */
 export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false): void {
   type JsonObject = Record<string, unknown>;
   type PageTool = {
@@ -47,7 +51,10 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
   const supportsToolsPolicy = permissionsPolicy?.features?.().includes("tools") === true;
   const toolsPolicyAllowed =
     supportsToolsPolicy && permissionsPolicy?.allowsFeature?.("tools") === true;
-  // fail closed unless Chromium can positively allow the draft `tools` feature — treating unknown as allowed would ignore page policy on Electron versions predating WebMCP
+  // Native WebMCP owns its own Permissions-Policy enforcement. The compatibility
+  // API must fail closed unless Chromium can positively identify and allow the
+  // draft's `tools` feature; treating an unknown feature as allowed would ignore
+  // a page's policy on Electron versions that predate WebMCP.
   if (!nativeModelContext && !toolsPolicyAllowed && !hostAllowsCompatibility) return;
   if (supportsToolsPolicy && !toolsPolicyAllowed) return;
 
@@ -57,7 +64,8 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
   const MAX_DESCRIPTION_BYTES = 4_096;
   const MAX_SCHEMA_BYTES = 16_384;
   const MAX_BRIDGE_LIST_BYTES = 24 * 1_024;
-  // tool output is fed back to a model — keep it materially below the generic browser JSON ceiling so a page can't flood the turn context
+  // Tool output is fed back to a model. Keep this materially below the generic
+  // browser JSON ceiling so a page cannot flood the turn context.
   const MAX_RESULT_BYTES = 65_536;
   const encoder = new TextEncoder();
   const byteLength = (value: string): number => encoder.encode(value).byteLength;
@@ -118,7 +126,8 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
         rawMessage = String(error);
       }
     } catch {
-      // a page may reject with an object whose coercion itself throws — never let that hostile error value escape the bounded error envelope
+      // A page may reject with an object whose coercion itself throws. Never
+      // let that hostile error value escape Synara's bounded error envelope.
     }
     return {
       name: normalizedText(rawName, MAX_NAME_BYTES) ?? "WebMcpToolError",
@@ -456,7 +465,8 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
   }
 
   let modelContext = nativeModelContext;
-  // the current draft moved ModelContext to Document and accepts an object; earlier Chromium's navigator API accepted stringified JSON
+  // The current draft moved ModelContext to Document and accepts an object.
+  // Chromium's earlier navigator API accepted stringified JSON instead.
   const nativeInputFormat = documentModelContext ? "object" : "json-string";
   let implementation: "native" | "compatibility" = "native";
   if (!modelContext) {
@@ -510,7 +520,8 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
       origin,
       annotations: {
         readOnlyHint: tool.annotations?.readOnlyHint === true,
-        // All page-provided metadata and results are untrusted to Synara even when the page author omits the WebMCP hint.
+        // All page-provided metadata and results are untrusted to Synara even
+        // when the page author omits the WebMCP hint.
         untrustedContentHint: true,
       },
     };
@@ -578,7 +589,8 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
         const rawResult = await context.executeTool(tool, executionInput, {
           signal: controller.signal,
         });
-        // the current draft returns stringified JSON — accept an object too for early-preview Chromium builds
+        // The current draft returns stringified JSON. Accept an object as well
+        // so Synara remains compatible with early-preview Chromium builds.
         const serializedResult =
           typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult);
         if (
@@ -701,5 +713,6 @@ try {
     args: [hostAllowsCompatibility],
   });
 } catch {
-  // The browser remains usable through DOM automation if the host Chromium cannot install the compatibility bridge.
+  // The browser remains usable through DOM automation if the host Chromium
+  // cannot install the compatibility bridge.
 }

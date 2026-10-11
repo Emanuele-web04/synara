@@ -1,3 +1,7 @@
+// FILE: composerDraftActions.ts
+// Purpose: Constructs the ComposerDraftStoreState actions while preserving granular thread identity.
+// Exports: Zustand state creator consumed by the public facade.
+
 import {
   type ModelSelection,
   type ProviderKind,
@@ -925,6 +929,7 @@ export const createComposerDraftStoreState =
         const base = existing ?? createEmptyThreadDraft();
         const nextMap = { ...base.modelSelectionByProvider };
         for (const provider of COMPOSER_PROVIDER_KINDS) {
+          // Only touch providers explicitly present in the input
           if (!normalizedOpts || !(provider in normalizedOpts)) continue;
           const opts = normalizedOpts[provider];
           const selectionKey = providerInstanceModelSelectionKey(provider);
@@ -974,6 +979,7 @@ export const createComposerDraftStoreState =
       if (normalizedProvider === null) {
         return;
       }
+      // Normalize just this provider's options
       const normalizedOpts = normalizeProviderModelOptions(
         { [normalizedProvider]: nextProviderOptions },
         normalizedProvider,
@@ -987,6 +993,7 @@ export const createComposerDraftStoreState =
         const existing = state.draftsByThreadId[threadId];
         const base = existing ?? createEmptyThreadDraft();
 
+        // Update the map entry for this provider
         const nextMap = { ...base.modelSelectionByProvider };
         const selectionKey = providerInstanceModelSelectionKey(
           normalizedProvider,
@@ -1019,6 +1026,7 @@ export const createComposerDraftStoreState =
           );
         }
 
+        // Handle sticky persistence
         let nextStickyMap = state.stickyModelSelectionByProvider;
         let nextStickyActiveProvider = state.stickyActiveProvider;
         if (options?.persistSticky === true) {
@@ -1261,9 +1269,15 @@ export const createComposerDraftStoreState =
         if (!current || current.queuedTurns.every((entry) => entry.id !== queuedTurnId)) {
           return state;
         }
+        const queuedTurns = current.queuedTurns.filter((entry) => entry.id !== queuedTurnId);
         const nextDraft: ComposerThreadDraftState = {
           ...current,
-          queuedTurns: current.queuedTurns.filter((entry) => entry.id !== queuedTurnId),
+          queuedTurns,
+          // A drained queue no longer needs its Resume acknowledgement.
+          ...(queuedTurns.length === 0 &&
+          (current.queueResumedTurnId != null || current.queueStoppedTurnId != null)
+            ? { queueResumedTurnId: null, queueStoppedTurnId: null }
+            : {}),
         };
         const nextDraftsByThreadId = { ...state.draftsByThreadId };
         if (shouldRemoveDraft(nextDraft)) {
@@ -1272,6 +1286,58 @@ export const createComposerDraftStoreState =
           nextDraftsByThreadId[threadId] = nextDraft;
         }
         return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    // Only a waiting queue records the stop: a message queued after Stop was
+    // typed with the stop in mind and keeps sending as before.
+    // `null` withdraws the record when the stop request itself failed.
+    pauseQueuedTurnsAfterStop: (threadId, stoppedTurnId) => {
+      if (threadId.length === 0 || stoppedTurnId?.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (
+          !current ||
+          current.queuedTurns.length === 0 ||
+          (current.queueStoppedTurnId ?? null) === stoppedTurnId
+        ) {
+          return state;
+        }
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: { ...current, queueStoppedTurnId: stoppedTurnId },
+          },
+        };
+      });
+    },
+    // Clears a recorded stop; a turn id also acknowledges that turn's failure.
+    resumeQueuedTurns: (threadId, pausedTurnId) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        const nextResumedTurnId = pausedTurnId ?? current?.queueResumedTurnId ?? null;
+        if (
+          !current ||
+          current.queuedTurns.length === 0 ||
+          ((current.queueStoppedTurnId ?? null) === null &&
+            (current.queueResumedTurnId ?? null) === nextResumedTurnId)
+        ) {
+          return state;
+        }
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: {
+              ...current,
+              queueStoppedTurnId: null,
+              queueResumedTurnId: nextResumedTurnId,
+            },
+          },
+        };
       });
     },
     addImage: (threadId, image) => {
@@ -1873,7 +1939,8 @@ export const createComposerDraftStoreState =
       }
       set((state) => {
         const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
-        // same PR+scope replaces the older card in place so a re-click refreshes the snapshot instead of stacking duplicates
+        // Same PR + scope replaces the older card in place so a re-click refreshes the
+        // snapshot instead of stacking duplicate bubbles.
         const dedupKey = pullRequestContextDedupKey(normalized);
         const kept = existing.pullRequestContexts.filter(
           (entry) => pullRequestContextDedupKey(entry) !== dedupKey && entry.id !== normalized.id,

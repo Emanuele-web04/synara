@@ -1,9 +1,21 @@
+// FILE: stats.ts
+// Purpose: Schemas for the local profile-stats RPCs that power the Profile page and
+// the shareable activity card. All metrics are backed by Synara's local DB
+// projections; no provider archive or cloud data is part of this contract.
+// Metrics are lifetime totals: deleting a thread or project from the app never
+// subtracts the work it already contributed to the profile.
+// Layer: shared contracts (schema-only, no runtime logic)
+
 import { Schema } from "effect";
 import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderKind } from "./orchestration";
 import { ProviderInstanceId } from "./providerInstance";
 
-// the client's fixed UTC offset so the server buckets activity by local day/hour, not UTC
+// ── Input ────────────────────────────────────────────────────────────
+
+// The client passes its own fixed UTC offset (minutes east of UTC, i.e.
+// `-new Date().getTimezoneOffset()`) so the server can bucket activity by the
+// user's LOCAL day/hour rather than UTC.
 export const StatsGetProfileStatsInput = Schema.Struct({
   utcOffsetMinutes: Schema.Int,
 });
@@ -12,7 +24,10 @@ export type StatsGetProfileStatsInput = typeof StatsGetProfileStatsInput.Type;
 export const StatsGetProfileTokenStatsInput = StatsGetProfileStatsInput;
 export type StatsGetProfileTokenStatsInput = typeof StatsGetProfileTokenStatsInput.Type;
 
-// pre-bucketed 0-4 so the client never knows the count distribution
+// ── Building blocks ──────────────────────────────────────────────────
+
+// One day in the GitHub-style heatmap. `intensity` is a pre-bucketed 0–4 level so
+// the client never has to know the count distribution. `weekday` is 0 (Sun)–6 (Sat).
 export const ProfileHeatmapCell = Schema.Struct({
   day: TrimmedNonEmptyString,
   count: NonNegativeInt,
@@ -30,7 +45,9 @@ export const ProfileProviderUsage = Schema.Struct({
 });
 export type ProfileProviderUsage = typeof ProfileProviderUsage.Type;
 
-// attributed to the model selected for the turn — mid-thread switches keep each model's share accurate
+// Token-based model mix. Tokens are attributed to the model selected for the
+// turn that processed them (thread selection is only a legacy-data fallback),
+// so switching models mid-thread keeps each model's share accurate.
 export const ProfileTokenModelUsage = Schema.Struct({
   provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
   instanceId: Schema.Union([ProviderInstanceId, Schema.Literal("unknown")]),
@@ -75,7 +92,8 @@ export const ProfileActivity = Schema.Struct({
   totalPromptsSent: NonNegativeInt,
   totalThreads: NonNegativeInt,
   promptsToday: NonNegativeInt,
-  // counts native user prompts per local day — days the user actually used Synara
+  // Activity heatmap counts native user prompts per local day (same source as
+  // totalPromptsSent), i.e. days the user actually used Synara.
   heatmapMetric: Schema.Literal("prompts"),
   heatmap: Schema.Array(ProfileHeatmapCell),
 });
@@ -90,7 +108,8 @@ export const ProfileActiveHours = Schema.Struct({
 export type ProfileActiveHours = typeof ProfileActiveHours.Type;
 
 export const ProfileInsights = Schema.Struct({
-  // clients prefer the token-based ranking when available
+  // Ranked by turn count. Token-based ranking lives on ProfileTokenStats; clients
+  // prefer it when available (see selectProfileTopProvider on the web).
   topProvider: Schema.NullOr(ProviderKind),
   topProviderPercent: Schema.NullOr(Schema.Number),
   topReasoning: Schema.NullOr(Schema.String),
@@ -113,6 +132,8 @@ export const ProfileTimezone = Schema.Struct({
 });
 export type ProfileTimezone = typeof ProfileTimezone.Type;
 
+// ── Aggregate result ─────────────────────────────────────────────────
+
 export const ProfileStats = Schema.Struct({
   generatedAt: IsoDateTime,
   timezone: ProfileTimezone,
@@ -131,19 +152,22 @@ export type ProfileStats = typeof ProfileStats.Type;
 export const StatsGetProfileStatsResult = ProfileStats;
 export type StatsGetProfileStatsResult = typeof StatsGetProfileStatsResult.Type;
 
-// false when the DB hasn't recorded token totals yet
+// Token totals come from Synara's projected context-window updates. `available`
+// is false when the DB has not recorded token totals yet.
 export const ProfileTokenStats = Schema.Struct({
   available: Schema.Boolean,
   lifetimeTotalTokens: Schema.NullOr(NonNegativeInt),
   peakDayTokens: Schema.NullOr(NonNegativeInt),
   peakDay: Schema.NullOr(TrimmedNonEmptyString),
   providers: Schema.Array(ProviderKind),
-  // their adapters never emit context-window updates — excluded from token rankings
+  // Providers with recorded turns but no token telemetry (their adapters never
+  // emit context-window updates); excluded from token-based rankings.
   unavailableProviders: Schema.Array(ProviderKind),
-  // among providers with token telemetry
+  // Most-used provider by tokens processed, among providers with token telemetry.
   topProvider: Schema.NullOr(ProviderKind),
   topProviderPercent: Schema.NullOr(Schema.Number),
-  // preferred over the turn-based providerModels when telemetry is available
+  // Per-model token shares; clients prefer this over the turn-based
+  // ProfileStats.providerModels when token telemetry is available.
   models: Schema.Array(ProfileTokenModelUsage),
   heatmapMetric: Schema.Literal("tokens"),
   heatmap: Schema.Array(ProfileHeatmapCell),

@@ -1,4 +1,7 @@
-// perf probe: engine throughput streaming assistant deltas across T concurrent threads (file-backed WAL SQLite, real engine + projection). Run: SYNARA_PERF=1 bunx vitest run perf/engineStreamingThroughput.perf.test.ts
+// Perf probe: orchestration engine throughput for streaming assistant deltas across T
+// concurrently streaming threads (file-backed WAL SQLite, real engine + projection pipeline).
+// Capacity probe only: provider journal, transport, renderer and provider children are excluded.
+//   SYNARA_PERF=1 bunx vitest run perf/engineStreamingThroughput.perf.test.ts
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -93,7 +96,8 @@ describe.skipIf(!ENABLED)("engine streaming throughput", () => {
             );
           }
           const perThread = repeat < 0 ? 30 : DELTAS_PER_THREAD;
-          // each thread streams one message of perThread deltas concurrently; bypasses the shared journal pump
+          // Each thread streams one message of `perThread` deltas; threads stream concurrently,
+          // each as a sequential producer. This bypasses the shared provider journal pump.
           const dispatchMs: number[] = [];
           let peakRss = process.memoryUsage().rss;
           const streamThread = (threadId: ThreadId, threadIndex: number) =>

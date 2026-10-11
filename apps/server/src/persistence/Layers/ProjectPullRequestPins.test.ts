@@ -140,7 +140,7 @@ layer("ProjectPullRequestPins", (it) => {
         });
       }
 
-      // establishing an already-present pin stays idempotent at the cap
+      // Establishing an already-present pin remains idempotent at the cap.
       yield* pins.setPinned({
         projectId: cappedProject,
         repositoryKey: "acme/capped",

@@ -1,3 +1,6 @@
+// FILE: chatWorkspaceFolders.test.ts
+// Purpose: Verifies Codex-style date/slug workspace folder naming for general chats.
+
 import { describe, expect, it } from "vitest";
 
 import { buildChatWorkspaceFolderPath } from "./chatWorkspaceFolders";

@@ -63,5 +63,7 @@ export function storeEditorViewState(threadId: string, snapshot: EditorViewState
         });
     }
     window.localStorage.setItem(EDITOR_VIEW_STATE_STORAGE_KEY, JSON.stringify(map));
-  } catch {}
+  } catch {
+    // Best-effort preference persistence only.
+  }
 }

@@ -1,4 +1,11 @@
-// raw <button>s intentional — tabs, not shadcn Buttons; tab-shape rendering (rounded-top, no bottom border on active, z-stacking) doesn't fit the Button taxonomy
+// FILE: TerminalWorkspaceTabs.tsx
+// Purpose: Renders the top-level workspace switcher between terminal and chat surfaces.
+// Layer: Chat workspace chrome
+// Depends on: terminal workspace store layout state and shared className helpers.
+//
+// Note: the two raw <button>s are intentional — they are tabs, not shadcn
+// Buttons. Tab-shape rendering (rounded-top corners, no bottom border on the
+// active tab, z-index stacking) doesn't fit the Button taxonomy.
 
 import { useRef } from "react";
 

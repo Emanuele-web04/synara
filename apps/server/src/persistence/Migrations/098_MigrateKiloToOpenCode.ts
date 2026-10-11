@@ -1,7 +1,11 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-// Kilo was removed; its sessions ran on the shared OpenCode runtime so persisted 'kilo' values rewrite to 'opencode' — otherwise strict decoding fails on every durable surface holding kilo-era rows; Kilo endpoints/binaries are incompatible with OpenCode's protocol — remove while preserving a real OpenCode bundle
+// The Kilo provider was removed; its sessions ran on the shared OpenCode
+// runtime, so persisted 'kilo' provider values are rewritten to 'opencode'.
+// Without this, strict ProviderKind/ModelSelection decoding fails on every
+// durable surface that still holds kilo-era rows (thread projections, handoff
+// metadata, automations, event replay, the runtime journal).
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -78,6 +82,8 @@ export default Effect.gen(function* () {
     WHERE json_extract(runtime_payload_json, '$.modelSelection.provider') = 'kilo'
   `;
 
+  // Kilo binary paths, endpoints, and auth are not compatible with OpenCode's
+  // process protocol. Remove them while preserving any real OpenCode bundle.
   yield* sql`
     UPDATE automation_definitions
     SET provider_options_json = json_remove(provider_options_json, '$.kilo')
@@ -134,6 +140,8 @@ export default Effect.gen(function* () {
     WHERE json_extract(payload_json, '$.activity.payload.provider') = 'kilo'
   `;
 
+  // Preserve an existing OpenCode bundle but never feed Kilo endpoints or
+  // binaries to the incompatible OpenCode process protocol.
   yield* sql`
     UPDATE orchestration_events
     SET payload_json = json_remove(payload_json, '$.providerOptions.kilo')

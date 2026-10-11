@@ -1,3 +1,10 @@
+/**
+ * GitHubCli - Effect service contract for `gh` process interactions.
+ *
+ * Provides thin command execution helpers used by Git workflow orchestration.
+ *
+ * @module GitHubCli
+ */
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type {
@@ -22,7 +29,14 @@ import type {
 import type { ProcessRunResult } from "../../processRunner";
 import type { GitHubCliError } from "../Errors.ts";
 
-/** `mergeable` is lazily computed by GitHub (UNKNOWN while recomputing) so list calls pay extra API cost — the remote-status cache bounds it */
+/**
+ * Field list for `gh pr view/list --json` calls that decode into
+ * {@link GitHubPullRequestSummary} — one source so call sites and tests cannot drift.
+ *
+ * Note: `mergeable` is computed lazily by GitHub (it answers UNKNOWN while recomputing),
+ * so list calls may pay a small extra API cost for it. The remote-status cache bounds
+ * that cost; if status polling ever feels slow, this field is the first suspect.
+ */
 export const PULL_REQUEST_SUMMARY_JSON_FIELDS =
   "number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt";
 
@@ -41,7 +55,7 @@ export interface GitHubPullRequestSummary {
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
-  /** used to rank multiple PRs for one branch */
+  /** ISO timestamp of the last PR update; used to rank multiple PRs for one branch. */
   readonly updatedAt?: string | null;
 }
 
@@ -190,6 +204,9 @@ export interface GitHubPullRequestDetailData {
   readonly commits: ReadonlyArray<PullRequestCommit>;
 }
 
+/**
+ * GitHubCliShape - Service API for executing GitHub CLI commands.
+ */
 export interface GitHubCliShape {
   /**
    * Run a background read through the server-wide GitHub read queue. Fails fast with a
@@ -210,7 +227,7 @@ export interface GitHubCliShape {
     readonly maxBufferBytes?: number;
     readonly outputMode?: "error" | "truncate";
     readonly allowNonZeroExit?: boolean;
-    /** stdin pipe for payloads that must never appear in argv */
+    /** Piped to the child's stdin — for payloads that must never appear in argv. */
     readonly stdin?: string;
     readonly env?: NodeJS.ProcessEnv;
     readonly onStdoutChunk?: (chunk: string) => void;
@@ -285,7 +302,7 @@ export interface GitHubCliShape {
     readonly number: number;
   }) => Effect.Effect<GitHubPullRequestDetailData, GitHubCliError>;
 
-  /** null for a standalone pull request */
+  /** Read the selected PR's full GitHub stack, or null for a standalone pull request. */
   readonly getPullRequestStack: (input: {
     readonly cwd: string;
     readonly repository: string;
@@ -311,6 +328,9 @@ export interface GitHubCliShape {
     readonly mergeMethod?: PullRequestMergeMethod;
   }) => Effect.Effect<{ readonly mergeOutcome: "merged" | "enqueued" | null }, GitHubCliError>;
 
+  /**
+   * Post an issue comment on a pull request as the authenticated gh user.
+   */
   readonly commentOnPullRequest: (input: {
     readonly cwd: string;
     readonly repository: string;
@@ -318,19 +338,28 @@ export interface GitHubCliShape {
     readonly body: string;
   }) => Effect.Effect<void, GitHubCliError>;
 
+  /**
+   * List open pull requests for a head branch.
+   */
   readonly listOpenPullRequests: (input: {
     readonly cwd: string;
     readonly headSelector: string;
     readonly limit?: number;
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
-  /** resolve the most relevant PR when no open PR exists */
+  /**
+   * List pull requests for a head branch in any state (open, closed, merged).
+   * Used to resolve the branch's most relevant PR when no open PR exists.
+   */
   readonly listPullRequests: (input: {
     readonly cwd: string;
     readonly headSelector: string;
     readonly limit?: number;
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
+  /**
+   * Resolve a pull request by URL, number, or branch-ish identifier.
+   */
   readonly getPullRequest: (input: {
     readonly cwd: string;
     readonly reference: string;
@@ -338,7 +367,10 @@ export interface GitHubCliShape {
     readonly background?: boolean;
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
 
-  /** checks ride the same `gh pr view` call so polling pays one round trip */
+  /**
+   * Resolve a pull request together with its CI checks (check runs + commit statuses)
+   * in a single `gh pr view` call, so snapshot polling pays one process/API round trip.
+   */
   readonly getPullRequestWithChecks: (input: {
     readonly cwd: string;
     readonly reference: string;
@@ -352,7 +384,11 @@ export interface GitHubCliShape {
     GitHubCliError
   >;
 
-  /** owner/repo passed explicitly so fork checkouts still query the repo that owns the PR */
+  /**
+   * List the root comments of unresolved review threads for a pull request.
+   * Owner/repo are passed explicitly (parsed from the PR URL) so fork checkouts whose
+   * remotes point at a different repository still query the repo that owns the PR.
+   */
   readonly getPullRequestReviewComments: (input: {
     readonly cwd: string;
     readonly host: string;
@@ -361,11 +397,17 @@ export interface GitHubCliShape {
     readonly number: number;
   }) => Effect.Effect<GitHubPullRequestReviewCommentsResult, GitHubCliError>;
 
+  /**
+   * Resolve clone URLs for a GitHub repository.
+   */
   readonly getRepositoryCloneUrls: (input: {
     readonly cwd: string;
     readonly repository: string;
   }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubCliError>;
 
+  /**
+   * Create a pull request from branch context and body file.
+   */
   readonly createPullRequest: (input: {
     readonly cwd: string;
     readonly baseBranch: string;
@@ -375,10 +417,16 @@ export interface GitHubCliShape {
     readonly draft?: boolean;
   }) => Effect.Effect<void, GitHubCliError>;
 
+  /**
+   * Resolve repository default branch through GitHub metadata.
+   */
   readonly getDefaultBranch: (input: {
     readonly cwd: string;
   }) => Effect.Effect<string | null, GitHubCliError>;
 
+  /**
+   * Checkout a pull request into the current repository worktree.
+   */
   readonly checkoutPullRequest: (input: {
     readonly cwd: string;
     readonly reference: string;
@@ -386,6 +434,9 @@ export interface GitHubCliShape {
   }) => Effect.Effect<void, GitHubCliError>;
 }
 
+/**
+ * GitHubCli - Service tag for GitHub CLI process execution.
+ */
 export class GitHubCli extends ServiceMap.Service<GitHubCli, GitHubCliShape>()(
   "synara/git/Services/GitHubCli",
 ) {}

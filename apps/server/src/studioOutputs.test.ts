@@ -237,7 +237,11 @@ describe("scanStudioWorkspaceFiles", () => {
   });
 });
 
-/** fake FileSystem whose stat looks up mtimes relative to the workspace root; unknown paths fail like a missing file */
+/**
+ * Fake `FileSystem` (+ real `Path`) layer whose `stat` looks up mtimes from
+ * `mtimesByRelativePath` (relative to the workspace root); unknown paths fail like a
+ * missing file would.
+ */
 function makeFakeStudioRootLayer(input: {
   readonly mtimesByRelativePath: ReadonlyMap<string, number>;
   readonly workspaceRoot: string;

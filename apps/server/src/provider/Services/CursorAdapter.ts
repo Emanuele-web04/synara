@@ -1,3 +1,8 @@
+/**
+ * CursorAdapter - Cursor CLI ACP implementation of the generic provider adapter contract.
+ *
+ * @module CursorAdapter
+ */
 import { ServiceMap } from "effect";
 
 import type { ProviderAdapterError } from "../Errors.ts";

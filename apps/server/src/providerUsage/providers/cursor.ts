@@ -1,3 +1,9 @@
+// FILE: providerUsage/providers/cursor.ts
+// Purpose: Live Cursor usage fetcher. Reads the Cursor access token from its VS Code-style
+// state.vscdb (key cursorAuth/accessToken) or the macOS keychain ("cursor-access-token")
+// read-only, then calls the Cursor DashboardService (Connect RPC) for the current billing
+// period usage + credit grants.
+
 import nodePath from "node:path";
 
 import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/contracts";
@@ -178,7 +184,7 @@ export const cursorUsageFetcher: ProviderUsageFetcher = {
         );
       }
 
-      // credit grants are best-effort — absence shouldn't fail the snapshot
+      // Credit grants are best-effort — absence shouldn't fail the snapshot.
       let creditsJson: unknown;
       try {
         const creditsResult = await fetchJson({

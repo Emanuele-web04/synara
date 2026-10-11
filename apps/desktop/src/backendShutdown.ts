@@ -108,7 +108,11 @@ function resolveDesktopBackendShutdownUrl(backendHttpUrl: string): URL {
   return url;
 }
 
-// begins the shutdown POST without placing its credential in a URL; the caller owns the request lifetime and must cancel on child exit or deadline
+/**
+ * Begins the desktop-only shutdown POST without placing its credential in a URL.
+ * The caller owns the request lifetime and must cancel it when the child exits or
+ * the overall shutdown deadline is reached.
+ */
 export function startDesktopBackendShutdownRequest(input: {
   readonly backendHttpUrl: string;
   readonly shutdownToken: string;
@@ -324,7 +328,11 @@ function runPosixBackendShutdown(input: {
   });
 }
 
-// graceful shutdown then TERM then KILL; resolves only after the OS reports child exit — a response or sent signal is not proof provider descendants finished before updater handoff
+/**
+ * Requests scoped macOS/Linux backend shutdown, then escalates to TERM and KILL.
+ * Resolves only after the OS reports child exit: a response or sent signal is not
+ * proof that provider descendants were finalized before updater handoff.
+ */
 export function stopPosixBackendAndWait(input: {
   readonly child: BackendShutdownProcess;
   readonly backendHttpUrl: string;
@@ -410,7 +418,8 @@ function runWindowsBackendShutdown(input: {
 
     input.child.once("exit", onExit);
 
-    // the exit listener installs first so an exit racing request construction can't be missed; sync transport failures use the same timers
+    // The listener is installed first so an exit racing request construction
+    // cannot be missed. Synchronous transport failures still use the same timers.
     try {
       pendingRequest = input.startRequest({
         backendHttpUrl: input.backendHttpUrl,
@@ -449,7 +458,8 @@ function runWindowsBackendShutdown(input: {
     };
 
     if (input.forceKillDelayMs === 0) {
-      // Node normalizes sub-1ms timers to the same delay — run the zero-delay fallback now so it provably precedes the overall timer
+      // Node normalizes sub-1 ms timers to the same effective delay. Run the
+      // zero-delay fallback now so it is provably before the overall timer.
       forceIfRunning();
     } else {
       forceTimer = setTimeout(forceIfRunning, input.forceKillDelayMs);
@@ -459,7 +469,8 @@ function runWindowsBackendShutdown(input: {
     if (settled) return;
 
     deadlineTimer = setTimeout(() => {
-      // process state wins over a queued exit event in the same turn; an HTTP response alone is never success
+      // Process state wins at the boundary even if an exit event is queued for
+      // the same turn; an HTTP response alone is never treated as success.
       if (hasExited(input.child)) {
         onExit();
         return;
@@ -470,7 +481,11 @@ function runWindowsBackendShutdown(input: {
   });
 }
 
-// graceful Windows shutdown, then at most one forceful fallback at the original deadline; repeat calls share one operation
+/**
+ * Requests graceful Windows backend shutdown, waits for actual child exit, and
+ * performs at most one forceful fallback at the original absolute threshold.
+ * Repeated calls for the same live process share one operation.
+ */
 export function stopWindowsBackendAndWait(input: {
   readonly child: BackendShutdownProcess;
   readonly backendHttpUrl: string;

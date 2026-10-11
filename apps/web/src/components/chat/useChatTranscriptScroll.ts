@@ -9,10 +9,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type MouseEvent,
   type WheelEvent,
 } from "react";
-import { flushSync } from "react-dom";
 import { isScrollContainerNearBottom } from "../../chat-scroll";
 import { isEditableEventTarget } from "../../lib/editableEventTarget";
 import type { TimelineEntry } from "../../session-logic";
@@ -48,6 +48,13 @@ export function useChatTranscriptScroll({
     top: number;
   } | null>(null);
   const pendingInteractionAnchorFrameRef = useRef<number | null>(null);
+  const pendingFollowCorrectionTimerRef = useRef<number | null>(null);
+  const cancelPendingFollowCorrection = useCallback(() => {
+    if (pendingFollowCorrectionTimerRef.current !== null) {
+      window.clearTimeout(pendingFollowCorrectionTimerRef.current);
+      pendingFollowCorrectionTimerRef.current = null;
+    }
+  }, []);
   const showScrollDebouncer = useRef(
     new Debouncer(() => setShowScrollToBottom(true), { wait: 150 }),
   );
@@ -56,25 +63,40 @@ export function useChatTranscriptScroll({
     const scrollDebouncer = showScrollDebouncer.current;
     return () => {
       scrollDebouncer.cancel();
+      cancelPendingFollowCorrection();
       const pendingFrame = pendingInteractionAnchorFrameRef.current;
       if (pendingFrame !== null) {
         window.cancelAnimationFrame(pendingFrame);
       }
     };
-  }, []);
+  }, [cancelPendingFollowCorrection]);
 
   const tailAnchorScrollInFlightRef = useRef(false);
 
-  // scroll helpers stay list-owned so transcript updates stop bouncing through a separate measurement/controller loop during streaming
-  // guards isAtEndRef from flipping during reflow-induced scroll events that fire right after an explicit scrollToEnd
+  // Scroll helpers stay list-owned so transcript updates stop bouncing through
+  // a separate measurement/controller loop during streaming.
+  // Guards isAtEndRef from flipping during reflow-induced scroll events that
+  // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
-  // user scroll gestures take ownership from streaming auto-follow; ref updates are immediate, state updates project into `followLiveOutput`
-  const [isUserScrollDetached, setIsUserScrollDetached] = useState(false);
+  // User scroll gestures take ownership from streaming auto-follow. Ref updates
+  // are immediate; the store projects into the `followLiveOutput` prop. React renders
+  // external-store changes synchronously before the next frame from any context, so a
+  // gesture disables list-owned follow before an already queued animation frame runs
+  // without `flushSync`, which React rejects when a gesture lands inside a commit.
+  const [detachedStore] = useState(createTranscriptDetachedStore);
+  const isUserScrollDetached = useSyncExternalStore(
+    detachedStore.subscribe,
+    detachedStore.get,
+    detachedStore.get,
+  );
   const isUserScrollDetachedRef = useRef(isUserScrollDetached);
-  const setTranscriptScrollDetached = useCallback((detached: boolean) => {
-    isUserScrollDetachedRef.current = detached;
-    setIsUserScrollDetached(detached);
-  }, []);
+  const setTranscriptScrollDetached = useCallback(
+    (detached: boolean) => {
+      isUserScrollDetachedRef.current = detached;
+      detachedStore.set(detached);
+    },
+    [detachedStore],
+  );
   const pendingScrollGestureRef = useRef<{
     container: HTMLElement;
     scrollTop: number;
@@ -89,7 +111,8 @@ export function useChatTranscriptScroll({
     pendingScrollGestureRef.current = null;
   }, []);
   useEffect(() => cancelPendingScrollGesture, [activeThreadId, cancelPendingScrollGesture]);
-  // the arrow's smooth jump is followed by one exact settle after LegendList measures the tail; a user gesture invalidates that pending settle
+  // The arrow's smooth jump is followed by one exact settle after LegendList
+  // has measured the tail. A user gesture invalidates that pending settle.
   const settledScrollRequestRef = useRef(0);
   const settledScrollInFlightRef = useRef(false);
   // Smooth only the first auto-follow after a send; live stream re-sticks stay cheap.
@@ -104,6 +127,7 @@ export function useChatTranscriptScroll({
   const armTranscriptAutoFollow = useCallback(
     (targetThreadId: ThreadId, animated = false) => {
       cancelPendingScrollGesture();
+      cancelPendingFollowCorrection();
       autoFollowThreadIdRef.current = targetThreadId;
       animateNextAutoFollowScrollRef.current = animated;
       isAtEndRef.current = true;
@@ -111,35 +135,39 @@ export function useChatTranscriptScroll({
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
     },
-    [cancelPendingScrollGesture, setTranscriptScrollDetached],
+    [cancelPendingScrollGesture, cancelPendingFollowCorrection, setTranscriptScrollDetached],
   );
-  const clearTranscriptAutoFollow = useCallback(
-    (synchronous = false) => {
-      cancelPendingScrollGesture();
-      const scrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
-      autoFollowThreadIdRef.current = null;
-      animateNextAutoFollowScrollRef.current = false;
-      settledScrollRequestRef.current += 1;
-      settledScrollInFlightRef.current = false;
-      programmaticScrollUntilRef.current = 0;
-      // A user scroll gesture takes over from any in-flight tail-anchor slide.
-      tailAnchorScrollInFlightRef.current = false;
-      const container = legendListRef.current?.getScrollableNode();
-      const detached =
-        container instanceof HTMLElement && container.scrollHeight > container.clientHeight + 1;
-      if (detached !== isUserScrollDetachedRef.current) {
-        // disable list-owned follow before an already queued animation frame runs — continuous wheel events otherwise defer this prop update
-        if (synchronous) flushSync(() => setTranscriptScrollDetached(detached));
-        else setTranscriptScrollDetached(detached);
-      }
-      if (scrollTarget) {
-        void stopTranscriptScrollAtCurrentOffset(scrollTarget);
-      }
-    },
-    [legendListRef, cancelPendingScrollGesture, setTranscriptScrollDetached],
-  );
+  const clearTranscriptAutoFollow = useCallback(() => {
+    cancelPendingScrollGesture();
+    cancelPendingFollowCorrection();
+    const scrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
+    autoFollowThreadIdRef.current = null;
+    animateNextAutoFollowScrollRef.current = false;
+    settledScrollRequestRef.current += 1;
+    settledScrollInFlightRef.current = false;
+    programmaticScrollUntilRef.current = 0;
+    // A user scroll gesture takes over from any in-flight tail-anchor slide.
+    tailAnchorScrollInFlightRef.current = false;
+    const container = legendListRef.current?.getScrollableNode();
+    const detached =
+      container instanceof HTMLElement && container.scrollHeight > container.clientHeight + 1;
+    if (detached !== isUserScrollDetachedRef.current) {
+      // The detached store renders before an already queued animation frame can
+      // run, so list-owned follow is off by then even for continuous wheel events.
+      setTranscriptScrollDetached(detached);
+    }
+    if (scrollTarget) {
+      void stopTranscriptScrollAtCurrentOffset(scrollTarget);
+    }
+  }, [
+    legendListRef,
+    cancelPendingScrollGesture,
+    cancelPendingFollowCorrection,
+    setTranscriptScrollDetached,
+  ]);
   const onTranscriptNavigate = useCallback(() => {
-    // search can navigate from an effect; its ref ownership changes immediately while React applies the list prop before the jump's next frame
+    // Search can navigate from an effect. Its ref ownership changes immediately,
+    // while React applies the list prop before the animated jump's next frame.
     clearTranscriptAutoFollow();
     isAtEndRef.current = false;
     showScrollDebouncer.current.maybeExecute();
@@ -179,21 +207,36 @@ export function useChatTranscriptScroll({
           !isScrollContainerNearBottom(container, 1) &&
           !tailAnchorScrollInFlightRef.current &&
           !settledScrollInFlightRef.current &&
-          performance.now() >= programmaticScrollUntilRef.current
+          pendingFollowCorrectionTimerRef.current === null
         ) {
+          // Preserve the only notification of a growing live row during the
+          // native-scroll guard. Keep its throttle instead of retrying per frame.
           const request = settledScrollRequestRef.current;
-          programmaticScrollUntilRef.current = performance.now() + 200;
-          window.requestAnimationFrame(() => {
+          const correctAtEnd = () => {
+            pendingFollowCorrectionTimerRef.current = null;
             if (
-              request === settledScrollRequestRef.current &&
-              !isUserScrollDetachedRef.current &&
-              !tailAnchorScrollInFlightRef.current &&
-              !settledScrollInFlightRef.current &&
-              legendListRef.current?.getScrollableNode() === container &&
-              !isScrollContainerNearBottom(container, 1)
+              request !== settledScrollRequestRef.current ||
+              isUserScrollDetachedRef.current ||
+              tailAnchorScrollInFlightRef.current ||
+              settledScrollInFlightRef.current ||
+              legendListRef.current?.getScrollableNode() !== container ||
+              isScrollContainerNearBottom(container, 1)
             )
-              scrollToEnd();
-          });
+              return;
+            const remainingGuardMs = programmaticScrollUntilRef.current - performance.now();
+            if (remainingGuardMs > 0) {
+              pendingFollowCorrectionTimerRef.current = window.setTimeout(
+                correctAtEnd,
+                remainingGuardMs,
+              );
+              return;
+            }
+            scrollToEnd();
+          };
+          pendingFollowCorrectionTimerRef.current = window.setTimeout(
+            correctAtEnd,
+            Math.max(0, programmaticScrollUntilRef.current - performance.now()),
+          );
         }
         return;
       }
@@ -205,7 +248,8 @@ export function useChatTranscriptScroll({
       ) {
         return;
       }
-      // the list can report its content end while the viewport is still inside the bottom inset; a detached reader resumes only at the actual bottom
+      // The list can report its content end while the viewport is still inside
+      // the bottom inset. A detached reader resumes only at the actual bottom.
       const atEnd =
         isAtEnd &&
         (!isUserScrollDetachedRef.current ||
@@ -218,7 +262,8 @@ export function useChatTranscriptScroll({
         showScrollDebouncer.current.cancel();
         setShowScrollToBottom(false);
       } else {
-        // a changing layout can temporarily leave the end during output — only user gestures detach live follow, a geometry notification must not
+        // A changing layout can temporarily leave the end during output. Only
+        // user gestures detach live follow; a geometry notification must not.
         showScrollDebouncer.current.maybeExecute();
       }
       isAtEndRef.current = atEnd;
@@ -266,7 +311,7 @@ export function useChatTranscriptScroll({
     [legendListRef, cancelPendingInteractionAnchorAdjustment],
   );
   const onMessagesPointerDownBase = useCallback(() => {
-    clearTranscriptAutoFollow(true);
+    clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
   const releaseTranscriptScrollGesture = useCallback(() => {
     const state = legendListRef.current?.getState();
@@ -277,10 +322,10 @@ export function useChatTranscriptScroll({
   const onMessagesScrollBase = useCallback(() => {}, []);
   const onMessagesTouchEndBase = releaseTranscriptScrollGesture;
   const onMessagesTouchMoveBase = useCallback(() => {
-    clearTranscriptAutoFollow(true);
+    clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
   const onMessagesTouchStartBase = useCallback(() => {
-    clearTranscriptAutoFollow(true);
+    clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
   // Follow outlives the viewport it describes: layout can move a following
   // reader without a gesture. A gesture that starts more than a viewport above
@@ -308,15 +353,17 @@ export function useChatTranscriptScroll({
                 isFollowingFromViewport(container) &&
                 (!upward || isScrollContainerNearBottom(container, 1)),
             };
-      clearTranscriptAutoFollow(true);
+      clearTranscriptAutoFollow();
       pendingScrollGestureRef.current = origin;
-      // native scrolling can settle on the next rendering pass; keep one pending check per gesture burst, preserving ownership from its first event
+      // Native scrolling can settle on the next rendering pass. Keep one
+      // pending check per gesture burst, preserving ownership from its first event.
       pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
         pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
           pendingScrollGestureFrameRef.current = null;
           pendingScrollGestureRef.current = null;
           if (origin.wasFollowing && container.scrollTop >= origin.scrollTop) {
-            // a nested or no-op wheel must not strand follow even if new text increased the distance from the bottom while the gesture settled
+            // A nested or no-op wheel must not strand follow, even if new text
+            // increased the distance from the bottom while the gesture settled.
             setTranscriptScrollDetached(false);
             onIsAtEndChange(true);
             scrollToEnd();
@@ -378,7 +425,7 @@ export function useChatTranscriptScroll({
                 wasFollowing: isFollowingFromViewport(container),
                 keyboard: true,
               };
-        clearTranscriptAutoFollow(true);
+        clearTranscriptAutoFollow();
         pendingScrollGestureRef.current = origin;
         isAtEndRef.current = false;
         showScrollDebouncer.current.maybeExecute();
@@ -391,7 +438,8 @@ export function useChatTranscriptScroll({
       if (!origin?.keyboard) return;
       const previousFrame = pendingScrollGestureFrameRef.current;
       if (previousFrame !== null) window.cancelAnimationFrame(previousFrame);
-      // native key scrolling may begin after keyup — give it rendering time, then recover a no-op/nested gesture instead of holding indefinitely
+      // Native key scrolling may begin after keyup. Give it rendering time to
+      // move, then recover a no-op/nested gesture instead of holding indefinitely.
       const deadline = performance.now() + 150;
       const check = () => {
         pendingScrollGestureFrameRef.current = null;
@@ -435,6 +483,7 @@ export function useChatTranscriptScroll({
   // reads the detached ref in the same commit, and a passive reset would run
   // after it had already skipped the new thread, without re-triggering it.
   useLayoutEffect(() => {
+    cancelPendingFollowCorrection();
     isAtEndRef.current = true;
     settledScrollRequestRef.current += 1;
     settledScrollInFlightRef.current = false;
@@ -443,16 +492,19 @@ export function useChatTranscriptScroll({
     showScrollDebouncer.current.cancel();
     const settle = window.setTimeout(() => setShowScrollToBottom(false), 0);
     return () => window.clearTimeout(settle);
-  }, [activeThreadId, setTranscriptScrollDetached]);
+  }, [activeThreadId, cancelPendingFollowCorrection, setTranscriptScrollDetached]);
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThreadId !== null && autoFollowThreadIdRef.current === activeThreadId;
     if (isUserScrollDetachedRef.current || (!isAtEndRef.current && !shouldFollowPendingTurn)) {
       return;
     }
-    // re-apply the bottom stick only for real transcript messages; tool/work rows shouldn't churn scroll/layout work
+    // Re-apply the bottom stick only for real transcript messages; tool/work
+    // rows can arrive quickly and should not churn scroll/layout work.
     const frameId = window.requestAnimationFrame(() => {
-      // the tail-anchor slide owns the scroll after a send; a re-snap here would hard-jump past the smooth slide mid-flight
+      // The tail-anchor slide owns the scroll after a send; a re-snap here
+      // would hard-jump past the smooth slide mid-flight. Once the anchor
+      // settles the spacer keeps the end position exact, so nothing is missed.
       if (tailAnchorScrollInFlightRef.current || isUserScrollDetachedRef.current) {
         return;
       }
@@ -465,7 +517,15 @@ export function useChatTranscriptScroll({
     };
   }, [activeThreadId, scrollToEnd, transcriptAutoFollowSignal]);
 
-  // committed inset, not a composer ResizeObserver: the inset lands a render after measurement, so an observer-scheduled scroll would race the padding it compensates for
+  // A composer that grows (attachments, approval cards, queued turns) eats into the
+  // transcript's bottom content inset, which would push the tail behind the frosted
+  // surface. Re-stick a transcript that was already parked at the end.
+  //
+  // This is driven by the *committed* inset rather than by a ResizeObserver on the
+  // composer: the inset lands a render after the measurement, so a scroll scheduled
+  // from the observer would race the padding it is supposed to compensate for. Here
+  // the new padding is already in the DOM, so the pre-resize viewport is simply the
+  // current one with the inset delta backed out.
   const previousComposerTranscriptInsetRef = useRef({
     threadId: activeThreadId ?? null,
     insetPx: composerTranscriptInsetPx,
@@ -491,13 +551,17 @@ export function useChatTranscriptScroll({
     });
     if (!wasNearEndBeforeResize) return;
 
-    // compensate by the exact inset delta rather than end-scroll: LegendList re-measures on its own schedule, so an end-scroll in this commit would land a composer-growth short of the tail
+    // Compensate by the exact inset delta rather than asking the list to scroll to its
+    // end: LegendList re-measures the padded viewport on its own schedule, so an
+    // end-scroll issued in this commit would aim at the pre-padding content height and
+    // land a composer-growth short of the tail.
     programmaticScrollUntilRef.current = performance.now() + 200;
     scrollContainer.scrollTop += insetDeltaPx;
   }, [legendListRef, activeThreadId, composerTranscriptInsetPx, isInactiveSplitPane]);
 
   const onScrollToBottom = useCallback(() => {
     cancelPendingScrollGesture();
+    cancelPendingFollowCorrection();
     tailAnchorScrollInFlightRef.current = false;
     setTranscriptScrollDetached(false);
     isAtEndRef.current = true;
@@ -537,7 +601,12 @@ export function useChatTranscriptScroll({
           settledScrollInFlightRef.current = false;
         }
       });
-  }, [legendListRef, cancelPendingScrollGesture, setTranscriptScrollDetached]);
+  }, [
+    legendListRef,
+    cancelPendingScrollGesture,
+    cancelPendingFollowCorrection,
+    setTranscriptScrollDetached,
+  ]);
 
   const previousThreadIdRef = useRef(activeThreadId);
   const pendingStreamingThreadRef = useRef<ThreadId | null>(null);
@@ -609,5 +678,28 @@ export function useChatTranscriptScroll({
     onMessagesTouchMoveBase,
     onMessagesTouchStartBase,
     onMessagesWheelBase,
+  };
+}
+
+interface TranscriptDetachedStore {
+  get: () => boolean;
+  set: (detached: boolean) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+function createTranscriptDetachedStore(): TranscriptDetachedStore {
+  let detached = false;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => detached,
+    set: (next) => {
+      if (next === detached) return;
+      detached = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
   };
 }

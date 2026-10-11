@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { formatDayAwareTimestamp, formatShortTimestamp } from "./timestampFormat";
 
-// ISO strings built from local wall-clock components so expectations are stable across runner timezones
+// Build ISO strings from local wall-clock components so expectations are
+// stable regardless of the timezone the test runner uses.
 function localIso(
   year: number,
   monthIndex: number,
@@ -14,7 +15,7 @@ function localIso(
 }
 
 describe("formatDayAwareTimestamp", () => {
-  const now = new Date(2026, 2, 17, 23, 0);
+  const now = new Date(2026, 2, 17, 23, 0); // Tuesday, March 17 2026, 23:00 local
 
   it("shows only the clock time for same-day messages", () => {
     const isoDate = localIso(2026, 2, 17, 9, 5);
@@ -24,7 +25,7 @@ describe("formatDayAwareTimestamp", () => {
   });
 
   it("prefixes the weekday name for messages from earlier this week", () => {
-    const isoDate = localIso(2026, 2, 16, 23, 59);
+    const isoDate = localIso(2026, 2, 16, 23, 59); // Monday, one calendar day earlier
     const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
       new Date(isoDate),
     );
@@ -34,7 +35,7 @@ describe("formatDayAwareTimestamp", () => {
   });
 
   it("uses the weekday name up to six calendar days back", () => {
-    const isoDate = localIso(2026, 2, 11, 8, 30);
+    const isoDate = localIso(2026, 2, 11, 8, 30); // Wednesday, six days earlier
     const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
       new Date(isoDate),
     );
@@ -44,7 +45,7 @@ describe("formatDayAwareTimestamp", () => {
   });
 
   it("switches to a short date once the weekday name becomes ambiguous", () => {
-    const isoDate = localIso(2026, 2, 10, 8, 30);
+    const isoDate = localIso(2026, 2, 10, 8, 30); // seven days earlier, same weekday as `now`
     const dayLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
       new Date(isoDate),
     );
@@ -66,7 +67,7 @@ describe("formatDayAwareTimestamp", () => {
   });
 
   it("dates future days instead of borrowing a weekday name", () => {
-    const isoDate = localIso(2026, 2, 19, 10, 0);
+    const isoDate = localIso(2026, 2, 19, 10, 0); // two days ahead of `now`
     const dayLabel = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
       new Date(isoDate),
     );

@@ -20,6 +20,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ProviderItemId,
   RuntimeItemId,
   RuntimeTaskId,
   ThreadId,
@@ -27,6 +28,7 @@ import {
 } from "@synara/contracts";
 import {
   Effect,
+  Deferred,
   Exit,
   Layer,
   ManagedRuntime,
@@ -72,6 +74,7 @@ import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { runProviderRuntimeEventPump } from "../../provider/providerRuntimeEventPump.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -125,7 +128,8 @@ function createProviderServiceHarness(options?: { readonly persistedStream?: boo
     compactThread: () => unsupported(),
     closeRuntimeEvents: Effect.void,
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
-    // only the already-persisted path uses this — when present the ingestion ignores streamEvents so ordinary harnesses must not provide it
+    // Only the already-persisted path uses this; when present the ingestion
+    // ignores `streamEvents`, so ordinary harnesses must not provide it.
     ...(options?.persistedStream === true
       ? { streamPersistedEvents: Stream.fromPubSub(persistedEventPubSub) }
       : {}),
@@ -298,6 +302,21 @@ async function waitForProjectedThread(
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+// The first drain stops at a row whose dispatch failed; the second retries it.
+async function drainWithRetry(harness: { readonly drain: () => Promise<void> }) {
+  await harness.drain().catch(() => undefined);
+  await harness.drain();
+}
+
+async function projectedMessage(
+  harness: { readonly readProjectedThread: () => Promise<OrchestrationThread | undefined> },
+  messageId: string,
+) {
+  return (await harness.readProjectedThread())?.messages.find(
+    (message) => message.id === messageId,
+  );
 }
 
 type ProviderRuntimeTestReadModel = OrchestrationReadModel;
@@ -531,6 +550,274 @@ describe("ProviderRuntimeIngestion", () => {
       readProjectedThread,
     };
   }
+
+  it("replays a committed text batch exactly once after an uncertain append and ingestion restart", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    const turnId = asTurnId("batch-recovery-turn");
+    const first: ProviderRuntimeEvent = {
+      type: "content.delta",
+      eventId: asEventId("batch-recovery-first"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("batch-recovery-item"),
+      createdAt: "2026-10-10T00:00:00.000Z",
+      payload: { streamKind: "assistant_text", delta: "Hello " },
+    };
+    const terminal: ProviderRuntimeEvent = {
+      ...first,
+      type: "turn.completed",
+      eventId: asEventId("batch-recovery-terminal"),
+      payload: { state: "completed" },
+    };
+    const attempts: ProviderRuntimeEvent[] = [];
+    const accepted: PersistedProviderRuntimeEvent[] = [];
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const done = yield* Deferred.make<void>();
+          yield* runProviderRuntimeEventPump({
+            provider: "codex",
+            batchAssistantText: true,
+            stream: Stream.make(
+              {
+                ...first,
+                type: "turn.started",
+                eventId: asEventId("batch-recovery-start"),
+                payload: {},
+              },
+              first,
+              {
+                ...first,
+                eventId: asEventId("batch-recovery-second"),
+                payload: { streamKind: "assistant_text", delta: "world" },
+              },
+              terminal,
+            ),
+            processEvent: (event) =>
+              Effect.gen(function* () {
+                const persisted = yield* harness.runtimeEventRepository.append(event);
+                if (event.type === "content.delta") {
+                  attempts.push(event);
+                  if (attempts.length === 1)
+                    return yield* Effect.fail(new Error("commit acknowledged late"));
+                }
+                accepted.push(persisted);
+                if (event.eventId === terminal.eventId) yield* Deferred.succeed(done, undefined);
+              }),
+            updateHealth: () => {},
+            retryBaseDelayMs: 1,
+            retryMaxDelayMs: 1,
+          }).pipe(Effect.forkScoped);
+          yield* Deferred.await(done);
+        }),
+      ),
+    );
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toBe(attempts[1]);
+    expect(accepted.map((row) => row.event.type)).toEqual([
+      "turn.started",
+      "content.delta",
+      "turn.completed",
+    ]);
+    const stored = await Effect.runPromise(
+      harness.runtimeEventRepository.readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: accepted[2]!.sequence,
+        limit: 20,
+      }),
+    );
+    expect(stored).toEqual(accepted);
+    await harness.drain();
+    expect((await projectedMessage(harness, "assistant:batch-recovery-item"))?.text).toBe(
+      "Hello world",
+    );
+    await Effect.runPromise(Scope.close(scope!, Exit.void));
+    const restartedDrain = await harness.restartIngestion();
+    // Late output for a new item remains settled via PR8's durable turn state.
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...first,
+        eventId: asEventId("batch-recovery-late"),
+        itemId: asItemId("batch-recovery-late-item"),
+        payload: { streamKind: "assistant_text", delta: "Late" },
+      }),
+    );
+    await restartedDrain();
+    const projected = await harness.readProjectedThread();
+    expect(projected?.messages.map((message) => [message.text, message.streaming])).toEqual([
+      ["Hello world", false],
+      ["Late", false],
+    ]);
+    expect(
+      await Effect.runPromise(
+        harness.runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      ),
+    ).toBe(await Effect.runPromise(harness.runtimeEventRepository.getHighWaterSequence));
+  });
+
+  it.each([false, true])(
+    "measures real SQLite writes for 260 paced deltas (batching=%s)",
+    async (batchAssistantText) => {
+      const harness = await createHarness({ startIngestion: false, persistedStream: true });
+      const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+      // TEMP triggers observe mutations even when settled text chunks are folded
+      // and deleted. Remove their own counter writes from total_changes below.
+      await Effect.runPromise(
+        sql`CREATE TEMP TABLE measured_delta_writes (table_name TEXT, action TEXT, writes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(table_name, action))`,
+      );
+      const measuredTables = [
+        "provider_runtime_events",
+        "orchestration_events",
+        "orchestration_command_receipts",
+        "message_text_chunks",
+        "projection_thread_messages",
+        "projection_threads",
+        "provider_runtime_event_consumers",
+        "provider_runtime_open_turns",
+      ];
+      for (const table of measuredTables)
+        for (const action of ["INSERT", "UPDATE", "DELETE"]) {
+          await Effect.runPromise(
+            sql`INSERT INTO measured_delta_writes (table_name, action) VALUES (${table}, ${action})`,
+          );
+          await Effect.runPromise(
+            sql.unsafe(
+              `CREATE TEMP TRIGGER measure_${table}_${action} AFTER ${action} ON ${table} BEGIN UPDATE measured_delta_writes SET writes = writes + 1 WHERE table_name = '${table}' AND action = '${action}'; END`,
+            ),
+          );
+        }
+      const readCounts = () =>
+        Effect.runPromise(sql<{
+          changes: number;
+          runtimeRows: number;
+          orchestrationRows: number;
+          receipts: number;
+          chunks: number;
+        }>`SELECT total_changes() AS changes,
+      (SELECT COUNT(*) FROM provider_runtime_events WHERE event_type = 'content.delta') AS runtimeRows,
+      (SELECT COUNT(*) FROM orchestration_events) AS orchestrationRows,
+      (SELECT COUNT(*) FROM orchestration_command_receipts) AS receipts,
+      (SELECT COUNT(*) FROM message_text_chunks) AS chunks`);
+      const before = (await readCounts())[0]!;
+      const base: ProviderRuntimeEvent = {
+        type: "content.delta",
+        eventId: asEventId("measure-0"),
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("measure-turn"),
+        itemId: asItemId("measure-item"),
+        createdAt: "2026-10-10T00:00:00.000Z",
+        payload: { streamKind: "assistant_text", delta: "abcdefghijkl" },
+      };
+      const deltas = Array.from(
+        { length: 260 },
+        (_, index): ProviderRuntimeEvent => ({ ...base, eventId: asEventId(`measure-${index}`) }),
+      );
+      const terminal: ProviderRuntimeEvent = {
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("measure-terminal"),
+        payload: { state: "completed" },
+      };
+      const events: ProviderRuntimeEvent[] = [
+        { ...base, type: "turn.started", eventId: asEventId("measure-start"), payload: {} },
+        ...deltas,
+        terminal,
+      ];
+      const admittedAt = new Map<EventId, number>();
+      const appendDelayMs: number[] = [];
+      const durableDelayMs: number[] = [];
+      const start = performance.now();
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const done = yield* Deferred.make<void>();
+            yield* runProviderRuntimeEventPump({
+              provider: "codex",
+              batchAssistantText,
+              stream: Stream.fromIterable(events).pipe(
+                Stream.mapEffect((event) =>
+                  Effect.sleep(10).pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        admittedAt.set(event.eventId, performance.now());
+                        return event;
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+              processEvent: (event) =>
+                Effect.gen(function* () {
+                  if (event.type === "content.delta")
+                    appendDelayMs.push(performance.now() - admittedAt.get(event.eventId)!);
+                  yield* harness.runtimeEventRepository.append(event);
+                  if (event.type === "content.delta")
+                    durableDelayMs.push(performance.now() - admittedAt.get(event.eventId)!);
+                  if (event.eventId === terminal.eventId) yield* Deferred.succeed(done, undefined);
+                }),
+              updateHealth: () => {},
+            }).pipe(Effect.forkScoped);
+            yield* Deferred.await(done);
+          }),
+        ),
+      );
+      await harness.drain();
+      const after = (await readCounts())[0]!;
+      const writesByTable = await Effect.runPromise(
+        sql<{
+          tableName: string;
+          action: string;
+          writes: number;
+        }>`SELECT table_name AS tableName, action, writes FROM measured_delta_writes WHERE writes > 0 ORDER BY table_name, action`,
+      );
+      const counts = Object.fromEntries(
+        Object.keys(after).map((key) => [
+          key,
+          after[key as keyof typeof after] - before[key as keyof typeof before],
+        ]),
+      );
+      counts.changes! -= writesByTable.reduce((sum, row) => sum + row.writes, 0);
+      const message = await projectedMessage(harness, "assistant:measure-item");
+      expect(message?.text).toBe("abcdefghijkl".repeat(260));
+      expect(message?.streaming).toBe(false);
+      if (batchAssistantText) expect(counts.runtimeRows).toBeLessThan(130);
+      else expect(counts.runtimeRows).toBe(260);
+      expect(
+        writesByTable.find(
+          (row) => row.tableName === "message_text_chunks" && row.action === "INSERT",
+        )?.writes,
+      ).toBe(counts.runtimeRows);
+      const summary = (values: number[]) => {
+        const sorted = values.toSorted((a, b) => a - b);
+        return {
+          p50: sorted[Math.floor(sorted.length * 0.5)],
+          p95: sorted[Math.floor(sorted.length * 0.95)],
+          max: sorted.at(-1),
+        };
+      };
+      const measurement = {
+        batchAssistantText,
+        sourceDeltas: 260,
+        textChars: message!.text.length,
+        counts,
+        writesByTable,
+        appendDelayMs: summary(appendDelayMs),
+        durableDelayMs: summary(durableDelayMs),
+        elapsedMs: performance.now() - start,
+      };
+      const measureDir = process.env.SYNARA_RUNTIME_DELTA_MEASURE_DIR;
+      if (measureDir) {
+        fs.mkdirSync(measureDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(measureDir, batchAssistantText ? "batch.json" : "baseline.json"),
+          JSON.stringify(measurement, null, 2),
+        );
+      }
+    },
+    30_000,
+  );
 
   it.each(["replay", "live"] as const)(
     "preserves workflow phase agents and poll snapshots during %s ingestion",
@@ -1488,7 +1775,8 @@ describe("ProviderRuntimeIngestion", () => {
 
       if (failPrefixAck) {
         const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
-        // only the completed prefix fails to ack — skipping ahead through the page would hide the failure
+        // Only the completed prefix fails to ack: incorrectly skipping ahead
+        // through the rest of the page would succeed and hide this failure.
         await Effect.runPromise(sql`
         CREATE TRIGGER fail_prefix_ack BEFORE UPDATE ON provider_runtime_event_consumers
         WHEN NEW.last_acked_sequence = ${sql.literal(String(prefixRow.sequence))}
@@ -1558,7 +1846,10 @@ describe("ProviderRuntimeIngestion", () => {
       `provider:${rejectedEvent.eventId}:thread-activity-append:${lateThreadId}:runtime.warning:${rejectedEvent.eventId}`,
     );
 
-    // the exact command this event replays into was already durably rejected (thread-2 didn't exist at first dispatch) — every replay raises PreviouslyRejected so the row can never succeed
+    // Model a durable rejection: the exact command this event replays into was
+    // already rejected by an invariant (thread-2 did not exist yet when it was
+    // first dispatched), so every replay raises PreviouslyRejected — retrying
+    // the journal row can never succeed.
     await expect(
       Effect.runPromise(
         harness.engine.dispatch({
@@ -1830,6 +2121,7 @@ describe("ProviderRuntimeIngestion", () => {
           ...base,
           payload: { streamKind: "assistant_text", delta },
         });
+        // Untyped provider lifecycle notifications project no visible tool row.
         await push({
           type: "item.updated",
           eventId: asEventId(`cjk-update-${index}`),
@@ -1870,6 +2162,7 @@ describe("ProviderRuntimeIngestion", () => {
     const push = (event: ProviderRuntimeEvent) =>
       Effect.runPromise(harness.runtimeEventRepository.append(event));
     const eventId = (suffix: string) => asEventId(`evt-segment-${suffix}`);
+    // Plan text before any tool activity.
     await push({
       type: "content.delta",
       eventId: eventId("1"),
@@ -1890,12 +2183,14 @@ describe("ProviderRuntimeIngestion", () => {
       itemId,
       payload: { streamKind: "assistant_text", delta: "scan files." },
     });
+    // A tool call runs between the second and third text deltas.
     const toolItemId = asItemId("tool-segment-interleave");
     await push({
       type: "item.started",
       eventId: eventId("3"),
       provider: "pi",
-      // provider events can share the same millisecond — the causal boundary must still split assistant text around the tool row
+      // Provider events can share the same millisecond. The causal event
+      // boundary must still split assistant text around the tool row.
       createdAt: "2026-07-14T00:10:01.000Z",
       threadId,
       turnId,
@@ -1974,7 +2269,9 @@ describe("ProviderRuntimeIngestion", () => {
     ).toEqual([
       {
         startedAt: "2026-07-14T00:10:00.000Z",
-        // live delivery stamps each segment with its own last delta's emit time — endedAt reflects when that slice finished arriving
+        // Live (streaming) delivery stamps each segment with its own last
+        // delta's emit time, so endedAt reflects when that slice actually
+        // finished arriving rather than the terminal event's time.
         endedAt: "2026-07-14T00:10:01.000Z",
         text: "Plan: scan files.",
       },
@@ -1985,7 +2282,8 @@ describe("ProviderRuntimeIngestion", () => {
       },
       {
         startedAt: "2026-07-14T00:10:40.000Z",
-        // the trailing segment closes at message completion — no later boundary exists to stamp it
+        // The trailing segment closes when the message completes rather than
+        // at its last delta, since no later boundary exists to stamp it.
         endedAt: "2026-07-14T00:10:45.000Z",
         text: "Done.",
       },
@@ -2070,6 +2368,63 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("One message.");
     expect(message?.textSegments).toBeUndefined();
+  });
+
+  it("does not split the reply a Claude Monitor event woke", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-monitor-woken");
+    const itemId = asItemId("item-monitor-woken");
+    const push = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+    const delta = (suffix: string, createdAt: string, text: string): ProviderRuntimeEvent => ({
+      type: "content.delta",
+      eventId: asEventId(`evt-monitor-woken-${suffix}`),
+      provider: "claudeAgent",
+      createdAt,
+      threadId,
+      turnId,
+      itemId,
+      payload: { streamKind: "assistant_text", delta: text },
+    });
+    await push(delta("1", "2026-07-14T00:30:01.000Z", "Still "));
+    // The transcript read lands mid-reply, dated at the notification before it.
+    await push({
+      type: "runtime.warning",
+      eventId: asEventId("evt-monitor-woken-event"),
+      provider: "claudeAgent",
+      createdAt: "2026-07-14T00:30:00.000Z",
+      threadId,
+      turnId,
+      payload: {
+        message: "CI checks — Lint: pass",
+        detail: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+      },
+    });
+    await push(delta("2", "2026-07-14T00:30:02.000Z", "running."));
+    await push({
+      type: "item.completed",
+      eventId: asEventId("evt-monitor-woken-complete"),
+      provider: "claudeAgent",
+      createdAt: "2026-07-14T00:30:03.000Z",
+      threadId,
+      turnId,
+      itemId,
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message) => message.id === "assistant:item-monitor-woken" && message.streaming === false,
+      ),
+    );
+    const message = thread.messages.find((entry) => entry.id === "assistant:item-monitor-woken");
+    expect(message?.text).toBe("Still running.");
+    expect(message?.textSegments).toBeUndefined();
+    expect(
+      thread.activities.find((activity) => activity.summary === "Monitor event")?.createdAt,
+    ).toBe("2026-07-14T00:30:00.000Z");
   });
 
   it("maps turn started/completed events into thread session updates", async () => {
@@ -2258,6 +2613,7 @@ describe("ProviderRuntimeIngestion", () => {
       ).toBe(false);
 
       if (outcome === "user-interrupt") {
+        // A user stop in the session gap pauses independently of provider events.
         await Effect.runPromise(
           harness.engine.dispatch({
             type: "thread.turn.interrupt",
@@ -2543,7 +2899,8 @@ describe("ProviderRuntimeIngestion", () => {
       const harness = await createHarness();
       const now = new Date().toISOString();
 
-      // a request left by a previous runtime — its in-memory callback can't survive restart so no response can ever consume it
+      // A user-input request left behind by a previous runtime: its in-memory
+      // callback cannot survive the restart, so no response can ever consume it.
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.activity.append",
@@ -2602,7 +2959,7 @@ describe("ProviderRuntimeIngestion", () => {
         ),
       });
 
-      // re-ingesting another session start must not duplicate the settlement
+      // Re-ingesting another session start must not duplicate the settlement.
       harness.emit({
         type: "session.started",
         eventId: asEventId("evt-session-restarted-orphaned-again"),
@@ -3088,7 +3445,8 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("recovers generated-image references from persisted turn activities", async () => {
-    // simulates a restart after the image activity was projected — no matching entry in the in-memory cache
+    // Simulates a server restart after the image activity was projected: this
+    // ingestion instance has no matching entry in its in-memory pending cache.
     const harness = await createHarness();
     const turnId = asTurnId("turn-image-persisted-recovery");
     const imagePath = "/tmp/provider-thread/persisted-recovery.png";
@@ -3112,12 +3470,14 @@ describe("ProviderRuntimeIngestion", () => {
       itemId: asItemId("persisted-recovery-answer"),
       payload: { itemType: "assistant_message", status: "completed" },
     });
-    await waitForThread(harness.engine, (thread) =>
-      thread.messages.some(
-        (message) =>
-          message.id === "assistant:persisted-recovery-answer" && message.streaming === false,
+    await harness.drain();
+    // The intentionally empty final item creates no row of its own; the image
+    // flush at turn settle gives it the image as its body.
+    expect(
+      (await harness.readProjectedThread())?.messages.some(
+        (message) => message.id === "assistant:persisted-recovery-answer",
       ),
-    );
+    ).toBe(false);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -3168,7 +3528,11 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("attaches generated images to the empty terminal assistant message, not collapsed commentary", async () => {
-    // Codex emits commentary, then the image artifact, then an intentionally empty final item (the artifact is the answer) — the image must land on the terminal message; on commentary it folds into the disclosure and the visible row renders "(empty response)"
+    // Regression: Codex emits commentary, then the image artifact, then a distinct
+    // *intentionally empty* final assistant item (the artifact is the answer). The
+    // image must end up on the terminal message the transcript keeps visible — an
+    // image attached to commentary is folded into the "Worked for…" disclosure and
+    // the visible row renders "(empty response)".
     const harness = await createHarness();
     const turnId = asTurnId("turn-image-empty-final");
     const imagePath = "/tmp/provider-thread/empty-final.png";
@@ -3227,7 +3591,7 @@ describe("ProviderRuntimeIngestion", () => {
         data: { kind: "codex.generated_image", path: imagePath, callId: "image-call" },
       },
     });
-    // the empty final item — no deltas, no fallback detail; mirrors the real trace
+    // The empty final item: no deltas, no fallback detail — mirrors the real trace.
     harness.emit({
       type: "item.completed",
       eventId: asEventId("evt-empty-final-answer-complete"),
@@ -3257,6 +3621,8 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     );
 
+    // The terminal message owns the image; commentary stays untouched and no
+    // synthetic image-only message was created.
     const commentary = thread.messages.find((message) => message.id === "assistant:commentary");
     expect(commentary?.text).toBe("Generating the image now…");
     const messagesWithImage = thread.messages.filter((message) =>
@@ -3354,12 +3720,15 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     );
 
-    // replay the same event with a fresh eventId — the dedup guard must prevent further dispatches since the message already references the image
+    // Replay the same image_generation_end event with a fresh eventId (provider would use a
+    // new id even for an idempotent replay). The dedup guard should prevent any further
+    // delta or complete dispatches because the target message already references the image.
     harness.emit({
       ...imageEvent,
       eventId: asEventId("evt-replay-image-complete-2"),
     });
 
+    // Give the ingestion worker a beat to process the replay.
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const finalText = await Effect.runPromise(
@@ -3372,6 +3741,7 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     );
 
+    // Same text, still finalized, and the image markdown is not duplicated.
     expect(finalText).toBe(eventCountBeforeReplay);
     const occurrences = finalText.split(`![Generated image](${imagePath})`).length - 1;
     expect(occurrences).toBe(1);
@@ -4733,7 +5103,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    // unbound turns default to streaming — buffered requires an explicit request
+    // Unbound turns default to streaming; buffered requires an explicit request.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -4808,17 +5178,22 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-buffered-whitespace" && !message.streaming,
+    await harness.drain();
+    // Nothing renderable was ever produced, so completion creates no empty row.
+    const finalReadModel = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      finalReadModel.threads
+        .find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))
+        ?.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-buffered-whitespace",
+        ),
+    ).toBe(false);
+    expect(
+      (await harness.readProjectedThread())?.messages.some(
+        (message) => message.id === "assistant:item-buffered-whitespace",
       ),
-    );
-    const message = thread.messages.find(
-      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered-whitespace",
-    );
-    expect(message?.text).toBe("");
-    expect(message?.streaming).toBe(false);
+    ).toBe(false);
   });
 
   it.each([
@@ -4941,7 +5316,7 @@ describe("ProviderRuntimeIngestion", () => {
           const afterGrace = await waitForThread(harness.engine, (entry) =>
             entry.messages.some(
               (message: ProviderRuntimeTestMessage) =>
-                message.id === "assistant:item-after-buffered-grace" && message.streaming,
+                message.id === "assistant:item-after-buffered-grace" && !message.streaming,
             ),
           );
           expect(
@@ -5383,7 +5758,8 @@ describe("ProviderRuntimeIngestion", () => {
       secondThreadId,
     );
 
-    // a terminal event for the buffered turn must neither erase its policy for late events nor disturb the active streaming turn on another thread
+    // A terminal event for the buffered turn must neither erase its policy for
+    // late events nor disturb the still-active streaming turn on another thread.
     harness.emit({
       type: "content.delta",
       eventId: asEventId("evt-late-delta-overlap-buffered"),
@@ -5702,7 +6078,9 @@ describe("ProviderRuntimeIngestion", () => {
     });
     await harness.drain();
 
-    // a causally earlier request arriving late belongs to the already-settled unmatched turn — discarded rather than queued ahead of the next real one
+    // The causally earlier request can arrive late from the independent domain
+    // stream. It belongs to the already-settled unmatched turn and must be
+    // discarded rather than queued ahead of the next real request.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -7915,7 +8293,10 @@ describe("ProviderRuntimeIngestion", () => {
       }),
     );
 
-    // a later event for the tombstoned child must not resurrect it — thread.create would be rejected and the rejection stored against a deterministic id, failing every later replay
+    // A later provider event for the same child must not try to resurrect the
+    // tombstoned thread: `thread.create` would be rejected, and the rejection is
+    // stored against a deterministic command id, so every later replay of this
+    // event would fail on the stored rejection.
     harness.emit({
       ...collabEvent,
       eventId: asEventId("evt-collab-deleted-child-2"),
@@ -7927,7 +8308,8 @@ describe("ProviderRuntimeIngestion", () => {
     const child = readModel.threads.find((thread) => thread.id === childThreadId);
     expect(child?.deletedAt).not.toBeNull();
 
-    // the journal keeps flowing — a blocked row would pin the cursor and stall every thread's projection
+    // The journal keeps flowing: a blocked row would pin the cursor and stall
+    // every thread's projection.
     harness.emit({
       type: "runtime.warning",
       eventId: asEventId("evt-after-deleted-child"),
@@ -7970,7 +8352,10 @@ describe("ProviderRuntimeIngestion", () => {
       },
     };
 
-    // a row the startup rebuild can never replay must degrade to a warning, not a crash loop
+    // Bind the child-create command id to a rejected command, the way a build
+    // that reshaped provider command ids leaves receipts the next build can
+    // never reuse. The startup rebuild runs on the server's boot path, so a row
+    // it can never replay must degrade to a warning, not a crash loop.
     const rejected = await Effect.runPromise(
       Effect.result(
         harness.engine.dispatch({
@@ -8115,6 +8500,259 @@ describe("ProviderRuntimeIngestion", () => {
     expect(
       parent?.activities.filter((activity) => activity.kind === "subagent.materialization.capped"),
     ).toHaveLength(1);
+  });
+
+  it("records a subagent's brief on its child thread as a message from the parent agent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const childThreadId = asThreadId("subagent:thread-1:toolu_brief");
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-brief-collab"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("toolu_brief"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Subagent task",
+        data: {
+          toolCallId: "toolu_brief",
+          toolName: "Agent",
+          input: { description: "Audit SQL", prompt: "Audit the SQL changes." },
+          receiverThreadId: "toolu_brief",
+          nickname: "Audit SQL",
+          prompt: "Audit the SQL changes.",
+        },
+      },
+    });
+    const briefEvent = {
+      type: "item.completed",
+      eventId: asEventId("evt-brief-message"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-brief"),
+      itemId: asItemId("brief-uuid-1"),
+      providerRefs: { providerThreadId: "toolu_brief", providerParentThreadId: "thread-1" },
+      payload: {
+        itemType: "user_message",
+        status: "completed",
+        title: "Subagent brief",
+        detail: "Audit the SQL changes.",
+      },
+    } as const;
+    harness.emit(briefEvent);
+    await harness.drain();
+    // A journal replay of the same event must not duplicate the brief.
+    harness.emit(briefEvent);
+    await harness.drain();
+
+    const child = await waitForThread(
+      harness.engine,
+      (thread) => thread.messages.length > 0,
+      2000,
+      childThreadId,
+    );
+    expect(
+      child.messages.map((message) => ({
+        role: message.role,
+        text: message.text,
+        dispatchOrigin: message.dispatchOrigin,
+      })),
+    ).toEqual([{ role: "user", text: "Audit the SQL changes.", dispatchOrigin: "agent" }]);
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const parent = readModel.threads.find((thread) => thread.id === "thread-1");
+    expect(parent?.messages.some((message) => message.text === "Audit the SQL changes.")).toBe(
+      false,
+    );
+  });
+
+  it("titles provider-native children from their prompt and never from a raw id", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-unnamed-child-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-unnamed-child"),
+      itemId: asItemId("item-unnamed-child"),
+      providerRefs: {
+        providerThreadId: "01a1223d-49c0-73c3-b6e3-1f11c74f2c18",
+        providerParentThreadId: "parent-provider-1",
+      },
+      payload: { streamKind: "assistant_text", delta: "Working." },
+    });
+    const unnamed = await waitForThread(
+      harness.engine,
+      () => true,
+      2000,
+      asThreadId("subagent:thread-1:01a1223d-49c0-73c3-b6e3-1f11c74f2c18"),
+    );
+    expect(unnamed.title).toBe("Subagent");
+
+    // The spawn arrives later with only a prompt: the placeholder takes its first line.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-prompt-spawn"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-prompt-spawn"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Subagent",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            receiverThreadIds: ["01a1223d-49c0-73c3-b6e3-1f11c74f2c18"],
+            prompt:
+              "Count the lines of calc.py with wc and report the exact number back to me in one line.\nThen stop.",
+          },
+        },
+      },
+    });
+    const titled = await waitForThread(
+      harness.engine,
+      (thread) => thread.title !== "Subagent",
+      2000,
+      asThreadId("subagent:thread-1:01a1223d-49c0-73c3-b6e3-1f11c74f2c18"),
+    );
+    expect(titled.title).toBe("Count the lines of calc.py with wc and report the exact num…");
+  });
+
+  it("records the spawning subagent thread as the source of a nested subagent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-nested-spawn"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-outer-child"),
+      itemId: asItemId("toolu_inner"),
+      providerRefs: {
+        providerThreadId: "toolu_outer",
+        providerParentThreadId: "thread-1",
+        providerItemId: ProviderItemId.makeUnsafe("toolu_inner"),
+      },
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "inProgress",
+        title: "Subagent task",
+        data: {
+          toolCallId: "toolu_inner",
+          toolName: "Agent",
+          input: { description: "Inner worker", prompt: "Run echo nested." },
+          receiverThreadId: "toolu_inner",
+          nickname: "Inner worker",
+          prompt: "Run echo nested.",
+        },
+      },
+    });
+
+    const inner = await waitForThread(
+      harness.engine,
+      () => true,
+      2000,
+      asThreadId("subagent:thread-1:toolu_inner"),
+    );
+    expect(inner.parentThreadId).toBe("thread-1");
+    expect(inner.sourceThreadId).toBe("subagent:thread-1:toolu_outer");
+    expect(inner.title).toBe("Inner worker");
+  });
+
+  it("never records the launching conversation as a subagent of its own subagent", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    // Inside the "survey" child, a collab call names both a new child and the
+    // root conversation that launched survey (Codex reports back to "root").
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-child-collab"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-child-collab"),
+      providerRefs: {
+        providerThreadId: "codex-survey",
+        providerParentThreadId: "codex-root",
+      },
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Subagent",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            receiverThreadIds: ["codex-runner", "codex-root"],
+            prompt: "Run wc -l calc.py.",
+          },
+        },
+      },
+    });
+
+    const runner = await waitForThread(
+      harness.engine,
+      () => true,
+      2000,
+      asThreadId("subagent:thread-1:codex-runner"),
+    );
+    expect(runner.sourceThreadId).toBe("subagent:thread-1:codex-survey");
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    expect(readModel.threads.some((thread) => thread.id === "subagent:thread-1:codex-root")).toBe(
+      false,
+    );
+  });
+
+  it("publishes the native subagent cap notice once across distinct overflowing events", async () => {
+    const harness = await createHarness();
+    const collabEvent = (eventId: string, receiverThreadIds: ReadonlyArray<string>) =>
+      ({
+        type: "item.updated",
+        eventId: asEventId(eventId),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-native-cap"),
+        itemId: asItemId(`item-${eventId}`),
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Task",
+          data: { item: { type: "collabAgentToolCall", receiverThreadIds } },
+        },
+      }) as const;
+
+    harness.emit(
+      collabEvent(
+        "evt-cap-first",
+        Array.from({ length: 21 }, (_, index) => `cap-child-${index}`),
+      ),
+    );
+    await harness.drain();
+    harness.emit(collabEvent("evt-cap-second", ["cap-child-extra-1", "cap-child-extra-2"]));
+    await harness.drain();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const notices =
+      readModel.threads
+        .find((thread) => thread.id === "thread-1")
+        ?.activities.filter((activity) => activity.kind === "subagent.materialization.capped") ??
+      [];
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.summary).toContain("Subagent limit reached");
+    expect(notices[0]?.turnId).toBe("turn-native-cap");
   });
 
   it("routes fallback-annotated child events without polluting the parent projection", async () => {
@@ -8461,7 +9099,8 @@ describe("ProviderRuntimeIngestion", () => {
           }),
         );
       }
-      // the bookkeeping variant aborts after the cursor UPDATE — that write must also roll back
+      // Fail inside the real acknowledgement transaction. The bookkeeping
+      // variant aborts after the cursor UPDATE, which must also roll back.
       await Effect.runPromise(
         failure === "bookkeeping-error"
           ? sql`CREATE TRIGGER fail_page_ack BEFORE INSERT ON provider_runtime_open_turns
@@ -8538,7 +9177,8 @@ describe("ProviderRuntimeIngestion", () => {
         ),
       );
     }
-    // every notification arrives while the first's drain is in flight — the rest get picked up as pages by that drain
+    // Every notification arrives while the first one's drain is still in
+    // flight, so the rest must be picked up as pages by that drain.
     for (const row of rows) harness.emitPersisted(row);
     const target = rows.at(-1)!.sequence;
     const deadline = Date.now() + 5_000;
@@ -8557,10 +9197,114 @@ describe("ProviderRuntimeIngestion", () => {
       `,
     );
     expect(acks.at(-1)?.toSequence).toBe(target);
-    // one ack for the first notification, then the backlog in pages — never one transaction per event
+    // One acknowledgement for the first notification, then the backlog in
+    // (at most) pages; never one transaction per event.
     expect(acks.length).toBeLessThan(rows.length);
     expect(acks.length).toBeLessThanOrEqual(4);
   });
+
+  it.each(["turn.completed", "turn.aborted", "session.exited"] as const)(
+    "keeps a newer turn's live tools after a stale %s",
+    async (type) => {
+      const harness = await createHarness();
+      const parentThreadId = asThreadId("thread-1");
+      const threadId = asThreadId("subagent:thread-1:reused-child");
+      const providerRefs = { providerThreadId: "reused-child", providerParentThreadId: "thread-1" };
+      const turnId = asTurnId("new-child-turn");
+      const createdAt = new Date().toISOString();
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("new-native-child-turn"),
+        payload: {},
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+      });
+      await harness.drain();
+      // The replacement generation owns a newer turn on the persisted child.
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("replacement-child-session"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      harness.emit({
+        type: "item.started",
+        eventId: asEventId("new-child-tool"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+        itemId: asItemId("reused-tool"),
+        payload: { itemType: "command_execution", status: "inProgress" },
+      });
+      await harness.drain();
+      const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+      const tools = () =>
+        runtime!.runPromise(sql<{ readonly itemId: string }>`
+        SELECT item_id AS "itemId" FROM projection_thread_active_tools WHERE thread_id = ${threadId}`);
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type,
+        eventId: asEventId("old-child-terminal"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId: asTurnId("old-child-turn"),
+        createdAt,
+        payload:
+          type === "turn.completed"
+            ? { state: "completed" }
+            : type === "session.exited"
+              ? { exitKind: "graceful" }
+              : {},
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId("old-child-tool-close"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId: asTurnId("old-child-turn"),
+        createdAt,
+        itemId: asItemId("reused-tool"),
+        payload: { itemType: "command_execution", status: "completed" },
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([{ itemId: "reused-tool" }]);
+      expect((await harness.readProjectedThread(threadId))?.session?.activeTurnId).toBe(turnId);
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("new-child-terminal"),
+        provider: "codex",
+        threadId: parentThreadId,
+        providerRefs,
+        turnId,
+        createdAt,
+        payload: { state: "completed" },
+      });
+      await harness.drain();
+      expect(await tools()).toEqual([]);
+    },
+  );
 
   it("maintains durable last-activity + in-flight tool rows for the worker monitor", async () => {
     const harness = await createHarness();
@@ -8720,5 +9464,633 @@ describe("ProviderRuntimeIngestion", () => {
     await harness.drain();
     row = (await sessionRow())[0];
     expect(row?.lastActivityAt).toBe("2026-09-10T00:27:05.000Z");
+  });
+
+  describe("robustness", () => {
+    type Harness = Awaited<ReturnType<typeof createHarness>>;
+    type EngineCommand = Parameters<OrchestrationEngineShape["dispatch"]>[0];
+    const threadId = asThreadId("thread-1");
+    const at = "2026-10-10T09:00:00.000Z";
+
+    const push = (harness: Harness, event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+
+    // A transient persistence fault on exactly one command. The journal row is
+    // retried from the same cursor with the process-local buffers left as they
+    // were when the failure happened.
+    const failDispatchOnce = (harness: Harness, matches: (command: EngineCommand) => boolean) => {
+      const dispatch = harness.engine.dispatch;
+      const state = { failed: false };
+      const spy = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) => {
+        if (!state.failed && matches(command)) {
+          state.failed = true;
+          return Effect.die(new Error("injected transient dispatch failure"));
+        }
+        return dispatch(command);
+      });
+      return { state, restore: () => spy.mockRestore() };
+    };
+
+    const startTurn = async (
+      harness: Harness,
+      turnId: TurnId,
+      assistantDeliveryMode: "buffered" | "streaming",
+    ) => {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-start-${turnId}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`request-${turnId}`),
+            role: "user",
+            text: "go",
+            attachments: [],
+          },
+          assistantDeliveryMode,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: at,
+        }),
+      );
+      await harness.drain();
+      await push(harness, {
+        type: "turn.started",
+        eventId: asEventId(`started-${turnId}`),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId,
+        payload: {},
+      });
+    };
+
+    const assistantDelta = (
+      turnId: TurnId,
+      itemId: string,
+      eventId: string,
+      delta: string,
+      provider: ProviderKind = "codex",
+    ): ProviderRuntimeEvent => ({
+      type: "content.delta",
+      eventId: asEventId(eventId),
+      provider,
+      createdAt: at,
+      threadId,
+      turnId,
+      itemId: asItemId(itemId),
+      payload: { streamKind: "assistant_text", delta },
+    });
+
+    const assistantCompleted = (
+      turnId: TurnId,
+      itemId: string,
+      eventId: string,
+      detail?: string,
+    ): ProviderRuntimeEvent => ({
+      type: "item.completed",
+      eventId: asEventId(eventId),
+      provider: "codex",
+      createdAt: at,
+      threadId,
+      turnId,
+      itemId: asItemId(itemId),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        ...(detail !== undefined ? { detail } : {}),
+      },
+    });
+
+    const turnCompleted = (turnId: TurnId | undefined, eventId: string): ProviderRuntimeEvent =>
+      ({
+        type: "turn.completed",
+        eventId: asEventId(eventId),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        ...(turnId ? { turnId } : {}),
+        payload: { state: "completed" },
+      }) as ProviderRuntimeEvent;
+
+    const engineMessage = async (harness: Harness, messageId: string) =>
+      (await Effect.runPromise(harness.engine.getReadModel())).threads
+        .find((thread) => thread.id === threadId)
+        ?.messages.find((message) => message.id === messageId);
+
+    it.each(["streaming", "buffered"] as const)(
+      "keeps a message settled when a %s delta arrives after its turn completed",
+      async (mode) => {
+        const harness = await createHarness();
+        const turnId = asTurnId(`turn-late-${mode}`);
+        await startTurn(harness, turnId, mode);
+        await push(harness, assistantDelta(turnId, "late-item", `late-${mode}-1`, "Answer."));
+        await push(harness, assistantCompleted(turnId, "late-item", `late-${mode}-complete`));
+        await push(harness, turnCompleted(turnId, `late-${mode}-turn-completed`));
+        await harness.drain();
+        expect(await projectedMessage(harness, "assistant:late-item")).toMatchObject({
+          text: "Answer.",
+          streaming: false,
+        });
+
+        // The provider flushes one more chunk for the finished item, and a new
+        // item, after the terminal event already finalized the turn.
+        await push(harness, assistantDelta(turnId, "late-item", `late-${mode}-2`, " Tail."));
+        await push(harness, assistantDelta(turnId, "late-new-item", `late-${mode}-3`, "Extra."));
+        await harness.drain();
+
+        if (mode === "buffered") {
+          // Buffered delivery keeps holding late text for a late completion;
+          // the next turn proves none is coming and settles it, unlost.
+          expect(await projectedMessage(harness, "assistant:late-item")).toMatchObject({
+            text: "Answer.",
+            streaming: false,
+          });
+          expect(await projectedMessage(harness, "assistant:late-new-item")).toBeUndefined();
+          await push(harness, {
+            type: "turn.started",
+            eventId: asEventId("late-buffered-next-turn"),
+            provider: "codex",
+            createdAt: at,
+            threadId,
+            turnId: asTurnId("turn-late-buffered-next"),
+            payload: {},
+          });
+          await harness.drain();
+        }
+
+        for (const read of [projectedMessage, engineMessage]) {
+          expect(await read(harness, "assistant:late-item")).toMatchObject({
+            text: "Answer. Tail.",
+            streaming: false,
+          });
+          expect(await read(harness, "assistant:late-new-item")).toMatchObject({
+            text: "Extra.",
+            streaming: false,
+          });
+        }
+      },
+    );
+
+    it("settles a new late assistant item after ingestion restarts", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-ended-before-restart");
+      await startTurn(harness, turnId, "buffered");
+      await push(
+        harness,
+        assistantDelta(turnId, "restart-answer", "restart-answer-delta", "Answer."),
+      );
+      await push(harness, assistantCompleted(turnId, "restart-answer", "restart-answer-completed"));
+      await push(harness, turnCompleted(turnId, "restart-turn-completed"));
+      await harness.drain();
+
+      await Effect.runPromise(Scope.close(scope!, Exit.void));
+      scope = null;
+      const drain = await harness.restartIngestion();
+      await push(
+        harness,
+        assistantDelta(turnId, "restart-answer", "restart-answer-tail", " Tail."),
+      );
+      await push(
+        harness,
+        assistantDelta(turnId, "restart-new-item", "restart-new-item-delta", "Extra."),
+      );
+      await drain();
+      await push(harness, {
+        type: "turn.started",
+        eventId: asEventId("restart-next-turn-started"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId: asTurnId("turn-after-restart"),
+        payload: {},
+      });
+      await drain();
+
+      for (const read of [projectedMessage, engineMessage]) {
+        expect(await read(harness, "assistant:restart-answer")).toMatchObject({
+          text: "Answer. Tail.",
+          streaming: false,
+        });
+        expect(await read(harness, "assistant:restart-new-item")).toMatchObject({
+          text: "Extra.",
+          streaming: false,
+        });
+      }
+    });
+
+    it("attaches images to a later nonempty completion instead of an earlier skipped item", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-image-after-empty-item");
+      const imagePath = "/tmp/provider-thread/later-answer.png";
+      await startTurn(harness, turnId, "streaming");
+      await push(harness, assistantCompleted(turnId, "earlier-empty", "earlier-empty-completed"));
+      await push(
+        harness,
+        assistantCompleted(turnId, "later-answer", "later-answer-completed", "Final answer."),
+      );
+      await push(harness, {
+        type: "item.completed",
+        eventId: asEventId("later-answer-image-completed"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId,
+        itemId: asItemId("later-answer-image"),
+        payload: {
+          itemType: "image_generation",
+          status: "completed",
+          title: "Generated image",
+          detail: imagePath,
+          data: { kind: "codex.generated_image", path: imagePath, callId: "later-answer-image" },
+        },
+      });
+      await push(harness, turnCompleted(turnId, "later-answer-turn-completed"));
+      await harness.drain();
+
+      const thread = await harness.readProjectedThread();
+      expect(
+        thread?.messages.find((message) => message.id === "assistant:earlier-empty"),
+      ).toBeUndefined();
+      expect(
+        thread?.messages.find((message) => message.id === "assistant:later-answer"),
+      ).toMatchObject({
+        text: `Final answer.\n\n![Generated image](${imagePath})`,
+        streaming: false,
+      });
+    });
+
+    it("leaves the live turn untouched when a turnless terminal event is ambiguous", async () => {
+      const harness = await createHarness();
+      const liveTurn = asTurnId("turn-ambiguous-live");
+      const otherTurn = asTurnId("turn-ambiguous-other");
+      for (const turnId of [liveTurn, otherTurn]) {
+        await push(harness, {
+          type: "turn.started",
+          eventId: asEventId(`started-${turnId}`),
+          provider: "codex",
+          createdAt: at,
+          threadId,
+          turnId,
+          payload: {},
+        });
+      }
+      await push(harness, assistantDelta(liveTurn, "ambiguous-item", "ambiguous-delta", "Still"));
+      await push(harness, {
+        type: "content.delta",
+        eventId: asEventId("ambiguous-reasoning"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId: liveTurn,
+        itemId: asItemId("ambiguous-thought"),
+        payload: { streamKind: "reasoning_summary_text", summaryIndex: 0, delta: "Thinking" },
+      });
+      await harness.drain();
+      expect((await harness.readProjectedThread())?.session?.activeTurnId).toBe(liveTurn);
+
+      await push(harness, turnCompleted(undefined, "ambiguous-terminal"));
+      await harness.drain();
+
+      const thread = await harness.readProjectedThread();
+      expect(thread?.session).toMatchObject({ status: "running", activeTurnId: liveTurn });
+      expect(
+        thread?.messages.find((message) => message.id === "assistant:ambiguous-item"),
+      ).toMatchObject({ text: "Still", streaming: true });
+      expect(
+        thread?.activities.some(
+          (activity) => activity.id === "provider-reasoning:thread-1:ambiguous-thought",
+        ),
+      ).toBe(false);
+
+      // The live turn still finalizes normally when its own terminal arrives.
+      await push(harness, {
+        type: "item.completed",
+        eventId: asEventId("ambiguous-thought-completed"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId: liveTurn,
+        itemId: asItemId("ambiguous-thought"),
+        payload: { itemType: "reasoning", status: "completed", title: "Reasoning" },
+      });
+      await push(harness, turnCompleted(liveTurn, "ambiguous-live-terminal"));
+      await harness.drain();
+      const settled = await harness.readProjectedThread();
+      expect(
+        settled?.messages.find((message) => message.id === "assistant:ambiguous-item"),
+      ).toMatchObject({ text: "Still", streaming: false });
+      expect(
+        settled?.activities.find(
+          (activity) => activity.id === "provider-reasoning:thread-1:ambiguous-thought",
+        )?.payload,
+      ).toMatchObject({ status: "completed", detail: "Thinking" });
+    });
+
+    it.each([
+      { segments: 2, text: "First part.Second part." },
+      { segments: 1, text: "Only part." },
+    ])(
+      "retries a failed buffered completion with $segments segment(s) exactly once",
+      async ({ segments, text }) => {
+        const harness = await createHarness();
+        const turnId = asTurnId(`turn-retry-complete-${segments}`);
+        await startTurn(harness, turnId, "buffered");
+        if (segments === 2) {
+          await push(harness, assistantDelta(turnId, "retry-item", "retry-seg-1", "First part."));
+          await push(harness, {
+            type: "item.started",
+            eventId: asEventId("retry-seg-tool"),
+            provider: "codex",
+            createdAt: at,
+            threadId,
+            turnId,
+            itemId: asItemId("retry-seg-command"),
+            payload: { itemType: "command_execution", status: "inProgress", title: "Run" },
+          });
+          await push(harness, assistantDelta(turnId, "retry-item", "retry-seg-2", "Second part."));
+        } else {
+          await push(harness, assistantDelta(turnId, "retry-item", "retry-seg-1", text));
+        }
+        await push(harness, assistantCompleted(turnId, "retry-item", "retry-seg-complete"));
+        const injected = failDispatchOnce(
+          harness,
+          (command) => command.type === "thread.message.assistant.complete",
+        );
+        try {
+          await drainWithRetry(harness);
+        } finally {
+          injected.restore();
+        }
+        expect(injected.state.failed).toBe(true);
+        for (const read of [projectedMessage, engineMessage]) {
+          expect(await read(harness, "assistant:retry-item")).toMatchObject({
+            text,
+            streaming: false,
+          });
+        }
+      },
+    );
+
+    it("keeps a buffered proposed plan when its terminal upsert is retried", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-retry-plan");
+      await startTurn(harness, turnId, "streaming");
+      await push(harness, {
+        type: "turn.proposed.delta",
+        eventId: asEventId("retry-plan-delta"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId,
+        payload: { delta: "# Keep this plan\n\n1. Verify the result." },
+      });
+      await push(harness, turnCompleted(turnId, "retry-plan-terminal"));
+      const injected = failDispatchOnce(
+        harness,
+        (command) => command.type === "thread.proposed-plan.upsert",
+      );
+      try {
+        await drainWithRetry(harness);
+      } finally {
+        injected.restore();
+      }
+      expect(injected.state.failed).toBe(true);
+      expect((await harness.readProjectedThread())?.proposedPlans).toContainEqual(
+        expect.objectContaining({
+          id: "plan:thread-1:turn:turn-retry-plan",
+          planMarkdown: "# Keep this plan\n\n1. Verify the result.",
+        }),
+      );
+    });
+
+    it("keeps buffered command output when the completed activity dispatch is retried", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-retry-output");
+      const base = { provider: "codex" as const, createdAt: at, threadId, turnId };
+      await push(harness, {
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("retry-output-1"),
+        itemId: asItemId("retry-output-command"),
+        payload: { streamKind: "command_output", delta: "line one\n" },
+      });
+      await push(harness, {
+        ...base,
+        type: "item.completed",
+        eventId: asEventId("retry-output-completed"),
+        itemId: asItemId("retry-output-command"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          data: { rawInput: { command: "printf" } },
+        },
+      });
+      const injected = failDispatchOnce(
+        harness,
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.id === "retry-output-completed",
+      );
+      try {
+        await drainWithRetry(harness);
+      } finally {
+        injected.restore();
+      }
+      expect(injected.state.failed).toBe(true);
+      const activity = (await harness.readProjectedThread())?.activities.find(
+        (entry) => entry.id === "retry-output-completed",
+      );
+      expect(activity?.payload).toMatchObject({
+        data: { rawOutput: { output: "line one\n" } },
+      });
+    });
+
+    it("keeps buffered reasoning when the completed reasoning dispatch is retried", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-retry-reasoning");
+      const base = {
+        provider: "codex" as const,
+        createdAt: at,
+        threadId,
+        turnId,
+        itemId: asItemId("retry-thought"),
+      };
+      await push(harness, {
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("retry-thought-delta"),
+        payload: { streamKind: "reasoning_summary_text", summaryIndex: 0, delta: "Plan it" },
+      });
+      await push(harness, {
+        ...base,
+        type: "item.completed",
+        eventId: asEventId("retry-thought-completed"),
+        payload: { itemType: "reasoning", status: "completed", title: "Reasoning" },
+      });
+      const activityId = "provider-reasoning:thread-1:retry-thought";
+      const injected = failDispatchOnce(
+        harness,
+        (command) =>
+          command.type === "thread.activity.append" && command.activity.id === activityId,
+      );
+      try {
+        await drainWithRetry(harness);
+      } finally {
+        injected.restore();
+      }
+      expect(injected.state.failed).toBe(true);
+      expect(
+        (await harness.readProjectedThread())?.activities.find((entry) => entry.id === activityId)
+          ?.payload,
+      ).toMatchObject({ status: "completed", detail: "Plan it" });
+    });
+
+    it("does not append a Claude reasoning delta twice when its preview dispatch is retried", async () => {
+      const harness = await createHarness();
+      const activityId = "provider-reasoning:thread-1:retry-claude-thought";
+      await push(harness, {
+        type: "content.delta",
+        eventId: asEventId("retry-claude-thought-delta"),
+        provider: "claudeAgent",
+        createdAt: at,
+        threadId,
+        turnId: asTurnId("turn-retry-claude-thought"),
+        itemId: asItemId("retry-claude-thought"),
+        payload: { streamKind: "reasoning_text", delta: "Weighing the options." },
+      });
+      const injected = failDispatchOnce(
+        harness,
+        (command) =>
+          command.type === "thread.activity.append" && command.activity.id === activityId,
+      );
+      try {
+        await drainWithRetry(harness);
+      } finally {
+        injected.restore();
+      }
+      expect(injected.state.failed).toBe(true);
+      expect(
+        (await harness.readProjectedThread())?.activities.find((entry) => entry.id === activityId)
+          ?.payload,
+      ).toMatchObject({ status: "inProgress", detail: "Weighing the options." });
+    });
+
+    it("keeps spilled buffered text when the spill dispatch is retried", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-retry-spill");
+      await startTurn(harness, turnId, "buffered");
+      const head = "a".repeat(20_000);
+      const tail = "b".repeat(10_000);
+      await push(harness, assistantDelta(turnId, "retry-spill-item", "retry-spill-1", head));
+      await push(harness, assistantDelta(turnId, "retry-spill-item", "retry-spill-2", tail));
+      await push(harness, assistantCompleted(turnId, "retry-spill-item", "retry-spill-complete"));
+      const injected = failDispatchOnce(
+        harness,
+        (command) =>
+          command.type === "thread.message.assistant.delta" &&
+          command.commandId.includes("assistant-delta-buffer-spill"),
+      );
+      try {
+        await drainWithRetry(harness);
+      } finally {
+        injected.restore();
+      }
+      expect(injected.state.failed).toBe(true);
+      const message = await projectedMessage(harness, "assistant:retry-spill-item");
+      expect(message?.streaming).toBe(false);
+      expect(message?.text.length).toBe(head.length + tail.length);
+      expect(message?.text).toBe(head + tail);
+    });
+
+    it("settles turnless interactions after a turn that ended with runtime.error", async () => {
+      const harness = await createHarness();
+      const generation = "generation-runtime-error";
+      const erroredTurn = asTurnId("turn-runtime-error-a");
+      const nextTurn = asTurnId("turn-runtime-error-b");
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("runtime-error-started-a"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId: erroredTurn,
+        lifecycleGeneration: generation,
+      });
+      harness.emit({
+        type: "runtime.error",
+        eventId: asEventId("runtime-error-a"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId: erroredTurn,
+        lifecycleGeneration: generation,
+        payload: { message: "provider crashed" },
+      });
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("runtime-error-started-b"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId: nextTurn,
+        lifecycleGeneration: generation,
+      });
+      emitTurnlessPendingApprovalRequest(harness, {
+        eventId: "runtime-error-turnless-request",
+        requestId: "req-runtime-error-turnless",
+        lifecycleGeneration: generation,
+      });
+      await waitForProjectedThread(
+        harness.readProjectedThread,
+        (thread) => pendingInteractionStatus(thread, "req-runtime-error-turnless") === "pending",
+      );
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-error-completed-b"),
+        provider: "codex",
+        createdAt: at,
+        threadId,
+        turnId: nextTurn,
+        lifecycleGeneration: generation,
+        payload: { state: "interrupted" },
+      });
+      // The errored turn is over, so the last live turn ending releases the
+      // turnless approval instead of leaving it "Awaiting Input".
+      await waitForProjectedThread(
+        harness.readProjectedThread,
+        (thread) => pendingInteractionStatus(thread, "req-runtime-error-turnless") === undefined,
+      );
+    });
+
+    it("does not attach a completion for a new item to another live message", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-completion-id");
+      await startTurn(harness, turnId, "streaming");
+      await push(harness, assistantDelta(turnId, "live-item", "completion-id-delta", "Live text"));
+      // A different item completes with its own text and no streamed deltas.
+      await push(harness, assistantCompleted(turnId, "other-item", "completion-id-other", "Other"));
+      await harness.drain();
+
+      const thread = await harness.readProjectedThread();
+      expect(
+        thread?.messages.find((message) => message.id === "assistant:live-item"),
+      ).toMatchObject({ text: "Live text", streaming: true });
+      expect(
+        thread?.messages.find((message) => message.id === "assistant:other-item"),
+      ).toMatchObject({ text: "Other", streaming: false });
+    });
+
+    it("does not create an empty assistant row for an empty completed item", async () => {
+      const harness = await createHarness();
+      const turnId = asTurnId("turn-empty-completion");
+      await startTurn(harness, turnId, "streaming");
+      await push(harness, assistantCompleted(turnId, "empty-item", "empty-item-completed"));
+      await push(harness, turnCompleted(turnId, "empty-item-turn-completed"));
+      await harness.drain();
+      expect(await projectedMessage(harness, "assistant:empty-item")).toBeUndefined();
+      expect(await engineMessage(harness, "assistant:empty-item")).toBeUndefined();
+    });
   });
 });

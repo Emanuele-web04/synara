@@ -1,3 +1,7 @@
+// FILE: PullRequestStackPopover.browser.tsx
+// Purpose: Browser coverage for the detail-header stack navigator and shared position indicator.
+// Layer: Pull request presentation test
+
 import "../../index.css";
 
 import type { PullRequestStack, PullRequestStackEntry } from "@synara/contracts";

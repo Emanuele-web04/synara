@@ -2,10 +2,10 @@ import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
 export interface ThreadGitMetadataReactorShape {
-  /** starts the provider-turn observer persisting branch and PR metadata */
+  /** Starts the provider-turn observer that persists branch and PR metadata. */
   readonly start: Effect.Effect<void, never, Scope.Scope>;
 
-  /** resolves when every captured turn boundary has been reconciled */
+  /** Resolves when every captured turn boundary has been reconciled. */
   readonly drain: Effect.Effect<void>;
 }
 

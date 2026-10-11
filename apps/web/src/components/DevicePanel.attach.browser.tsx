@@ -62,7 +62,8 @@ function state(
   };
 }
 
-// decode timing is controlled but paint uses a real VideoFrame + canvas — no native simulator or platform codec needed to exercise this UI race
+// Decode timing is controlled, but paint uses a real VideoFrame and canvas.
+// No native simulator or platform codec is needed to exercise this UI race.
 const decoders: ControlledDecoder[] = [];
 class ControlledDecoder {
   state = "unconfigured";

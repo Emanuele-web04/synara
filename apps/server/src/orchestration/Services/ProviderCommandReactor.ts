@@ -1,3 +1,11 @@
+/**
+ * ProviderCommandReactor - Provider command reaction service interface.
+ *
+ * Owns background workers that react to orchestration intent events and
+ * dispatch provider-side command execution.
+ *
+ * @module ProviderCommandReactor
+ */
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
@@ -15,6 +23,9 @@ export interface ProviderDeliveryReconciliationResult {
   readonly reconciledAt: string;
 }
 
+/**
+ * ProviderCommandReactorShape - Service API for provider command reactors.
+ */
 export interface ProviderCommandReactorShape {
   /**
    * Start reacting to provider-intent orchestration domain events.
@@ -29,7 +40,10 @@ export interface ProviderCommandReactorShape {
    */
   readonly start: Effect.Effect<void, never, Scope.Scope>;
 
-  /** resolves when the queue is empty and idle — for tests, replaces sleeps */
+  /**
+   * Resolves when the internal processing queue is empty and idle.
+   * Intended for test use to replace timing-sensitive sleeps.
+   */
   readonly drain: Effect.Effect<void>;
 
   readonly listBlockingDeliveries: (input: {
@@ -51,6 +65,9 @@ export interface ProviderCommandReactorShape {
   }) => Effect.Effect<OrchestrationRegenerateThreadTitleResult, unknown>;
 }
 
+/**
+ * ProviderCommandReactor - Service tag for provider command reaction workers.
+ */
 export class ProviderCommandReactor extends ServiceMap.Service<
   ProviderCommandReactor,
   ProviderCommandReactorShape

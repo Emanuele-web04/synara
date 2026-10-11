@@ -19,7 +19,8 @@ describe("device helper cache key", () => {
   });
 
   it("changes when the toolchain changes", () => {
-    // a helper built against one Xcode must never be reused after an upgrade — it links private frameworks
+    // The whole point of the key: a helper built against one Xcode must never
+    // be reused after an upgrade, because it links private frameworks.
     const first = deviceHelperCacheKey(XCODEBUILD_OUTPUT);
     expect(deviceHelperCacheKey("Xcode 26.3\nBuild version 17D10")).not.toBe(first);
     expect(deviceHelperCacheKey("Xcode 26.2\nBuild version 17C60")).not.toBe(first);
@@ -38,7 +39,9 @@ describe("device helper cache key", () => {
   });
 
   it("changes when the helper's own sources change", () => {
-    // without this the cache never invalidates on a helper fix — the toolchain is identical and the fix never reaches users
+    // Without this the cache never invalidates on a helper fix: the toolchain
+    // is identical, so every existing user keeps running the binary they
+    // already built and the fix silently never reaches them.
     const before = deviceHelperSourceRevision([{ name: "HIDBridge.m", contents: "volume = 0x2;" }]);
     const after = deviceHelperSourceRevision([{ name: "HIDBridge.m", contents: "volume = 0xe9;" }]);
     expect(after).not.toBe(before);
@@ -52,9 +55,9 @@ describe("device helper cache key", () => {
       { name: "A.swift", contents: "x" },
       { name: "B.swift", contents: "y" },
     ];
-    // readdir order must not shift the key
+    // Same tree, listed the other way round: readdir order must not shift the key.
     expect(deviceHelperSourceRevision([...a].reverse())).toBe(deviceHelperSourceRevision(a));
-    // a rename with identical contents is still a different build
+    // A rename with identical contents is still a different build.
     expect(
       deviceHelperSourceRevision([
         { name: "A.swift", contents: "x" },
@@ -64,12 +67,13 @@ describe("device helper cache key", () => {
   });
 
   it("keys on the toolchain alone when the sources cannot be read", () => {
-    // falling back beats failing the attach outright
+    // Falling back beats failing the attach outright.
     expect(deviceHelperCacheKey(XCODEBUILD_OUTPUT, undefined)).toBe("26.2-17C52");
   });
 
   it("pins the cache location both callers build from", () => {
-    // server and smoke script must agree on this path or a passing smoke populates a dir the server never reads
+    // The server and scripts/device-helper-smoke.ts must agree on this path or
+    // a passing smoke run populates a directory the server never reads.
     expect([...DEVICE_HELPER_CACHE_SEGMENTS]).toEqual([
       "Library",
       "Caches",

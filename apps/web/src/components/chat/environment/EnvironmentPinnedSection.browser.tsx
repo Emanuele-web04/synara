@@ -1,3 +1,7 @@
+// FILE: EnvironmentPinnedSection.browser.tsx
+// Purpose: Browser-level regression tests for pinned-message panel interactions.
+// Layer: Vitest browser tests
+
 import "../../../index.css";
 
 import { MessageId, type PinnedMessage } from "@synara/contracts";

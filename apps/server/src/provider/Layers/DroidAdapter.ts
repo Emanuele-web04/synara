@@ -1,4 +1,9 @@
 import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
+/**
+ * DroidAdapterLive - Factory Droid CLI (`droid exec --output-format acp`) via ACP.
+ *
+ * @module DroidAdapterLive
+ */
 import {
   ApprovalRequestId,
   EventId,
@@ -139,7 +144,10 @@ const DROID_ACP_DEBUG_ENV = "SYNARA_DROID_ACP_DEBUG";
 const LEGACY_DROID_ACP_DEBUG_ENV = "DP_DROID_ACP_DEBUG";
 const DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
 const DROID_TURN_SETTLE_DRAIN_POLL_MS = 25;
-// backstop for an alive-but-silent droid child; generous so long quiet tool runs aren't killed — override via SYNARA_DROID_TURN_IDLE_TIMEOUT_MS
+// Backstop for an alive-but-silent droid child: if a turn produces no ACP
+// activity for this long, force-fail it instead of showing "Working" forever.
+// Generous by design so legitimate long, quiet tool runs are not killed;
+// override with SYNARA_DROID_TURN_IDLE_TIMEOUT_MS when a workload needs longer.
 const DROID_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   envVar: "SYNARA_DROID_TURN_IDLE_TIMEOUT_MS",
   defaultMs: 600_000,
@@ -175,7 +183,8 @@ function runDroidAcpConfigurationAfterReplay<A, E>(input: {
   readonly threadId: ThreadId;
   readonly effect: Effect.Effect<A, E>;
 }): Effect.Effect<A, E | ProviderAdapterError> {
-  // replay readiness owns a separate hard-cap budget — only actual config work consumes the ACP request timeout
+  // Replay readiness owns its separate hard-cap budget. Only the actual
+  // configuration work consumes the ACP request timeout.
   return input.runtime.awaitLoadReplayReady.pipe(
     Effect.mapError((cause) =>
       mapAcpToAdapterError(PROVIDER, input.threadId, "session/load", cause),
@@ -236,19 +245,40 @@ interface DroidSessionContext {
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
   /** Turns cancelled by Synara only because their Plan proposal was captured. */
   readonly planCapturedTurnIds: Set<TurnId>;
+  // Epoch-ms of the last inbound ACP activity for the active turn; drives the
+  // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
-  // tool-call→turn map for backlogged ToolCallUpdated events after activeTurnId cleared; cleared on next dispatch
+  // Provider tool-call ids seen during the most recent turn, mapped to that
+  // turn. A backlogged consumer can process a queued ToolCallUpdated after the
+  // prompt response cleared activeTurnId; this keeps the event attributed to
+  // its originating turn instead of dropping it as an orphan. Cleared when the
+  // next turn dispatches.
   readonly turnToolCallIds: Map<string, TurnId>;
-  // Droid runs Task subagents outside the parent ACP stream — track their parent tool rows so the watchdog uses a longer cap
+  // Droid executes `Task` subagents outside the parent ACP event stream. Track
+  // their parent tool rows so the watchdog can use a longer, still-finite cap.
   readonly activeNestedTaskToolCallIds: Set<string>;
   readonly nestedTaskLifecycleByToolCallId: Map<string, "active" | "completed">;
-  // session registers before config RPCs settle so sendTurn can route mid-startup — turns await this gate; stopSessionInternal resolves it too
+  // Pending until startSession has applied the requested model/effort config.
+  // The session is registered in `sessions` before the config RPCs run, which
+  // means sendTurn can route to it mid-startup;
+  // turns await this gate so the first prompt never runs with provider
+  // defaults. Resolved by stopSessionInternal too, so a failed startup never
+  // strands waiters.
   sessionConfigReady: Deferred.Deferred<void> | undefined;
-  // resolves only after the ACP scope and child process fully closed — recovery awaits it before starting a replacement
+  // Resolves only after the ACP scope and its child process have fully closed.
+  // Recovery awaits this gate before starting a replacement session.
   readonly teardownComplete: Deferred.Deferred<void>;
   latestSessionCostUsd: number | undefined;
+  // Count of ACP session/update events fully handled by the notification
+  // consumer. Compared against acp.sessionUpdatesEnqueuedCount to detect when
+  // events received before a prompt response have all been processed —
+  // in-flight handlers and stream chunk buffering included.
   sessionUpdatesProcessed: number;
+  // True while sendTurn is between its entry check and prompt dispatch; lets
+  // interruptTurn flag a turn that has no prompt fiber to interrupt yet.
   turnStarting: boolean;
+  // Set by interruptTurn when the turn is still starting; the prompt dispatch
+  // guard honors it so a cancelled turn is never prompted.
   pendingTurnInterrupted: boolean;
   stopped: boolean;
 }
@@ -284,7 +314,8 @@ export function classifyDroidPromptTurnCompletion(input: {
       });
 }
 
-// Factory's parent Task row is the only reliable liveness signal — child-session progress isn't forwarded over ACP
+// Identifies Factory's parent `Task` tool row; child-session progress is not
+// forwarded over ACP, so this marker is the only reliable liveness signal.
 export function isDroidNestedTaskToolCall(toolCall: AcpToolCallState): boolean {
   if (toolCall.title?.trim().toLowerCase() === "task") {
     return true;
@@ -298,7 +329,8 @@ export function isDroidNestedTaskToolCall(toolCall: AcpToolCallState): boolean {
   );
 }
 
-// a turn-specific stop is valid only while that exact turn is active — during startup no caller can know the new provider turn id
+// A turn-specific stop is valid only while that exact turn is active. During
+// startup no caller can know the new provider turn id yet, so a supplied id is stale.
 export function shouldIgnoreDroidInterrupt(
   requestedTurnId: TurnId | undefined,
   activeTurnId: TurnId | undefined,
@@ -620,7 +652,9 @@ export function makeDroidAdapter(
               });
             }).pipe(Effect.ensuring(completeTeardown));
 
-            // a daemon performs the close so prompt/watchdog fibers owned by this scope can initiate teardown without waiting on their own termination
+            // Scope.close interrupts prompt/watchdog fibers owned by this scope.
+            // A daemon performs the close so those fibers can initiate teardown
+            // without waiting on their own termination.
             yield* teardown.pipe(Effect.forkDetach, Effect.asVoid);
           }
 
@@ -674,11 +708,16 @@ export function makeDroidAdapter(
         if (ctx.activeTurnId !== turnId || ctx.stopped) {
           return;
         }
-        // capture ownership immediately — the delay is only for the cancel attempt; the prompt may settle during it and must still complete as a captured Plan turn
+        // Capture ownership immediately. The fallback delay is only for the
+        // cancellation attempt; the prompt may settle during that delay and
+        // must still complete as a successfully captured Plan turn.
         ctx.planCapturedTurnIds.add(turnId);
-        // keeping the marker in this fiber closes the scheduler window where the prompt could settle before a forked child's first instruction
+        // Only the cancellation work runs in the background. Keeping the marker
+        // in this caller fiber closes the scheduler window where the prompt
+        // could settle before a forked child executed its first instruction.
         yield* Effect.gen(function* () {
-          // The expected rejected-tool update normally starts this immediately. The delayed capture path is a fallback for providers that omit it.
+          // The expected rejected-tool update normally starts this immediately.
+          // The delayed capture path is a fallback for providers that omit it.
           if (delayMs > 0) {
             yield* Effect.sleep(delayMs);
           }
@@ -933,7 +972,9 @@ export function makeDroidAdapter(
                 if (!isFormElicitationRequest(params)) {
                   return { action: "decline" as const };
                 }
-                const questions = elicitationQuestionsFromRequest(params);
+                const questions = elicitationQuestionsFromRequest(params, {
+                  otherAnswerConvention: "droid",
+                });
                 if (questions.length === 0) {
                   return { action: "decline" as const };
                 }
@@ -966,7 +1007,9 @@ export function makeDroidAdapter(
                   requestId: runtimeRequestId,
                   payload: { answers: resolved },
                 });
-                return elicitationResponseFromAnswers(params, resolved);
+                return elicitationResponseFromAnswers(params, resolved, {
+                  otherAnswerConvention: "droid",
+                });
               }),
             );
             const startedOption = yield* acp
@@ -1111,6 +1154,10 @@ export function makeDroidAdapter(
                     return;
                   case "ToolCallUpdated":
                     {
+                      // A queued update for a tool call the just-settled turn
+                      // already rendered belongs to that turn; emit it with the
+                      // originating turn id so the existing tool row resolves in
+                      // place instead of being dropped as an orphan.
                       const lateTurnId =
                         ctx.activeTurnId === undefined
                           ? ctx.turnToolCallIds.get(event.toolCall.toolCallId)
@@ -1252,6 +1299,9 @@ export function makeDroidAdapter(
                     return;
                 }
               }).pipe(
+                // Bump the processed count only after the handler fully ran, so
+                // waitForDroidQueuedTurnEventsDrained cannot observe an event as
+                // consumed while its state updates are still being applied.
                 Effect.ensuring(
                   Effect.sync(() => {
                     ctx.sessionUpdatesProcessed += 1;
@@ -1259,13 +1309,18 @@ export function makeDroidAdapter(
                 ),
               ),
             ),
+            // The drain's lifetime is the session's, not the caller's: forking it as
+            // a child of the fiber that called startSession kills it as soon as that
+            // fiber returns, silently dropping every session/update.
           ).pipe(Effect.forkIn(sessionScope));
 
           ctx.notificationFiber = notificationFiber;
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
-          // the consumer fork activates the shared replay gate — startup waits briefly under the thread lock so stop/restart stays responsive
+          // The consumer fork activates the shared replay gate. Configuration
+          // remains pending until replay settles, but startup only waits briefly
+          // while holding the thread lock so stop/restart stays responsive.
           yield* Effect.gen(function* () {
             const configurationFiber = yield* runDroidAcpConfigurationAfterReplay({
               runtime: acp,
@@ -1280,6 +1335,8 @@ export function makeDroidAdapter(
                       mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
                   });
                 }
+                // Turns await this deferred, so none can inherit provider
+                // defaults while long replay/configuration work continues.
                 yield* Deferred.succeed(sessionConfigReady, undefined);
                 ctx.sessionConfigReady = undefined;
               }),
@@ -1331,6 +1388,10 @@ export function makeDroidAdapter(
         }).pipe(Effect.scoped),
       );
 
+    // Idle-progress watchdog escape hatch: force-fail a turn whose droid child
+    // is alive but has gone completely silent. Mirrors the prompt-fiber
+    // onFailure branch and stays idempotent via clearAcpActiveTurn, so it is a
+    // no-op if the turn settled normally first (whichever fires first wins).
     const failDroidTurnAsTimedOut = (ctx: DroidSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
@@ -1370,7 +1431,8 @@ export function makeDroidAdapter(
             ...completedCost,
           },
         });
-        // Let Droid flush final ACP updates and settle session/prompt before escalating to process teardown for a silent nested worker.
+        // Let Droid flush final ACP updates and settle session/prompt before
+        // escalating to process teardown for a silent nested worker.
         yield* cancelDroidPromptWithGrace(ctx, promptFiber);
         yield* stopSessionInternal(ctx, {
           exitKind: "error",
@@ -1382,6 +1444,9 @@ export function makeDroidAdapter(
     const sendTurn: DroidAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
+        // A second sendTurn entering while another turn is still starting would
+        // clear that turn's pendingTurnInterrupted flag (letting a cancelled
+        // turn dispatch anyway) and race two ACP prompts; reject it instead.
         if (ctx.turnStarting) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -1405,9 +1470,14 @@ export function makeDroidAdapter(
       input: Parameters<DroidAdapterShape["sendTurn"]>[0],
     ) =>
       Effect.gen(function* () {
+        // Startup registers the session before its config RPCs settle; a turn
+        // routed in during that window must not prompt with provider defaults.
         if (ctx.sessionConfigReady !== undefined) {
           yield* Deferred.await(ctx.sessionConfigReady);
         }
+        // The setup gate above is resolved by stopSessionInternal too; a turn
+        // unblocked by a failed or stopped startup must fail here instead of
+        // emitting lifecycle events for a dead session.
         if (ctx.stopped) {
           return yield* new ProviderAdapterSessionNotFoundError({
             provider: PROVIDER,
@@ -1427,6 +1497,9 @@ export function makeDroidAdapter(
             issue: "Auto runtime mode is available only to Codex and Claude.",
           });
         }
+        // Selection changes normally arrive via a session restart, but a turn
+        // can still carry an explicit selection; re-assert it over ACP (the
+        // shared runtime skips the RPC when the value already matches).
         yield* runDroidAcpConfigurationAfterReplay({
           runtime: ctx.acp,
           threadId: input.threadId,
@@ -1503,6 +1576,9 @@ export function makeDroidAdapter(
           promptParts.unshift(harnessPolicy);
         }
 
+        // A stop can land while the replay gate or attachment reads above were
+        // in flight; opening the turn now would publish turn.started (and a
+        // phantom cancelled completion) for a session that already exited.
         if (ctx.stopped) {
           return yield* new ProviderAdapterSessionNotFoundError({
             provider: PROVIDER,
@@ -1513,6 +1589,8 @@ export function makeDroidAdapter(
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activeTurnFailedToolDetail = undefined;
+        // Late-event attribution only matters between turns; once a new turn
+        // dispatches, stragglers from older turns are stale enough to drop.
         ctx.turnToolCallIds.clear();
         ctx.activeNestedTaskToolCallIds.clear();
         ctx.nestedTaskLifecycleByToolCallId.clear();
@@ -1537,6 +1615,11 @@ export function makeDroidAdapter(
         });
 
         const runPrompt = Effect.suspend(() =>
+          // interruptTurn during attachment reads or between turn.started publishing
+          // and this fiber being registered sets pendingTurnInterrupted; honor it and
+          // a concurrent stop here so a cancelled turn is never prompted. Self-interrupting
+          // routes through the onInterrupt branch below, which completes the
+          // turn as cancelled rather than as a provider failure.
           ctx.pendingTurnInterrupted || ctx.stopped
             ? Effect.interrupt
             : ctx.acp.prompt({ prompt: promptParts }),
@@ -1579,6 +1662,9 @@ export function makeDroidAdapter(
                     ...completedCost,
                   },
                 });
+                // Transport/prompt failures make the ACP child unusable. Remove
+                // it from routing immediately so ProviderService can recover on
+                // the next send instead of reusing a dead session forever.
                 yield* stopSessionInternal(ctx, {
                   exitKind: "error",
                   reason: detail,
@@ -1587,6 +1673,8 @@ export function makeDroidAdapter(
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
+                // Drain BEFORE snapshotting turn state: queued events may still
+                // set activeTurnFailedToolDetail or assistant-content flags.
                 yield* waitForDroidQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
@@ -1672,6 +1760,9 @@ export function makeDroidAdapter(
         );
         ctx.activePromptFiber = yield* runPrompt;
 
+        // Backstop the forked prompt: if the child goes silent, fail the turn
+        // instead of leaving it "Working" forever. Self-terminates when the
+        // turn settles; pauses while a human approval is pending.
         yield* forkAcpAdapterTurnIdleWatchdog({
           context: ctx,
           turnId,
@@ -1708,6 +1799,9 @@ export function makeDroidAdapter(
           return;
         }
         const activeTurnId = turnId ?? ctx.activeTurnId;
+        // A turn that is still starting has no prompt fiber to interrupt yet;
+        // flag it so startDroidTurn aborts before prompting instead of running
+        // the cancelled turn anyway.
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
         }
@@ -1719,7 +1813,8 @@ export function makeDroidAdapter(
             yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
             const activePromptFiber = ctx.activePromptFiber;
             yield* cancelDroidPromptWithGrace(ctx, activePromptFiber);
-            // closing the process group is intentional: Factory can ack cancel before nested workers quiesce, so session reuse is unsafe
+            // Closing the process group is intentional: Factory can acknowledge
+            // cancel before nested workers quiesce, so session reuse is unsafe.
             yield* stopSessionInternal(ctx, {
               exitKind: "graceful",
               reason: "Droid turn cancelled; runtime closed to stop nested work.",
@@ -1843,6 +1938,8 @@ export function makeDroidAdapter(
           });
 
         const activeSource = sessions.get(input.sourceThreadId);
+        // Forking mid-turn would branch from incomplete in-flight state, so
+        // let the retained-transcript fallback handle busy sources.
         if (activeSource?.activeTurnId !== undefined) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -1890,6 +1987,10 @@ export function makeDroidAdapter(
               return yield* forkRuntime(runtime);
             }).pipe(Effect.scoped);
 
+        // Return only the cursor: ProviderService registers the binding under
+        // a committed lifecycle lease and the target's first turn resumes it
+        // there. Starting the runtime here would capture an undefined
+        // lifecycle generation, orphaning the fork's approval requests.
         return {
           threadId: input.threadId,
           resumeCursor: {
@@ -1944,7 +2045,8 @@ export function makeDroidAdapter(
         supportsPluginMentions: true,
         supportsPluginDiscovery: true,
         supportsRuntimeModelList: true,
-        // Droid's TUI has /compact, but ACP currently exposes no compaction RPC and treats that text as an ordinary model prompt.
+        // Droid's TUI has /compact, but ACP currently exposes no compaction RPC
+        // and treats that text as an ordinary model prompt.
         supportsThreadCompaction: false,
         supportsThreadImport: true,
       } satisfies ProviderComposerCapabilities);

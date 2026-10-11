@@ -1,3 +1,8 @@
+// FILE: browserIpc.ts
+// Purpose: Centralizes the desktop browser IPC contract and handler wiring.
+// Layer: Desktop IPC adapter
+// Depends on: Electron ipcMain/webContents and DesktopBrowserManager
+
 import type { IpcMain, WebContents } from "electron";
 
 import type {
@@ -21,6 +26,7 @@ import type {
 import type { DesktopBrowserManager } from "./browserManager";
 import { BROWSER_IPC_CHANNELS } from "./ipcChannels";
 
+// Pushes the latest browser state snapshot to the renderer shell.
 export function sendBrowserState(
   webContents: WebContents | null | undefined,
   state: ThreadBrowserState,
@@ -28,6 +34,8 @@ export function sendBrowserState(
   webContents?.send(BROWSER_IPC_CHANNELS.state, state);
 }
 
+// Notifies the renderer that the native browser page handled the copy-link chord so the
+// shell can surface the confirmation toast (the URL is already on the clipboard).
 export function sendBrowserCopyLink(
   webContents: WebContents | null | undefined,
   event: BrowserCopyLinkEvent,
@@ -42,6 +50,7 @@ export function sendBrowserAnnotationEvent(
   webContents?.send(BROWSER_IPC_CHANNELS.annotations.event, event);
 }
 
+// Registers the desktop browser bridge in one place so main.ts stays focused on app boot.
 export function registerBrowserIpcHandlers(
   ipcMain: IpcMain,
   browserManager: DesktopBrowserManager,
@@ -185,7 +194,8 @@ export function registerBrowserIpcHandlers(
 
   ipcMain.removeAllListeners(BROWSER_IPC_CHANNELS.annotations.guestMessage);
   ipcMain.on(BROWSER_IPC_CHANNELS.annotations.guestMessage, (event, payload: unknown) => {
-    // guest subframes inherit the preload in some embed configurations — only the current main frame may establish document/session affinity
+    // Guest subframes inherit the preload in some embed configurations. Only
+    // the current main frame may establish document/session affinity.
     if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return;
     browserManager.handleAnnotationGuestMessage(event.sender, payload);
   });

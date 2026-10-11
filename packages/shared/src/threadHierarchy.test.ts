@@ -28,7 +28,7 @@ describe("collectSubagentDescendants", () => {
     const threads = [
       thread("root"),
       thread("child", "root"),
-      // corrupted rows: the root claims the child as its parent, and a thread points at itself
+      // Corrupted rows: the root claims the child as its parent, and a thread points at itself.
       { id: "root", parentThreadId: "child" },
       thread("self", "self"),
     ];

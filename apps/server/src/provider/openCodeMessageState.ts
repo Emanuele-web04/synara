@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-// fixed-size fingerprint instead of a second serialized copy of every tool output
+// Keep a fixed-size fingerprint, rather than retaining a second serialized copy
+// of every tool output. Original parts and emitted-text state remain intact.
 export function openCodeSnapshotKey(value: unknown): string {
   let serialized: string;
   try {

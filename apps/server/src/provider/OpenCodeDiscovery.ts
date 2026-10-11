@@ -1,3 +1,8 @@
+// FILE: OpenCodeDiscovery.ts
+// Purpose: Pure normalization for OpenCode-compatible model, agent, and command discovery.
+// Layer: Server provider domain
+// Exports: Discovery inventory inputs and canonical provider discovery projections.
+
 import type {
   ProviderListAgentsResult,
   ProviderListCommandsResult,
@@ -35,7 +40,8 @@ export interface OpenCodeModelInventory {
             readonly output?: number;
           };
           readonly variants?: Record<string, Record<string, unknown>>;
-          // Newer models.dev payloads expose the source metadata directly; older OpenCode servers normalize it into `variants`.
+          // Newer models.dev payloads expose the source metadata directly;
+          // older OpenCode servers normalize it into `variants`.
           readonly reasoning_options?: unknown;
           readonly reasoningOptions?: unknown;
         }
@@ -81,7 +87,9 @@ function isOpenCodeManagedProvider(provider: OpenCodeInventoryProvider) {
   );
 }
 
-// custom providers in opencode.jsonc carry credentials inline (options.apiKey), never in auth.json — `connected` already proves usable even though credentialProviderIDs lacks them
+// Custom providers declared in opencode.jsonc carry their credential inline
+// (`options.apiKey`) instead of through auth.json, so they never appear in
+// credentialProviderIDs even though `connected` already proves they are usable.
 function hasInlineConfiguredApiKey(provider: OpenCodeInventoryProvider): boolean {
   return (
     trimNonEmptyString(provider.options?.apiKey) !== undefined ||
@@ -311,6 +319,8 @@ function resolveOpenCodeModelReasoningSupport(
       ];
     },
   );
+  // The server's variants include provider transport limits and user overrides.
+  // An empty record can mean every variant was disabled by the user.
   const descriptors =
     model.variants !== undefined
       ? variantDescriptors

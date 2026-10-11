@@ -1,3 +1,6 @@
+// FILE: 082_AutomationMemory.ts
+// Purpose: Adds DB-backed persistent memory for automation runs.
+
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

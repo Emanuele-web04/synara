@@ -1,3 +1,9 @@
+// FILE: shareCardExport.ts
+// Purpose: Fully offline rendering of the share card to a PNG, plus clipboard copy,
+// file download, and social-intent URLs. No data leaves the device to BUILD the image;
+// opening a social composer is an explicit, user-initiated action.
+// Layer: web profile feature.
+
 import { toBlob } from "html-to-image";
 import { copyPngBlobToDesktopClipboard } from "~/lib/desktopClipboard";
 import { readNativeApi } from "~/nativeApi";
@@ -10,7 +16,9 @@ const SHARE_URL = "https://trysynara.com";
 
 export type ShareTarget = "x" | "linkedin" | "reddit";
 
-// explicit width/height keeps the export deterministic and free of trailing whitespace regardless of layout measurement
+// Renders the given node to a PNG blob entirely on-device (canvas serialization).
+// Passing explicit width/height keeps the export deterministic and free of trailing
+// whitespace regardless of layout measurement quirks.
 export async function renderNodeToPngBlob(
   node: HTMLElement,
   size?: { width: number; height: number },

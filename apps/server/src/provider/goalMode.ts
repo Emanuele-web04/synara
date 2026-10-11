@@ -1,3 +1,7 @@
+// FILE: goalMode.ts
+// Purpose: Injects Synara's provider-independent persistent thread objective.
+// Layer: Provider prompt policy
+
 function escapeXmlText(value: string): string {
   return value
     .replaceAll("&", "&amp;")

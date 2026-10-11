@@ -1,3 +1,8 @@
+// FILE: useKanbanBoard.ts
+// Purpose: Subscribes to app/composer/kanban stores and derives the memoized kanban board.
+// Layer: UI state hook (projection only — board math lives in kanban.logic.ts)
+// Exports: useKanbanBoard
+
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useEffect, useMemo, useRef } from "react";
 
@@ -30,7 +35,9 @@ import {
   type KanbanDraftThreadSnapshot,
 } from "./kanban.logic";
 
-// an optimistic dispatch that never produces a runtime signal reverts to Draft after this window — generous on purpose, slow provider init (e.g. Cursor) is the normal case
+// An optimistic dispatch that never produces a runtime signal (provider died
+// silently, server unreachable mid-flight) reverts to Draft after this window.
+// Generous on purpose: slow provider session init (e.g. Cursor) is the normal case.
 const OPTIMISTIC_DISPATCH_TIMEOUT_MS = 30_000;
 const OPTIMISTIC_DISPATCH_EXPIRY_CHECK_MS = 5_000;
 
@@ -129,7 +136,8 @@ export function useKanbanBoard(): KanbanBoard {
     return ids;
   }, [terminalStateByThreadId]);
 
-  // drop persisted draft orders for projects that no longer exist so localStorage doesn't grow forever
+  // Drop persisted manual draft orders for projects that no longer exist, so the
+  // localStorage payload doesn't grow forever as projects come and go.
   useEffect(() => {
     if (!threadsHydrated) {
       return;
@@ -143,7 +151,10 @@ export function useKanbanBoard(): KanbanBoard {
     }
   }, [allProjects, threadsHydrated]);
 
-  // settle optimistic dispatches once runtime state catches up; a provider failure (session error, no turn) reverts immediately with the real error
+  // Settle optimistic dispatches once runtime state catches up: from then on the
+  // derived column owns the card and the overlay must stop overriding it. A
+  // provider failure (session error after the drop, no turn) reverts immediately
+  // with the real error instead of waiting for the expiry safety net.
   useEffect(() => {
     const entries = Object.entries(optimisticDispatchByThreadId);
     if (entries.length === 0) {
@@ -170,7 +181,11 @@ export function useKanbanBoard(): KanbanBoard {
     }
   }, [optimisticDispatchByThreadId, threads]);
 
-  // safety net: a dispatch whose signal never arrives reverts to Draft; keyed on a boolean so new entries don't stretch older deadlines; reads the live list through a ref assigned post-commit
+  // Safety net: a dispatch whose runtime signal never arrives reverts to Draft
+  // instead of leaving a ghost card In Progress forever. Keyed on a boolean so
+  // new entries don't reset the interval and stretch older entries' deadlines;
+  // the interval reads the live thread list through a ref (assigned post-commit
+  // so a discarded concurrent render can never leak into it).
   const threadsRef = useRef(threads);
   useEffect(() => {
     threadsRef.current = threads;
@@ -185,7 +200,9 @@ export function useKanbanBoard(): KanbanBoard {
         .getState()
         .expireOptimisticDispatches(Date.now() - OPTIMISTIC_DISPATCH_TIMEOUT_MS);
       for (const [threadId, entry] of expired) {
-        // entries that outlive the window while still connecting just stop watching — the card is already In Progress from derived state, so a revert toast would be a lie
+        // Entries that outlive the window while the session is still connecting
+        // (slow provider) just stop watching for failure — the card is already
+        // In Progress from derived state, so a revert toast would be a lie.
         const thread = threadsRef.current.find((candidate) => candidate.id === threadId);
         // A thread that left the display set while its dispatch was still on
         // the wire cannot be confirmed as reverted here — stay silent rather

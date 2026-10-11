@@ -1,6 +1,12 @@
+// FILE: browserShortcuts.ts
+// Purpose: Shared key-chord matching for in-app browser shortcuts so the renderer and
+//   desktop main process agree on the same bindings without duplicating modifier logic.
+// Layer: Shared runtime utility
+// Depends on: nothing
+
 export const BROWSER_COPY_LINK_TOAST_TITLE = "Link copied";
 
-// normalized chord shape both Electron Input events and DOM KeyboardEvents map onto
+// Normalized chord shape both Electron `Input` events and DOM KeyboardEvents map onto.
 export interface BrowserShortcutChord {
   readonly meta: boolean;
   readonly ctrl: boolean;
@@ -17,7 +23,7 @@ export interface KeyboardShortcutPlatform {
   readonly isWindows: boolean;
 }
 
-// Cmd+Shift+C on macOS, Ctrl+Shift+C elsewhere
+// Copy-link chord: Cmd+Shift+C on macOS, Ctrl+Shift+C elsewhere.
 export function isBrowserCopyLinkChord(chord: BrowserShortcutChord, isMac: boolean): boolean {
   if (chord.key.toLowerCase() !== "c") {
     return false;
@@ -41,7 +47,8 @@ export function isKeyboardShortcutsHelpChord(
     return false;
   }
 
-  // some Windows layouts translate Ctrl+- to "/" while retaining the physical minus code — outside Windows, "/" stays authoritative
+  // Some Windows layouts translate Ctrl+- to "/" while retaining the physical
+  // minus code. Outside Windows, "/" stays authoritative for remapped layouts.
   if (
     chord.key === "-" ||
     (platform.isWindows && (chord.code === "Minus" || chord.code === "NumpadSubtract"))

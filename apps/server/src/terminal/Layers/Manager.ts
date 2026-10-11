@@ -1,3 +1,7 @@
+// FILE: Manager.ts
+// Purpose: Implements server-side terminal sessions, cleanup orchestration, history persistence, and PTY output flow control.
+// Layer: Terminal infrastructure
+// Depends on: PTY adapters, process-tree cleanup helpers, shared terminal contracts, and server config.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -84,21 +88,30 @@ export type { TerminalSubprocessActivity } from "../subprocessActivity";
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
-/** backoff multiplier when all terminals are idle; any activity pulls it back via bumpSubprocessPolling */
+/**
+ * When every running terminal is idle (no live subprocess and no recent
+ * input/output) the subprocess poll backs off to this multiple of the base
+ * interval, cutting the per-`ps` idle drain. Any activity pulls the cadence back
+ * to the base interval via {@link TerminalManagerRuntime#bumpSubprocessPolling}.
+ */
 const SUBPROCESS_IDLE_POLL_MULTIPLIER = 8;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
 const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
-/** flush batched PTY output at ~60fps to reduce WebSocket message volume */
+/** Flush batched PTY output at ~60 fps to reduce WebSocket message volume. */
 const OUTPUT_BATCH_INTERVAL_MS = 16;
-/** flush immediately when the batch exceeds this byte count */
-const OUTPUT_BATCH_SIZE_LIMIT = 131_072;
-/** pause PTY reads when the pending output buffer exceeds this */
-const OUTPUT_BUFFER_HIGH_WATERMARK = 1_048_576;
-/** pause once renderer-unacked output grows past this */
+/** Flush immediately when the batched output exceeds this byte count. */
+const OUTPUT_BATCH_SIZE_LIMIT = 131_072; // 128 KB
+/** Pause PTY reads when the pending output buffer exceeds this size. */
+const OUTPUT_BUFFER_HIGH_WATERMARK = 1_048_576; // 1 MB
+/** Pause once renderer-unacked output grows past this byte count. */
 const OUTPUT_ACK_HIGH_WATERMARK = 100_000;
-/** resume after parsed-output ACKs drain below this */
+/** Resume after parsed-output ACKs drain below this byte count. */
 const OUTPUT_ACK_LOW_WATERMARK = 5_000;
-/** force-resume ACK-paused reads if no ACK arrives — only fires when a renderer stalled or disconnected while paused */
+/**
+ * Force-resume ACK-paused reads if no ACK arrives within this window. Each ACK is
+ * proof the renderer is alive and resets the countdown, so this only fires when a
+ * renderer has stalled or disconnected while reads were paused.
+ */
 const OUTPUT_ACK_RESUME_TIMEOUT_MS = 10_000;
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
@@ -109,14 +122,21 @@ const TERMINAL_ENV_BLOCKLIST = new Set([
   "PORT",
   "ELECTRON_RENDERER_PORT",
   "ELECTRON_RUN_AS_NODE",
-  // host-terminal identity must not leak into the PTY — an inherited TERM gives spawned shells wrong/missing terminfo
+  // Host-terminal identity must not leak into the PTY: sessions render in the
+  // app's xterm.js surface, not in whichever emulator launched this server.
+  // An inherited TERM like "xterm-ghostty" (plus its TERMINFO pointers) makes
+  // spawned shells use wrong/missing terminfo — "unknown terminal type"
+  // errors and garbled line-editor redraw.
   "TERM",
   "TERMINFO",
   "TERMINFO_DIRS",
   "TERM_PROGRAM",
   "TERM_PROGRAM_VERSION",
   "TERM_SESSION_ID",
-  // COLORTERM is also the host's — a harness shell's NO_COLOR=1 would blank ANSI color in every spawned terminal
+  // Color-control identity is also the host's, not the PTY's: a server launched
+  // from a non-interactive harness shell (e.g. `codex exec` sets NO_COLOR=1)
+  // would otherwise blank every ANSI color in every spawned terminal. COLORTERM
+  // is stripped here and pinned below alongside TERM.
   "NO_COLOR",
   "FORCE_COLOR",
   "CLICOLOR",
@@ -138,7 +158,9 @@ const TERMINAL_ENV_BLOCKLIST = new Set([
   "ALACRITTY_WINDOW_ID",
 ]);
 
-// what the embedded xterm.js actually implements; pinned explicitly since node-pty only uses `name` when env lacks TERM
+// What the app's embedded xterm.js surface actually implements; mirrors the
+// `name` passed to the PTY adapters (node-pty only uses `name` when the env
+// carries no TERM of its own, so we pin it explicitly).
 const TERMINAL_SPAWN_TERM =
   globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color";
 const MANAGED_TERMINAL_WRAPPER_DIRNAME = "_managed-bin";
@@ -353,7 +375,9 @@ function isCsiFinalByte(codePoint: number): boolean {
 }
 
 function shouldStripCsiSequence(body: string, finalByte: string): boolean {
-  // replayed into a fresh xterm — keep styling, strip cursor/erase/query/mode sequences that could blank the pane
+  // Persisted terminal history is replayed into a fresh xterm. Keep styling, but
+  // strip cursor movement, erase, query/reply, and mode-control CSI sequences
+  // that can move replayed prompt text off-screen or blank the pane.
   return finalByte !== "m";
 }
 
@@ -421,10 +445,28 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
-/** runaway bound for an unterminated control sequence — real emulators abandon it; counts UTF-16 code units (deliberately generous for sixel/iTerm2 payloads); scrollback-only, live output is never sanitized */
+/**
+ * Upper bound on how much is held back while waiting for a control-sequence terminator.
+ *
+ * String sequences (OSC/DCS/PM/APC) only end on BEL/ST, so a truncated program, a
+ * crashed TUI, or `cat` on a binary can leave one open forever. Without a bound the
+ * carryover buffer grows without limit, every flush rescans it from the start
+ * (quadratic), and nothing ever reaches scrollback — the terminal silently freezes.
+ * Real emulators abandon an over-long sequence and resume, so we do the same.
+ *
+ * The bound counts what `.length` counts — UTF-16 code units, not bytes — so an
+ * all-ASCII payload is capped at exactly 64 KiB while a non-ASCII one can be a few
+ * times that on the wire. That imprecision is deliberate: this is a runaway guard,
+ * and it only has to sit far above legitimate traffic. It is generous for the same
+ * reason, since inline-image protocols (sixel DCS, iTerm2 OSC 1337) do send large
+ * payloads. Payloads above it are abandoned for scrollback only: live output is
+ * streamed as raw PTY bytes and is never sanitized, so the visible terminal is
+ * unaffected. Scrollback itself is capped at 1 MB, so a payload this large could not
+ * survive there anyway.
+ */
 const MAX_PENDING_CONTROL_SEQUENCE_LENGTH = 65_536;
 
-/** ESC + backslash: the 7-bit ST that closes an OSC/DCS/PM/APC sequence */
+/** ESC + backslash: the 7-bit String Terminator that closes an OSC/DCS/PM/APC sequence. */
 const STRING_TERMINATOR = "\u001b\\";
 
 function sanitizeTerminalHistoryChunk(
@@ -446,7 +488,12 @@ function sanitizeTerminalHistoryChunk(
     visibleText += value;
   };
 
-  /** carry an incomplete control sequence into the next chunk; past the bound, emit the bytes terminated by ST and reset */
+  /**
+   * Stop parsing at an incomplete control sequence and carry it into the next
+   * chunk — unless the carryover exceeds the safety bound, in which case the
+   * sequence is abandoned: the buffered bytes are emitted (terminated by ST so a
+   * replayed transcript cannot wedge the client parser) and the parser resets.
+   */
   const suspend = (start: number) => {
     const pending = input.slice(start);
     if (pending.length > MAX_PENDING_CONTROL_SEQUENCE_LENGTH) {
@@ -632,7 +679,9 @@ function createTerminalSpawnEnv(
     if (shouldExcludeTerminalEnvKey(key)) continue;
     spawnEnv[key] = value;
   }
-  // pin TERM/COLORTERM to the embedded renderer's capabilities; a caller-provided runtimeEnv may still override below
+  // Pin TERM/COLORTERM to the embedded renderer's capabilities (xterm.js
+  // renders truecolor SGR); a caller-provided runtimeEnv may still override
+  // them deliberately below.
   spawnEnv.TERM = TERMINAL_SPAWN_TERM;
   spawnEnv.COLORTERM = "truecolor";
   if (runtimeEnv) {
@@ -736,7 +785,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly shellResolver: () => string;
   private readonly persistQueues = new Map<string, Promise<void>>();
   private readonly persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  /** materializer thunk so the O(maxBytes) cap only runs when the debounced write fires — never on the per-flush hot path */
+  /**
+   * Pending persist work keyed by session. Stores a materializer thunk rather
+   * than a string so the O(maxBytes) history cap only runs when the debounced
+   * write actually fires (≈4/s) — never on the per-flush hot path.
+   */
   private readonly pendingPersistHistory = new Map<string, () => string>();
   private readonly persistedHistoryByKey = new Map<string, string>();
   private persistTempCounter = 0;
@@ -751,7 +804,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly maxRetainedInactiveSessions: number;
   private subprocessPollTimer: ReturnType<typeof setTimeout> | null = null;
   private subprocessPollInFlight = false;
-  /** delay of the scheduled poll, so activity can pull it forward */
+  /** Delay of the currently scheduled poll, so activity can pull it forward. */
   private currentSubprocessPollDelayMs = 0;
   private readonly killEscalationTimers = new Map<PtyProcess, KillEscalationHandle>();
   private readonly logger = createLogger("terminal");
@@ -779,7 +832,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     this.persistDebounceMs = DEFAULT_PERSIST_DEBOUNCE_MS;
     this.subprocessChecker = options.subprocessChecker ?? defaultSubprocessChecker;
     this.processTreeKiller = options.processTreeKiller ?? defaultProcessTreeKiller;
-    // only the built-in checker shares a single snapshot per poll; injected checkers keep the per-pid path
+    // Only the built-in checker can share a single process snapshot across the
+    // poll cycle; injected checkers (tests) keep the per-pid path.
     this.useDefaultSubprocessChecker = options.subprocessChecker === undefined;
     this.processSnapshotObserver =
       options.processSnapshotObserver ??
@@ -941,7 +995,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         JSON.stringify(currentRuntimeEnv) !== JSON.stringify(nextRuntimeEnv);
 
       if (existing.process) {
-        // a renderer reattach is not a restart — keep the live PTY's original cwd/env so UI drift can't SIGTERM a running agent
+        // A renderer reattach/reconcile is not an explicit restart; keep the live
+        // PTY's original cwd/env so UI drift cannot SIGTERM a running agent.
         if (existing.cwd !== input.cwd || runtimeEnvChanged) {
           this.logger.warn("ignoring terminal open cwd/env change for running session", {
             threadId: existing.threadId,
@@ -982,7 +1037,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(existing);
       }
 
-      // discard the previous client's ACK accounting so a reconnect-while-paused can never leave the terminal frozen
+      // Reattaching a renderer to a still-running session: discard the previous
+      // client's ACK accounting and resume reads so a reconnect-while-paused can
+      // never leave this terminal frozen.
       this.resetOutputAckTracking(existing);
 
       if (existing.cols !== targetCols || existing.rows !== targetRows) {
@@ -993,7 +1050,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         existing.updatedAt = new Date().toISOString();
       }
 
-      // drain batched output so the reconnect snapshot carries latest history and the mode-replay preamble
+      // Drain any batched-but-unparsed output so the reconnect snapshot carries
+      // the latest history and an up-to-date mode-replay preamble.
       this.flushOutputBuffer(existing);
       return this.snapshot(existing);
     });
@@ -1032,7 +1090,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.emitActivityEvent(session);
     }
     session.lastInputAt = Date.now();
-    // typing may spawn a subprocess — restore fast polling promptly
+    // Typing may spawn a subprocess; restore fast subprocess polling promptly.
     this.bumpSubprocessPolling();
     session.process.write(input.data);
   }
@@ -1047,7 +1105,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (session.outputUnackedBytes <= OUTPUT_ACK_LOW_WATERMARK) {
       session.outputAckPauseRequested = false;
     }
-    // an ACK proves the renderer is alive — reset the resume watchdog
+    // An ACK proves the renderer is alive: reset the resume watchdog window and
+    // re-sync pause state (which re-arms the watchdog if reads stay paused).
     this.clearOutputAckResumeTimer(session);
     this.syncOutputReadPause(session);
   }
@@ -1126,7 +1185,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
-          // restart has no headless mode of its own; existing sessions keep the mode they were opened with
+          // Restart has no headless mode of its own; fresh sessions stream normally
+          // and existing sessions (below) keep whatever mode they were opened with.
           streamOutput: true,
           outputPaused: false,
           outputBufferPauseRequested: false,
@@ -1278,7 +1338,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     for (const session of sessions) {
-      // flush remaining batched output before teardown
+      // Flush any remaining batched output before tearing down.
       this.flushOutputBuffer(session);
       this.stopProcess(session);
     }
@@ -1465,11 +1525,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private onProcessData(session: TerminalSessionState, data: string): void {
-    // hot path: buffer only — all parsing runs once per coalesced batch (~60/s), not per raw chunk
+    // Hot path: only buffer raw output here. All parsing (mode-replay feed,
+    // history sanitize, CLI/hook detection, persistence) happens once per
+    // coalesced batch in flushOutputBuffer, so its cost scales with batches
+    // (~60/s) rather than with the number of raw PTY chunks.
     session.pendingOutputChunks.push(data);
     session.pendingOutputLength += Buffer.byteLength(data, "utf8");
 
-    // pause the PTY when the server buffer grows too large
+    // Backpressure: pause PTY when the local server buffer grows too large.
     if (
       !session.outputBufferPauseRequested &&
       session.pendingOutputLength >= OUTPUT_BUFFER_HIGH_WATERMARK
@@ -1479,7 +1542,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
 
     if (session.pendingOutputLength >= OUTPUT_BATCH_SIZE_LIMIT) {
-      // large burst — flush immediately to bound latency
+      // Large burst — flush immediately to avoid excessive latency.
       this.flushOutputBuffer(session);
     } else if (session.outputFlushTimer === null) {
       session.outputFlushTimer = setTimeout(() => {
@@ -1488,7 +1551,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
-  /** batch parse is equivalent to per-chunk: sanitize/replay thread state through the carryover and the cap only trims from the front */
+  /**
+   * Parse a coalesced output batch: feed the mode-replay mirror, sanitize into
+   * scrollback, detect CLI/hook activity, and schedule persistence. Operating on
+   * the joined batch is equivalent to processing each raw chunk in order:
+   * sanitize/replay thread their state across the pending-control carryover, and
+   * history capping only ever trims from the front, so per-chunk and per-batch
+   * processing yield identical observable state.
+   */
   private processOutputBatch(session: TerminalSessionState, data: string): void {
     this.feedModeReplayTracker(session, data);
     const sanitized = sanitizeTerminalHistoryChunk(session.pendingHistoryControlSequence, data);
@@ -1520,11 +1590,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.queuePersist(session);
       const normalizedSignature = normalizeProviderOutputSignature(sanitized.visibleText);
       if (normalizedSignature.length > 0 && normalizedSignature !== session.lastOutputSignature) {
-        // ignore identical redraws so an idle prompt doesn't pin the provider "busy" forever
-        // when hooks are active they're the source of truth — this heuristic only matters for unmanaged terminals
+        // Only refresh on genuinely new output. Repeated identical redraws (idle prompt
+        // repaints) are ignored so they do not pin the provider in a "busy" state forever.
+        // When hooks are active (managedAgentObserved), hooks are the source of truth anyway;
+        // this heuristic only matters for unmanaged terminals.
         session.lastOutputAt = Date.now();
         session.lastOutputSignature = normalizedSignature;
-        // fresh output can mean a subprocess started — recover fast polling
+        // Fresh output can mean a subprocess started; recover fast polling.
         this.bumpSubprocessPolling();
       }
     }
@@ -1545,10 +1617,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
     session.outputBufferPauseRequested = false;
 
-    // parse before emitting so a snapshot right after a flush reflects this output
+    // Parse the batch (history/replay/detection) before emitting so a snapshot
+    // taken right after a flush reflects this output.
     this.processOutputBatch(session, data);
 
-    // headless sessions still drain and record history but skip the live broadcast
+    // Headless sessions (e.g. dev servers) still drain the PTY and maintain
+    // history above, but skip the live broadcast so unviewed background output
+    // never reaches the WebSocket fanout.
     if (session.streamOutput) {
       this.emitEvent({
         type: "output",
@@ -1582,7 +1657,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     this.syncOutputAckResumeWatchdog(session);
   }
 
-  /** ACK-pause can only drain via renderer ACKs — arm a watchdog so a stalled/disconnected renderer can't freeze the PTY forever */
+  /**
+   * ACK-backpressure can only be drained by renderer ACKs. If a renderer stalls or
+   * disconnects while reads are paused, those ACKs never arrive and the PTY would
+   * stay paused forever. Arm a watchdog whenever ACK-pause holds reads down so the
+   * session always recovers; any ACK or state change resets it.
+   */
   private syncOutputAckResumeWatchdog(session: TerminalSessionState): void {
     if (session.outputPaused && session.outputAckPauseRequested) {
       if (session.outputAckResumeTimer !== null) return;
@@ -1611,7 +1691,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
-  /** drop the previous renderer's ACK accounting on reattach — else reconnect-while-paused strands the PTY paused forever */
+  /**
+   * Drop the previous renderer's ACK accounting when a new renderer reattaches to a
+   * still-running session. Without this, a reconnect that happened while reads were
+   * ack-paused would strand outputUnackedBytes high and the PTY paused forever
+   * (the fresh renderer never ACKs output it never received).
+   */
   private resetOutputAckTracking(session: TerminalSessionState): void {
     session.outputAckObserved = false;
     session.outputUnackedBytes = 0;
@@ -1685,7 +1770,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private onProcessExit(session: TerminalSessionState, event: PtyExitEvent): void {
-    // drain batched output before emitting the exit event
+    // Drain any remaining batched output before emitting the exit event.
     this.flushOutputBuffer(session);
     this.clearKillEscalationTimer(session.process, { force: false });
     this.cleanupProcessHandles(session);
@@ -1720,7 +1805,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private stopProcess(session: TerminalSessionState): void {
-    // drain batched output before killing
+    // Drain any remaining batched output before killing.
     this.flushOutputBuffer(session);
     const process = session.process;
     if (!process) return;
@@ -1819,7 +1904,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     };
 
     signalTree("SIGTERM");
-    // also signal the PTY handle directly for adapter compatibility and test doubles
+    // Also signal the PTY handle directly for adapter compatibility and test doubles.
     signalProcess("SIGTERM");
 
     const unsubscribeExit = ptyProcess.onExit(() => {
@@ -1838,7 +1923,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.killEscalationTimers.delete(ptyProcess);
       const rootExited = handle?.rootExited === true;
       signalTree("SIGKILL", { includeRootTree: !rootExited });
-      // once the root exit is observed, only the captured descendants are safe to signal
+      // Once the root exit is observed, only the captured descendants are safe to signal.
       if (!rootExited) {
         signalProcess("SIGKILL");
       }
@@ -1873,7 +1958,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.sessions.delete(key);
       this.clearPersistTimer(session.threadId, session.terminalId);
       this.pendingPersistHistory.delete(key);
-      // release the cached history ref after the final write — retaining it leaks up to historyByteLimit per evicted key
+      // Release the cached history reference once the final write lands (the write
+      // re-populates it on completion). The session is gone, so retaining it would
+      // leak up to historyByteLimit per evicted key for the server's lifetime.
       void this.enqueuePersistWrite(
         session.threadId,
         session.terminalId,
@@ -1885,7 +1972,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
-  /** history materialized lazily in the debounce so the hot output path never pays the cap cost; the thunk reads latest content at write time */
+  /**
+   * Mark a session's history dirty for a debounced persist. The history string is
+   * materialized lazily (in the debounce timer / flush), so the hot output path
+   * never pays the cap cost. The thunk reads `session.history` at write time so it
+   * always persists the latest content, even after the session is removed.
+   */
   private queuePersist(session: TerminalSessionState): void {
     if (session.providerAuthInstanceId) return;
     const persistenceKey = toSessionKey(session.threadId, session.terminalId);
@@ -1915,7 +2007,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       if (this.persistedHistoryByKey.get(persistenceKey) === history) {
         return;
       }
-      // atomic temp-file + rename so a crash can't leave a torn history file
+      // Atomic replace: write a temp file then rename, so a crash mid-write can
+      // never leave a torn history file. History is byte-capped, so this writes
+      // at most ~historyByteLimit bytes regardless of total output volume.
       const finalPath = this.historyPath(threadId, terminalId);
       const tempPath = `${finalPath}.tmp-${process.pid}-${(this.persistTempCounter += 1)}`;
       try {
@@ -2016,7 +2110,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         maxBytes: this.historyByteLimit,
       });
 
-      // migrate the legacy transcript filename to the terminal-scoped path
+      // Migrate legacy transcript filename to the terminal-scoped path.
       await fs.promises.writeFile(nextPath, capped, {
         encoding: "utf8",
         mode: PRIVATE_FILE_MODE,
@@ -2091,11 +2185,16 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private ensureSubprocessPolling(): void {
     if (this.subprocessPollTimer || this.subprocessPollInFlight) return;
-    // kick an immediate poll, then self-schedule adaptively
+    // Kick an immediate poll, then self-schedule the next one adaptively.
     void this.runSubprocessPollCycle();
   }
 
-  /** poll fast while any terminal works, back off when all idle — quiet shells cost one `ps` sweep every few seconds */
+  /**
+   * Poll fast while any terminal is working (a live subprocess, or recent
+   * input/output) and back off when all running sessions are idle. Hook-managed
+   * and quiet shells then cost one `ps` sweep every few seconds instead of every
+   * second.
+   */
   private desiredSubprocessPollIntervalMs(now: number): number {
     const base = this.subprocessPollIntervalMs;
     for (const session of this.sessions.values()) {
@@ -2140,6 +2239,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     this.subprocessPollTimer = timer;
   }
 
+  /**
+   * Pull the next subprocess poll forward to the base cadence when a backed-off
+   * session sees fresh input/output, so activity detection stays responsive
+   * after an idle period. No-op while already polling fast.
+   */
   private bumpSubprocessPolling(): void {
     if (this.subprocessPollInFlight) return;
     if (!this.subprocessPollTimer) return;
@@ -2167,7 +2271,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
 
     this.subprocessPollInFlight = true;
-    // one snapshot per cycle: POSIX one `ps`, Windows one persistent observer
+    // Capture the whole process tree once per cycle. POSIX uses one `ps`; Windows
+    // uses one persistent observer process. Every running terminal is then
+    // inspected synchronously against the same immutable snapshot.
     const sharedChildrenMap = this.processSnapshotObserver
       ? await this.processSnapshotObserver.capture()
       : this.useDefaultSubprocessChecker && process.platform !== "win32"
@@ -2178,7 +2284,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     try {
       await Promise.all(
         runningSessions.map(async (session) => {
-          // a failed Windows snapshot proves nothing — preserve last known activity while the observer backs off
+          // A failed Windows snapshot proves nothing. Preserve the last known
+          // activity state while the observer backs off instead of reporting a
+          // false idle transition or falling back to per-terminal processes.
           if (sharedSnapshotUnavailable) return;
           const terminalPid = session.pid;
           let hasRunningSubprocess = false;
@@ -2191,18 +2299,20 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
             const providerDescendantObserved =
               session.providerDescendantObserved ||
               (session.detectedCliKind !== null && subprocessActivity.hasProviderDescendant);
-            // process-tree provider matches affect busy-state only; branding follows explicit env/input/hook signals
+            // Process-tree provider matches affect busy-state only. Branding follows explicit
+            // env/input/hook signals so dev servers that spawn agents stay generic.
             shouldClearDetectedCliKind =
               session.detectedCliKind !== null &&
               !subprocessActivity.hasProviderDescendant &&
               (providerDescendantObserved || !isProviderSessionBusy(session, Date.now()));
             session.providerDescendantObserved = providerDescendantObserved;
             if (session.managedAgentObserved) {
-              // hooks fired — trust them as the sole source of truth; only non-provider subprocesses override
+              // Hooks have fired — trust them as the sole source of truth (superset model).
+              // Only override with non-provider subprocesses (e.g. user spawned a build).
               hasRunningSubprocess =
                 session.managedAgentRunning || subprocessActivity.hasNonProviderSubprocess;
             } else {
-              // no hooks observed — fall back to process-tree + output heuristic
+              // No hooks observed — fall back to process-tree + output heuristic.
               hasRunningSubprocess = subprocessActivity.hasProviderDescendant
                 ? subprocessActivity.hasNonProviderSubprocess ||
                   isProviderSessionBusy(session, Date.now())
@@ -2282,7 +2392,16 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
-  /** drop the write-dedup entry for a non-resident session — else closed-but-archived sessions pin scrollback for the process lifetime */
+  /**
+   * Drop the write-dedup entry for a session that is no longer resident.
+   *
+   * `persistedHistoryByKey` only exists to skip a redundant rewrite of identical
+   * history, and the final persist re-populates it *after* the session was removed.
+   * Without this release every closed-but-not-deleted session (archiving keeps its
+   * history on disk) would pin up to `historyByteLimit` of scrollback in memory for
+   * the lifetime of the process. Dropping the entry costs at most one redundant file
+   * write later; `readHistory` re-populates it when the terminal is reopened.
+   */
   private releasePersistedHistoryCache(threadId: string, terminalId: string): void {
     this.persistedHistoryByKey.delete(toSessionKey(threadId, terminalId));
   }

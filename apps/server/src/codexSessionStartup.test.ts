@@ -155,7 +155,8 @@ describe("Codex session startup failures", () => {
       });
 
       await vi.waitFor(() => expect(requests).toContain(method));
-      // stay comfortably below the ordinary deadline before crossing it
+      // vi.waitFor advances fake time while the async startup reaches the open request.
+      // Stay comfortably below the ordinary deadline before crossing it.
       await vi.advanceTimersByTimeAsync(19_000);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1_000);
@@ -300,7 +301,8 @@ describe("Codex session startup failures", () => {
     let acceptedFrame: unknown;
     vi.spyOn(child.stdin, "write").mockImplementation((frame) => {
       acceptedFrame = JSON.parse(String(frame));
-      // the provider can receive the frame before the stream's write callback confirms — closing loses acknowledgement, not proof of delivery
+      // The provider can receive the frame before the stream's write callback
+      // confirms it. Closing here loses acknowledgement, not proof of delivery.
       queueMicrotask(() => child.stdin.emit("close"));
       return true;
     });

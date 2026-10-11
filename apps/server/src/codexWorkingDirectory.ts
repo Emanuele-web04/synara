@@ -1,6 +1,10 @@
 import { statSync } from "node:fs";
 
-/** missing project cwd often surfaces as spawn ENOENT — callers must distinguish it from a missing Codex install so the UI can prompt relocate */
+/**
+ * Missing project CWDs often surface as spawn ENOENT (Node/Effect access the
+ * working directory before the binary). Callers must distinguish that from a
+ * missing Codex installation so the UI can prompt relocate/reconnect.
+ */
 export function formatMissingCodexWorkingDirectoryError(cwd: string): string {
   return `Project working directory no longer exists: ${cwd}. Relocate or reconnect the project in Synara.`;
 }

@@ -1,4 +1,10 @@
-// Sidebar.tsx is the app's largest component; Spaces is a self-contained unit of handlers/dialog state/sync effects extracted here
+// FILE: useSpacesController.ts
+// Purpose: All Space selection, editing, deletion, and assignment behavior behind the sidebar.
+// Layer: Sidebar controller hook
+// Why: Sidebar.tsx is the largest component in the app; the Spaces feature is a
+//      self-contained unit of handlers, dialog state, and sync effects. One seam here
+//      (inputs in, handlers out) keeps it reviewable instead of interleaved through an
+//      8k-line component.
 
 import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -179,7 +185,8 @@ export function useSpacesController(input: {
    */
   const handleSelectSpaceForIncomingProject = useCallback(
     (spaceId: SpaceId | null) => {
-      // read the live value so an async create flow can roll back a provisional selection with the same callback instance
+      // Read the live value so an async create flow can roll back a provisional
+      // selection with the same callback instance it used to select it.
       if (spaceId === useSpacesUiStore.getState().activeSpaceId) return;
       rememberDepartingSpaceContext();
       selectSpaceForNavigation(spaceId);
@@ -221,7 +228,11 @@ export function useSpacesController(input: {
         return;
       }
 
-      // an empty Space still has to be entered; a bare "/" restores a thread route belonging to the Space being left and useRouteSpaceSync would undo the click — on upgraded installs every Space is empty so this is the only path
+      // An empty Space still has to be entered. The landing has to say *which* Space it is
+      // entering: a bare "/" restores the last remembered thread route, which belongs to the
+      // Space being left, and useRouteSpaceSync would then adopt that thread's Space and undo
+      // the click. On an upgraded install every project keeps `spaceId = null`, so every
+      // user-created Space is empty and this is the only path a Space switch can take.
       startTransition(() => {
         void navigate({ to: "/", search: { space: spaceKey(target.spaceId) } });
       });
@@ -257,7 +268,9 @@ export function useSpacesController(input: {
       const icon = toSpaceIconName(value.icon);
 
       if (spaceEditorState.mode === "edit") {
-        // only actual changes are sent — an icon-only edit can't collide with a concurrent rename, and a no-change save is a plain close (the server rejects no-op updates)
+        // Only actual changes are sent, so an icon-only edit cannot collide with a
+        // concurrent rename; saving with nothing changed is a plain close, not a
+        // command — the server rejects no-op metadata updates.
         const currentSpace = spaces.find((space) => space.id === spaceEditorState.spaceId);
         const nextName = currentSpace?.name === value.name ? undefined : value.name;
         const nextIcon = currentSpace?.icon === icon ? undefined : icon;
@@ -336,7 +349,8 @@ export function useSpacesController(input: {
         if (activeSpaceId === spaceId) {
           selectSpaceForNavigation(null);
           if (!isOrdinarySpaceProject(activeContextProject, workspacePaths)) {
-            // same explicit landing as an empty-Space switch: we just selected Void, so the restore must not reopen a thread filing into another Space
+            // Same explicit landing as an empty-Space switch: we just selected Void, so the
+            // restore must not reopen a thread that files into some other Space.
             void navigate({ to: "/", search: { space: spaceKey(null) } });
           }
         }
@@ -390,7 +404,8 @@ export function useSpacesController(input: {
       reorderSpacesLocally(orderedSpaceIds);
       void reorderSpaces({ api, movedSpaceId, orderedSpaceIds }).catch(async (error) => {
         try {
-          // a transport error can arrive after the command committed — re-read the authoritative shell instead of blindly rolling back a stored reorder
+          // A transport error can arrive after the command committed. Re-read the authoritative
+          // shell instead of blindly rolling back a reorder the server may already have stored.
           const snapshot = await api.orchestration.getShellSnapshot();
           useStore.getState().syncServerShellSnapshot(snapshot);
           const confirmedSpaceIds = snapshot.spaces.map((space) => space.id);
@@ -398,7 +413,8 @@ export function useSpacesController(input: {
             return;
           }
         } catch {
-          // keep the optimistic order when authority is unreachable; the next shell snapshot reconciles without a false rollback after a successful commit
+          // Keep the optimistic order when authority cannot be reached; the next shell snapshot
+          // will reconcile it without risking a false rollback after a successful commit.
         }
         toastManager.add({
           type: "error",
@@ -426,7 +442,8 @@ export function useSpacesController(input: {
       const project = projectById.get(projectId);
       if (!api || !project || (project.spaceId ?? null) === spaceId) return;
       onCloseProjectContextMenu();
-      // evaluated before the `try` (see spaceOrderMatches); none of these inputs can change across the await anyway
+      // Evaluated before the `try` (see `spaceOrderMatches`); none of these inputs can change
+      // across the await anyway.
       const movesTheRoutedProject =
         activeRouteProjectId === projectId || (isOnKanban && routeProjectId === projectId);
       try {

@@ -1,3 +1,8 @@
+// FILE: useNowMs.ts
+// Purpose: Shared lightweight wall-clock tick for live elapsed labels.
+// Layer: Web hook
+// Exports: useNowMs
+
 import { useEffect, useState } from "react";
 import { startVisibleInterval } from "../lib/visibleInterval";
 

@@ -1,3 +1,7 @@
+// FILE: floatingBrowserPanel.logic.ts
+// Purpose: Pure placement, resize, and visibility rules for the floating browser host.
+// Layer: Chat surface UI logic
+
 import {
   BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
   BROWSER_AUTOMATION_VIEWPORT_WIDTH,
@@ -284,6 +288,18 @@ export function floatingBrowserResizeCursor(edge: FloatingBrowserResizeEdge): st
   return "nwse-resize";
 }
 
+/**
+ * How far the floating card's host must stop above the pane's bottom edge so the card (kept
+ * one margin inside the host) never covers the composer. Zero when there is no composer.
+ */
+export function floatingBrowserComposerClearancePx(input: {
+  paneBottom: number;
+  composerTop: number | null;
+}): number {
+  if (input.composerTop === null || !Number.isFinite(input.composerTop)) return 0;
+  return Math.max(0, Math.round(input.paneBottom - input.composerTop));
+}
+
 export const FLOATING_BROWSER_DRAG_THRESHOLD_PX = 4;
 
 export function isFloatingBrowserDragGesture(
@@ -293,14 +309,16 @@ export function isFloatingBrowserDragGesture(
   return Math.hypot(delta.x, delta.y) >= thresholdPx;
 }
 
-// shared by single and split surfaces so a stale request can't reappear over another thread or duplicate a docked browser
+// Keep this decision shared by single and split surfaces so a stale request can never
+// reappear over another thread or duplicate a browser that is already docked and visible.
 export function shouldRenderFloatingBrowserPanel(input: {
   hostThreadId: string | null;
   floatingThreadId: string | null;
   dockBrowserVisible: boolean;
   isFocused?: boolean;
 }): boolean {
-  // hide while a docked live browser is on screen, but don't treat it as dismissed — collapsing the dock should restore the card
+  // Hide while a docked live browser is on screen, but do not treat that as
+  // dismissing the request — collapsing the dock should restore the card.
   return (
     input.hostThreadId !== null &&
     input.hostThreadId === input.floatingThreadId &&

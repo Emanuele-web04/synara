@@ -1,3 +1,8 @@
+// FILE: providerAttachmentPaths.ts
+// Purpose: Resolves persisted attachment identities to provider-readable storage paths.
+// Layer: Orchestration/provider boundary utility
+// Depends on: managed attachment persistence and the legacy attachment layout.
+
 import { statSync } from "node:fs";
 
 import type { ChatAttachment, ProviderKind, ThreadId } from "@synara/contracts";
@@ -54,6 +59,7 @@ function resolutionError(input: {
   });
 }
 
+/** Resolve an attachment already normalized for provider dispatch, falling back to the legacy layout. */
 export function resolveProviderAttachmentPath(input: {
   readonly attachmentsDir: string;
   readonly attachment: ChatAttachment;
@@ -67,7 +73,11 @@ export function resolveProviderAttachmentPath(input: {
   );
 }
 
-// schema decode drops server-only properties — carry only the unforgeable in-process storage marker from validated input to decoded attachments
+/**
+ * Schema decoding intentionally drops server-only properties. Carry only the
+ * unforgeable in-process storage marker from the validated raw input to the
+ * decoded attachment objects before adapter dispatch.
+ */
 export function carryProviderAttachmentPaths(
   rawInput: unknown,
   attachments: ReadonlyArray<ChatAttachment>,
@@ -86,7 +96,11 @@ export function carryProviderAttachmentPaths(
   });
 }
 
-// managed attachments resolve through their claimed repo record exactly once at the orchestration/provider boundary; legacy ids keep flat-file resolution
+/**
+ * Resolve managed attachments through their claimed repository record exactly
+ * once at the orchestration/provider boundary. Legacy IDs retain their
+ * historical flat-file resolution.
+ */
 export function resolveProviderDispatchAttachments(input: {
   readonly attachments: ReadonlyArray<ChatAttachment> | undefined;
   readonly attachmentsDir: string;

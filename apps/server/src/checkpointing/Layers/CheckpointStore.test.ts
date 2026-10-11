@@ -1,3 +1,7 @@
+// FILE: CheckpointStore.test.ts
+// Purpose: Verifies filesystem checkpoint store behavior around expensive Git capture work.
+// Layer: Checkpointing tests.
+// Exports: Vitest coverage for CheckpointStoreLive.
 import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -211,7 +215,8 @@ describe("CheckpointStoreLive", () => {
         yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 25)));
 
         yield* Fiber.interrupt(first);
-        // the owner's interruption must surface to waiters as a typed store error, not replay as their own fiber interrupt
+        // The owner's interruption must surface to waiters as a typed store
+        // error, not replay as the waiter's own fiber being interrupted.
         const waiterResult = yield* Fiber.join(waiter);
         expect(waiterResult).toBe("CheckpointInvariantError");
 
@@ -380,7 +385,7 @@ describe("CheckpointStoreLive", () => {
       }),
     );
 
-    // every ref is still attempted; one loser must not abandon the batch
+    // Every ref is still attempted; one loser must not abandon the batch.
     expect(execute).toHaveBeenCalledTimes(2);
     expect(result).not.toBe("success");
     expect(result).toContain(lockedRef);
@@ -389,7 +394,8 @@ describe("CheckpointStoreLive", () => {
   });
 
   it("tolerates deleting checkpoint refs that are already absent", async () => {
-    // `git update-ref -d` exits 0 on a missing ref — the exit-code check must not turn best-effort cleanup into a hard failure
+    // `git update-ref -d` exits 0 for a ref that does not exist, so the
+    // exit-code check must not turn best-effort cleanup into a hard failure.
     const missingRef = CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/gone");
     const execute = vi.fn<GitCoreShape["execute"]>(() =>
       Effect.succeed({ code: 0, stdout: "", stderr: "" }),

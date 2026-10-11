@@ -1,3 +1,6 @@
+// FILE: desktopUserDataProfile.ts
+// Purpose: Resolves Synara's Electron userData paths and completes bridge profile repair.
+
 import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
@@ -103,7 +106,13 @@ function findBridgeBrowserPartitionPaths(sourceProfilePath: string): string[] {
     .sort((left, right) => FS.statSync(right).mtimeMs - FS.statSync(left).mtimeMs);
 }
 
-// the bridge manifest identifies the trusted sibling profile — discovering its *-browser partition from that path avoids shipping predecessor names while repairing cookies/storage missed on the first bridge run
+/**
+ * Finishes any browser-partition copy described by the compatibility bridge.
+ *
+ * The bridge manifest identifies the exact sibling profile that supplied the Synara profile.
+ * Discovering its `*-browser` partition from that trusted path avoids shipping predecessor names
+ * while still repairing cookies or storage entries that were absent during the first bridge run.
+ */
 export function repairBrowserProfileFromBridgeManifest(
   targetPath: string,
 ): BrowserProfileBridgeRepairResult {
@@ -148,7 +157,8 @@ export function repairBrowserProfileFromBridgeManifest(
       const stagedSourcePath = Path.join(stagedGroupPath, "source");
       const stagedTargetBackupPath = Path.join(stagedGroupPath, "target-backup");
       try {
-        // stage the whole source generation before removing orphaned target sidecars — a failed copy leaves the target untouched
+        // Stage the whole source generation before removing orphaned target
+        // sidecars, so a failed source copy leaves the target untouched.
         FS.mkdirSync(stagedSourcePath, { recursive: true });
         for (const entryName of sourceEntryNames) {
           FS.cpSync(
@@ -162,7 +172,8 @@ export function repairBrowserProfileFromBridgeManifest(
           );
         }
 
-        // another startup may have completed the repair while this group was staged — preserve its database, leave its sidecars
+        // Another startup may have completed the repair while this group was
+        // staged. Preserve its database and leave its sidecars untouched.
         if (FS.existsSync(Path.join(targetPartitionPath, baseEntryName))) continue;
 
         const installOrder = [

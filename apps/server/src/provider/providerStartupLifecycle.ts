@@ -1,3 +1,7 @@
+// FILE: providerStartupLifecycle.ts
+// Purpose: Makes provider startup phases, failures, timeout, cancellation, and cleanup explicit.
+// Layer: Provider runtime infrastructure
+
 import { ExecutableNotFoundError } from "@synara/shared/platformProcess";
 import { Duration, Effect, Option } from "effect";
 
@@ -120,6 +124,11 @@ export interface ProviderStartupPhaseDurations {
   readonly byPhase: Readonly<Record<string, number>>;
 }
 
+/**
+ * Collapses a startup snapshot's transition timestamps into per-phase and
+ * total durations so a slow provider start is attributable from the
+ * `provider.session.started` log alone, without reproducing it.
+ */
 export function startupPhaseDurations(
   snapshot: ProviderStartupSnapshot,
 ): ProviderStartupPhaseDurations {
@@ -162,7 +171,12 @@ export function classifyProviderStartupFailure(cause: unknown): ProviderStartupF
   return "ProtocolFailure";
 }
 
-// the deadline lives inside the interruption hook: expiry records HandshakeTimeout, only external interruption records Cancelled
+/**
+ * Bounds an adapter start with the orchestration deadline and records the outcome
+ * on the lifecycle. The deadline is applied *inside* the interruption hook so an
+ * expired timeout is recorded as `HandshakeTimeout`, and only an external
+ * interruption of the start itself is recorded as `Cancelled`.
+ */
 export const observeProviderStartup = <A, E, R>(
   start: Effect.Effect<A, E, R>,
   input: {

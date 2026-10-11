@@ -1,3 +1,4 @@
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { MessageId, ThreadId, type ProviderKind, type TurnId } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -7,10 +8,13 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useCallback } from "react";
 import { newCommandId, newMessageId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { useComposerDraftStore, type QueuedComposerPlanFollowUp } from "../../composerDraftStore";
+import { useComposerDraftStore } from "../../composerDraftStore";
 import { formatOutgoingComposerPrompt } from "../../lib/composerSend";
 import { reconcileDeletedThreadFromClient } from "../../lib/deletedThreadClientReconciliation";
-import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
+import {
+  armQueuedComposerSteerGate,
+  prepareQueuedComposerResumeAfterSend,
+} from "../../lib/queuedComposerDrain";
 import { appendOriginalComposerPromptBlocks } from "../../lib/terminalContext";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../../pendingTurnDispatch";
 import {
@@ -45,7 +49,7 @@ import { useChatTranscriptScroll } from "./useChatTranscriptScroll";
 import { useChatWorkLog } from "./useChatWorkLog";
 import { toastManager } from "../ui/toast";
 
-import type { LateComposerSendHandlers } from "./chatSendTypes";
+import type { LateComposerSendHandlers, PlanFollowUpSubmission } from "./chatSendTypes";
 interface ChatTurnFollowUpsInput {
   threadId: ThreadId;
   activeThread: Thread | undefined;
@@ -148,12 +152,8 @@ export function useChatTurnFollowUps({
     interactionMode: nextInteractionMode,
     dispatchMode,
     queuedTurn,
-  }: {
-    text: string;
-    interactionMode: "default" | "plan";
-    dispatchMode: "queue" | "steer";
-    queuedTurn?: QueuedComposerPlanFollowUp;
-  }): Promise<boolean> {
+    resumeQueueAfterSend: preparedQueueResume,
+  }: PlanFollowUpSubmission): Promise<boolean> {
     const api = readNativeApi();
     if (
       !api ||
@@ -161,6 +161,7 @@ export function useChatTurnFollowUps({
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
+      (activeThread && isThreadDetailAwaitingVerification(activeThread.id)) ||
       sendInFlightRef.current
     ) {
       return false;
@@ -172,6 +173,11 @@ export function useChatTurnFollowUps({
     }
 
     const threadIdForSend = activeThread.id;
+    const resumeQueueAfterSend =
+      preparedQueueResume ??
+      (!queuedTurn || dispatchMode === "steer"
+        ? prepareQueuedComposerResumeAfterSend(threadIdForSend)
+        : undefined);
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingComposerPrompt({
@@ -218,7 +224,8 @@ export function useChatTurnFollowUps({
         createdAt: messageCreatedAt,
       });
 
-      // keep the mode toggle and plan-follow-up banner in sync while the same-thread implementation turn starts
+      // Keep the mode toggle and plan-follow-up banner in sync immediately
+      // while the same-thread implementation turn is starting.
       setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
 
       const sourceProposedPlan =
@@ -236,6 +243,8 @@ export function useChatTurnFollowUps({
           planDispatchSettings.modelSelection.provider,
         providerOptions: planDispatchSettings.providerOptions,
       });
+      if (isThreadDetailAwaitingVerification(threadIdForSend))
+        throw new Error("Wait for the conversation to reconnect before sending.");
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -277,7 +286,9 @@ export function useChatTurnFollowUps({
         setQueuedSteerGate(nextSteerGate);
         armQueuedComposerSteerGate(threadId, nextSteerGate);
       }
-      // "default" mode means the agent is executing the plan, producing step-tracking activities the sidebar displays
+      // Optimistically open the plan sidebar when implementing (not refining).
+      // "default" mode here means the agent is executing the plan, which produces
+      // step-tracking activities that the sidebar will display.
       if (nextInteractionMode === "default") {
         planSidebarDismissedForTurnRef.current = null;
         setPlanSidebarOpen(true);
@@ -288,6 +299,7 @@ export function useChatTurnFollowUps({
       await dispatchPlanFollowUpTurn();
       armLocalDispatchAckFallback(threadIdForSend);
       sendInFlightRef.current = false;
+      if (resumeQueueAfterSend) resumeQueueAfterSend();
       return true;
     } catch (err) {
       setOptimisticUserMessages((existing) =>
@@ -298,7 +310,8 @@ export function useChatTurnFollowUps({
         err instanceof Error ? err.message : "Failed to send plan follow-up.",
       );
       sendInFlightRef.current = false;
-      // the turn RPC failed, so no server turn exists for the watchdog — drop the marker
+      // The turn RPC failed, so no server turn exists for the watchdog to
+      // recover — drop the marker armed when the dispatch began.
       clearPendingTurnDispatch(threadIdForSend);
       resetLocalDispatch();
       return false;
@@ -308,7 +321,13 @@ export function useChatTurnFollowUps({
   const onEditUserMessage = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
       const api = readNativeApi();
-      if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) {
+      if (
+        !api ||
+        !activeThread ||
+        !isServerThread ||
+        isRevertingCheckpoint ||
+        isThreadDetailAwaitingVerification(activeThread.id)
+      ) {
         return false;
       }
       const editTarget = resolveTailUserMessageEditTarget({
@@ -354,6 +373,7 @@ export function useChatTurnFollowUps({
           threadId: activeThread.id,
           createdAt: messageCreatedAt,
         });
+        if (isThreadDetailAwaitingVerification(activeThread.id)) return false;
         await api.orchestration.dispatchCommand({
           type: "thread.message.edit-and-resend",
           commandId: newCommandId(),
@@ -400,7 +420,10 @@ export function useChatTurnFollowUps({
       setComposerDraftComputerControlMode,
     ],
   );
-  // resuming a workflow sends a pre-built turn telling the agent to re-invoke the Workflow tool; completed agent() calls replay from cache so a paused run picks up where it stopped
+  // Resuming a workflow is a normal composer turn instructing the agent to
+  // re-invoke the Workflow tool against the persisted script; completed agent()
+  // calls replay from cache, so a paused run picks up where it stopped. Sent as
+  // a pre-built chat turn so it takes the exact send path a queued turn does.
 
   const onContinueFailedTurn = useCallback(
     async (turnId: TurnId): Promise<boolean> => {
@@ -503,6 +526,7 @@ export function useChatTurnFollowUps({
       !isServerThread ||
       isSendBusy ||
       isConnecting ||
+      (activeThread && isThreadDetailAwaitingVerification(activeThread.id)) ||
       sendInFlightRef.current
     ) {
       return;
@@ -554,6 +578,8 @@ export function useChatTurnFollowUps({
         createdAt,
       })
       .then(() => {
+        if (isThreadDetailAwaitingVerification(activeThread.id))
+          throw new Error("Wait for the conversation to reconnect before sending.");
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
           provider: implementationDispatchSettings.modelSelection.provider,

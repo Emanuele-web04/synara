@@ -168,7 +168,8 @@ function SourceMessageLayout({
   work: WorkLogEntry[];
   onFinished: () => void;
 }) {
-  // the message signal comes from the source array, before plans and work rows clone or split its presentation entries
+  // Match ChatView: the message signal comes from the source array, before
+  // plans and work rows clone or split its presentation entries.
   const entries = deriveTimelineEntries(messages, plans, work);
   return (
     <DelayedLayout contentRevision={entries} messageRevision={messages} onFinished={onFinished} />

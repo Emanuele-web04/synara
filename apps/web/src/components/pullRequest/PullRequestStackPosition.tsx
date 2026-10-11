@@ -1,3 +1,8 @@
+// FILE: PullRequestStackPosition.tsx
+// Purpose: Shared compact stack-position indicator for pull request list and detail surfaces.
+// Layer: Pull request presentation
+// Exports: PullRequestStackPosition
+
 import type { PullRequestStackSummary } from "@synara/contracts";
 
 import { Badge } from "~/components/ui/badge";

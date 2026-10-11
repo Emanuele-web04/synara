@@ -1,3 +1,8 @@
+// FILE: githubUpdateFeed.ts
+// Purpose: Derives human-facing GitHub release URLs from electron-updater config.
+// Layer: Desktop update utility
+// Exports: resolveGitHubUpdateSource, buildGitHubReleasesPageUrl
+
 type GitHubUpdateSource = {
   readonly owner: string;
   readonly repo: string;
@@ -30,6 +35,7 @@ export function resolveGitHubUpdateSource(
   };
 }
 
+// Human-facing releases page used only by the manual-download fallback.
 export function buildGitHubReleasesPageUrl(source: GitHubUpdateSource, tag?: string): string {
   const path =
     tag && tag.trim().length > 0

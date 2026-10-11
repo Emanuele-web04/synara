@@ -218,7 +218,8 @@ describe("managed worktrees", () => {
     await fs.symlink(canonicalRoot, symlinkedRoot);
     const removals: string[] = [];
     const git = makeGit({ removals });
-    // threads recorded worktrees through the symlinked dir while the inventory scan reports realpath-canonical entries
+    // Threads recorded their worktrees through the symlinked directory, while
+    // the inventory scan reports realpath-canonical entries.
     const threads = paths.map(
       (worktreePath, index) =>
         ({
@@ -251,7 +252,9 @@ describe("managed worktrees", () => {
     const removals: string[] = [];
     const git = makeGit({ removals });
 
-    // the oldest archived thread was soft-deleted by retention — getShellSnapshot would hide it and strand its worktree forever, so the prune must read a query keeping soft-deleted threads visible
+    // The oldest archived thread was soft-deleted by retention. `getShellSnapshot`
+    // would hide it and silently strand its worktree on disk forever, so the prune
+    // path must read a projection query that keeps soft-deleted threads visible.
     const snapshotQuery = {
       listManagedWorktreeThreads: () =>
         Effect.succeed(
@@ -275,6 +278,9 @@ describe("managed worktrees", () => {
       }),
     );
 
+    // Deleted owners reclaim immediately (bypass archived retention). The
+    // remaining archived set fits inside the keep window, so only the deleted
+    // owner is removed here.
     expect(removals).toEqual([paths[0]]);
   });
 
@@ -451,7 +457,10 @@ describe("managed worktrees", () => {
       { path: "/wt/orphan", workspaceRoot: "/repo" },
     ];
     const canonicalByRecordedPath = new Map(inventory.map((entry) => [entry.path, entry.path]));
-    // forcing the retention window via a real classifier against a synthetic set is awkward — assert the core buckets with a small inventory instead
+    // Force retention window to treat only the newest archived as kept by
+    // providing MANAGED_WORKTREE_RETENTION_COUNT archived paths via the real
+    // classifier against a synthetic set is awkward; assert the core buckets
+    // with a small inventory instead.
     const candidates = classifyManagedWorktreeRemovalCandidates({
       inventory,
       canonicalByRecordedPath,

@@ -5,7 +5,8 @@ export type ClaudeResultUsageBaseline = Pick<SDKResultMessage, "modelUsage" | "t
 const delta = (current: number, before: number | undefined) =>
   before !== undefined && current >= before ? current - before : current;
 
-// the SDK's modelUsage/cost is process-cumulative — keep the baseline on the query context so a new/resumed process starts at zero
+// Claude's long-lived SDK query reports process-cumulative modelUsage and cost.
+// Keep the baseline on the query context, so a new/resumed process starts at zero.
 export function claudeTurnResultUsage(
   result: ClaudeResultUsageBaseline,
   previous: ClaudeResultUsageBaseline | undefined,

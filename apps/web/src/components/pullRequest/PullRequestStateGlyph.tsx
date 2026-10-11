@@ -43,7 +43,9 @@ export function pullRequestStateLabel(
   return "Closed";
 }
 
-// draft always shows as draft; conflicts show the conflict glyph — precedence lives in resolvePrStatePresentation so every surface agrees
+// Draft always shows as draft (a draft isn't heading for a merge); an open non-draft PR
+// with conflicts shows the conflict glyph — precedence lives in resolvePrStatePresentation
+// so the thread badge, kanban chip, and every PR surface agree.
 export function PullRequestStateGlyph({
   state,
   isDraft,

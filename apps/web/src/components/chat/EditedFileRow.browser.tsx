@@ -1,3 +1,7 @@
+// FILE: EditedFileRow.browser.tsx
+// Purpose: Verify changed-file review/open actions remain independent, accessible, and path-safe.
+// Layer: Browser UI test
+
 import "../../index.css";
 
 import type { EditorId, NativeApi } from "@synara/contracts";

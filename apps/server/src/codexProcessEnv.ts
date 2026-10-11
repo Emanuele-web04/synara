@@ -1,3 +1,9 @@
+// FILE: codexProcessEnv.ts
+// Purpose: Builds the exact environment used when Synara launches Codex subprocesses.
+// Layer: Server runtime utility
+// Exports: Codex process env builder and browser-plugin overlay helpers.
+// Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
+
 import * as fs from "node:fs/promises";
 import { constants, lstatSync, readFileSync, readlinkSync, type BigIntStats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -68,7 +74,8 @@ export const SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS = [
 const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
 const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
 const codexOverlayPreparationQueues = new Map<string, Promise<void>>();
-// retired local browser integrations used a stable six-char namespace — match the structural conflict without retaining the old product name
+// Retired local browser integrations used a stable six-character namespace.
+// Match the structural conflict without retaining any previous product name.
 const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
   /^\[plugins\."[a-z0-9][a-z0-9-]{5}-browser@local"\]$/;
 
@@ -1983,7 +1990,11 @@ export function isCodexSharedContinuationStatePrepared(
   return readCodexSharedContinuationGeneration(input) !== undefined;
 }
 
-/** only symlinks removed — a regular db file in the overlay is left untouched since Synara no longer owns or reads it */
+/**
+ * Removes SQLite links that earlier Synara releases mirrored into the overlay.
+ * Only symlinks are removed: a regular database file in the overlay is left
+ * untouched because Synara no longer owns or reads it.
+ */
 async function removeLegacyCodexOverlaySqliteLinks(overlayHomePath: string): Promise<void> {
   for (const entry of await fs.readdir(overlayHomePath)) {
     if (!isCodexSqliteStateEntry(entry)) {
@@ -2342,9 +2353,11 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
       continue;
     }
     if (tableName === managedMcpTableName) {
-      // the session-scoped gateway entry is authoritative inside the overlay; the user's source config stays untouched
+      // The session-scoped gateway entry is authoritative inside Synara's
+      // overlay. The user's source config remains untouched.
       overlayConfig = removeTomlTableNamespace(overlayConfig, SYNARA_MANAGED_MCP_TABLE_HEADER);
-      // recover only fields Synara generates for its HTTP gateway — saved stdio fields (multiline args/env) make Codex reject the config
+      // Recover only the fields Synara generates for its HTTP gateway. Saved
+      // stdio fields (including multiline args/env) make Codex reject the config.
       tables.push(
         [
           header,
@@ -2527,7 +2540,8 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       );
     }
   } catch {
-    // a partially missing source home still lets Codex start with the overlay config
+    // If the source home is partially missing, Codex can still start with the
+    // overlay config and create any required state lazily.
   }
 
   if (accountSegment && !shadowHomePath && !hasDedicatedAccountHome) {
@@ -2789,7 +2803,9 @@ export async function buildCodexProcessEnv(
           effectiveEnv[providerEnvKey] = shellEnvironment[providerEnvKey];
         }
       }
-    } catch {}
+    } catch {
+      // Keep inherited environment if shell lookup fails.
+    }
   }
 
   if (input.expectedSharedContinuationGeneration) {

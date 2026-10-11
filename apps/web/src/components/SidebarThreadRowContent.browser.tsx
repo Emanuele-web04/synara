@@ -1,3 +1,7 @@
+// FILE: SidebarThreadRowContent.browser.tsx
+// Purpose: Characterizes the shared Sidebar thread-row identity and status presentation.
+// Layer: Browser UI test
+
 import "../index.css";
 
 import { ProjectId, ThreadId } from "@synara/contracts";

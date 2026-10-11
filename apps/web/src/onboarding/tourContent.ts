@@ -1,3 +1,8 @@
+// FILE: tourContent.ts
+// Purpose: Copy and links for the "what Synara can do" tour. Wording mirrors the public
+//          docs (trysynara.com/docs) and changelog so onboarding and docs stay consistent.
+// Layer: Web content (no React)
+
 import type { LucideIcon } from "~/lib/icons";
 import {
   BotIcon,
@@ -13,6 +18,7 @@ export const SYNARA_DOCS_URL = "https://trysynara.com/docs";
 
 export interface TourCard {
   readonly id: string;
+  /** Short tab label. */
   readonly label: string;
   readonly title: string;
   readonly description: string;
@@ -106,6 +112,7 @@ export const TOUR_CARDS: ReadonlyArray<TourCard> = [
   },
 ];
 
+/** Keybinding commands surfaced on the shortcuts card and the final step. */
 export const TOUR_SHORTCUT_COMMANDS = [
   { command: "chat.new", label: "New task" },
   { command: "sidebar.addProject", label: "Add project" },

@@ -1,4 +1,11 @@
-/** serializes provider turn activation and checkpoint reverts per thread — a turn may activate after the final state check, so both reactors hold this lease across their mutation boundaries */
+/**
+ * Serializes provider turn activation and checkpoint reverts for one thread.
+ *
+ * Revert admission and provider state checks cannot make a destructive restore
+ * safe on their own: a provider turn may activate after the final check. Both
+ * side-effect reactors therefore hold this shared lease while crossing their
+ * respective mutation boundaries.
+ */
 import type { ThreadId } from "@synara/contracts";
 import { ServiceMap, type Effect } from "effect";
 
@@ -7,6 +14,11 @@ export interface TurnCheckpointCoordinatorShape {
   readonly resolveWorkspaceIdentity: (cwd: string) => Effect.Effect<string>;
   /** Acquire after a thread lease when both are needed; release after owned cleanup. */
   readonly withWorkspaceLease: <A, E, R>(
+    cwd: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
+  /** Shared provider admission; concurrent starts exclude destructive workspace mutations. */
+  readonly withWorkspaceActivationLease: <A, E, R>(
     cwd: string,
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;

@@ -1,3 +1,7 @@
+// FILE: providerUsage/rateLimitResilience.test.ts
+// Purpose: Unit-covers the shared last-good/cooldown helper: serving cached usage while throttled,
+// clamping a hostile Retry-After, per-account keying, and reset.
+
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -34,7 +38,7 @@ describe("createRateLimitResilience", () => {
     expect(served.detail).toContain("~5m");
     expect(served.limits).toHaveLength(0);
 
-    // the cooldown must keep short-circuiting so we don't hammer the throttled endpoint
+    // The cooldown must keep short-circuiting so we don't hammer the throttled endpoint.
     expect(resilience.serveDuringCooldown("home", NOW_MS + 60_000)?.status).toBe("error");
   });
 
@@ -42,7 +46,7 @@ describe("createRateLimitResilience", () => {
     const resilience = makeResilience();
 
     resilience.enterCooldown("home", NOW_MS, 24 * 60 * 60 * 1000);
-    // just before the cap it's still cooling down; just after, a live fetch goes through
+    // Just before the cap it is still cooling down; just after, it lets a live fetch through again.
     expect(
       resilience.serveDuringCooldown("home", NOW_MS + MAX_RATE_LIMIT_COOLDOWN_MS - 1),
     ).not.toBeNull();
@@ -64,9 +68,9 @@ describe("createRateLimitResilience", () => {
 
     const served = resilience.enterCooldown("home", NOW_MS, 120_000);
     expect(served.stale).toBe(true);
-    // `updatedAt` still says when the data was fetched, not re-served
+    // `updatedAt` still says when the data was actually fetched, not when it was re-served.
     expect(served.updatedAt).toBe("2026-06-09T12:00:00.000Z");
-    // fresh snapshots never carry the flag
+    // Fresh snapshots never carry the flag.
     expect(goodSnapshot().stale).toBeUndefined();
   });
 

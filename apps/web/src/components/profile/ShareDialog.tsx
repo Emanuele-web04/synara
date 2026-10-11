@@ -1,3 +1,9 @@
+// FILE: ShareDialog.tsx
+// Purpose: "Share your activity" dialog — previews the virality card and exports it to
+// PNG fully on-device, then copies to clipboard + opens a social composer, or saves the
+// file. Mirrors the reference share sheet (Copy / X / LinkedIn / Reddit / Save).
+// Layer: web profile feature.
+
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { SiReddit, SiX } from "react-icons/si";
 import { FaLinkedinIn } from "react-icons/fa6";
@@ -87,7 +93,8 @@ export function ShareDialog({
     return (await copyImageToClipboard(blob)) ? "copied" : "clipboard-unavailable";
   };
 
-  // promise chains instead of async/try-finally: React Compiler doesn't support try/finally and would skip this component
+  // Promise chains instead of async/try-finally in these handlers: React
+  // Compiler does not yet support try/finally and would skip this component.
   const handleCopy = () => {
     setBusy("copy");
     setStatus(null);

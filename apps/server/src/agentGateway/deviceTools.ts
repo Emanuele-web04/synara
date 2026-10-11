@@ -56,7 +56,19 @@ export function deviceToolRequiresApproval(name: string): boolean {
   return DEVICE_APPROVAL_REQUIRED_TOOLS.has(name);
 }
 
-/** failures the pane's status row may show — the agent hears all of them; the user only sees actionable ones. Denylist of recoverable shapes: an unrecognized failure is more useful shown */
+/**
+ * Errors the pane's status row is allowed to show.
+ *
+ * The agent hears about every tool failure; the person watching should only be
+ * interrupted by the ones they can act on — the helper will not build, the
+ * simulator will not boot, the stream died. A scroll that ran out of list, a
+ * label that matched nothing, a tap whose element moved: those are the agent's
+ * feedback loop, and painting them in red under the device reads as the pane
+ * being broken while the agent is already recovering.
+ *
+ * Deliberately a denylist of the recoverable shapes rather than an allowlist of
+ * fatal ones: an unrecognised failure is more useful shown than hidden.
+ */
 const AGENT_RECOVERABLE_ERROR_PATTERNS: readonly RegExp[] = [
   /appears to be at its end/iu,
   /no element (?:matching|labelled|labeled)/iu,
@@ -71,7 +83,7 @@ function isViewerFacingDeviceError(error: unknown): boolean {
   return !AGENT_RECOVERABLE_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 
-/** input + open_url: anything that changes what the device does */
+/** Input plus `device_open_url`: anything that changes what the device does. */
 const DEVICE_APPROVAL_REQUIRED_TOOLS = new Set([
   "device_boot",
   "device_install",
@@ -79,13 +91,23 @@ const DEVICE_APPROVAL_REQUIRED_TOOLS = new Set([
   "device_open_url",
   "device_tap",
   "device_swipe",
-  // scrolling drives real swipes — grouped with input tools despite reading as a lookup
+  // Scrolling drives real swipes, so it belongs with the input tools rather
+  // than the read-only ones despite reading as a lookup.
   "device_scroll_to_element",
   "device_type",
   "device_press_button",
 ]);
 
-/** `rotate` deliberately absent: a Simulator.app window command with no HID usage or headless simctl equivalent — advertising a guaranteed failure invites bad plans */
+/**
+ * The buttons an agent may press.
+ *
+ * `rotate` is in the contract's button union but deliberately absent here: the
+ * backend refuses it on every call, because rotation is a Simulator.app window
+ * command with no HID usage and no simctl equivalent on a headless boot.
+ * Advertising a value that is guaranteed to fail only invites agents to plan
+ * around it and then report an error the user cannot act on. The pane's own
+ * rail leaves it out for the same reason.
+ */
 const DEVICE_HARDWARE_BUTTONS: readonly DeviceHardwareButton[] = [
   "home",
   "lock",
@@ -188,7 +210,11 @@ export function makeAgentGatewayDeviceTools(
 ): ReadonlyArray<ToolEntry> {
   const { manager } = options;
 
-  /** shared handler: refuse when approval is impossible, mark the thread agent-driven, turn failures into tool errors */
+  /**
+   * Shared handler body: refuse when approval is impossible, mark the thread as
+   * agent-driven for the badge, and turn any failure into a tool error rather
+   * than a transport error.
+   */
   const handle = (
     name: string,
     run: (args: Record<string, unknown>, context: ToolContext) => Promise<unknown>,
@@ -239,7 +265,16 @@ export function makeAgentGatewayDeviceTools(
     await manager.surfaceDeviceForAgent(context.callerThreadId, udid, reason);
   };
 
-  /** surfacing runs after the action so a failed tap doesn't open a pane; no-op once surfaced */
+  /**
+   * Wrap an interaction tool so driving the device also puts it in front of the
+   * user. Any interaction counts, not just install and launch: the common case
+   * is an app already running on a booted simulator, where the agent goes
+   * straight to describe/tap and the pane would otherwise never open.
+   *
+   * Surfacing runs after the action so a failed tap does not open a pane on a
+   * device the agent could not drive, and it is a no-op once the pane has been
+   * surfaced for that thread and device.
+   */
   const handleInteraction = (
     name: string,
     run: (args: Record<string, unknown>, context: ToolContext) => Promise<unknown>,
@@ -293,7 +328,10 @@ export function makeAgentGatewayDeviceTools(
       handler: handle("device_boot", async (args, context) => {
         const udid = readUdid(args);
         const result = await manager.boot(udid);
-        // attach so the pane has something to show, but stay silent — opening is reserved for install/launch
+        // Booting is the agent claiming a device even when it never installs
+        // or launches (driving Settings, opening a URL). Attach so the pane has
+        // something to show, but stay silent: opening the pane is reserved for
+        // install/launch, when there is actually an app to watch.
         if (result.kind === "booted") {
           await manager.ensureThreadAttached(context.callerThreadId, udid).catch(() => undefined);
         }
@@ -383,7 +421,10 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Open URL", ...WRITE_TOOL_ANNOTATIONS, openWorldHint: true },
       },
-      // opening a deep link is how an Expo/RN app reaches the screen — exactly when the user needs the pane
+      // Surfaced like any other interaction. Opening a deep link is how an Expo
+      // or React Native app reaches the screen, so it is exactly the moment the
+      // user needs to see the device; without this the dock stays shut until a
+      // later tap or describe happens to open it.
       handler: handleInteraction("device_open_url", async (args) => {
         const udid = readUdid(args);
         await manager.openUrl(udid, readStringArg(args, "url", { required: true })!);
@@ -434,7 +475,8 @@ export function makeAgentGatewayDeviceTools(
           return { udid, x, y };
         }
         const match = await manager.tapElement(udid, request.target);
-        // report the hit node and pre-tap toggle state — the follow-up describe shows the change
+        // Report the node so the agent sees what it hit and, for a toggle, the
+        // state it had before the tap; the follow-up describe shows the change.
         return {
           udid,
           x: match.point.x,
@@ -575,7 +617,8 @@ export function makeAgentGatewayDeviceTools(
                 }),
               );
               await surfaceDevice(context, readUdid(args), "agent-tool");
-              // image content beside the JSON so the model sees the screen without a second decode — matches browser_screenshot
+              // Image content beside the JSON so the model sees the screen
+              // without a second decode step, matching browser_screenshot.
               const { bytesBase64, ...metadata } = result;
               return {
                 ...mcpToolResultJson(metadata),

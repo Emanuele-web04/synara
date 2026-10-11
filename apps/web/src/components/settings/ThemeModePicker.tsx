@@ -1,8 +1,16 @@
+// FILE: ThemeModePicker.tsx
+// Purpose: Theme mode radio cards (System / Light / Dark) rendered as miniature
+//          app-window mockups instead of a plain segmented control.
+// Layer: Settings UI components
+// Exports: ThemeModePicker
+
 import { cn } from "~/lib/utils";
 import type { ThemeMode, ThemeVariant } from "~/hooks/useTheme";
 import { useRadioGroupKeyboardNav } from "~/hooks/useRadioGroupKeyboardNav";
 
-// the mockups show a fixed grayscale rendering of each appearance — deliberately hard-coded, not derived from CSS variables
+// The mockups always show a fixed grayscale rendering of each appearance — they must
+// look "light" and "dark" regardless of the app's current theme or chrome overrides,
+// so these are deliberately hard-coded rather than derived from CSS variables.
 const MOCKUP_COLORS: Record<
   ThemeVariant,
   {
@@ -35,7 +43,9 @@ const MOCKUP_COLORS: Record<
   },
 };
 
-// percentage lengths resolve against the container width so the artwork scales; bar/hairline heights stay px for crisp strokes
+// Percentage lengths resolve against the containing block's width, so the artwork
+// scales proportionally with the card; bar/hairline heights stay in px to keep the
+// strokes crisp at small sizes. Tune the look here, not inline.
 const MOCKUP_LAYOUT = {
   panelInsetX: "8%",
   panelTop: "14%",

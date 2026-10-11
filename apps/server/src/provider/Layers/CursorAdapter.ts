@@ -1,4 +1,9 @@
 import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
+/**
+ * CursorAdapterLive — Cursor CLI (`cursor-agent acp`) via ACP.
+ *
+ * @module CursorAdapterLive
+ */
 import * as nodePath from "node:path";
 
 import {
@@ -12,6 +17,7 @@ import {
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeRequestId,
   type RuntimeMode,
@@ -132,6 +138,43 @@ import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 const PROVIDER = "cursor" as const;
 export const resolveCursorStartInstanceId = resolveProviderSessionInstanceId;
 
+const nonNegativeInteger = (value: number | null | undefined) =>
+  value !== undefined && value !== null && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+
+/**
+ * ACP's final PromptResponse usage is a cumulative session counter. Keep it
+ * separate from the live context occupancy updates so Profile can account for
+ * Cursor spend without treating the context window as spend a second time.
+ */
+export function cursorPromptUsageSnapshot(
+  usage: Acp.Usage | null | undefined,
+  contextUsage?: ThreadTokenUsageSnapshot,
+): ThreadTokenUsageSnapshot | undefined {
+  if (!usage || !Number.isFinite(usage.totalTokens) || usage.totalTokens < 0) {
+    return undefined;
+  }
+  const totalProcessedTokens = nonNegativeInteger(usage.totalTokens);
+  if (totalProcessedTokens === undefined) return undefined;
+  const inputTokens = nonNegativeInteger(usage.inputTokens);
+  const outputTokens = nonNegativeInteger(usage.outputTokens);
+  const reasoningOutputTokens = nonNegativeInteger(usage.thoughtTokens);
+  const cachedInputTokens = nonNegativeInteger(usage.cachedReadTokens);
+  const cacheCreationInputTokens = nonNegativeInteger(usage.cachedWriteTokens);
+  return {
+    // Cursor's ACP response does not report context occupancy. The cumulative
+    // spend counter is still useful to Profile via totalProcessedTokens.
+    ...(contextUsage ?? { usedTokens: 0 }),
+    totalProcessedTokens,
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+  };
+}
+
 export function stampCursorTerminalEventInstance(
   event: ProviderRuntimeEvent,
   providerInstanceId: ProviderSession["providerInstanceId"],
@@ -151,16 +194,21 @@ export const takeCursorSynaraHarnessPolicyTextPart = (
   });
 const CURSOR_RESUME_VERSION = 1 as const;
 const CURSOR_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
-// forking a dead source must resume it first (may replay history) — wider budget than plain requests
+// Forking a dead source session must first resume it, which may replay
+// history, so the fork exchange gets a wider budget than plain requests.
 const CURSOR_ACP_FORK_TIMEOUT_MS = 30_000;
-// cursor-agent authenticates via macOS Keychain (1-12s normal, hangs forever when a prompt can't show) — authenticate gets the widest budget under the aggregate cap
+// `cursor-agent` authenticates against the macOS Keychain: 1-12s is normal and it
+// hangs forever when a Keychain prompt cannot be shown, so authenticate gets the
+// widest budget while the aggregate cap keeps a stuck startup from hanging a thread.
 const CURSOR_ACP_STARTUP_TIMEOUTS = {
   initializeMs: 20_000,
   authenticateMs: 30_000,
   sessionSetupMs: 20_000,
   totalMs: 60_000,
 } as const satisfies AcpSessionStartupTimeouts;
-// backstop for an alive-but-silent cursor-agent: force-fail a turn with no ACP activity this long; override via SYNARA_CURSOR_TURN_IDLE_TIMEOUT_MS
+// Backstop for an alive-but-silent cursor-agent child: if a turn produces no
+// ACP activity for this long, force-fail it instead of showing "Working"
+// forever. Generous by design; override with SYNARA_CURSOR_TURN_IDLE_TIMEOUT_MS.
 const CURSOR_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   envVar: "SYNARA_CURSOR_TURN_IDLE_TIMEOUT_MS",
   defaultMs: 600_000,
@@ -222,11 +270,23 @@ interface CursorSessionContext {
   activeTurnId: TurnId | undefined;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  latestContextUsage: ThreadTokenUsageSnapshot | undefined;
+  // Epoch-ms of the last inbound ACP activity for the active turn; drives the
+  // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
   latestSessionCostUsd: number | undefined;
-  // the runtime is registered before load replay settles so stop/restart can close it without waiting for the replay hard cap
+  // The runtime is registered before load replay settles so stop/restart can
+  // close it without waiting for the replay hard cap. Turns wait here until
+  // startup configuration has completed under the thread lock.
   sessionConfigReady: Deferred.Deferred<void> | undefined;
   stopped: boolean;
+}
+
+function cursorNativeSessionRefs(
+  ctx: CursorSessionContext,
+): ProviderRuntimeEvent["providerRefs"] | undefined {
+  const sessionId = parseCursorResume(ctx.session.resumeCursor)?.sessionId;
+  return sessionId === undefined ? undefined : { providerThreadId: sessionId };
 }
 
 function clearCursorActiveTurn(ctx: CursorSessionContext, turnId: TurnId): boolean {
@@ -339,7 +399,9 @@ function describeCursorAcpErrorData(data: unknown): string {
   return JSON.stringify(data).slice(0, 500);
 }
 
-// startup failures are the user's only signal — keep the agent's own wording (JSON-RPC data included) over tagged-error defaults
+// Startup failures are the only signal the user gets about why Cursor did not
+// come up, so keep the agent's own wording (JSON-RPC data included) instead of
+// the tagged-error class defaults, which carry no detail for transport errors.
 function cursorAcpFailureDetail(error: AcpErrors.AcpError): string {
   if (error._tag === "AcpRequestError") {
     const message = error.errorMessage.trim();
@@ -437,6 +499,8 @@ export function makeCursorAdapter(
     const fileSystem = yield* FileSystem.FileSystem;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
+    // Optional so adapter tests can run without the gateway layer; when
+    // present, every session gets the synara_* MCP tools.
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
@@ -502,6 +566,8 @@ export function makeCursorAdapter(
         );
       });
 
+    // Degraded model selection is a visible-but-non-fatal condition: the session
+    // keeps running on whatever model Cursor actually accepted.
     const emitCursorModelSelectionNotice = (input: {
       readonly threadId: ThreadId;
       readonly lifecycleGeneration: string | undefined;
@@ -568,7 +634,9 @@ export function makeCursorAdapter(
         }
       });
 
-    // idle-watchdog escape hatch: force-fail a silent turn; idempotent via clearCursorActiveTurn
+    // Idle-progress watchdog escape hatch: force-fail a turn whose cursor-agent
+    // child is alive but has gone completely silent. Stays idempotent via
+    // clearCursorActiveTurn, so it is a no-op if the turn settled normally first.
     const failCursorTurnAsTimedOut = (ctx: CursorSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
@@ -607,6 +675,8 @@ export function makeCursorAdapter(
             ...completedCost,
           },
         });
+        // Best-effort: tell the child to abandon the turn, then unwind the
+        // pending prompt fiber (its onInterrupt no-ops, the turn is cleared).
         yield* Effect.ignore(ctx.acp.cancel);
         if (promptFiber) {
           yield* Fiber.interrupt(promptFiber);
@@ -894,7 +964,8 @@ export function makeCursorAdapter(
                   );
                 }
               });
-            // cursor-agent sends cursor/update_todos as a request with id; keep the notification handler for older/alternate clients
+            // Cursor Agent CLI sends cursor/update_todos as a request with an id; keep the
+            // notification handler for older or alternate ACP clients.
             yield* acp.handleExtRequest("cursor/update_todos", CursorUpdateTodosRequest, (params) =>
               handleCursorUpdateTodos(params).pipe(Effect.as({ accepted: true } as const)),
             );
@@ -981,7 +1052,9 @@ export function makeCursorAdapter(
             );
             return yield* acp.start();
           }).pipe(
-            // not mapAcpToAdapterError: startup must surface the agent's own failure text (Keychain -32603, auth required, timeout step)
+            // Not mapAcpToAdapterError: startup must surface the agent's own
+            // failure text (Keychain -32603 data, "Authentication required…",
+            // startup timeout step) instead of a generic wrapper message.
             Effect.mapError(
               (error) =>
                 new ProviderAdapterRequestError({
@@ -1034,6 +1107,7 @@ export function makeCursorAdapter(
             activeTurnId: undefined,
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            latestContextUsage: undefined,
             lastTurnActivityAt: undefined,
             latestSessionCostUsd: undefined,
             sessionConfigReady,
@@ -1043,6 +1117,8 @@ export function makeCursorAdapter(
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
+                // Any inbound ACP event proves the child is alive and making
+                // progress; reset the idle-progress watchdog clock.
                 ctx.lastTurnActivityAt = Date.now();
                 switch (event._tag) {
                   case "ModeChanged":
@@ -1145,6 +1221,7 @@ export function makeCursorAdapter(
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    ctx.latestContextUsage = event.usage;
                     recordCursorSessionCost(ctx, event.cost);
                     yield* offerRuntimeEvent(
                       input.lifecycleGeneration,
@@ -1153,6 +1230,9 @@ export function makeCursorAdapter(
                         provider: PROVIDER,
                         threadId: ctx.threadId,
                         turnId: ctx.activeTurnId,
+                        ...(cursorNativeSessionRefs(ctx)
+                          ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                          : {}),
                         usage: event.usage,
                         rawPayload: event.rawPayload,
                       }),
@@ -1161,7 +1241,10 @@ export function makeCursorAdapter(
                 }
               }),
             ),
-            // the drain's lifetime is the session's, not the caller's — forked under the startSession fiber it died on return and dropped every session/update
+            // The drain's lifetime is the session's, not the caller's. Forking it
+            // as a child of the fiber that called startSession killed it the moment
+            // that fiber returned, so every session/update — assistant text, tool
+            // calls, usage — was dropped and the transcript stayed empty.
           ).pipe(Effect.forkIn(sessionScope));
 
           ctx.notificationFiber = nf;
@@ -1176,7 +1259,9 @@ export function makeCursorAdapter(
 
       return Effect.gen(function* () {
         const { ctx, session, started, cursorModelSelection, sessionConfigReady } = yield* setup;
-        // the replay wait deliberately runs without the thread lock — the registered context lets stop/restart close the scope and release the gate early
+        // The replay wait deliberately runs without the per-thread lock. The
+        // registered context lets stop/restart close the scope and release the
+        // gate immediately instead of waiting for its hard cap.
         yield* ctx.acp.awaitLoadReplayReady.pipe(
           Effect.mapError((cause) =>
             ctx.stopped
@@ -1280,6 +1365,8 @@ export function makeCursorAdapter(
                 },
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+          // No turnId: the notice is emitted before turn.started, so it belongs
+          // to the session timeline rather than to an unannounced turn.
           onModelSelectionNotice: (notice) =>
             emitCursorModelSelectionNotice({
               threadId: input.threadId,
@@ -1415,6 +1502,23 @@ export function makeCursorAdapter(
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
+                const promptUsage = cursorPromptUsageSnapshot(result.usage, ctx.latestContextUsage);
+                if (promptUsage !== undefined) {
+                  yield* offerRuntimeEvent(
+                    ctx.lifecycleGeneration,
+                    makeAcpTokenUsageEvent({
+                      stamp: yield* makeEventStamp(),
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      turnId,
+                      ...(cursorNativeSessionRefs(ctx)
+                        ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                        : {}),
+                      usage: promptUsage,
+                      rawPayload: result,
+                    }),
+                  );
+                }
                 yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
@@ -1466,6 +1570,9 @@ export function makeCursorAdapter(
         );
         ctx.activePromptFiber = yield* runPrompt;
 
+        // Backstop the forked prompt: if the child goes silent, fail the turn
+        // instead of leaving it "Working" forever. Self-terminates when the
+        // turn settles; pauses while a human approval is pending.
         yield* forkAcpTurnIdleWatchdog({
           idleTimeoutMs: CURSOR_TURN_IDLE_TIMEOUT_MS,
           checkIntervalMs: CURSOR_TURN_WATCHDOG_INTERVAL_MS,
@@ -1718,7 +1825,9 @@ export function makeCursorAdapter(
           }),
         ),
       );
-      // cursor/list_available_models exposes the full per-model matrix (context, effort, thinking, fast) the flat CLI list can't provide
+      // Preferred path: the ACP `cursor/list_available_models` extension exposes
+      // each model's full parameter matrix (context window, effort, thinking,
+      // fast) — data the flat `cursor-agent models` CLI list cannot provide.
       const effectiveAcpSettings: CursorAcpRuntimeCursorSettings = {
         binaryPath: effectiveBinaryPath,
         homeDir: serverConfig.homeDir,
@@ -1768,7 +1877,8 @@ export function makeCursorAdapter(
           source: "cursor.acp",
           cached: false,
         })),
-        // the flat CLI list expands transport variants ACP represents as controls — fallback only when the ACP catalog is unavailable
+        // The flat CLI list expands transport variants that ACP already represents
+        // as per-model controls. Use it only when the richer ACP catalog is unavailable.
         Effect.catch(() =>
           runCursorModelListCommand.pipe(
             Effect.map(
@@ -1828,7 +1938,8 @@ export function makeCursorAdapter(
           });
 
         const activeSource = sessions.get(input.sourceThreadId);
-        // forking mid-turn branches from incomplete in-flight state — busy sources use the retained-transcript fallback
+        // Forking mid-turn would branch from incomplete in-flight state, so
+        // let the retained-transcript fallback handle busy sources.
         if (activeSource?.activeTurnId !== undefined) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -1885,7 +1996,10 @@ export function makeCursorAdapter(
               return yield* forkRuntime(runtime);
             }).pipe(Effect.scoped);
 
-        // return only the cursor: ProviderService registers the binding under a committed lease and the first turn resumes it — starting here captures an undefined generation and orphans approvals
+        // Return only the cursor: ProviderService registers the binding under
+        // a committed lifecycle lease and the target's first turn resumes it
+        // there. Starting the runtime here would capture an undefined
+        // lifecycle generation, orphaning the fork's approval requests.
         return {
           threadId: input.threadId,
           resumeCursor: {

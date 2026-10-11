@@ -1,3 +1,8 @@
+// FILE: automationIntent.test.ts
+// Purpose: Locks down chat-composer automation intent parsing.
+// Layer: Web lib test
+// Depends on: parseChatAutomationIntent and cadence formatting.
+
 import { DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -388,7 +393,8 @@ describe("parseChatAutomationIntent", () => {
     expect(resolved).toMatchObject({
       source: "deterministic",
       mode: "heartbeat",
-      // schedule parsed deterministically but name/prompt are LLM-rewritten — the draft must still get human review even though needsConfirmation was false
+      // The schedule parsed deterministically, but name/prompt are LLM-rewritten, so the
+      // draft must still go through human review even though needsConfirmation was false.
       requiresReview: true,
       intent: {
         name: "Generated",
@@ -521,7 +527,8 @@ describe("parseChatAutomationIntent", () => {
     expect(resolved).toMatchObject({
       source: "generated",
       mode: "heartbeat",
-      // high-confidence thread-scoped intent with no stop policy must still require human review, not silently auto-create a recurring background automation
+      // High-confidence (0.93), thread-scoped, no stop policy: must still require human
+      // review rather than silently auto-creating a recurring background automation.
       requiresReview: true,
       intent: {
         name: "Controlla disponibilita",

@@ -1,3 +1,8 @@
+// FILE: threadRetention.test.ts
+// Purpose: Verifies inactive-thread selection without running the server loop.
+// Layer: Server maintenance tests
+// Exports: Vitest coverage for threadRetention helpers.
+
 import {
   ProjectId,
   ThreadId,

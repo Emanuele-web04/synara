@@ -375,7 +375,8 @@ describe("pullRequestActionMutationOptions", () => {
       invalidate.mockRestore();
     }
 
-    // Mirrors TanStack's mutation lifecycle: a rejected onSuccess callback is routed through onError/onSettled even though the mutation function itself already returned success.
+    // Mirrors TanStack's mutation lifecycle: a rejected onSuccess callback is routed through
+    // onError/onSettled even though the mutation function itself already returned success.
     if (callbackError) {
       await Reflect.apply(action.onError!, undefined, [callbackError, input, context, undefined]);
     }

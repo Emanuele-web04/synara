@@ -1,3 +1,7 @@
+// FILE: ConversationStorageSettingsPanels.browser.tsx
+// Purpose: Browser characterization for worktree association and archived-thread grouping.
+// Layer: Browser UI test
+
 import "../../index.css";
 
 import { afterEach, describe, expect, it, vi } from "vitest";

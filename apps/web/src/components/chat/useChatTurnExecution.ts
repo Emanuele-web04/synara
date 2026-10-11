@@ -43,11 +43,13 @@ import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
   WorktreeSetupCancelledError,
   createWorktreeSetupResolution,
+  hasServerReceivedSentMessage,
   resolveQueuedTurnDispatchSettings,
   revokeUserMessagePreviewUrls,
   runWorktreeCreationFlow,
@@ -286,7 +288,10 @@ export function useChatTurnExecution({
       let turnStartSucceeded = false;
       let settledLocalBranchUpdatedForSend = false;
       await (async () => {
-        // "Work locally": drop any prepared worktree and point the send back at the project checkout, awaited before dispatch so the session resolves the local cwd
+        // "Work locally" from the setup card: drop any prepared worktree and
+        // point the send (and the thread's metadata) back at the project
+        // checkout. Awaited before the turn dispatch so the session resolves the
+        // local cwd instead of the abandoned worktree.
         const applyWorkLocallySwitch = async () => {
           switchedToLocalCheckout = true;
           nextThreadEnvMode = "local";
@@ -332,7 +337,9 @@ export function useChatTurnExecution({
           clearLocalDispatchWorktreeSetup();
         };
 
-        // honors Cancel / Work locally at a step boundary; the cancelled sentinel keeps the shared failure path from painting error state
+        // Honors a Cancel / Work locally choice at a step boundary. Cancel
+        // unwinds through the shared send-failure path below; the cancelled
+        // sentinel keeps that path from painting error state.
         const consumeWorktreeSetupResolution = async () => {
           const action = worktreeSetupResolution?.action ?? null;
           if (action === null || switchedToLocalCheckout) {
@@ -402,10 +409,12 @@ export function useChatTurnExecution({
             try {
               await dispatchThreadNotes(threadIdForSend, inheritedThreadNotes);
             } catch {
-              // seeding is non-critical; instructions can still be copied from the Environment panel
+              // Seeding is non-critical; project instructions can still be copied
+              // into the notepad manually from the Environment panel.
             }
           }
-          // persist a staged /goal now so the decider stamps goalStartedAt when the thread starts working
+          // Same for a goal staged on the draft via /goal: persist it now so the
+          // decider stamps goalStartedAt when the thread actually starts working.
           const draftGoalForSend = activeThread.goal?.trim() ?? "";
           if (draftGoalForSend.length > 0) {
             try {
@@ -533,7 +542,9 @@ export function useChatTurnExecution({
                 terminalId: setupTerminal.terminalId,
                 signal: setupActivityAbortController.signal,
               });
-              // setup scripts can run for minutes — let Cancel / Work locally win the wait; the script itself keeps running
+              // Setup scripts can run for minutes; let Cancel / Work locally win
+              // the wait. The script itself keeps running — a cancelled worktree
+              // is force-removed, a local switch just stops waiting on it.
               await (
                 worktreeSetupResolution
                   ? Promise.race([setupActivityWait, worktreeSetupResolution.promise])
@@ -542,7 +553,8 @@ export function useChatTurnExecution({
             }
           }
         }
-        // covers a resolution set while the thread was linked or the setup script ran
+        // Covers a resolution set while the thread was linked or the setup
+        // script ran (the creation-step race above only guards the first step).
         await consumeWorktreeSetupResolution();
 
         const needsProviderHandoff =
@@ -595,7 +607,9 @@ export function useChatTurnExecution({
             associatedWorktreeRef: nextAssociatedWorktreeRef,
           });
         }
-        // keep setup resolvable while attachment uploads are preparing; once they settle, consume the last choice before the card advances
+        // Keep setup resolvable while attachment uploads are still preparing the
+        // turn. Once they settle, consume the last possible choice before the
+        // card advances to the non-resolvable "Starting session" step.
         await consumeWorktreeSetupResolution();
         // A provider picked over the thread's own one: hand off in place while
         // the message already shows. A failure throws into the rollback below,
@@ -641,7 +655,10 @@ export function useChatTurnExecution({
           providerOptions: dispatchSettings.providerOptions,
         });
         await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {
-          if (getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null) {
+          if (
+            getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null ||
+            isThreadDetailAwaitingVerification(threadIdForSend)
+          ) {
             throw new Error(
               "Choose how to resume the held message before sending another message.",
             );
@@ -685,7 +702,11 @@ export function useChatTurnExecution({
           setSettledThreadBranchWarningDismissedThreadId(threadIdForSend);
         }
         armLocalDispatchAckFallback(threadIdForSend);
-        // non-natively-steerable providers interrupt the live turn before re-dispatching; hold queued auto-dispatch through that gap — gate keys off the live session provider (server decides the interrupt path)
+        // Steers on providers without native mid-turn steering interrupt the live
+        // turn before re-dispatching; hold queued auto-dispatch through that gap
+        // so it can't race the steer. The live session provider decides the
+        // interrupt path server-side, so the gate keys off it rather than the
+        // requested model selection.
         const liveProviderForSteerGate =
           activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
         if (
@@ -713,19 +734,35 @@ export function useChatTurnExecution({
           );
         }
       })().catch(async (err: unknown) => {
-        // a user-cancelled worktree setup unwinds through this same rollback, but silently: no error styling, no thread error
+        // The server already recorded this message, so the turn exists whatever failed
+        // around it. Rolling back would delete the promoted thread and hand the sent
+        // prompt back to the composer, where it survives reloads and gets sent again.
+        if (
+          !turnStartSucceeded &&
+          hasServerReceivedSentMessage(
+            getThreadFromState(useStore.getState(), threadIdForSend),
+            messageIdForSend,
+          )
+        ) {
+          turnStartSucceeded = true;
+        }
+        // A user-cancelled worktree setup unwinds through this same rollback,
+        // but silently: no error styling on the step row, no thread error.
         const setupCancelled = err instanceof WorktreeSetupCancelledError;
-        // uploads start in parallel with workspace/session prep; on earlier failure, settle that promise and release every staged blob
+        // Uploads start in parallel with workspace/session preparation. If any
+        // earlier step fails, settle that promise and release every staged blob.
         await turnAttachmentsPromise.then(
           (staged) => staged.cleanup(),
           () => undefined,
         );
-        // surface the failure on whichever setup step was active
+        // Surface the failure on whichever setup step was active (no-op for
+        // sends without a worktree setup in flight).
         if (!setupCancelled) {
           failLocalDispatchWorktreeSetup();
         }
         if (!turnStartSucceeded) {
-          // the turn RPC never resolved, so no server turn exists for the watchdog to recover — drop the marker
+          // The turn RPC never resolved, so no server turn exists for the
+          // watchdog to recover — drop the marker armed when the dispatch began.
           clearPendingTurnDispatch(threadIdForSend);
         }
         if (settledLocalBranchUpdatedForSend && !turnStartSucceeded) {
@@ -923,7 +960,8 @@ export function useChatTurnExecution({
         if (baseBranchForWorktree && (worktreeSetupResolution?.action ?? null) === null) {
           scheduleFailedWorktreeSetupDispatchReset();
         } else {
-          // a resolved setup has no error step to hold on screen — release the marker directly
+          // A resolved setup (cancelled, or switched to local and then failed)
+          // has no error step to hold on screen — release the marker directly.
           resetLocalDispatch();
         }
       }

@@ -1,4 +1,6 @@
-// relinks imported project paths atomically without replacing conversation identities
+// FILE: projectRelocation.ts
+// Purpose: Relinks imported project paths atomically without replacing conversation identities.
+// Layer: Server orchestration
 
 import {
   EventId,
@@ -18,7 +20,7 @@ type ProjectUpdatedEvent = Omit<
   "sequence"
 >;
 
-/** the engine persists the batch together — no intermediate root/thread split */
+/** The engine persists the returned batch together; no intermediate root/thread split. */
 export const withProjectRelocationEvents = Effect.fn("withProjectRelocationEvents")(
   function* (input: {
     readonly event: ProjectUpdatedEvent;
@@ -47,7 +49,8 @@ export const withProjectRelocationEvents = Effect.fn("withProjectRelocationEvent
             "Stop active turns and wait for checkpoint restores before changing the project path.",
         });
       }
-      // moving a linked worktree requires repairing Git's gitdir/common-dir links — string replacement isn't a safe substitute for git worktree repair
+      // Moving a linked worktree also requires repairing Git's gitdir/common-dir
+      // links. A string replacement is not a safe substitute for git worktree repair.
       for (const worktree of [thread.worktreePath, thread.associatedWorktreePath]) {
         if (relocateProjectPath(worktree, previousProject.workspaceRoot, nextRoot) !== worktree) {
           return yield* new OrchestrationCommandInvariantError({

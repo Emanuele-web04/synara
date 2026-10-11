@@ -1,4 +1,10 @@
+// FILE: deletedThreadClientReconciliation.ts
+// Purpose: Keeps thread-delete UI state responsive after the server accepts deletion.
+// Layer: Web orchestration helper
+// Exports: reconcileDeletedThreadFromClient, reconcileDeletedThreadsFromClient
+
 import type { ThreadId } from "@synara/contracts";
+import { useDiffRenderModeStore } from "../diffRenderModeStore";
 
 interface DeletedThreadClientReconciliationInput {
   threadIds: ReadonlyArray<ThreadId>;
@@ -21,7 +27,8 @@ export function reconcileDeletedThreadFromClient(
   });
 }
 
-// intentionally local-only; shell snapshots/events still own authoritative refresh and can arrive stale while a delete propagates
+// Delete reconciliation is intentionally local-only; shell snapshots/events still own
+// authoritative refresh and can arrive stale while a delete is propagating.
 export async function reconcileDeletedThreadsFromClient(
   input: DeletedThreadClientReconciliationInput,
 ): Promise<void> {
@@ -31,6 +38,7 @@ export async function reconcileDeletedThreadsFromClient(
   }
 
   for (const threadId of threadIds) {
+    useDiffRenderModeStore.getState().removeThread(threadId);
     input.removeDeletedThreadFromClientState(threadId);
   }
 }

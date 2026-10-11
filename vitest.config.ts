@@ -8,7 +8,8 @@ export default defineConfig({
         find: /^@synara\/contracts$/,
         replacement: path.resolve(import.meta.dirname, "./packages/contracts/src/index.ts"),
       },
-      // web's "~" alias so tests resolve its modules
+      // The web app's `~` alias (only workspace that defines one), so its
+      // modules stay importable from tests without rewriting to relative paths.
       {
         find: /^~\//,
         replacement: `${path.resolve(import.meta.dirname, "./apps/web/src")}/`,

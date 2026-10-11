@@ -78,6 +78,11 @@ function normalizeKey(key: string): string {
     .replace(/^(alt|control|meta|shift)(left|right)$/, "$1");
 }
 
+/**
+ * The one normalized key every accepted representation of this event names.
+ * The policy validates each representation independently, so the takeover
+ * signal must be derivable from whichever form the caller sent.
+ */
 export function normalizedKeyEventKey(params: Record<string, unknown>): string | undefined {
   for (const field of ["key", "code", "text", "unmodifiedText"]) {
     const value = params[field];
@@ -108,6 +113,7 @@ function deniedKey(key: string, modifiers: number): boolean {
   );
 }
 
+/** Allow native editing, including OS copy/paste, but not application shortcuts. */
 export class BetterwrightKeyboardPolicy {
   private readonly heldModifiers = new Map<string, number>();
 
@@ -125,6 +131,7 @@ export class BetterwrightKeyboardPolicy {
       modifiers > 15
     )
       reject();
+    // These alternate native representations are not emitted by Betterwright's driver.
     if (
       (params.keyIdentifier !== undefined && params.keyIdentifier !== "") ||
       (params.nativeVirtualKeyCode !== undefined && params.nativeVirtualKeyCode !== 0) ||

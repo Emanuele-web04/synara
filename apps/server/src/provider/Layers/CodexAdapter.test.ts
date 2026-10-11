@@ -995,6 +995,80 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("presents multi-agent v2 subAgentActivity items as named subagent spawns", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-subagent-started"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("call_spawn_1"),
+        payload: {
+          item: {
+            type: "subAgentActivity",
+            model: "gpt-6-luna",
+            reasoningEffort: "low",
+            id: "call_spawn_1",
+            kind: "started",
+            agentThreadId: "01a12294-fb86-74a3-9a94-90713254495e",
+            agentPath: "/root/count_calc",
+          },
+        },
+      } satisfies ProviderEvent);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-subagent-completed"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("subagent-completed-1"),
+        payload: {
+          item: {
+            type: "subAgentActivity",
+            model: null,
+            reasoningEffort: null,
+            id: "subagent-completed-1",
+            kind: "completed",
+            agentThreadId: "01a12294-fb86-74a3-9a94-90713254495e",
+            agentPath: "/root/count_calc",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const [started, completed] = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(started?.type, "item.completed");
+      if (started?.type !== "item.completed" || completed?.type !== "item.completed") {
+        return;
+      }
+      assert.equal(started.payload.itemType, "collab_agent_tool_call");
+      const startedItem = (started.payload.data as { item: Record<string, unknown> }).item;
+      assert.deepEqual(startedItem.receiverThreadIds, ["01a12294-fb86-74a3-9a94-90713254495e"]);
+      assert.deepEqual(startedItem.receiverAgents, [
+        {
+          threadId: "01a12294-fb86-74a3-9a94-90713254495e",
+          agentNickname: "count_calc",
+          model: "gpt-6-luna",
+          reasoningEffort: "low",
+        },
+      ]);
+      assert.equal(startedItem.tool, "spawnAgent");
+      const completedItem = (completed.payload.data as { item: Record<string, unknown> }).item;
+      assert.deepEqual(completedItem.agentsStates, {
+        "01a12294-fb86-74a3-9a94-90713254495e": { status: "completed" },
+      });
+    }),
+  );
+
   it.effect("preserves failed commandExecution status from canonical completed items", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -2608,6 +2682,9 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         const adapter = yield* CodexAdapter;
         const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
+        // `item/agentMessage/completed` has no explicit mapping (only the
+        // `item/agentMessage/delta` stream does); before the passthrough
+        // fallback this event produced no runtime event at all.
         lifecycleManager.emit("event", {
           id: asEventId("evt-unmapped-agent-message-completed"),
           kind: "notification",
@@ -2638,6 +2715,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         if (firstEvent.value.type !== "event.unmapped") {
           return;
         }
+        // Raw native type/label is carried as the title source.
         assert.equal(firstEvent.value.payload.nativeType, "item/agentMessage/completed");
         assert.equal(firstEvent.value.payload.detail, "Finished the refactor");
         const serialized = JSON.stringify(firstEvent.value);
@@ -2647,6 +2725,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.deepEqual(firstEvent.value.raw?.payload, {
           synaraSanitized: true,
         });
+        // Provider refs still resolved from the raw event.
         assert.equal(firstEvent.value.itemId, "agent_message_9");
         assert.equal(firstEvent.value.providerRefs?.providerItemId, "agent_message_9");
       }),
@@ -2674,6 +2753,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       emit("remoteControl/status/changed");
       emit("skills/changed");
       emit("session/threadOpenRequested", "session");
+      // Real errors and useful unknown events must survive the filter.
       emit("session/threadOpenRequested", "error");
       emit("item/future/completed");
       emit("session/started", "session");

@@ -1,3 +1,8 @@
+// FILE: useStarredModels.ts
+// Purpose: React binding for the persisted starred model presets.
+// Layer: Web hooks
+// Depends on: useLocalStorage and the starred model storage helpers.
+
 import { useState } from "react";
 
 import {

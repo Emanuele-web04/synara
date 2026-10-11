@@ -1,3 +1,7 @@
+// FILE: useProviderUsageSummary.ts
+// Purpose: Merge usage signals from thread activities, server-side local archives,
+// and provider-specific snapshots into one UI-friendly summary.
+
 import type {
   OrchestrationThread,
   ProviderInstanceId,

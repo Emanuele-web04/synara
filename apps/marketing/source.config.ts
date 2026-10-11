@@ -4,9 +4,11 @@ export const docs = defineDocs({
   dir: "content/docs",
   docs: {
     postprocess: {
+      // Compile the canonical MDX into clean Markdown for agents and llms-full.txt.
       includeProcessedMarkdown: true,
     },
-    // stamps pages with last git commit date — needs VERCEL_DEEP_CLONE=true on Vercel to see history
+    // Stamp pages with their last git commit date so DocsPage can show it.
+    // On Vercel this needs the VERCEL_DEEP_CLONE=true env var to see history.
     lastModified: true,
   },
 });

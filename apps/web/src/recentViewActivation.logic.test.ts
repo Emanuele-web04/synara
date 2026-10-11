@@ -1,3 +1,7 @@
+// FILE: recentViewActivation.logic.test.ts
+// Purpose: Verifies split-pane restoration for Ctrl+Tab recent thread activation.
+// Layer: UI state logic test
+
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import type { SplitView } from "./splitViewStore";

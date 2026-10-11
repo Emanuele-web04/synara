@@ -47,7 +47,8 @@ function commandIntent(command: Command): Record<string, unknown> {
             };
           case "image":
           case "file":
-            // name/MIME/size resolve from the server ledger — only the attachment identity belongs to the idempotent client intent
+            // Name, MIME, and size are resolved from the managed server ledger. Only the
+            // attachment identity belongs to the idempotent client command intent.
             return { type: attachment.type, id: attachment.id };
         }
       }),

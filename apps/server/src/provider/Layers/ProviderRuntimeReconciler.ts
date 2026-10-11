@@ -1,3 +1,12 @@
+/**
+ * ProviderRuntimeReconcilerLive - Repairs live runtime/projection divergence.
+ *
+ * This is the same-process counterpart to startupTurnReconciliation. It uses
+ * Adapter sessions as live evidence and always settles ambiguous missing-event
+ * cases as interrupted rather than inventing successful completion.
+ *
+ * @module ProviderRuntimeReconcilerLive
+ */
 import {
   CommandId,
   EventId,
@@ -39,7 +48,10 @@ export interface ProviderRuntimeReconcilerLiveOptions {
 }
 
 function reconciliationKey(plan: ProviderRuntimeReconciliationPlan): string {
-  // consecutive settlement plans on one stale turn are retries of one recovery, not separate recoveries; runtime realignment stays distinct (each live turn is independent evidence)
+  // A stale turn can move through multiple settlement plans while the session
+  // and turn projections converge. Those are retries/refinements of one
+  // recovery, not separate user-visible recoveries. Runtime realignment stays
+  // distinct because each live runtime turn is independent evidence.
   const operation = plan.action === "align-running-turn" ? plan.action : "settle-running-turn";
   return `provider-runtime-reconcile:${JSON.stringify([
     plan.provider,
@@ -135,11 +147,14 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
             : plan.action === "settle-terminal-projection"
               ? plan.terminalSession.lastError
               : null,
-        // always `now` — replaying the terminal session's timestamp freezes the staleness clock and replans the same repair forever
+        // Always `now`. Replaying a terminal session's original timestamp keeps
+        // the staleness clock frozen, so the same repair is replanned forever.
         updatedAt: now,
       };
 
-      // nothing to repair: dispatching anyway writes two fresh events on every tick while the thread stays a candidate
+      // Nothing left to repair: the projected session already matches the plan
+      // and no turn is left running. Dispatching anyway writes two fresh events
+      // on every tick for as long as the thread stays a candidate.
       if (
         thread.latestTurn?.state !== "running" &&
         isSameProjectedSession(thread.session, session)
@@ -148,9 +163,13 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       }
 
       const key = reconciliationKey(plan);
-      // command ids identify attempts (timestamps legitimately change on retry); the activity id identifies the semantic repair so projectors can suppress a repeated visible recovery
+      // Command ids identify attempts because timestamps can legitimately
+      // change between retries. The activity id identifies the semantic repair,
+      // allowing projectors to suppress a repeated visible recovery while a
+      // failed or lagging session update remains safe to retry.
       const attemptKey = `${key}:${crypto.randomUUID()}`;
-      // session first — if only one command lands it must be the one that unsticks the thread, not the note explaining it
+      // Session first: it is the repair. If only one of the two lands, it must
+      // be the one that unsticks the thread, not the note explaining it.
       yield* orchestrationEngine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.makeUnsafe(`${attemptKey}:session`),
@@ -183,7 +202,10 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         createdAt: now,
       });
 
-      // the durable binding still advertises the just-settled turn, keeping the thread a candidate forever — merge only into an existing row; an upsert would resurrect a binding for a thread with none
+      // The durable binding still advertises the turn that was just settled,
+      // which keeps the thread a reconciliation candidate forever. Only merge
+      // into an existing row: an upsert would otherwise resurrect a binding for
+      // a thread that no longer has one.
       if (
         input.binding !== undefined &&
         session.activeTurnId === null &&

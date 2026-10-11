@@ -1,4 +1,22 @@
-/** video gets its own upgrade path: on one socket a video backlog sits ahead of RPC responses, and the RPC path negotiates per-message deflate which would burn CPU on already-compressed H.264; backpressure lives in the transport — this module only adapts an Effect Socket into the sink, tracking in-flight bytes because the socket exposes no bufferedAmount */
+/**
+ * Device frame WebSocket route.
+ *
+ * Encoded video gets its own upgrade path rather than sharing the JSON RPC
+ * socket. Two reasons, both about not hurting the rest of the app:
+ *
+ * - Send-queue isolation. On one socket a video backlog sits ahead of RPC
+ *   responses in the same queue; on its own connection it cannot.
+ * - Compression. The RPC path negotiates per-message deflate; H.264 is already
+ *   compressed, so running it through zlib would burn CPU for nothing. This
+ *   path lands on the uncompressed WebSocket server (see
+ *   `upgradePathAllowsCompression`).
+ *
+ * Backpressure lives in `DeviceFrameTransport`; this module only adapts an
+ * Effect `Socket` into the transport's sink, tracking in-flight bytes itself
+ * because the Effect socket exposes no `bufferedAmount`.
+ *
+ * @module device/deviceFrameRoute
+ */
 import {
   DEVICE_FRAME_RESYNC_MESSAGE,
   DEVICE_FRAME_WS_PATH,
@@ -15,10 +33,14 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { DeviceService } from "./Services/DeviceService.ts";
 import type { DeviceFrameSink } from "./deviceFrameTransport.ts";
 
-/** a resync request is a few dozen bytes; anything larger is not one */
+/** A resync request is a few dozen bytes; anything larger is not one. */
 const MAX_CLIENT_MESSAGE_BYTES = 1_024;
 
-/** returns the request kind or null for anything unrecognized — ignored rather than a protocol error */
+/**
+ * Parse a client message on the frame socket. Returns the request kind, or
+ * null for anything unrecognized, which the caller ignores rather than
+ * treating as a protocol error.
+ */
 export function decodeResyncRequest(message: string | Uint8Array): "resync" | null {
   return decodeFrameResyncRequest(message, DEVICE_FRAME_RESYNC_MESSAGE, MAX_CLIENT_MESSAGE_BYTES);
 }
@@ -28,7 +50,11 @@ export interface DeviceFrameSocketWriter {
   readonly sink: FrameSink;
 }
 
-/** tracks bytes handed to the socket but not yet flushed — the transport reads it to decide whether the client is keeping up */
+/**
+ * Wrap a raw write function as a transport sink, accounting for bytes handed
+ * to the socket but not yet acknowledged as flushed. The transport reads that
+ * number to decide whether the client is keeping up.
+ */
 export function makeDeviceFrameSink(options: {
   readonly send: (bytes: Uint8Array) => Promise<void> | void;
   readonly isOpen: () => boolean;
@@ -36,9 +62,16 @@ export function makeDeviceFrameSink(options: {
   return makeFrameSink(options);
 }
 
-/** requests without a device, or on a host with no engine, are refused before the upgrade */
+/**
+ * Mount `GET /ws/device-frames?udid=...`. Requests without a device, or on a
+ * host with no device engine, are refused before the upgrade.
+ */
 export function makeDeviceFrameRouteLayer<R = never>(options: {
-  /** passed in rather than imported — this module doesn't depend on the auth stack and tests can mount the route without one */
+  /**
+   * Same admission decision as the RPC upgrade. Passed in rather than imported
+   * so this module does not depend on the auth stack, and so tests can mount
+   * the route without one.
+   */
   readonly authorizeUpgrade: (
     request: HttpServerRequest.HttpServerRequest,
   ) => Effect.Effect<boolean, never, R>;
@@ -78,8 +111,12 @@ export function makeDeviceFrameRouteLayer<R = never>(options: {
               unsubscribe();
             }),
           );
-          // the only client message is a resync request — a property of this stream, and a frozen canvas shouldn't depend on a second socket being healthy
-          // anything unrecognized is ignored — a stray message must not kill a stream
+          // The only thing a client may send is a resync request, when its
+          // decoder hits a sequence gap or an error. Handled here rather than
+          // as an RPC because it is a property of this stream, and because a
+          // frozen canvas should not depend on a second socket being healthy.
+          // Anything unrecognized is ignored: a stray message must not kill a
+          // stream.
           yield* socket.run((message) => {
             if (decodeResyncRequest(message) === null) return;
             Effect.runFork(

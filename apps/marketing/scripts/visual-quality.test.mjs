@@ -11,6 +11,8 @@ function read(relativePath) {
 }
 
 test("browser quality CI uses a supported runtime and preserves failure evidence", () => {
+  // Lives at the repo root now: workflows only run from there, so the site's
+  // own .github/ moved to ../../.github when it joined the monorepo.
   const workflow = read("../../.github/workflows/validate-marketing.yml");
   const performance = read("scripts/performance-smoke.mjs");
 
@@ -33,6 +35,8 @@ test("browser quality CI uses a supported runtime and preserves failure evidence
 
 test("performance gate uses the pinned browser stack without Socket-warning dependencies", () => {
   const packageJson = JSON.parse(read("package.json"));
+  // The monorepo installs with bun from a single root lockfile; this app no
+  // longer carries its own package-lock.json.
   const packageLock = read("../../bun.lock");
   const performance = read("scripts/performance-smoke.mjs");
 
@@ -57,6 +61,7 @@ test("performance gate uses the pinned browser stack without Socket-warning depe
     "csp_evaluator",
     "chrome-launcher",
   ]) {
+    // Bun stores package identities in the first tuple field, including nested resolutions.
     assert.ok(
       !packageLock.includes(`["${removedPackage}@`),
       `removed Socket-warning dependency remains in lockfile: ${removedPackage}`,

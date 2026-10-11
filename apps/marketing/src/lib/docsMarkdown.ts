@@ -1,3 +1,7 @@
+// FILE: lib/docsMarkdown.ts
+// Purpose: Renders the canonical documentation as agent-readable Markdown.
+// Layer: server utility for Markdown docs routes and the full AI corpus.
+
 import { docsSource } from "@/lib/docs";
 import { SITE_URL } from "@/lib/seo";
 

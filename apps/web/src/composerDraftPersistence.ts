@@ -292,6 +292,8 @@ type PersistedComposerPromptHistorySavedDraft =
 const PersistedComposerThreadDraftState = Schema.Struct({
   pendingUserInputDrafts: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
   prompt: Schema.String,
+  // Set only while composer prompt-history browsing is active: the user's real
+  // draft snapshot, kept safe while `prompt` temporarily holds a recalled history entry.
   promptHistorySavedDraft: Schema.optionalKey(PersistedComposerPromptHistorySavedDraft),
   attachments: Schema.Array(PersistedComposerImageAttachment),
   assistantSelections: Schema.optionalKey(
@@ -311,6 +313,8 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   skills: Schema.optionalKey(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optionalKey(Schema.Array(ProviderMentionReference)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
+  queueStoppedTurnId: Schema.optionalKey(Schema.String),
+  queueResumedTurnId: Schema.optionalKey(Schema.String),
   restoredSourceProposedPlan: Schema.optionalKey(PersistedRestoredSourceProposedPlan),
   modelSelectionByProvider: Schema.optionalKey(
     Schema.Record(Schema.String, Schema.optional(ModelSelection)),
@@ -1067,6 +1071,7 @@ function normalizePersistedDraftsByThreadId(
       promptCandidate,
       terminalContexts.length,
     );
+    // If the draft already has the v3 shape, use it directly
     const legacyDraftCandidate = draftValue as LegacyPersistedComposerThreadDraftState;
     let modelSelectionByProvider: ModelSelectionByProviderInstance = {};
     let activeProvider: ProviderInstanceId | null = null;
@@ -1075,6 +1080,7 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.modelSelectionByProvider &&
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
+      // v3 format
       modelSelectionByProvider = normalizePersistedModelSelectionMap(
         draftCandidate.modelSelectionByProvider,
       );
@@ -1083,6 +1089,7 @@ function normalizePersistedDraftsByThreadId(
         modelSelectionByProvider,
       );
     } else {
+      // v2 or legacy format: migrate
       const normalizedModelOptions =
         normalizeProviderModelOptions(
           legacyDraftCandidate.modelOptions,
@@ -1165,6 +1172,12 @@ function normalizePersistedDraftsByThreadId(
       ...(skills.length > 0 ? { skills } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
+      ...(hasQueuedTurns && typeof draftCandidate.queueStoppedTurnId === "string"
+        ? { queueStoppedTurnId: draftCandidate.queueStoppedTurnId }
+        : {}),
+      ...(hasQueuedTurns && typeof draftCandidate.queueResumedTurnId === "string"
+        ? { queueResumedTurnId: draftCandidate.queueResumedTurnId }
+        : {}),
       ...(restoredSourceProposedPlan ? { restoredSourceProposedPlan } : {}),
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
       ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
@@ -1182,7 +1195,8 @@ function normalizePersistedDraftsByThreadId(
 export function migratePersistedComposerDraftStoreState(
   persistedState: unknown,
 ): PersistedComposerDraftStoreState {
-  // version bumps sanitize persisted data without forcing users back through legacy sticky-model fields
+  // Version bumps should sanitize persisted data without forcing users back
+  // through the legacy sticky-model fields.
   return normalizeCurrentPersistedComposerDraftStoreState(persistedState);
 }
 
@@ -1201,7 +1215,8 @@ export function partializeComposerDraftStoreState(
     > = [];
     for (const queuedTurn of draft.queuedTurns) {
       if (queuedTurn.kind === "chat") {
-        // file attachments are intentionally in-memory only — persisting the queued turn without them would make a later send incomplete
+        // File attachments are intentionally in-memory only; persisting the
+        // queued turn without them would make a later send incomplete.
         if (queuedTurn.files.length > 0) {
           continue;
         }
@@ -1485,6 +1500,12 @@ export function partializeComposerDraftStoreState(
       ...(draft.skills.length > 0 ? { skills: [...draft.skills] } : {}),
       ...(draft.mentions.length > 0 ? { mentions: [...draft.mentions] } : {}),
       ...(hasQueuedTurns ? { queuedTurns: persistedQueuedTurns } : {}),
+      ...(hasQueuedTurns && draft.queueStoppedTurnId
+        ? { queueStoppedTurnId: draft.queueStoppedTurnId }
+        : {}),
+      ...(hasQueuedTurns && draft.queueResumedTurnId
+        ? { queueResumedTurnId: draft.queueResumedTurnId }
+        : {}),
       ...(draft.restoredSourceProposedPlan
         ? { restoredSourceProposedPlan: draft.restoredSourceProposedPlan }
         : {}),
@@ -1548,6 +1569,7 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
       stickyModelSelectionByProvider,
     );
   } else {
+    // Legacy migration path
     const stickyModelOptions =
       normalizeProviderModelOptions(normalizedPersistedState.stickyModelOptions) ?? {};
     const normalizedStickyModelSelection = normalizeModelSelection(
@@ -1696,6 +1718,12 @@ export function toHydratedThreadDraft(
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],
     queuedTurns: hydrateQueuedTurnsFromPersisted(threadId, persistedDraft.queuedTurns),
+    ...(persistedDraft.queueStoppedTurnId
+      ? { queueStoppedTurnId: persistedDraft.queueStoppedTurnId }
+      : {}),
+    ...(persistedDraft.queueResumedTurnId
+      ? { queueResumedTurnId: persistedDraft.queueResumedTurnId }
+      : {}),
     restoredSourceProposedPlan: persistedDraft.restoredSourceProposedPlan ?? null,
     modelSelectionByProvider,
     activeProvider,

@@ -1,3 +1,9 @@
+// FILE: gitActionGlyphs.tsx
+// Purpose: Single source of truth mapping every git affordance to its glyph, so the
+//          header quick action, the dropdown picker rows, and the git dialogs always
+//          render the same icon for the same action.
+// Layer: Git UI primitive
+
 import {
   CloudSyncIcon,
   CreatePullRequestIcon,
@@ -9,7 +15,8 @@ import {
 } from "~/lib/icons";
 import type { GitGlyphName } from "./GitActionsControl.logic";
 
-// central icons render as masked spans (not <svg>), so size them explicitly rather than via parent `[&>svg]` selectors
+// Central icons render as masked spans (not <svg>), so size them explicitly here
+// rather than relying on parent `[&>svg]` selectors.
 export const GIT_ACTION_ICON_CLASS = "size-3.5";
 
 const GIT_ACTION_GLYPH: Record<GitGlyphName, LucideIcon> = {

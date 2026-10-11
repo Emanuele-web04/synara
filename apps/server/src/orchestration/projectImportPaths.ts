@@ -46,7 +46,7 @@ export async function importDirectoryExists(value: string): Promise<boolean> {
   }
 }
 
-// read Git's local pointer only — discovery never runs hooks, fetches, or changes a checkout
+// Read Git's local pointer only; discovery never runs hooks, fetches, or changes a checkout.
 export async function findImportGitWorkspace(
   cwd: string,
 ): Promise<{ root: string; worktree: string | null } | null> {

@@ -1,3 +1,8 @@
+// FILE: memoryDiagnostics.ts
+// Purpose: Emits low-volume backend memory counters for diagnosing desktop OOM crashes.
+// Layer: Server runtime observability helper
+// Exports: memory snapshot formatting and desktop diagnostic timer setup.
+
 import * as V8 from "node:v8";
 
 import type { RuntimeMode } from "./config";
@@ -80,6 +85,7 @@ function isServerMemoryDiagnosticsDisabled(): boolean {
   });
 }
 
+// Starts low-volume heap/RSS logging for packaged desktop backend crash reports.
 export function startServerMemoryDiagnostics(input: {
   readonly mode: RuntimeMode;
   readonly intervalMs?: number;

@@ -1,5 +1,6 @@
+// Trigger cloud probe after workflow registration.
 const { app, BrowserWindow } = require("electron");
-// keeps the app alive: probes close every window between runs
+// A probe intentionally destroys every window between paired runs.
 app.on("window-all-closed", () => {});
 const numericArgs = process.argv
   .slice(1)

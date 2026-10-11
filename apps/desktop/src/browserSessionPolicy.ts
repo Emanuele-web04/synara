@@ -1,3 +1,7 @@
+// FILE: browserSessionPolicy.ts
+// Purpose: Owns the persistent Electron browser session identity and popup security policy.
+// Layer: Desktop browser infrastructure
+
 import {
   app,
   net,
@@ -165,7 +169,8 @@ export class BrowserSessionPolicy {
       this.configuredSession = partitionSession;
       this.configured = true;
     } catch {
-      // session creation can race Electron readiness — retrying the next call preserves the per-WebContents fallback without permanently disabling partition config
+      // Session creation can race Electron readiness. Retrying the next call preserves the
+      // per-WebContents fallback without permanently disabling partition configuration.
       this.configured = false;
     }
   }
@@ -188,7 +193,8 @@ export class BrowserSessionPolicy {
       partitionSession.webRequest.onHeadersReceived(null);
       partitionSession.protocol.unhandle(LOCAL_HTML_PREVIEW_SCHEME);
     } catch {
-      // Electron may already be tearing the session down during app quit. The manager reference is cleared above, so no retained callback remains here.
+      // Electron may already be tearing the session down during app quit.
+      // The manager reference is cleared above, so no retained callback remains here.
     }
   }
 

@@ -1,3 +1,9 @@
+// FILE: ComposerModelPickerTraitRows.tsx
+// Purpose: Footer of the composer model picker — one "<Trait> … <value> ›" row per control
+//   the selected model exposes (thinking, context, effort, speed, agent).
+// Layer: Chat composer presentation
+// Depends on: composer trait resolution, the shared trait commit hook, and menu primitives.
+
 import {
   type ProviderAgentDescriptor,
   type ProviderInstanceId,
@@ -7,6 +13,7 @@ import {
 } from "@synara/contracts";
 import { useState, type ReactNode } from "react";
 
+import type { FastModeNotice } from "~/lib/fastModeState";
 import { cn } from "~/lib/utils";
 import { type ProviderOptions } from "../../providerModelOptions";
 import { MenuRadioGroup, MenuRadioItem, MenuSub, MenuSubTrigger } from "../ui/menu";
@@ -17,12 +24,14 @@ import {
   getComposerTraitSelection,
   planComposerEffortChange,
   resolveComposerTraitStatusLabel,
+  showsComposerFastModeBadge,
   supportsComposerFastModeControl,
 } from "./composerTraits";
 import { defaultAgentForProvider, getAgentOptions, getSelectedAgentValue } from "./TraitsPicker";
 import { useComposerTraitCommit } from "./useComposerTraitCommit";
 
-// Footer row "<Trait> ……… <value> ›" opening a radio submenu. Picking a value closes only the submenu, so the user can compose model + traits and then star the result.
+// Footer row "<Trait> ……… <value> ›" opening a radio submenu. Picking a value closes
+// only the submenu, so the user can compose model + traits and then star the result.
 export type ComposerEffortControl = "menu" | "slider";
 
 function TraitRow(props: {
@@ -74,8 +83,10 @@ export function ComposerModelPickerTraitRows(props: {
   modelOptions: ProviderOptions | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns both. Models without an effort ladder always keep the rows.
+  // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns
+  // both. Models without an effort ladder always keep the rows.
   effortControl: ComposerEffortControl;
+  fastModeNotice?: FastModeNotice | null | undefined;
 }) {
   const { provider, threadId, model, modelOptions, prompt } = props;
   const selection = getComposerTraitSelection(
@@ -99,6 +110,8 @@ export function ComposerModelPickerTraitRows(props: {
   const contextWindowValue = selection.contextWindow ?? selection.defaultContextWindow ?? "";
 
   const usesEffortSlider = props.effortControl === "slider" && selection.effortLevels.length > 0;
+  // Only a requested fast mode can be refused; otherwise there is nothing to explain.
+  const fastModeNotice = showsComposerFastModeBadge(selection) ? props.fastModeNotice : null;
 
   const rows: ReactNode[] = [];
   if (selection.thinkingEnabled !== null) {
@@ -167,7 +180,7 @@ export function ComposerModelPickerTraitRows(props: {
         key="speed"
         label="Speed"
         value={selection.fastModeEnabled ? "on" : "off"}
-        valueLabel={selection.fastModeEnabled ? "Fast" : "Standard"}
+        valueLabel={selection.fastModeEnabled ? (fastModeNotice?.label ?? "Fast") : "Standard"}
         options={[
           { value: "off", label: "Standard", isDefault: true },
           { value: "on", label: "Fast" },
@@ -211,9 +224,15 @@ export function ComposerModelPickerTraitRows(props: {
           modelOptions={modelOptions}
           prompt={prompt}
           onPromptChange={props.onPromptChange}
+          fastModeNotice={fastModeNotice}
         />
       ) : null}
       {rows}
+      {fastModeNotice ? (
+        <div className="px-2 pt-1 pb-1.5 text-muted-foreground/80 text-ui-sm leading-snug">
+          {fastModeNotice.detail}
+        </div>
+      ) : null}
     </div>
   );
 }

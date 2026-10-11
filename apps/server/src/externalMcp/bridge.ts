@@ -31,7 +31,10 @@ const RUNTIME_STATE_RELATIVE_PATHS = [
   path.join("userdata", "server-runtime.json"),
   path.join("dev", "server-runtime.json"),
 ] as const;
-const WINDOWS_TRUSTED_RUNTIME_ACL_SIDS = new Set(["S-1-5-18", "S-1-5-32-544"]);
+const WINDOWS_TRUSTED_RUNTIME_ACL_SIDS = new Set([
+  "S-1-5-18", // LocalSystem
+  "S-1-5-32-544", // Builtin Administrators
+]);
 const WINDOWS_RUNTIME_ACL_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   "$target = $env:SYNARA_RUNTIME_ACL_TARGET",
@@ -349,7 +352,8 @@ function assertPrivateFile(filePath: string): void {
 
 function writePrivateJson(filePath: string, value: unknown): void {
   const directory = path.dirname(filePath);
-  // validate both directory levels with O_NOFOLLOW — a pre-existing symlink must never redirect secrets
+  // Validate both private directory levels with O_NOFOLLOW before writing.
+  // A pre-existing baseDir/mcp or leaf symlink must never redirect secrets.
   ensurePrivateDirectorySync(path.dirname(directory));
   ensurePrivateDirectorySync(directory);
   const tempPath = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
@@ -642,7 +646,8 @@ export function requestTimeoutForBody(body: string): number {
         typeof requestedWaitMs === "number" && Number.isFinite(requestedWaitMs)
           ? Math.min(EXTERNAL_MCP_MAX_WAIT_MS, Math.max(0, requestedWaitMs))
           : EXTERNAL_MCP_DEFAULT_WAIT_MS;
-      // the gateway processes batch entries sequentially — each wait adds to the request's total duration
+      // The HTTP gateway processes batch entries sequentially, so each wait
+      // contributes to the request's total server-side duration.
       serverWorkMs += waitMs;
     }
     return Math.max(REQUEST_TIMEOUT_MS, serverWorkMs + 5_000);
@@ -900,7 +905,7 @@ export async function serveExternalMcpStdio(input: {
           JSON.parse(responseText);
           return responseText.trim();
         } catch {
-          // fall through to a transport error that preserves request ids
+          // Fall through to a transport error that preserves request ids.
         }
       }
       const message = `Synara external MCP request failed with HTTP ${response.status}.`;

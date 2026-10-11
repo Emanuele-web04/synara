@@ -82,7 +82,8 @@ export function resolveBranchToolbarValue(input: {
   return currentGitBranch ?? activeThreadBranch;
 }
 
-// local threads should mirror the concrete checkout; stale thread metadata makes the current branch appear selectable while clicks no-op
+// Local threads should mirror the concrete checkout; stale thread metadata makes
+// the current Git branch appear selectable while clicks only perform a no-op.
 export function shouldSyncLocalThreadBranch(input: {
   envMode: EnvMode;
   activeWorktreePath: string | null;

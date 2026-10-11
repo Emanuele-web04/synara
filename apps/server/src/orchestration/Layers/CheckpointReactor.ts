@@ -184,7 +184,9 @@ const make = Effect.gen(function* () {
   // is expected for such turns and must not surface as a capture failure.
   const turnsStartedWithoutGitWorkspace = new Map<ThreadId, TurnId>();
 
-  // providers that stream their own diff (Codex) update via ingestion; providers without it (Claude) derive the live diff from git here
+  // Providers that stream their own unified diff (e.g. Codex) update the live
+  // turn diff through ProviderRuntimeIngestion. For providers without that
+  // capability (e.g. Claude) we derive the live diff from git here instead.
   const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
     provider: ProviderRuntimeEvent["provider"],
   ) {
@@ -197,7 +199,8 @@ const make = Effect.gen(function* () {
     return capabilities?.supportsLiveTurnDiffPatch === true;
   });
 
-  // wait briefly for ingestion to persist the final assistant message id when completion wins the subscriber race
+  // Wait a short time for ProviderRuntimeIngestion to persist the final
+  // assistant message id when turn completion wins the subscriber race.
   const resolveAssistantMessageIdForTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
@@ -238,11 +241,16 @@ const make = Effect.gen(function* () {
       }
     }
 
-    // return undefined rather than a synthetic id — clients scope the card by turnId so null is safe; a synthetic id could collide with a real one
+    // No real assistant MessageId could be resolved for this turn: return
+    // undefined rather than a synthetic fallback. Clients scope the diff
+    // card by turnId, so a null assistantMessageId is safe; a synthetic id
+    // could collide with a real MessageId from another turn.
     return undefined;
   });
 
-  // anchor a revert failure on a turn the transcript still renders — clients drop turn-less activities once a thread has turn-stamped messages
+  // Anchors a revert failure on a turn the transcript still renders: clients
+  // drop turn-less activities once a thread has turn-stamped messages, which
+  // made every revert failure invisible.
   const resolveRevertFailureTurnId = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnCount: number;
@@ -481,7 +489,15 @@ const make = Effect.gen(function* () {
     );
   });
 
-  // prefer the active session cwd, fall back to thread/project config — every checkpoint path shares this policy: mixed sources would diff two different checkouts
+  // Resolves the workspace CWD for checkpoint operations, preferring the
+  // active provider session CWD and falling back to the thread/project config.
+  // Returns undefined when no CWD can be determined or the workspace is not
+  // a git repository.
+  //
+  // Every checkpoint path (baseline, completion, revert) shares this single
+  // policy: a worktree thread whose baseline resolved through the workspace
+  // while its completion snapshot resolved through the session cwd would diff
+  // two different checkouts.
   const resolveCheckpointWorkspace = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">;
@@ -540,6 +556,9 @@ const make = Effect.gen(function* () {
     return workspace?.isGitRepository ? workspace.cwd : undefined;
   });
 
+  // Shared tail for both capture paths: creates the git checkpoint ref, diffs
+  // it against the previous turn, then dispatches the domain events to update
+  // the orchestration read model.
   const captureAndDispatchCheckpoint = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
@@ -601,7 +620,8 @@ const make = Effect.gen(function* () {
       checkpointRef: targetCheckpointRef,
     });
 
-    // invalidate the workspace entry cache so the @-mention picker sees files created/deleted this turn
+    // Invalidate the workspace entry cache so the @-mention file picker
+    // reflects files created or deleted during this turn.
     clearWorkspaceIndexCache(input.cwd);
 
     const checkpointStatus = fromCheckpointExists ? input.status : ("missing" as const);
@@ -810,7 +830,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // while a primary turn is active, only that turn may produce completion checkpoints
+    // When a primary turn is active, only that turn may produce completion checkpoints.
     if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
       yield* Effect.logDebug("turn-completion checkpoint skipped: turn is not the active turn", {
         threadId: thread.id,
@@ -820,7 +840,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // only skip when a real checkpoint already exists — ingestion may insert "missing" placeholders that must not prevent real capture
+    // Only skip if a real (non-placeholder) checkpoint already exists for this turn.
+    // ProviderRuntimeIngestion may insert placeholder entries with status "missing"
+    // before this reactor runs; those must not prevent real git capture.
     if (
       thread.checkpoints.some(
         (checkpoint) => checkpoint.turnId === turnId && checkpoint.status !== "missing",
@@ -846,7 +868,8 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // reuse a placeholder's turn count instead of incrementing past it
+    // If a placeholder checkpoint exists for this turn, reuse its turn count
+    // instead of incrementing past it.
     const existingPlaceholder = thread.checkpoints.find(
       (checkpoint) => checkpoint.turnId === turnId && checkpoint.status === "missing",
     );
@@ -858,8 +881,21 @@ const make = Effect.gen(function* () {
       ? existingPlaceholder.checkpointTurnCount
       : currentTurnCount + 1;
 
+    // The in-memory marker covers the normal turn.started path. Read the
+    // projection as well so a reactor restart between turn start and completion
+    // retains the provider-independent workspace classification.
+    const persistedTurn = yield* projectionTurnRepository.getByTurnId({
+      threadId: thread.id,
+      turnId,
+    });
+    const pendingTurnStart = Option.isNone(persistedTurn)
+      ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({ threadId: thread.id })
+      : Option.none();
     const workspaceInitializedDuringTurn =
-      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId;
+      turnsStartedWithoutGitWorkspace.get(thread.id) === turnId ||
+      (Option.isSome(persistedTurn) && persistedTurn.value.startedWithoutGitWorkspace === true) ||
+      (Option.isSome(pendingTurnStart) &&
+        pendingTurnStart.value.startedWithoutGitWorkspace === true);
     turnsStartedWithoutGitWorkspace.delete(thread.id);
 
     yield* captureAndDispatchCheckpoint({
@@ -876,7 +912,15 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // snapshots the working tree into a throwaway ref (temp index — real index/worktree untouched) and diffs against the turn-start baseline; the terminal turn.completed capture stays authoritative
+  // Derives a live turn diff from git while a turn is still running, for providers
+  // that do not stream their own unified diff (e.g. Claude). Snapshots the working
+  // tree into a throwaway ref (isolated temp index — the real index/worktree are
+  // untouched), diffs it against the turn-start baseline, and dispatches a
+  // provider-diff placeholder so the "files changed" strip shows live +N/-M.
+  //
+  // The terminal git checkpoint from `turn.completed` stays authoritative: it
+  // captures with a real ref and status "ready", which the projector refuses to
+  // let a later "missing" placeholder overwrite.
   const captureLiveTurnDiff = Effect.fnUntraced(function* (
     event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>,
   ) {
@@ -894,12 +938,13 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // only the active primary turn may emit live diffs
+    // Only the active primary turn may emit live diffs.
     if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
       return;
     }
 
-    // never override a real checkpoint already captured by the terminal path
+    // Never override a real (non-placeholder) checkpoint already captured for
+    // this turn by the terminal turn.completed path.
     const existingForTurn = thread.checkpoints.find((checkpoint) => checkpoint.turnId === turnId);
     if (existingForTurn && existingForTurn.status !== "missing") {
       return;
@@ -958,7 +1003,8 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // align the placeholder turn count with the terminal capture so both resolve to the same entry
+    // Align the placeholder turn count with the eventual terminal capture so
+    // both resolve to the same checkpoint entry (see captureCheckpointFromTurnCompletion).
     const maxTurnCount = thread.checkpoints.reduce(
       (max, checkpoint) => Math.max(max, checkpoint.checkpointTurnCount),
       0,
@@ -973,7 +1019,8 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       turnId,
       completedAt: event.createdAt,
-      // a provider-diff ref keeps the projector treating this as a live placeholder, not an interrupted turn
+      // A provider-diff ref keeps the projector treating this as a live
+      // placeholder (turn stays "running") instead of an interrupted turn.
       checkpointRef: CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`),
       status: "missing",
       files,
@@ -983,7 +1030,13 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // the real filesystem checkpoint must only come from terminal turn.completed — an in-progress diff update would freeze an intermediate tree as final
+  // Captures a real git checkpoint when a placeholder checkpoint (status "missing")
+  // is detected via a domain event.
+  //
+  // Placeholders from turn.diff.updated remain placeholders. The real filesystem
+  // checkpoint for a turn must only be captured from the terminal turn.completed
+  // event; otherwise an in-progress diff update can freeze an intermediate tree
+  // as the final checkpoint for the turn.
   const captureCheckpointFromPlaceholder = Effect.fnUntraced(function* (
     event: Extract<OrchestrationEvent, { type: "thread.turn-diff-completed" }>,
   ) {
@@ -1023,7 +1076,9 @@ const make = Effect.gen(function* () {
       return;
     }
     if (!workspace.isGitRepository) {
-      // nothing to snapshot yet — remember the turn so completion doesn't report the necessarily-missing baseline as a failure
+      // Nothing to snapshot yet. Remember the turn so its completion capture
+      // does not report the (necessarily) missing baseline as a failure when
+      // the turn itself initializes the repository.
       turnsStartedWithoutGitWorkspace.set(thread.id, turnId);
       yield* Effect.logDebug(
         "checkpoint turn start baseline skipped: workspace is not a git repository",
@@ -1087,6 +1142,37 @@ const make = Effect.gen(function* () {
     Effect.sync(() => {
       pendingMessageStartByThread.set(event.payload.threadId, event.payload.messageId);
     });
+
+  const rememberPendingWorkspaceInitialization = Effect.fnUntraced(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>,
+  ) {
+    const thread = yield* getThreadDetail(event.payload.threadId);
+    if (!thread) return;
+    const project = yield* getProjectShell(thread.projectId);
+    if (!project) return;
+    const workspace = yield* resolveCheckpointWorkspace({
+      threadId: thread.id,
+      thread,
+      project,
+    });
+    if (!workspace || workspace.isGitRepository) return;
+
+    // The projector commits the request before publishing it. A lagging reactor
+    // may see an already-promoted turn or a newer pending request, so mark only
+    // the row owned by this message without replacing the pending slot.
+    yield* projectionTurnRepository.markStartedWithoutGitWorkspace({
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
+    });
+    yield* Effect.logDebug(
+      "checkpoint turn start marked workspace as not yet initialized as a git repository",
+      {
+        threadId: event.payload.threadId,
+        messageId: event.payload.messageId,
+        cwd: workspace.cwd,
+      },
+    );
+  });
 
   const handleRevertRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<OrchestrationEvent, { type: "thread.checkpoint-revert-requested" }>,
@@ -1162,7 +1248,10 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // requiring a live session would make revert fail after idle stop/restart though checkpoints and the binding survive
+    // Both scopes resolve the workspace the same way: prefer a live provider
+    // session cwd, fall back to the thread/project workspace. Requiring a live
+    // session here would make revert fail after an idle stop or a restart, even
+    // though the checkpoints and the provider binding both survive that.
     const project = yield* getProjectShell(thread.projectId);
     const checkpointCwd = project
       ? yield* resolveCheckpointCwd({
@@ -1179,6 +1268,42 @@ const make = Effect.gen(function* () {
           event.payload.scope === "files"
             ? "No git workspace is available for file Undo."
             : "No git workspace is available for this thread's checkpoints.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    // A thread lease protects this conversation, but other threads can still
+    // edit the same checkout. Check them while holding the workspace lease,
+    // before either Undo scope changes files or the provider conversation.
+    const checkpointWorkspaceIdentity =
+      yield* turnCheckpointCoordinator.resolveWorkspaceIdentity(checkpointCwd);
+    for (const peer of commandReadModel.threads) {
+      if (relevantThreadIds.includes(peer.id)) continue;
+      const providerThread = yield* resolveProviderSessionThread(projectionSnapshotQuery, peer.id);
+      const peerSession = providerSessions.find(
+        (session) => session.threadId === (providerThread?.id ?? peer.id),
+      );
+      const pendingStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+        threadId: peer.id,
+      });
+      if (
+        !threadHasInFlightTurn(peer) &&
+        !providerSessionHasInFlightTurn(peerSession) &&
+        !(Option.isSome(pendingStart) && peer.session?.status !== "error")
+      )
+        continue;
+      const peerCwd =
+        peerSession?.cwd ??
+        resolveThreadWorkspaceCwd({ thread: peer, projects: commandReadModel.projects });
+      if (!peerCwd) continue;
+      const peerIdentity = yield* turnCheckpointCoordinator.resolveWorkspaceIdentity(peerCwd);
+      if (peerIdentity !== checkpointWorkspaceIdentity) continue;
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          "Another thread is working in this workspace. Stop its active turn before undoing changes.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
@@ -1379,7 +1504,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // cheap read before any write — a missing checkpoint refuses while worktree and conversation are still untouched
+    // Cheap read before any write: a missing checkpoint refuses the revert
+    // while the worktree and the conversation are both still untouched, so no
+    // rescue snapshot has to be captured only to be rolled straight back.
     const missingTargetCheckpointDetail = yield* checkpointStore
       .hasCheckpointRef({
         cwd: checkpointCwd,
@@ -1407,7 +1534,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // a revert mutates two systems that can't commit together — snapshot the pre-revert worktree so failures can restore it
+    // A revert mutates two systems that cannot be committed together: the
+    // worktree and the provider's conversation. Snapshot the pre-revert
+    // worktree first so failures can restore it.
     const rolledBackTurns = Math.max(0, currentTurnCount - event.payload.turnCount);
     const rescueCheckpointRef = revertRescueCheckpointRef(event.payload.threadId);
     const rescueCaptureFailure = yield* checkpointStore
@@ -1443,14 +1572,22 @@ const make = Effect.gen(function* () {
         ),
       );
 
-    // returns null on success; otherwise the rescue ref is the only remaining copy of the pre-revert tree and must survive
+    // Puts the workspace back where the revert found it. Returns null on
+    // success, otherwise why the pre-revert tree could not be reinstated — at
+    // which point the rescue ref is the only remaining copy of it and must
+    // survive.
     const restoreRescueCheckpoint = (rescueRef: CheckpointRef) =>
       checkpointStore.restoreCheckpoint({ cwd: checkpointCwd, checkpointRef: rescueRef }).pipe(
         Effect.map((restored) => (restored ? null : "the rescue snapshot was no longer available")),
         Effect.catch((error) => Effect.succeed(error.message)),
       );
 
-    // three outcomes not two: restoreCheckpoint does a read-only lookup before writing, so `false` proves untouched while a failure can land halfway; collapsing them discarded the only copy of a half-rewritten workspace
+    // Three outcomes, not two: `restoreCheckpoint` resolves the target commit
+    // with a read-only lookup before it issues a single writing command, so
+    // `false` is proof that the workspace was never touched, while a failure can
+    // land anywhere — including halfway through rewriting the tree. Collapsing
+    // them into one string made the caller discard the rescue snapshot in both
+    // cases, destroying the only copy of a workspace it had just half-rewritten.
     const restoreOutcome = yield* checkpointStore
       .restoreCheckpoint({
         cwd: checkpointCwd,
@@ -1492,6 +1629,8 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Invalidate the workspace entry cache so the @-mention file picker
+    // reflects the reverted filesystem state.
     clearWorkspaceIndexCache(checkpointCwd);
 
     if (rolledBackTurns > 0) {
@@ -1526,7 +1665,9 @@ const make = Effect.gen(function* () {
     const completionFailure = yield* orchestrationEngine
       .dispatch({
         type: "thread.revert.complete",
-        // stable across retries — if persistence committed but the response was lost, the receipt makes the retry idempotent
+        // Stable across retries: if persistence committed but the response was
+        // lost, the command receipt makes the retry idempotent instead of
+        // reverting a second time.
         commandId: CommandId.makeUnsafe(`server:checkpoint-revert-complete:${event.eventId}`),
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
@@ -1542,7 +1683,9 @@ const make = Effect.gen(function* () {
         Effect.catch((error) => Effect.succeed(error.message)),
       );
     if (completionFailure !== null) {
-      // both systems already moved — the snapshot is the only way back, so it's deliberately kept and named in the activity
+      // Both systems already moved, so the snapshot is deliberately kept: it is
+      // the only way back to the pre-revert worktree. Name it in the activity,
+      // otherwise the ref survives with nothing pointing a human at it.
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
@@ -1554,7 +1697,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // domain state is authoritative — refs drop only once the completion commits; deleting earlier destroys what a retry needs when dispatch fails
+    // Domain state is authoritative, so refs are dropped only once the
+    // completion has committed. Deleting them earlier would destroy the
+    // checkpoints a retry needs when the dispatch is the step that fails.
     const staleCheckpointRefs = thread.checkpoints
       .filter((checkpoint) => checkpoint.checkpointTurnCount > event.payload.turnCount)
       .map((checkpoint) => checkpoint.checkpointRef);
@@ -1585,7 +1730,11 @@ const make = Effect.gen(function* () {
       );
       const sessionThreadId = providerThread?.id ?? event.payload.threadId;
 
-      // the lease is shared with checkpoint capture which can park on a slow git command — bound only acquisition (the revert itself runs to completion) via a child fiber + handshake race
+      // The per-thread lease is shared with checkpoint capture, which can park
+      // on a slow git command or be held by a turn that never settles. Bound
+      // only the acquisition — once the lease is held the revert itself must
+      // run to completion — by parking the lease in a child fiber and racing a
+      // timeout against the handshake.
       const leaseAcquired = yield* Deferred.make<void>();
       const leaseReleased = yield* Deferred.make<void>();
       const leaseFiber = yield* Effect.forkChild(
@@ -1636,6 +1785,7 @@ const make = Effect.gen(function* () {
   const processDomainEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
     if (event.type === "thread.turn-start-requested") {
       yield* rememberPendingMessageStart(event);
+      yield* rememberPendingWorkspaceInitialization(event);
       return;
     }
 
@@ -1653,7 +1803,11 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // placeholders stay unresolved until turn.completed captures the real checkpoint; this hook only logs them — settlement comes from the session status transition
+    // Placeholder checkpoints (status "missing") from turn.diff.updated stay
+    // unresolved until the terminal turn.completed runtime event captures the real
+    // git checkpoint; this hook only logs them. Turn settlement itself does not
+    // depend on this reactor — the projector settles latestTurn from the session
+    // status transition.
     if (event.type === "thread.turn-diff-completed") {
       yield* captureCheckpointFromPlaceholder(event);
     }

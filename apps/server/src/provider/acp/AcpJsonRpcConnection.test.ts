@@ -1,3 +1,7 @@
+// FILE: AcpJsonRpcConnection.test.ts
+// Purpose: Verifies ACP session negotiation, lifecycle, and event normalization.
+// Layer: Provider ACP runtime tests
+
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -177,9 +181,12 @@ describe("AcpSessionRuntime", () => {
         expect(requestEvents.some((event) => event.method === "authenticate")).toBe(true);
         expect(probeEnqueuedCount).toBeGreaterThan(0);
 
+        // The final session's bounded state is present, but nothing from the
+        // discarded probe session leaked through.
         const commands = yield* runtime.getAvailableCommands;
         expect(commands).toEqual([{ name: "compact", description: "Compact the current context" }]);
 
+        // Give any orphan update a moment to arrive, then consume the event stream.
         yield* Effect.sleep("200 millis");
         const eventsChunk = yield* Stream.runCollect(runtime.getEvents()).pipe(
           Effect.timeoutOption("500 millis"),
@@ -256,7 +263,9 @@ describe("AcpSessionRuntime", () => {
         const started = yield* runtime.start();
         expect(started.sessionId).toBe("mock-session-1");
 
-        // resumed sessions drop session/update until a consumer attaches — take the event stream before prompting (adapters fork the drain right after start)
+        // Resumed sessions drop session/update until a consumer attaches, so the
+        // events stream must be taken before prompting (mirrors the adapters,
+        // which fork the drain right after start()).
         const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
           Effect.forkChild,
         );
@@ -266,6 +275,8 @@ describe("AcpSessionRuntime", () => {
         expect(promptResult).toMatchObject({ stopReason: "end_turn" });
         expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "code" });
 
+        // The session/load replay chunks are dropped; only the immediate first
+        // prompt's legitimate events arrive after the quiet gate opens.
         const notes = Array.from(yield* Fiber.join(eventsFiber));
         expect(notes.map((note) => note._tag)).toEqual([
           "PlanUpdated",
@@ -309,6 +320,9 @@ describe("AcpSessionRuntime", () => {
         const runtime = yield* AcpSessionRuntime;
         yield* runtime.start();
 
+        // The load response starts in ask mode, then replay reports code mode.
+        // Waiting before reading retained state makes this ask request a real
+        // write instead of incorrectly treating it as an early no-op.
         yield* runtime.setMode("ask");
 
         const modeRequest = requestEvents.find(
@@ -513,6 +527,7 @@ describe("AcpSessionRuntime", () => {
         authMethodId: "test",
       });
 
+    // First server lifetime: fresh session plus one completed turn.
     const firstSessionId = await Effect.runPromise(
       Effect.gen(function* () {
         const runtime = yield* AcpSessionRuntime;
@@ -523,6 +538,7 @@ describe("AcpSessionRuntime", () => {
       }).pipe(Effect.provide(layerFor()), Effect.scoped, Effect.provide(NodeServices.layer)),
     );
 
+    // Second server lifetime: resume from the persisted cursor and prompt again.
     await Effect.runPromise(
       Effect.gen(function* () {
         const runtime = yield* AcpSessionRuntime;

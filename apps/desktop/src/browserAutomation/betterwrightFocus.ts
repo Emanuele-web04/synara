@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WebContents } from "electron";
 
+/** The manager only leases guests attached to Synara's trusted owning renderer. */
 export async function withRendererGuestFocus<T>(
   contents: WebContents,
   operation: () => Promise<T>,
@@ -11,6 +12,8 @@ export async function withRendererGuestFocus<T>(
     throw new Error("Browser focus unavailable.");
   const key = JSON.stringify(`synara-browser-focus-${randomUUID()}`);
   try {
+    // Never interpolate model input into the privileged renderer. The only
+    // arguments are a native WebContents ID and a one-use restoration key.
     const focused = await host.executeJavaScript(`(() => {
       const guests = Array.from(document.querySelectorAll("webview")).filter(element => {
         try { return element.isConnected && element.getWebContentsId() === ${contents.id}; }
@@ -31,6 +34,8 @@ export async function withRendererGuestFocus<T>(
       throw new Error("Browser focus unavailable.");
     return await operation();
   } finally {
-    if (!host.isDestroyed()) await host.executeJavaScript(`globalThis[${key}]?.()`).catch(() => {});
+    if (!host.isDestroyed())
+      // Cleanup must never mask the operation's own error or lease diagnostics.
+      await host.executeJavaScript(`globalThis[${key}]?.()`).catch(() => {});
   }
 }

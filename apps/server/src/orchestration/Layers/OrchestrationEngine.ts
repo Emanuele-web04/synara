@@ -152,7 +152,8 @@ function commandToAggregateRef(command: OrchestrationCommand): {
   }
 }
 
-// space/project metadata share the synchronous shell path — cheap sidebar-visible rows queryable the moment the command commits
+// Space and project metadata events share the synchronous "shell" projection path: they
+// are cheap, sidebar-visible rows that must be queryable the moment the command commits.
 function isShellMetadataEvent(event: OrchestrationEvent): event is ShellMetadataOrchestrationEvent {
   return (
     event.type === "space.created" ||
@@ -533,7 +534,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const degraded =
         dirty || lag.missingProjectors.length > 0 || Object.keys(lag.lagByProjector).length > 0;
       return {
-        // a failed probe with the dirty flag is known degradation — "unknown" is reserved for a failed probe with no other evidence
+        // A failed probe with the dirty flag set is still a known degradation;
+        // "unknown" is reserved for a failed probe with no other evidence.
         state: degraded ? "degraded" : lag.probeFailed ? "unknown" : "healthy",
         inFlight,
         retryAttempts,
@@ -587,7 +589,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     thread: OrchestrationReadModel["threads"][number],
   ): OrchestrationReadModel => {
     const existingThread = model.threads.find((entry) => entry.id === thread.id);
-    // the cache may hold only deltas since a restart; durable detail has complete text — overlaying a partial cache would truncate completion
+    // The command cache may contain only deltas received since a restart.
+    // Durable detail includes the complete text, now including pending chunks.
+    // Overlaying that detail with a partial cache would truncate completion.
     const hasThread = existingThread !== undefined;
     return {
       ...model,
@@ -674,8 +678,38 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.user-input.respond":
       case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+      case "thread.message.assistant.delta": {
+        // The command model only holds messages touched since startup. The
+        // first delta for any other message reads that exact row, so a late
+        // delta for a message finalized before a restart cannot reopen it.
+        const thread = commandReadModel.threads.find((entry) => entry.id === command.threadId);
+        if (!thread || thread.messages.some((entry) => entry.id === command.messageId)) {
+          return Effect.succeed(commandReadModel);
+        }
+        return messageRepository
+          .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new OrchestrationCommandInternalError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  detail: `Failed to load the streamed assistant message: ${error.message}`,
+                }),
+            ),
+            Effect.map((message) =>
+              Option.isNone(message)
+                ? commandReadModel
+                : overlayThread(commandReadModel, {
+                    ...thread,
+                    messages: [orchestrationMessageFromStoredMessage(message.value)],
+                  }),
+            ),
+          );
+      }
       case "thread.message.assistant.complete":
-        // read the exact message, including one older than the transcript window — avoids loading a whole thread
+        // Read the exact message, including a resumed message older than the
+        // transcript window. This avoids loading a whole thread to finalize it.
         return messageRepository
           .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
           .pipe(
@@ -694,7 +728,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               return model.pipe(
                 Effect.map((readModel) => {
                   const thread = readModel.threads.find((entry) => entry.id === command.threadId);
-                  // a missing projection row must not discard text still in cache; SQL failures stay errors — a present row is authoritative
+                  // A missing projection row must not discard text still in cache.
+                  // SQL failures stay errors; a present row remains authoritative.
                   if (!thread || Option.isNone(message)) return readModel;
                   return overlayThread(readModel, {
                     ...thread,
@@ -709,7 +744,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     }
   };
 
-  // rebuild only project/space rows and snapshot cursors — existing thread rows stay so older installs don't lose history no longer fully in the event log
+  // Rebuild only the project/space projection rows and snapshot cursors.
+  // Existing thread/chat projection rows stay in place so older installs do not
+  // lose history that is no longer fully represented in orchestration_events.
   const resetDerivedProjectionState = sql.withTransaction(
     Effect.gen(function* () {
       yield* sql`DELETE FROM projection_spaces`;
@@ -793,7 +830,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       ),
     );
 
-  // callers must build this inside a fiber — the body runs synchronously so throws are only contained while an effect is being evaluated
+  // Callers must build this effect inside a fiber (see `runEnvelope`): the body
+  // runs synchronously, so anything it throws is only contained when it is raised
+  // while an effect is being evaluated.
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void, never> => {
     const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
     const commandFingerprint = fingerprintOrchestrationCommand(envelope.command);
@@ -1527,7 +1566,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     ),
   );
 
-  /** processEnvelope builds its effect synchronously — a throw while building would propagate into the worker's flatMap before `ensuring` attaches: the envelope never finishes (outstanding leaks, drain hangs) and the defect kills the worker; Effect.suspend contains it per envelope so one poisoned command fails alone */
+  /**
+   * Runs one envelope with the worker's structural safety net.
+   *
+   * `processEnvelope` builds its effect synchronously, so a throw raised while
+   * building it (schema/normalization helpers, read-model access, anything added
+   * to that body later) would otherwise propagate into the worker's `flatMap`
+   * before `Effect.ensuring` is attached: the envelope would never be finished
+   * (`outstanding` leaks, `drain` hangs, the caller waits out the dispatch
+   * timeout) and the defect would kill the worker fiber, wedging every later
+   * command. Building it inside `Effect.suspend` turns that into a defect of this
+   * effect, which is contained per envelope so one poisoned command fails alone.
+   */
   const runEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> =>
     Effect.suspend(() => processEnvelope(envelope)).pipe(
       Effect.catchCause((cause): Effect.Effect<void> => {
@@ -1546,7 +1596,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           Effect.asVoid,
         );
       }),
-      // last resort — a defect raised by the handler itself must not escape the worker loop
+      // Last resort: even a defect raised by the handler above (a throwing getter
+      // on the command, say) must not escape into the worker loop.
       Effect.catchCause(
         (cause): Effect.Effect<void> =>
           Cause.hasInterruptsOnly(cause) ? Effect.interrupt : Effect.void,
@@ -1661,7 +1712,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] =
     eventPublicationLock.withPermits(1)(
       Effect.gen(function* () {
-        // capture the cursor atomically with attachment so a publication can't fall between the subscription and its replay boundary
+        // Capture the cursor atomically with attachment, so a publication cannot
+        // fall between the live subscription and its initial replay boundary.
         const subscription = yield* PubSub.subscribe(eventPubSub);
         let cursor = lastPublishedSequence;
         return Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(
@@ -1685,7 +1737,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }),
     );
 
-  // compatibility bridge for older tests — production code should use ProjectionSnapshotQuery directly
+  // Compatibility bridge for older tests and out-of-tree callers. Production
+  // code should use ProjectionSnapshotQuery directly instead of depending on
+  // the command engine to own a hydrated read model.
   const getReadModel = () => Effect.sync(() => commandReadModel);
   const refreshCommandReadModel: OrchestrationEngineShape["refreshCommandReadModel"] = () =>
     maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
@@ -1805,7 +1859,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       );
     });
 
-  // rebuilds local indexes without deleting chats; also invoked by recovery paths that can stampede
+  // Used by the settings screen to rebuild local indexes without deleting chats.
+  // Also invoked by empty-route / desktop recovery paths — those can stampede.
   const runProjectionRepair: OrchestrationEngineShape["repairState"] = () =>
     maintenanceLock.withPermits(1)(
       Effect.gen(function* () {
@@ -2002,7 +2057,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     subscribeDomainEvents,
     dispatch,
     repairState,
-    // each access creates a fresh subscription so every consumer receives all domain events independently
+    // Each access creates a fresh PubSub subscription so that multiple
+    // consumers (Effect RPC, ProviderRuntimeIngestion, CheckpointReactor, etc.)
+    // each independently receive all domain events.
     get streamDomainEvents(): OrchestrationEngineShape["streamDomainEvents"] {
       return Stream.unwrap(subscribeDomainEvents);
     },

@@ -90,7 +90,7 @@ describe("searchWorkspaceEntries", () => {
     const paths = result.entries.map((entry) => entry.path);
 
     assert.strictEqual(paths[0], "apps/web/src/lib/central-icons.tsx");
-    // directory-only matches still appear, just after everything named "cent…"
+    // The directory-only matches still appear, just after everything named "cent…".
     assert.include(paths, "apps/web/public/central-icons-fill/3d.svg");
   });
 
@@ -420,7 +420,8 @@ describe("searchWorkspaceEntries", () => {
     clearWorkspaceIndexCache(cwd);
     await staleBuild;
 
-    // the pre-invalidation build must not have re-seeded the cache — this search triggers a fresh walk
+    // The pre-invalidation build must not have re-seeded the cache, so this
+    // search triggers a fresh walk instead of serving the stale snapshot.
     await searchWorkspaceEntries({ cwd, query: "", limit: 100 });
 
     assert.equal(rootReadCount, 2);
@@ -503,6 +504,7 @@ describe("listWorkspaceDirectories", () => {
       ).rejects.toThrow("outside the workspace root");
     }
 
+    // Traversal that stays contained inside the root is still allowed.
     const contained = await listWorkspaceDirectories({
       cwd,
       includeFiles: true,
@@ -521,6 +523,7 @@ describe("listWorkspaceDirectories", () => {
       listWorkspaceDirectories({ cwd, includeFiles: true, relativePath: "innocent" }),
     ).rejects.toThrow("outside the workspace root");
 
+    // A symlink that resolves inside the root is still allowed.
     writeFile(cwd, "docs/guide.md", "# guide");
     fs.symlinkSync(path.join(cwd, "docs"), path.join(cwd, "docs-alias"));
     const contained = await listWorkspaceDirectories({
@@ -700,7 +703,8 @@ describe("searchWorkspaceContent", () => {
   });
 
   it("scans files past the first 2000 in alphabetical order", async () => {
-    // regression guard: a fixed file-count cap on the sorted index used to permanently exclude files late in the alphabet from every query
+    // Regression guard: a fixed file-count cap applied to the sorted index
+    // used to permanently exclude files late in the alphabet from every query.
     const cwd = makeTempDir("synara-content-search-no-count-cap-");
     fs.mkdirSync(path.join(cwd, "bulk"), { recursive: true });
     for (let index = 0; index < 2_000; index += 1) {

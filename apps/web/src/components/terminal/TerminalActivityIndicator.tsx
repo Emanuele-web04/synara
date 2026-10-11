@@ -1,3 +1,7 @@
+// FILE: TerminalActivityIndicator.tsx
+// Purpose: Compact terminal lifecycle indicator for running, attention, and review states.
+// Layer: Terminal presentation primitive
+
 import type { TerminalVisualState } from "@synara/shared/terminalThreads";
 
 import { cn } from "~/lib/utils";

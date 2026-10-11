@@ -29,8 +29,15 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
 import { expiredUserInputDrafts } from "../../pendingUserInputRecovery";
-import { derivePendingApprovals, derivePendingUserInputs } from "../../session-logic";
+import {
+  canSessionAnswerPendingRequests,
+  derivePendingApprovals,
+  derivePendingUserInputs,
+  type PendingApproval,
+  type PendingUserInput,
+} from "../../session-logic";
 import { useStore } from "../../store";
+import { isThreadDetailAwaitingVerification } from "../../threadDetailAuthority";
 import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
@@ -39,6 +46,8 @@ import { type Thread } from "../../types";
 import { respondToThreadApproval } from "./respondToThreadApproval";
 import { usePendingUserInputDrafts } from "./usePendingUserInputDrafts";
 const EMPTY_ACTIVITIES: Thread["activities"] = [];
+const EMPTY_PENDING_APPROVALS: PendingApproval[] = [];
+const EMPTY_PENDING_USER_INPUTS: PendingUserInput[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 interface ChatPendingInteractionsInput {
   threadId: ThreadId;
@@ -71,13 +80,23 @@ export function useChatPendingInteractions({
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
 
+  // A closed or errored session has no live provider callback, so its requests
+  // can never be answered. Gate them exactly like the sidebar pill, Kanban and
+  // Tasks so a dead approval cannot keep the composer locked; the server settles
+  // the rows once the runtime reports the turn or session gone.
+  const detailSync = useStore((store) => store.threadDetailSyncById?.[threadId]);
+  const canAnswerPendingRequests =
+    detailSync !== "cached" && canSessionAnswerPendingRequests(activeThread?.session);
   const pendingApprovals = useMemo(
     () =>
-      derivePendingApprovals(threadActivities, activeThread?.pendingInteractions, {
-        authoritativeHasPending: activeThread?.hasPendingApprovals,
-        latestTurnId: activeThread?.latestTurn?.turnId,
-      }),
+      canAnswerPendingRequests
+        ? derivePendingApprovals(threadActivities, activeThread?.pendingInteractions, {
+            authoritativeHasPending: activeThread?.hasPendingApprovals,
+            latestTurnId: activeThread?.latestTurn?.turnId,
+          })
+        : EMPTY_PENDING_APPROVALS,
     [
+      canAnswerPendingRequests,
       activeThread?.hasPendingApprovals,
       activeThread?.latestTurn?.turnId,
       activeThread?.pendingInteractions,
@@ -115,12 +134,15 @@ export function useChatPendingInteractions({
   }, [nextUserInputResponseReclaimAt]);
   const pendingUserInputs = useMemo(
     () =>
-      derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions, {
-        authoritativeHasPending: activeThread?.hasPendingUserInput,
-        latestTurnId: activeThread?.latestTurn?.turnId,
-        responseClaimReferenceAt: userInputResponseClaimReferenceAt,
-      }),
+      canAnswerPendingRequests
+        ? derivePendingUserInputs(threadActivities, activeThread?.pendingInteractions, {
+            authoritativeHasPending: activeThread?.hasPendingUserInput,
+            latestTurnId: activeThread?.latestTurn?.turnId,
+            responseClaimReferenceAt: userInputResponseClaimReferenceAt,
+          })
+        : EMPTY_PENDING_USER_INPUTS,
     [
+      canAnswerPendingRequests,
       activeThread?.hasPendingUserInput,
       activeThread?.latestTurn?.turnId,
       activeThread?.pendingInteractions,
@@ -167,7 +189,9 @@ export function useChatPendingInteractions({
         : null,
     [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
   );
-  // read once here: a `activePendingProgress?.x` read inside the memo makes React Compiler infer a dep that doesn't match the hand-written property-path dep
+  // Read once here for the same reason as `activeLatestTurnId`: an `activePendingProgress?.x`
+  // read inside a memo body makes React Compiler infer `activePendingProgress` as the
+  // dependency, which no longer matches the hand-written property-path dep.
   const activePendingQuestion = activePendingProgress?.activeQuestion ?? null;
   const activePendingResolvedAnswers = useMemo(
     () =>
@@ -283,6 +307,7 @@ export function useChatPendingInteractions({
       );
       await Promise.resolve()
         .then(async () => {
+          if (isThreadDetailAwaitingVerification(activeThreadId)) return;
           await api.orchestration.dispatchCommand({
             type: "thread.user-input.respond",
             commandId: newCommandId(),
@@ -292,7 +317,8 @@ export function useChatPendingInteractions({
             ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
             createdAt: new Date().toISOString(),
           });
-          // refresh identities and settlement after acceptance; acceptance alone doesn't mean Claude received the answer
+          // Refresh identities and settlement after command acceptance; acceptance
+          // alone does not mean Claude received the answer.
           clearThreadDetailResumeCursor(activeThreadId);
           await api.orchestration.subscribeThread(buildThreadSubscribeInput(activeThreadId));
         })

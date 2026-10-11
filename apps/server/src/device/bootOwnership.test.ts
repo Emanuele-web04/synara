@@ -12,7 +12,8 @@ const store = async () => {
 
 describe("the boot ownership record", () => {
   it("survives the process that wrote it", async () => {
-    // a crash runs no finalizer — the only way the next run knows which simulators were ours is to have written it down
+    // The whole point: a crash runs no finalizer, so the only way the next run
+    // can know which simulators were ours is to have written it down.
     const { file } = await store();
     await makeBootOwnershipStore(file, 4242).write(["A", "B"]);
 
@@ -22,7 +23,8 @@ describe("the boot ownership record", () => {
   });
 
   it("reads as owning nothing when the file is absent or corrupt", async () => {
-    // shutting down a device we can't prove is ours is worse than leaking one — every unreadable state degrades to "own nothing"
+    // Shutting down a device we cannot prove is ours is worse than leaking one,
+    // so every unreadable state degrades to "own nothing".
     const { dir, file } = await store();
     expect(await makeBootOwnershipStore(file).read()).toBeNull();
 
@@ -42,7 +44,8 @@ describe("the boot ownership record", () => {
     await owned.clear();
 
     expect((await owned.read())?.udids).toEqual([]);
-    // still valid JSON — the next read is a clean empty rather than a parse failure indistinguishable from corruption
+    // Still valid JSON, so the next read is a clean empty rather than a parse
+    // failure that looks identical to corruption.
     expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({ version: 1, udids: [] });
   });
 });
@@ -59,12 +62,14 @@ describe("deciding which boots to reclaim", () => {
   });
 
   it("leaves a live sibling server's devices alone", () => {
-    // two Synara processes can run at once — the record belongs to the one still running
+    // Two Synara processes can run at once; the older record belongs to the
+    // one still running, and shutting its simulators down would be a bug.
     expect(orphanedBootUdids({ pid: 123, udids: ["A"] }, ["A"], alive)).toEqual([]);
   });
 
   it("never reclaims a device the user booted themselves", () => {
-    // only udids we recorded are candidates — anything else running stays running
+    // The safety property that matters most: only udids we recorded are
+    // candidates, so anything else running stays running.
     expect(orphanedBootUdids({ pid: 9, udids: ["OURS"] }, ["OURS", "THEIRS"], dead)).toEqual([
       "OURS",
     ]);
@@ -86,7 +91,7 @@ describe("processIsAlive", () => {
   });
 
   it("reports a pid that cannot exist as dead", () => {
-    // above the usual pid_max, so safe to assume nothing owns it
+    // Above the usual pid_max, so it is safe to assume nothing owns it.
     expect(processIsAlive(0x7fffffff)).toBe(false);
   });
 });

@@ -1,3 +1,7 @@
+// FILE: MessagesTimeline.find.browser.tsx
+// Purpose: Browser regression for imperative active-match updates in mounted rows.
+// Layer: Vitest browser tests
+
 import "../../index.css";
 
 import { MessageId } from "@synara/contracts";

@@ -1,3 +1,7 @@
+// FILE: electronUpdaterSecurity.test.ts
+// Purpose: Verifies the Windows updater hardening stays shell-free.
+// Layer: Desktop update runtime tests
+
 import { describe, expect, it, vi } from "vitest";
 
 import {

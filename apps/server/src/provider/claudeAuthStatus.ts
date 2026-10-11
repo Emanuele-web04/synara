@@ -1,4 +1,12 @@
-// pure interpretation of `claude auth status` output incl. refresh-rotation-race false negatives; ProviderHealth owns spawning/locking/retries
+/**
+ * claudeAuthStatus - Pure interpretation of `claude auth status` output.
+ *
+ * Decides authenticated/unauthenticated/unknown from the CLI's JSON or text
+ * output, detects the structured false negatives produced by refresh-token
+ * rotation races, and derives subscription metadata labels. Pure functions
+ * only; the health check in ProviderHealth owns spawning, locking, and
+ * retries.
+ */
 import type { ServerProviderAuthStatus, ServerProviderStatusState } from "@synara/contracts";
 
 import {
@@ -72,6 +80,7 @@ export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
     };
   }
 
+  // `claude auth status` returns JSON with a `loggedIn` boolean.
   const parsedAuth = readClaudeAuthStatusJsonMarker(result);
 
   if (parsedAuth.auth === true) {

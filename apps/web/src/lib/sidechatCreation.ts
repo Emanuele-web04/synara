@@ -149,7 +149,8 @@ export function createOrJoinSidechat(input: {
   return flight.completion;
 }
 
-// Null means the successful fork is still synchronizing and must not be pruned. Missing restored panes receive one bounded recheck window before removal.
+// Null means the successful fork is still synchronizing and must not be pruned.
+// Missing restored panes receive one bounded recheck window before removal.
 export function sidechatPaneRetentionRemainingMs(
   threadId: ThreadId,
   nowMs = Date.now(),
@@ -191,7 +192,7 @@ export function resolveSidechatRuntimeMode(
   runtimeMode: RuntimeMode,
   modelSelection: ModelSelection,
 ): RuntimeMode {
-  // changing provider can lose Auto support — never turn that fallback into Full access
+  // Changing provider can lose Auto support; never turn that fallback into Full access.
   return autoRuntimeModeSelectionIssue({ runtimeMode, modelSelection })
     ? "approval-required"
     : runtimeMode;

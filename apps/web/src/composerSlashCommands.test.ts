@@ -396,6 +396,7 @@ describe("composerSlashCommands", () => {
     expect(shouldHideProviderNativeCommandFromComposerMenu("opencode", "review")).toBe(true);
     expect(providerSupportsTextNativeReviewCommand("opencode", ["review", "status"])).toBe(false);
     expect(providerSupportsTextNativeReviewCommand("opencode", [{ name: "review" }])).toBe(false);
+    // Other providers with a native review still use text pass-through.
     expect(providerSupportsTextNativeReviewCommand("claudeAgent", ["review"])).toBe(true);
   });
 
@@ -529,6 +530,7 @@ describe("composerSlashCommands", () => {
 
       expect(availableCommands).toContain("fork");
       expect(shouldHideProviderNativeCommandFromComposerMenu(provider, "fork")).toBe(true);
+      // Native /branch stays independent: it is no longer aliased to /fork.
       expect(shouldHideProviderNativeCommandFromComposerMenu(provider, "branch")).toBe(false);
       expect(hasProviderNativeSlashCommand(provider, ["branch"], "fork")).toBe(false);
     }

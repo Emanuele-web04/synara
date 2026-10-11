@@ -1,3 +1,8 @@
+/**
+ * DroidAdapter - Droid Build CLI ACP implementation of the generic provider contract.
+ *
+ * @module DroidAdapter
+ */
 import { ServiceMap } from "effect";
 
 import type { ProviderAdapterError } from "../Errors.ts";

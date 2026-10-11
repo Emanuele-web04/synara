@@ -1,9 +1,9 @@
 import { ThreadId } from "@synara/contracts";
 import type { RefObject } from "react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { collapseExpandedComposerCursor, detectComposerTrigger } from "../../composer-logic";
 import { resolveComputerControlMode } from "../../computerControlMode";
-import { type QueuedComposerTurn } from "../../composerDraftStore";
+import { type QueuedComposerTurn, useComposerDraftStore } from "../../composerDraftStore";
 import { cloneComposerImageAttachment } from "../../lib/composerSend";
 import {
   armQueuedComposerSteerGate,
@@ -18,6 +18,7 @@ import {
   runLockedQueuedComposerAutoDispatch,
   tryBeginQueuedComposerAutoDispatch,
 } from "../../lib/queuedComposerDrain";
+import { deriveQueuedComposerPause } from "../../lib/queuedComposerPause";
 import { derivePhase } from "../../session-logic";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
@@ -135,7 +136,6 @@ export function useChatQueuedTurns({
   scheduleComposerFocus,
   removeQueuedComposerTurnFromDraft,
   lateComposerSendHandlersRef,
-  insertQueuedComposerTurn,
   phase,
   localDispatch,
   isLocalDraftThread,
@@ -150,16 +150,46 @@ export function useChatQueuedTurns({
 }: ChatQueuedTurnsInput) {
   const hasPendingCacheReview =
     hasPendingCacheReviewInput === true || activeThread?.claudeCacheReview != null;
+  const queueResumedTurnId = useComposerDraftStore(
+    (store) => store.draftsByThreadId[threadId]?.queueResumedTurnId ?? null,
+  );
+  const queueStoppedTurnId = useComposerDraftStore(
+    (store) => store.draftsByThreadId[threadId]?.queueStoppedTurnId ?? null,
+  );
+  // A stop, failure, or usage limit pauses the queue until Resume or a new turn ends normally.
+  const queuePause = useMemo(
+    () =>
+      deriveQueuedComposerPause({
+        latestTurn: activeLatestTurn,
+        activities: activeThread?.activities ?? [],
+        threadError: activeThread?.error,
+        queuedTurnCount: queuedComposerTurns.length,
+        stoppedTurnId: queueStoppedTurnId,
+        resumedTurnId: queueResumedTurnId,
+      }),
+    [
+      activeLatestTurn,
+      activeThread?.activities,
+      activeThread?.error,
+      queueResumedTurnId,
+      queueStoppedTurnId,
+      queuedComposerTurns.length,
+    ],
+  );
   const queuedComposerTurnsRef = useRef<QueuedComposerTurn[]>([]);
 
   const autoDispatchingQueuedTurnRef = useRef(false);
 
-  // holds auto-dispatch through a non-steerable provider's interrupt→re-dispatch gap; seeded from the shared map so a remount still sees the held gate
+  // Holds queued-composer auto-dispatch through a non-natively-steerable
+  // provider steer's interrupt→re-dispatch gap; see
+  // resolveQueuedSteerGateTransition. Seed from the shared map so a remount
+  // during the interrupt gap still sees the gate the watcher has been holding.
 
   const [queuedSteerGate, setQueuedSteerGate] = useState<QueuedSteerGate | null>(() =>
     getQueuedComposerSteerGate(threadId),
   );
-  // bumped to re-evaluate auto-dispatch when only non-reactive ref guards blocked it
+  // Bumped to re-evaluate auto-dispatch when only non-reactive guards (refs)
+  // blocked it; nothing else re-triggers the effect once they reset.
   const [queuedAutoDispatchTick, setQueuedAutoDispatchTick] = useState(0);
 
   useEffect(() => {
@@ -322,29 +352,32 @@ export function useChatQueuedTurns({
       ) {
         return;
       }
-      const previousQueue = queuedComposerTurnsRef.current;
-      const queuedIndex = previousQueue.findIndex((entry) => entry.id === queuedTurn.id);
-      if (queuedIndex < 0) {
+      const queuedTurnForSend = useComposerDraftStore
+        .getState()
+        .draftsByThreadId[threadId]?.queuedTurns.find((entry) => entry.id === queuedTurn.id);
+      if (!queuedTurnForSend || !tryBeginQueuedComposerAutoDispatch(threadId)) {
         return;
       }
-      removeQueuedComposerTurnFromDraft(threadId, queuedTurn.id);
-      const succeeded = await dispatchQueuedComposerTurn(queuedTurn, "steer");
-      if (succeeded) {
-        clearQueuedComposerAutoDispatchRetry(threadId);
-        return;
-      }
-      insertQueuedComposerTurn(threadId, queuedTurn, queuedIndex);
-      if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
-        recordQueuedComposerAutoDispatchFailure(threadId, queuedTurn.id);
-      }
-      setQueuedAutoDispatchTick((tick) => tick + 1);
+      await runLockedQueuedComposerAutoDispatch({
+        threadId,
+        run: async () => {
+          const succeeded = await dispatchQueuedComposerTurn(queuedTurnForSend, "steer");
+          if (succeeded) {
+            clearQueuedComposerAutoDispatchRetry(threadId);
+            removeQueuedComposerTurnFromDraft(threadId, queuedTurnForSend.id);
+            return;
+          }
+          if (getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview == null) {
+            recordQueuedComposerAutoDispatchFailure(threadId, queuedTurnForSend.id);
+          }
+          setQueuedAutoDispatchTick((tick) => tick + 1);
+        },
+      });
     },
     [
-      queuedComposerTurnsRef,
       setQueuedAutoDispatchTick,
       dispatchQueuedComposerTurn,
       hasPendingCacheReview,
-      insertQueuedComposerTurn,
       removeQueuedComposerTurnFromDraft,
       threadId,
     ],
@@ -358,7 +391,24 @@ export function useChatQueuedTurns({
     [removeQueuedComposerTurn, restoreQueuedTurnToComposer],
   );
 
-  // advance/expire the steer gate as the session moves through the interrupt→steered-turn handoff
+  const onResumeQueuedComposerTurns = useCallback(() => {
+    if (!queuePause) {
+      return;
+    }
+    useComposerDraftStore.getState().resumeQueuedTurns(threadId, queuePause.turnId);
+  }, [queuePause, threadId]);
+
+  // Edit on the paused notice takes the next queued message back into the composer;
+  // the rest stays paused until that message is sent and its turn ends normally.
+  const onEditPausedQueuedComposerTurn = useCallback(() => {
+    const nextQueuedTurn = queuedComposerTurnsRef.current[0];
+    if (nextQueuedTurn) {
+      onEditQueuedComposerTurn(nextQueuedTurn);
+    }
+  }, [onEditQueuedComposerTurn]);
+
+  // Advance/expire the steer gate as the session moves through the
+  // interrupt→steered-turn handoff (or fails out of it).
   const sessionErroredForSteerGate = activeThread?.session?.status === "error";
   const activeTurnIdForSteerGate = activeThread?.session?.activeTurnId ?? null;
 
@@ -414,12 +464,15 @@ export function useChatQueuedTurns({
     activeThread.messages.length === 0 &&
     activeLatestTurn == null;
 
+  const isQueuePaused = queuePause !== null;
+
   useEffect(() => {
     if (hasPendingCacheReview) {
       clearQueuedComposerAutoDispatchRetry(threadId);
       return;
     }
     if (
+      isQueuePaused ||
       isQueuedComposerAwaitingTurnStart(threadId) ||
       resolveQueuedComposerAutoDispatchHold({
         localDispatch,
@@ -445,7 +498,9 @@ export function useChatQueuedTurns({
       sendInFlightRef.current ||
       sendPreflightInFlightRef.current
     ) {
-      // the guards are refs, so nothing re-triggers this effect once they reset — poll until the in-flight send settles
+      // These guards are refs, so nothing re-triggers this effect once they
+      // reset; poll until the in-flight send settles instead of leaving the
+      // queue stuck at the end of a turn.
       const timer = window.setTimeout(() => setQueuedAutoDispatchTick((tick) => tick + 1), 250);
       return () => window.clearTimeout(timer);
     }
@@ -465,7 +520,8 @@ export function useChatQueuedTurns({
       return () => window.clearTimeout(timer);
     }
     if (!tryBeginQueuedComposerAutoDispatch(threadId)) {
-      // the watcher already owns this thread's queue head — poll until that send settles
+      // The watcher already owns this thread's queue head (background drain
+      // started before this ChatView claimed). Poll until that send settles.
       const timer = window.setTimeout(() => setQueuedAutoDispatchTick((tick) => tick + 1), 250);
       return () => window.clearTimeout(timer);
     }
@@ -503,6 +559,7 @@ export function useChatQueuedTurns({
     hasPendingCacheReview,
     isConnecting,
     isLocalDraftThread,
+    isQueuePaused,
     isUnstartedThread,
     localDispatch,
     pendingUserInputs.length,
@@ -518,5 +575,8 @@ export function useChatQueuedTurns({
     removeQueuedComposerTurn,
     onSteerQueuedComposerTurn,
     onEditQueuedComposerTurn,
+    queuePause,
+    onResumeQueuedComposerTurns,
+    onEditPausedQueuedComposerTurn,
   };
 }

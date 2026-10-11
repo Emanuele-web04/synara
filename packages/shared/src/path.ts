@@ -34,7 +34,7 @@ function normalizePathSeparators(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
-// for paths whose separators are already normalized to forward slashes
+// For paths whose separators have already been normalized to forward slashes.
 export function isNormalizedWindowsAbsolutePath(value: string): boolean {
   return isWindowsDrivePath(value) || value.startsWith("//");
 }
@@ -62,7 +62,10 @@ function windowsRelativePathOf(targetPath: string, workspaceRoot: string): strin
   return rootMatches ? targetSegments.slice(rootSegments.length).join("/") : null;
 }
 
-// null for the root itself, paths outside it, and anything failing the safety check — safe to hand to workspace file RPCs
+// Converts an absolute path inside `workspaceRoot` to its workspace-relative
+// form (forward-slash separated). Returns null for the root itself, for paths
+// outside the root, and for anything that still fails the relative-path safety
+// check (so callers can hand the result straight to workspace file RPCs).
 export function workspaceRelativePathOf(targetPath: string, workspaceRoot: string): string | null {
   const trimmedTarget = targetPath.trim();
   const trimmedRoot = workspaceRoot.trim();
@@ -88,7 +91,9 @@ export function workspaceRelativePathOf(targetPath: string, workspaceRoot: strin
   return isWorkspaceRelativePathSafe(relativePath) ? relativePath : null;
 }
 
-// joins matching the root's own separator style so the result stays a valid native path on Windows
+// Inverse of `workspaceRelativePathOf`: joins a workspace root with a
+// forward-slash relative path, matching the root's own separator style so the
+// result stays a valid native path on Windows.
 export function joinWorkspaceRelativePath(workspaceRoot: string, relativePath: string): string {
   const separator = workspaceRoot.includes("\\") ? "\\" : "/";
   const normalizedRoot = workspaceRoot.replace(/[\\/]+$/, "");
@@ -96,7 +101,8 @@ export function joinWorkspaceRelativePath(workspaceRoot: string, relativePath: s
   return `${normalizedRoot}${separator}${normalizedRelativePath}`;
 }
 
-// rejects absolute paths and any "."/".." segments — cannot escape the root
+// True for workspace-relative paths that cannot escape the workspace root:
+// rejects absolute paths (POSIX and Windows) and any "." / ".." segments.
 export function isWorkspaceRelativePathSafe(value: string): boolean {
   const trimmed = value.trim();
   if (trimmed.length === 0) {

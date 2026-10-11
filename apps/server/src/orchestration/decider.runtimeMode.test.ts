@@ -173,7 +173,9 @@ describe("decider Auto model compatibility", () => {
   });
 
   it("allows a provider-native subagent thread in Auto without a verified flag", async () => {
-    // provider-native threads mirror subagents the provider already runs — rejecting them would durably poison the runtime journal replay, not stop any session
+    // Provider-native threads mirror subagents the provider already runs;
+    // rejecting them would durably poison the runtime journal replaying the
+    // provider event (see ProviderRuntimeIngestion), not stop any session.
     const readModel = await makeProjectOnlyReadModel();
 
     const result = await Effect.runPromise(

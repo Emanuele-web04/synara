@@ -1,3 +1,8 @@
+// FILE: EditorWorkspaceView.tsx
+// Purpose: Read-only editor-style thread surface with file explorer, workspace
+//          file search, file/diff preview, and chat.
+// Layer: Chat route presentation
+
 import type { ProjectId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import {
@@ -381,22 +386,30 @@ export interface EditorLeaveGuard {
 }
 
 export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
-  // the editor header sits flush against the window's left edge when the global sidebar is collapsed — it has to clear the macOS traffic lights the same way every other chat-surface header does
+  // The editor header sits flush against the window's left edge whenever the
+  // global sidebar is collapsed, so it has to clear the macOS traffic lights the
+  // same way every other chat-surface header does.
   const trafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const { resolvedTheme: editorResolvedTheme } = useTheme();
   const [chatPaneWidth, setChatPaneWidth] = useState(readStoredEditorChatPaneWidth);
   const chatPaneResizeStateRef = useRef<EditorChatPaneResizeState | null>(null);
-  // both side surfaces can be hidden so main content takes full width: re-clicking the active activity-bar item collapses the sidebar (VS Code style), the header chat toggle hides the chat pane (kept mounted so the chat runtime survives)
+  // Both side surfaces can be hidden so the main content takes the full width:
+  // re-clicking the active activity-bar item collapses the sidebar (VS Code
+  // style), and the header chat toggle hides the chat pane (kept mounted so
+  // the chat runtime survives).
   const [sidebarVisible, setSidebarVisible] = useState(() =>
     readStoredEditorVisibility(EDITOR_SIDEBAR_VISIBLE_STORAGE_KEY),
   );
   const [chatPaneVisible, setChatPaneVisible] = useState(() =>
     readStoredEditorVisibility(EDITOR_CHAT_PANE_VISIBLE_STORAGE_KEY),
   );
-  // the search pane replaces the explorer/diff sidebar without touching center mode — picking a result opens it in the file preview; the query lives here so it survives toggling between sidebar panes
+  // The search pane replaces the explorer/diff sidebar without touching the
+  // center mode, so picking a result simply opens it in the file preview. The
+  // query lives here so it survives toggling between sidebar panes.
   const [searchPaneActive, setSearchPaneActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  // the file preview unmounts in Diff/Edit mode — keep explicit Markdown choices in the editor shell, scoped to workspace+file for this session
+  // The file preview unmounts in Diff/Edit mode. Keep explicit Markdown choices
+  // in the editor shell, scoped to the workspace and file for this session.
   const [markdownPreviewModes, setMarkdownPreviewModes] = useState<ReadonlyMap<string, boolean>>(
     () => new Map(),
   );

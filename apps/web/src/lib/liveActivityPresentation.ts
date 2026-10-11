@@ -1,3 +1,7 @@
+// FILE: liveActivityPresentation.ts
+// Purpose: Provider-agnostic labels and live timing for normalized transcript activity.
+// Layer: Web presentation helper
+
 import { useSyncExternalStore } from "react";
 
 import type { WorkLogLiveActivity } from "../workLog";
@@ -126,11 +130,15 @@ export function formatLiveActivityElapsed(
 }
 
 export interface LiveActivityMetaOptions {
-  // subagent rows only hear back when the child finishes — quiet time is expected, never idleness
+  // Subagent rows (Cursor/Claude `Task`, Codex collab) only hear back from the child
+  // agent when it finishes, so quiet time is the expected state — never idleness.
   readonly subagent?: boolean;
 }
 
-// live meta exists to explain what the row can't state itself: elapsed time in flight or a bad end — a simply-succeeded tool already reads as a finished sentence so gets no tail
+// Live meta only exists to explain work the row can't state on its own: how long
+// something in flight has been running, or that it ended badly. A tool call that
+// simply succeeded already reads as a finished sentence ("Searched for foo in
+// src"), so it gets no status/elapsed tail — that detail lives in the disclosure.
 export function formatLiveActivityMeta(
   activity: WorkLogLiveActivity,
   nowMs: number,

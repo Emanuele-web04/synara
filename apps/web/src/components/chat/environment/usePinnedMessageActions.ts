@@ -1,3 +1,8 @@
+// FILE: usePinnedMessageActions.ts
+// Purpose: Centralize sidepanel pin and notes command dispatch with optimistic rollback guards.
+// Layer: Environment panel hook
+// Exports: usePinnedMessageActions
+
 import {
   PINNED_MESSAGES_MAX_COUNT,
   type MessageId,

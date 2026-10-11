@@ -8,7 +8,12 @@ import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 
 import { canonicalSynaraComputerToolName } from "../../agentGateway/computerToolPermission.ts";
 import { computeUsagePercent, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
-import { ACP_SUBAGENT_TOOL_KIND, canonicalItemTypeFromAcpToolKind } from "./AcpAdapterSupport.ts";
+import { isImageGenerationToolName } from "../imageGenerationTool.ts";
+import {
+  ACP_IMAGE_GENERATION_TOOL_KIND,
+  ACP_SUBAGENT_TOOL_KIND,
+  canonicalItemTypeFromAcpToolKind,
+} from "./AcpAdapterSupport.ts";
 
 type AcpTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 
@@ -201,6 +206,7 @@ function normalizeToolCallStatus(
   }
 }
 
+// Converts ACP's unstable usage updates into Synara's context-window snapshot shape.
 function tokenUsageSnapshotFromAcpUsageUpdate(input: {
   readonly size: unknown;
   readonly used: unknown;
@@ -340,6 +346,12 @@ function normalizeToolKind(kind: unknown): string | undefined {
   return typeof kind === "string" && kind.trim().length > 0 ? kind.trim() : undefined;
 }
 
+function readNativeToolName(rawInput: unknown): unknown {
+  return isRecord(rawInput)
+    ? (rawInput._toolName ?? rawInput.toolName ?? rawInput.tool_name)
+    : undefined;
+}
+
 function inferToolKindFromProviderTitle(title: string | undefined): string | undefined {
   const normalized = title?.toLowerCase().replace(/\s+/g, " ").trim();
   switch (normalized) {
@@ -362,7 +374,11 @@ interface AcpSubagentToolInput {
 
 const ACP_SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(["task", "agent", "subagent"]);
 
-// Cursor's Task subagent arrives as a generic `other` tool call with rawInput carrying name+prompt and streams nothing until finishing — detection is what renders it as a subagent run, not an idle-looking tool
+// Cursor's ACP bridge surfaces its `Task` subagent tool as a generic `other` tool call
+// whose rawInput carries the native tool name plus the task description/prompt. The
+// subagent streams nothing back over ACP until it finishes (only `cursor/task`, a
+// completion-only notification), so this detection is what lets the client render it
+// as a subagent run instead of an idle-looking generic tool.
 function parseSubagentToolInput(rawInput: unknown): AcpSubagentToolInput | undefined {
   if (!isRecord(rawInput)) {
     return undefined;
@@ -387,6 +403,8 @@ function deriveGenericToolActionTitle(
 ): string | undefined {
   const running = status === "pending" || status === "inProgress" || status === undefined;
   switch (kind) {
+    case ACP_IMAGE_GENERATION_TOOL_KIND:
+      return "Image generation";
     case "execute":
       return "Ran command";
     case "edit":
@@ -438,7 +456,8 @@ function makeToolCallState(
     return undefined;
   }
   const subagent = parseSubagentToolInput(input.rawInput);
-  // A subagent's own description ("Explore composer UI") is the row heading; the provider title ("Task: Explore composer UI") is only the fallback.
+  // A subagent's own description ("Explore composer UI") is the row heading; the
+  // provider title ("Task: Explore composer UI") is only the fallback.
   const title = subagent?.description ?? (input.title?.trim() || undefined);
   const command = subagent ? undefined : extractToolCallCommand(input.rawInput, title);
   const textContent = extractTextContentFromToolCallContent(input.content);
@@ -446,9 +465,20 @@ function makeToolCallState(
   const locationDetail = summarizeToolCallLocations(input.locations);
   const outputDetail = summarizeToolRawOutput(input.rawOutput);
   const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
+  const protocolKind = normalizeToolKind(input.kind);
+  const nativeToolName = readNativeToolName(input.rawInput);
+  // A provider's native identifier wins over presentation. Bare exact titles are
+  // only a fallback for generic kinds with no native name, never approval policy.
+  const imageGeneration =
+    isImageGenerationToolName(nativeToolName) ||
+    (nativeToolName === undefined &&
+      (protocolKind === undefined || protocolKind === "other") &&
+      isImageGenerationToolName(title));
   const kind = subagent
     ? ACP_SUBAGENT_TOOL_KIND
-    : (normalizeToolKind(input.kind) ?? inferToolKindFromProviderTitle(title));
+    : imageGeneration
+      ? ACP_IMAGE_GENERATION_TOOL_KIND
+      : (protocolKind ?? inferToolKindFromProviderTitle(title));
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title
@@ -458,6 +488,7 @@ function makeToolCallState(
     data.kind = kind;
   }
   if (subagent) {
+    // Shape read by the web collab-action extractor (`item.tool` / `item.prompt`).
     data.tool = "task";
     if (subagent.prompt) {
       data.prompt = subagent.prompt;
@@ -468,11 +499,7 @@ function makeToolCallState(
   }
   // Native name fields identify the tool; provider titles are presentation only.
   // Keep arguments intact in rawInput, never promote their values into a title.
-  const computerToolName = isRecord(input.rawInput)
-    ? canonicalSynaraComputerToolName(
-        input.rawInput._toolName ?? input.rawInput.toolName ?? input.rawInput.tool_name,
-      )
-    : undefined;
+  const computerToolName = canonicalSynaraComputerToolName(nativeToolName);
   if (computerToolName) {
     data.toolName = computerToolName;
   }
@@ -489,6 +516,8 @@ function makeToolCallState(
     data.locations = input.locations;
   }
   const kindSpecificTitleIsGeneric = isProviderGenericToolTitle(title, kind);
+  // A healthy subagent row previews its prompt (from data), not a restated title or
+  // the bookkeeping rawOutput ({ durationMs, isBackground }); failures keep the detail.
   const fallbackDetail =
     subagent && status !== "failed"
       ? undefined
@@ -572,7 +601,14 @@ export function mergeToolCallState(
   next: AcpToolCallState,
 ): AcpToolCallState {
   const nextKind = typeof next.data.kind === "string" ? next.data.kind : undefined;
-  const kind = nextKind ?? previous?.kind;
+  // Sparse completion updates often repeat ACP's generic kind without the native
+  // name. They describe the same call and must not erase its detected image kind.
+  const kind =
+    nextKind === "other" &&
+    previous?.kind === ACP_IMAGE_GENERATION_TOOL_KIND &&
+    readNativeToolName(next.data.rawInput) === undefined
+      ? previous.kind
+      : (nextKind ?? previous?.kind);
   const status = next.status ?? previous?.status;
   const nextTitleIsGeneric = isProviderGenericToolTitle(next.title, kind);
   const actionTitle = nextTitleIsGeneric ? deriveGenericToolActionTitle(kind, status) : undefined;
@@ -591,6 +627,7 @@ export function mergeToolCallState(
     data: {
       ...previous?.data,
       ...next.data,
+      ...(kind === ACP_IMAGE_GENERATION_TOOL_KIND ? { kind } : {}),
     },
   };
 }

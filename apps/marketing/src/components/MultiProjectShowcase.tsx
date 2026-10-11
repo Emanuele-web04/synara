@@ -1,3 +1,7 @@
+// FILE: MultiProjectShowcase.tsx
+// Purpose: Shows persistent project and task organization across repositories.
+// Layer: Marketing UI section
+
 const sectionHeading =
   "text-[1.35rem] font-medium leading-[1.14] tracking-[-0.03em] text-[var(--text-primary)] sm:text-[1.6rem]";
 const sectionBody =

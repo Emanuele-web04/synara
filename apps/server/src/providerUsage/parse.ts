@@ -1,3 +1,8 @@
+// FILE: providerUsage/parse.ts
+// Purpose: Small, dependency-free parsing/formatting helpers and snapshot builders shared by
+// the per-provider usage fetchers. Kept pure so the per-provider parsers can be unit-tested
+// without touching the network, filesystem, or keychain.
+
 import type {
   ProviderKind,
   ProviderUsageStatus,
@@ -16,7 +21,7 @@ export function asFiniteNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  // several provider APIs send numeric quotas as strings
+  // Several provider APIs send numeric quotas as strings (e.g. unix-ms timestamps).
   if (typeof value === "string" && value.trim().length > 0) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : undefined;
@@ -40,7 +45,7 @@ export function clampPercent(value: number | undefined): number | undefined {
   return Math.min(100, Math.max(0, value));
 }
 
-/** fraction (0..1) or already-percent (0..100) → clamped 0..100 */
+/** Convert a fraction (0..1) or an already-percent value (0..100) into a clamped 0..100 percent. */
 export function toUsedPercent(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isFinite(value)) {
     return undefined;

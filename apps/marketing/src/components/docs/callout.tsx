@@ -1,4 +1,7 @@
-// monochrome by design — type only changes the icon, not the color
+// FILE: components/docs/callout.tsx
+// Purpose: MDX <Callout> for docs pages, built on the shadcn Alert primitive.
+//          Monochrome by design — type only changes the icon, not the color.
+// Layer: server component (no client hooks).
 
 import type { ReactNode } from "react";
 import { Info, Lightbulb, OctagonAlert, TriangleAlert } from "lucide-react";

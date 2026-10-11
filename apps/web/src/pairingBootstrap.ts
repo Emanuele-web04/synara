@@ -1,3 +1,6 @@
+// FILE: pairingBootstrap.ts
+// Purpose: Exchanges one-time remote pairing links before the application opens a WebSocket.
+
 const PAIRING_PATH = "/pair";
 
 interface PairingLocation {

@@ -49,6 +49,17 @@ function callbacks() {
 }
 
 describe("useClaudeContextCompaction", () => {
+  it("holds a cached idle session before sending the native compaction turn", async () => {
+    useStore.setState({ threadDetailSyncById: { [threadId]: "cached" } });
+    const actions = callbacks();
+    const hook = await renderHook(() =>
+      useClaudeContextCompaction({ threadId, disabledReason: null, ...actions }),
+    );
+    expect(await hook.result.current.compact()).toBe(false);
+    expect(mocks.dispatchCommand).not.toHaveBeenCalled();
+    expect(actions.onBegin).not.toHaveBeenCalled();
+    await hook.unmount();
+  });
   it("uses the exact native command without sending draft settings or attachments", async () => {
     useComposerDraftStore.getState().setPrompt(threadId, "Keep this draft for later");
     const actions = callbacks();
@@ -272,6 +283,7 @@ it("reuses an unconfirmed request after remount and persisted state hydration", 
   await first.result.current.compact();
   const original = mocks.dispatchCommand.mock.calls[0]![0];
   await first.unmount();
+  // Simulate a page reload: the persisted request is all the new hook inherits.
   const saved = sessionStorage.getItem("synara:claude-compaction-requests")!;
   useClaudeCompactionRequests.setState({ requests: {} });
   sessionStorage.setItem("synara:claude-compaction-requests", saved);

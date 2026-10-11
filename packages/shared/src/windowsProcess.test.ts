@@ -1,3 +1,7 @@
+// FILE: windowsProcess.test.ts
+// Purpose: Verifies Windows process preparation avoids Node shell-mode deprecations.
+// Layer: Shared Node runtime utility tests
+
 import { spawnSync as spawnChildSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,6 +76,26 @@ describe("windowsProcess", () => {
       }),
     ).toBe(`${command}.CMD`);
   });
+
+  it.runIf(process.platform === "win32")(
+    "resolves project-relative shims against the launch working directory",
+    () => {
+      writeFileSync(Path.join(root, "codex.CMD"), "@echo off\r\n");
+      expect(
+        prepareWindowsSafeProcess(".\\codex", ["app-server"], {
+          platform: "win32",
+          cwd: root,
+          env: { PATH: "", PATHEXT: ".CMD", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        }),
+      ).toEqual({
+        command: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/s", "/v:off", "/c", 'call ".\\codex.CMD" "app-server"'],
+        shell: false,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      });
+    },
+  );
 
   it("keeps explicit path-like Windows executables without resolving", () => {
     expect(

@@ -1,3 +1,7 @@
+// FILE: ProviderUsageLimitRows.tsx
+// Purpose: Shared provider usage limit-row renderer for Settings and compact
+// popovers. Keeps labels, progress tracks, pace details, and tones consistent.
+
 import {
   providerUsagePaceDetails,
   providerUsageProgressTrackProps,

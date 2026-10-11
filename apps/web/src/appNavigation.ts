@@ -1,3 +1,9 @@
+// FILE: appNavigation.ts
+// Purpose: Owns the TanStack history instance and browser-style app navigation controls.
+// Layer: Web app routing utility
+// Exports: appHistory, route navigation helpers, and navigation availability state
+// Depends on: TanStack Router history and the Electron environment flag
+
 import {
   createBrowserHistory,
   createHashHistory,
@@ -17,7 +23,7 @@ function createAppHistory(): RouterHistory {
   if (typeof window === "undefined") {
     return createMemoryHistory({ initialEntries: ["/"] });
   }
-  // Electron loads from a file-backed shell — hash history avoids path resolution issues
+  // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
   return isElectron ? createHashHistory() : createBrowserHistory();
 }
 
@@ -40,7 +46,8 @@ function resolveKnownAppHistoryMaxIndex(history: RouterHistory, currentIndex: nu
   return currentIndex;
 }
 
-// track the highest app-owned index so browser-global history.length can't fake Forward availability
+// Records the highest app-owned history index seen so browser-global history.length
+// cannot make Forward look available before this app creates a forward entry.
 export function syncAppNavigationState(
   history: RouterHistory = appHistory,
   action?: HistorySubscriberAction,
@@ -71,6 +78,10 @@ export interface AppNavigationState {
   canGoForward: boolean;
 }
 
+// Flushes TanStack's queued URL writes before asking native history to move.
+// This keeps rapid back/forward clicks aligned with the latest in-memory route.
+// Callers gate this on `canGoBack` so Back stays disabled (like Forward) when
+// there is no previous entry, rather than silently no-oping.
 export function goBackInAppHistory(history: RouterHistory = appHistory): void {
   history.flush();
   history.back();
@@ -81,7 +92,7 @@ export function goForwardInAppHistory(history: RouterHistory = appHistory): void
   history.forward();
 }
 
-// forward availability derives from app-owned history indexes, not browser-global length
+// Derives forward availability from app-owned history indexes, not browser-global history length.
 export function resolveAppNavigationState(history: RouterHistory = appHistory): AppNavigationState {
   const currentIndex = readCurrentHistoryIndex(history);
   if (currentIndex === null) {

@@ -6,7 +6,7 @@ import {
   parseHelperProbe,
 } from "./helperCapabilities.ts";
 
-/** a probe payload with every capability healthy */
+/** A probe payload with every capability healthy. */
 const healthyProbe = (overrides: Record<string, unknown> = {}): string =>
   JSON.stringify({
     ok: true,
@@ -56,7 +56,7 @@ describe("parseHelperProbe", () => {
     expect(probe.ok).toBe(false);
     const accessibility = probe.capabilities.find((entry) => entry.id === "accessibility");
     expect(accessibility).toMatchObject({ ok: false, missingSymbol: "AXPTranslator" });
-    // the others are untouched — that separation is the whole point
+    // The others are untouched: that separation is the whole point.
     expect(probe.capabilities.filter((entry) => entry.ok)).toHaveLength(3);
   });
 
@@ -65,7 +65,8 @@ describe("parseHelperProbe", () => {
       JSON.stringify({ ok: true, capabilities: { framebuffer: "ok", hid: "ok" } }),
     );
 
-    // an older helper genuinely can't provide what it never measured — claiming otherwise surfaces as a mystery failure at the point of use
+    // An older helper genuinely cannot provide what it never measured; claiming
+    // otherwise would surface as a mystery failure at the point of use.
     expect(probe.capabilities.find((entry) => entry.id === "accessibility")?.ok).toBe(false);
     expect(probe.ok).toBe(false);
   });
@@ -95,7 +96,7 @@ describe("availabilityFromProbe", () => {
       ),
     );
 
-    // nothing works — a broken helper, not "partly usable"
+    // Nothing works, so this is not "partly usable" — it is a broken helper.
     expect(availability.kind).toBe("helper-unavailable");
   });
 

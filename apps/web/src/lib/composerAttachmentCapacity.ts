@@ -1,3 +1,7 @@
+// FILE: composerAttachmentCapacity.ts
+// Purpose: Defines the composer attachment limit as one shared, commit-time invariant.
+// Layer: Web composer domain utility
+
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 
 interface AttachmentIdCarrier {
@@ -11,7 +15,10 @@ export interface ComposerAttachmentCountDraft {
   readonly persistedAttachments?: ReadonlyArray<AttachmentIdCarrier> | undefined;
 }
 
-// live refs plus persisted images not yet hydrated — hydrating an image with the same id consumes no additional slot
+/**
+ * Counts live references plus persisted images that have not hydrated yet.
+ * Hydrating an image with the same id therefore consumes no additional slot.
+ */
 export function effectiveComposerAttachmentCount(
   draft: ComposerAttachmentCountDraft | undefined,
 ): number {

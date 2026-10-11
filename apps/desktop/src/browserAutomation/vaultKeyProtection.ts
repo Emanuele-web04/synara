@@ -76,6 +76,7 @@ async function readPrivate(path: string, max: number): Promise<Buffer | null> {
   }
 }
 
+/** The same data key is wrapped by a master-derived key and, optionally, the OS key store. */
 export class VaultKeyProtection {
   private envelope: Envelope | null = null;
   private key: Buffer | null = null;

@@ -1,11 +1,12 @@
-// read only the Factory encryption key through OS utilities — never a module from Factory's home
+// Read only the Factory encryption key through OS utilities, never a module from Factory's home.
 import { execFile } from "node:child_process";
 import nodePath from "node:path";
 import { tmpdir } from "node:os";
 
 import type { ProviderUsageContext } from "../types";
 
-// keytar stores a UTF-8 blob credential; this fixed script imports only the OS CredReadW/CredFree API
+// keytar stores a generic credential named service/account with a UTF-8 blob on Windows.
+// This fixed script imports only the OS CredReadW/CredFree API; no profile or third-party module.
 const WINDOWS_KEY_READER = `
 $ErrorActionPreference = 'Stop'
 $PSModuleAutoLoadingPreference = 'None'
@@ -51,7 +52,7 @@ export function readDroidSecureKey(
 ): Promise<string | null> {
   let executable: string;
   let args: string[];
-  // don't inherit loader injection vars, shell profiles, API keys, or a user PATH
+  // Do not inherit loader injection variables, shell profiles, API keys, or a user PATH.
   const env: NodeJS.ProcessEnv = { HOME: ctx.homeDir, PATH: "/usr/bin:/bin" };
   if (ctx.platform === "darwin") {
     executable = "/usr/bin/security";
@@ -70,7 +71,7 @@ export function readDroidSecureKey(
       if (ctx.env[key]) env[key] = ctx.env[key];
     }
   } else if (ctx.platform === "win32" && source === "keyring") {
-    // SystemRoot comes from the server's OS env, never provider settings or credential data
+    // SystemRoot comes from the server's OS environment, never provider settings or credential data.
     const systemRoot = process.env.SystemRoot;
     if (!systemRoot || !nodePath.win32.isAbsolute(systemRoot)) return Promise.resolve(null);
     executable = nodePath.win32.join(
@@ -103,7 +104,7 @@ export function readDroidSecureKey(
         windowsHide: true,
       },
       (error, stdout) => {
-        // never propagate child errors — they can contain stdout/stderr and therefore the key
+        // Never propagate child errors: they can contain stdout/stderr and therefore the key.
         resolve(error ? null : stdout.trim());
       },
     );

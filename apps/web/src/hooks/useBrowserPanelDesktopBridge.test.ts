@@ -1,3 +1,7 @@
+// FILE: useBrowserPanelDesktopBridge.test.ts
+// Purpose: Characterize the shared desktop browser-panel menu and open-request subscriptions.
+// Layer: Web hook test
+
 import { ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -1,5 +1,10 @@
 "use client";
 
+// FILE: slider.tsx
+// Purpose: Shared accent-colored single-value slider primitive with optional step marks.
+// Layer: Base UI component
+// Exports: Slider
+
 import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 import { useEffect, useState } from "react";
 
@@ -27,7 +32,9 @@ type SliderProps = {
   onValueChange: (value: number) => void;
 };
 
-// quick overshoot so the thumb visibly "lands"; Base UI positions via inset-inline-start and sizes the fill via width — those are the transitioned properties
+// Snap motion: quick, with a touch of overshoot so the thumb visibly "lands" on the
+// stop. Base UI positions the thumb via `inset-inline-start` and sizes the fill via
+// `width`, so those are the transitioned properties.
 const MAGNETIC_MOTION_CLASS =
   "transition-[inset-inline-start,width] duration-180 ease-[cubic-bezier(0.22,1.1,0.36,1)] motion-reduce:transition-none";
 
@@ -40,7 +47,9 @@ function stepMarkPercents(min: number, max: number, step: number): number[] {
   return marks;
 }
 
-// the pointer can leave the slider mid-drag but the cursor still follows the element under it — force the closed hand document-wide for the press
+// The pointer can leave the slider mid-drag (Base UI captures the pointer, but the
+// cursor shown still follows the element under it), so the closed hand is forced
+// document-wide for the duration of the press.
 function useGrabbingCursor(active: boolean): void {
   useEffect(() => {
     if (!active) return;

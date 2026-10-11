@@ -100,7 +100,8 @@ describe("SidechatExpiryReactor unarchive view race", () => {
       const reactor = await runtime.runPromise(Effect.service(SidechatExpiryReactor));
       await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
 
-      // the shell can publish the unarchived projection before this reactor sees the event — the view must still seed from it
+      // The shell can publish the unarchived projection before this reactor sees
+      // the matching domain event. The view must still seed from that projection.
       thread = { ...thread, archivedAt: null };
       await Effect.runPromise(reactor.viewStarted(thread.id));
 

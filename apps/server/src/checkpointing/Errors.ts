@@ -2,6 +2,9 @@ import { Schema } from "effect";
 import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 import { GitCommandError } from "../git/Errors.ts";
 
+/**
+ * CheckpointUnavailableError - Expected checkpoint does not exist.
+ */
 export class CheckpointUnavailableError extends Schema.TaggedErrorClass<CheckpointUnavailableError>()(
   "CheckpointUnavailableError",
   {
@@ -16,6 +19,9 @@ export class CheckpointUnavailableError extends Schema.TaggedErrorClass<Checkpoi
   }
 }
 
+/**
+ * CheckpointInvariantError - Inconsistent provider/filesystem/catalog state.
+ */
 export class CheckpointInvariantError extends Schema.TaggedErrorClass<CheckpointInvariantError>()(
   "CheckpointInvariantError",
   {

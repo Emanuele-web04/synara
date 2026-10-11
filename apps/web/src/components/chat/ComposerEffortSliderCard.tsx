@@ -16,6 +16,7 @@ import { ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ProviderOptions } from "../../providerModelOptions";
 import { Slider } from "../ui/slider";
+import type { FastModeNotice } from "~/lib/fastModeState";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   getComposerTraitSelection,
@@ -36,12 +37,16 @@ type ComposerEffortSliderCardProps = {
   modelOptions: ProviderOptions | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  fastModeNotice?: FastModeNotice | null | undefined;
 };
 
 const CARD_ICON_BUTTON_CLASS_NAME =
   "flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]/60 disabled:pointer-events-none disabled:opacity-35";
 
-// every level the model exposes is one stop including prompt-injected ones (Ultrathink); changes commit immediately, menu stays open
+// Effort ladder as a stepped slider. Every level the model exposes is one stop
+// (including prompt-injected ones such as Ultrathink), so the ladder matches the
+// radio menu exactly; changes commit immediately and keep the menu open so the label
+// and thumb update in place.
 export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   const { provider, threadId, model, modelOptions, prompt, onPromptChange } = props;
   const selection = getComposerTraitSelection(
@@ -101,6 +106,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
           <FastModeToggle
             tone="accent"
             enabled={fastModeEnabled}
+            notice={props.fastModeNotice}
             onToggle={() => commitTrait({ fastMode: !fastModeEnabled })}
           />
         ) : (

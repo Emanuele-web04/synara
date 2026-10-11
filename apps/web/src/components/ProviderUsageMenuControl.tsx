@@ -1,3 +1,6 @@
+// FILE: ProviderUsageMenuControl.tsx
+// Purpose: Shared provider-usage chip/menu used in the chat header and Environment panel.
+
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceId,
@@ -62,7 +65,8 @@ export function buildProviderUsageMenuModel(input: {
   };
 }
 
-// module-level: the selector memoizes on store slices — recreating it per render would defeat the memo and rebuild every thread on each streaming flush
+// Module-level: the selector memoizes on store slices, so recreating it per render would
+// defeat the memo and rebuild every thread on each streaming flush.
 const selectAccountRateLimitThreads = createAccountRateLimitThreadsSelector();
 
 function providerUsageEmptyMessage(

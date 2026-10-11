@@ -188,7 +188,7 @@ export function makeServerRuntimeServicesLayer(
     ),
     DeviceServiceLive,
   );
-  // shares the single memoized TerminalManager with the top-level TerminalLayerLive
+  // Shares the single memoized TerminalManager with the top-level TerminalLayerLive.
   const devServerManagerLayer = DevServerManagerLive.pipe(Layer.provide(TerminalLayerLive));
   const sessionCredentialLayer = SessionCredentialServiceLive.pipe(
     Layer.provide(ServerSecretStoreLive),
@@ -242,6 +242,8 @@ export function makeServerRuntimeServicesLayer(
       Layer.mergeAll(
         ProjectionThreadMessageRepositoryLive,
         OrchestrationCommandReceiptRepositoryLive,
+        // The same instance the todo.* RPCs use, so a to-do an agent adds reaches open windows.
+        todoServiceLayer,
       ),
     ),
     Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
@@ -261,7 +263,8 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(BrowserAutomationHostLive),
-    // the gateway exposes device_* tools only where a backend can exist but resolves the service on every platform to make that decision
+    // The gateway exposes device_* tools only where a backend can exist, but it
+    // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
     Layer.provideMerge(ComputerServiceLive),
   );
@@ -334,13 +337,19 @@ export function makeServerRuntimeServicesLayer(
   ).pipe(Layer.provideMerge(serverSettingsLayer), Layer.provideMerge(NodeServices.layer));
 }
 
-/** provider adapters issue tokens from this registry and the HTTP gateway verifies them — constructing independently would break scoped MCP */
+/**
+ * Compose the two top-level server graphs around one credential layer. Provider
+ * adapters issue tokens from this registry and the HTTP gateway verifies those
+ * same tokens, so constructing them independently would break scoped MCP.
+ */
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
   const runtimeServicesLayer = makeServerRuntimeServicesLayer({
     agentGatewayCredentialsLayer,
   });
-  // provider start/discovery gates must observe the same settings instance as the RPC layer — reusing this layer lets Effect memoize one ServerSettings service
+  // Provider start/discovery gates must observe the same settings instance as
+  // the RPC layer. Reusing this layer in the final graph lets Effect memoize a
+  // single ServerSettings service instead of capturing private defaults.
   const providerLayer = makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
     Layer.provideMerge(ServerSettingsLive),
   );

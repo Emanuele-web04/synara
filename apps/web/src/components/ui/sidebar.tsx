@@ -118,6 +118,8 @@ function SidebarProvider({
   const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
 
+  // This is the internal state of the sidebar.
+  // We use openProp and setOpenProp for control from outside the component.
   const [_open, _setOpen] = React.useState(defaultOpen);
   const open = openProp ?? _open;
   const setOpen = React.useCallback(
@@ -132,10 +134,13 @@ function SidebarProvider({
     [setOpenProp, open],
   );
 
+  // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
     return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open);
   }, [isMobile, setOpen]);
 
+  // We add a state so that we can do data-state="expanded" or "collapsed".
+  // This makes it easier to style the sidebar with Tailwind classes.
   const state = open ? "expanded" : "collapsed";
 
   const contextValue = React.useMemo<SidebarContextProps>(
@@ -174,7 +179,9 @@ function SidebarProvider({
   );
 }
 
-// resolves resizable options into concrete bounds, or null when resizing is unavailable — shared by Sidebar and the detached content-seam rail so both agree
+// Resolves user-facing resizable options into concrete bounds, or null when resizing
+// is unavailable (mobile / non-collapsible / disabled). Shared by Sidebar and the
+// detached content-seam rail so both agree on identical resize behavior.
 function resolveSidebarResizable(
   resizable: boolean | SidebarResizableOptions,
   { collapsible, isMobile }: { collapsible: "offcanvas" | "icon" | "none"; isMobile: boolean },
@@ -192,7 +199,11 @@ function resolveSidebarResizable(
   };
 }
 
-// supplies per-instance context to a SidebarRail rendered OUTSIDE its <Sidebar> (the content-seam rail must stack above the chat card); provide the SAME resizable/side as the matching <Sidebar>
+// Supplies the per-instance sidebar context (side + resolved resize options) to a
+// SidebarRail rendered OUTSIDE its <Sidebar> — e.g. the content-seam rail, which must
+// stack above the chat card. Without this the detached rail has no resize config and
+// silently degrades to toggle-only (the "can't drag" regression). Provide the SAME
+// `resizable`/`side` here as on the matching <Sidebar>. Must be used inside a SidebarProvider.
 function SidebarInstanceProvider({
   side,
   resizable,
@@ -340,6 +351,7 @@ function Sidebar({
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
               : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",
+            // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
               : cn(
@@ -398,7 +410,11 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
   );
 }
 
-// companion trigger for when the in-sidebar one is off-canvas; traffic-light clearance is owned solely by the host header's gutter — no offset of its own
+// Desktop headers lose access to the in-sidebar trigger after an off-canvas close,
+// so this companion control reuses the same trigger and only appears when hidden.
+// Traffic-light clearance is owned solely by the host header's
+// DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS gutter — this control adds no offset of
+// its own, so the toggle sits at the same x whether the sidebar is open or closed.
 function SidebarHeaderTrigger({
   className,
   onClick,
@@ -710,7 +726,8 @@ function SidebarInset({
   return (
     <main
       className={cn(
-        // keep caller layout classes on the outer shell so route-level height/overflow constraints still apply after the inner-surface refactor
+        // Keep caller layout classes on the outer shell so route-level height and
+        // overflow constraints still apply after the inner-surface refactor.
         "relative flex min-h-0 min-w-0 w-full flex-1 flex-col bg-transparent",
         "md:peer-data-[variant=sidebar]:peer-data-[side=left]:peer-data-[state=expanded]:-ms-[var(--sidebar-width)]",
         "md:peer-data-[variant=sidebar]:peer-data-[side=left]:peer-data-[state=expanded]:w-[calc(100%+var(--sidebar-width))]",
@@ -913,7 +930,9 @@ function SidebarMenuButton({
   tooltip?: string | React.ComponentProps<typeof TooltipPopup>;
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
   const isActive = isActiveProp ?? false;
-  // cva VariantProps admit explicit `null` ("use defaultVariants") — only `undefined` may fall back here, so `??` would not preserve behavior
+  // `variant`/`size` come from cva's VariantProps, whose types admit an explicit
+  // `null` (meaning "use the cva defaultVariants"). Only `undefined` may fall back
+  // here, so `??` would not preserve behavior.
   const variant = variantProp === undefined ? "default" : variantProp;
   const size = sizeProp === undefined ? "default" : sizeProp;
   const { isMobile, state } = useSidebar();
@@ -984,7 +1003,8 @@ function SidebarMenuSkeleton({
   showIcon?: boolean;
 }) {
   const showIcon = showIconProp ?? false;
-  // random width chosen once per mount so the bar doesn't jitter (lazy init keeps the impure call out of render)
+  // Random width between 50 to 90%, chosen once per mount so the bar doesn't
+  // jitter on re-renders (lazy state init keeps the impure call out of render).
   const [width] = React.useState(() => `${Math.floor(Math.random() * 40) + 50}%`);
 
   return (

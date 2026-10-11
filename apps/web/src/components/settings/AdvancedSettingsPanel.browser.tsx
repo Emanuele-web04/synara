@@ -1,3 +1,7 @@
+// FILE: AdvancedSettingsPanel.browser.tsx
+// Purpose: Browser characterization for advanced-settings ownership and disclosure behavior.
+// Layer: Browser UI test
+
 import "../../index.css";
 
 import { page } from "vitest/browser";

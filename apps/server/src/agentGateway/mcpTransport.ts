@@ -397,7 +397,10 @@ export function makeAgentGatewayMcpTransport(input: {
       const responseSlots: McpResponseSlot[] = [];
       const cancellationRequestIds: Array<string | number> = [];
 
-      // start every request before awaiting any — a cancellation notification in the same batch can then see its target even when it appears first
+      // Start every request before awaiting any of them. Apart from avoiding
+      // head-of-line blocking for ordinary batches, this guarantees that a
+      // cancellation notification in the same batch can see its target even
+      // when the notification appears first.
       for (const parsed of parsedMessages) {
         switch (parsed.kind) {
           case "request": {
@@ -427,7 +430,9 @@ export function makeAgentGatewayMcpTransport(input: {
                 cancellationRequested = true;
                 if (!requestStarted) return Promise.resolve();
                 return new Promise<void>((resolve) => {
-                  // don't interrupt re-entrantly while an async Effect is still installing its AbortController finalizer
+                  // Avoid interrupting re-entrantly while an async Effect is
+                  // still installing its AbortController finalizer. The fiber
+                  // observer is the cleanup barrier returned to Stop.
                   queueMicrotask(() => {
                     if (fiber.pollUnsafe() !== undefined) {
                       resolve();
@@ -440,7 +445,9 @@ export function makeAgentGatewayMcpTransport(input: {
               },
             });
             if (cancellationRequested) {
-              // a terminal-turn tombstone cancelled this during registration — still fenced behind `registered`, so a direct interrupt is safe
+              // A terminal-turn tombstone cancelled this request during
+              // registration. The handler is still fenced behind `registered`,
+              // so a direct interruption is safe and no browser work can start.
               fiber.interruptUnsafe();
             } else {
               requestStarted = true;

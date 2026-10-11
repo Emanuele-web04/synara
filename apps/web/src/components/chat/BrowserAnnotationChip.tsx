@@ -1,3 +1,6 @@
+// FILE: BrowserAnnotationChip.tsx
+// Purpose: Render one compact browser DOM annotation consistently in the composer and transcript.
+
 import { type ComponentPropsWithoutRef } from "react";
 
 import type { BrowserAnnotationDraft } from "~/lib/browserAnnotations";

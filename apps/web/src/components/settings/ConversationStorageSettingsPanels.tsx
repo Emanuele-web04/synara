@@ -1,3 +1,8 @@
+// FILE: ConversationStorageSettingsPanels.tsx
+// Purpose: Own settings panels for managed worktrees and archived conversations.
+// Layer: Settings UI components
+// Exports: WorktreesSettingsPanel, ArchivedSettingsPanel
+
 import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
@@ -256,7 +261,9 @@ export function ArchivedSettingsPanel({ active }: { readonly active: boolean }) 
   const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
   const projects = useStore((store) => store.projects);
   const archivedGroups = useMemo(() => {
-    // a child whose parent is still active/missing is also a root and must stay visible so legacy retention state can be recovered
+    // Represent each archived subtree once. Normally that is a top-level thread;
+    // a child whose parent is still active/missing is also a root and must remain
+    // visible so legacy retention state can be recovered.
     const archivedThreadIds = new Set(
       threadShells.filter((thread) => thread.archivedAt != null).map((thread) => thread.id),
     );

@@ -257,7 +257,7 @@ describe("ServerSettingsService", () => {
       }),
     );
 
-    // the rest of the settings and the OpenCode-compatible model survive
+    // The rest of the settings and the OpenCode-compatible model survive.
     expect(result.settingsFileExists).toBe(true);
     expect(result.settings.enableProviderUpdateChecks).toBe(false);
     expect(result.settings.textGenerationModelSelection).toMatchObject({

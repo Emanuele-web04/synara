@@ -2,7 +2,7 @@ import type { Readable } from "node:stream";
 
 import { Deferred, Effect } from "effect";
 
-/** consume the desktop-only marker before provider children can inherit it */
+/** Consume the desktop-only marker before provider children can inherit it. */
 export function consumeDesktopParentInput(
   env: NodeJS.ProcessEnv,
   input: () => Readable,
@@ -12,7 +12,7 @@ export function consumeDesktopParentInput(
   return enabled ? input() : undefined;
 }
 
-/** the desktop holds stdin open for exactly its own lifetime, including crashes */
+/** The desktop holds stdin open for exactly its own lifetime, including crashes. */
 export function withDesktopParentLifetime<A, E, R>(
   program: Effect.Effect<A, E, R>,
   input: Readable | undefined,
@@ -30,7 +30,8 @@ export function withDesktopParentLifetime<A, E, R>(
           if (ownerLost) return;
           ownerLost = true;
           Deferred.doneUnsafe(disconnected, Effect.void);
-          // the desktop's shutdown watchdog is gone — bound hung runtime finalizers without touching another process or bypassing its lock
+          // The desktop's usual shutdown watchdog is gone. Bound hung runtime
+          // finalizers without touching another process or bypassing its lock.
           shutdownTimer = setTimeout(() => {
             process.stderr.write("Desktop owner lost: backend shutdown timed out.\n");
             process.exit(1);
@@ -54,7 +55,7 @@ export function withDesktopParentLifetime<A, E, R>(
         }),
     );
 
-    // install the watcher before startup acquires the database or any children
+    // Install the watcher before startup acquires the database or any children.
     if (ownerLost) return;
     return yield* Effect.raceFirst(
       program,

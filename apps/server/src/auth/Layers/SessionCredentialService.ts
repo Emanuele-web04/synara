@@ -123,7 +123,9 @@ export const makeSessionCredentialService = Effect.gen(function* () {
   const authSessions = yield* AuthSessionRepository;
   const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
   const activeConnectionsRef = yield* Ref.make<ActiveConnections>(new Map());
-  // tickets are an in-memory allowlist, not bearer claims — a restart intentionally invalidates every outstanding ticket
+  // Tickets are an in-memory allowlist, not merely signed bearer claims. A restart
+  // intentionally invalidates every outstanding ticket, so an old signed value
+  // cannot become replayable when the process-local consumption ledger is lost.
   const outstandingWebSocketTicketsRef = yield* Ref.make<OutstandingWebSocketTickets>(new Map());
   const activeConnectionsSemaphore = yield* Semaphore.make(1);
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();

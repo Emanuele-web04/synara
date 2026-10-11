@@ -42,6 +42,7 @@ describe("host-authored Betterwright locators", () => {
     const selector = '\"); globalThis.injected = true; //\\\n';
     const call = vi.fn();
     const context = { page: { locator: call }, injected: false };
+    // Bypass input validation deliberately to exercise the code-generation boundary.
     runInNewContext(betterwrightLocator({ selector } as BrowserUploadTarget), context);
     expect(context.injected).toBe(false);
     expect(call).toHaveBeenCalledExactlyOnceWith(selector);

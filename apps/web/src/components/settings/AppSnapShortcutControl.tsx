@@ -1,3 +1,6 @@
+// FILE: AppSnapShortcutControl.tsx
+// Purpose: Record, validate, and save AppSnap's global two-key shortcut.
+
 import {
   type DesktopAppSnapKeyChord,
   type DesktopAppSnapShortcut,
@@ -68,7 +71,8 @@ export function AppSnapShortcutControl({
     availability: null,
   });
   const checkIdRef = useRef(0);
-  // consecutive keydowns can arrive before React re-renders — the render-time capture state may lag one event behind
+  // Source of truth for held modifiers: consecutive keydowns can arrive before
+  // React re-renders, so the render-time capture state may lag one event behind.
   const heldCodesRef = useRef<string[]>([]);
   const labels = appSnapShortcutLabels(candidate);
   const changed = !sameAppSnapShortcut(candidate, shortcut);
@@ -178,7 +182,8 @@ export function AppSnapShortcutControl({
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) return;
     const result = await bridge.setShortcut(nextShortcut);
-    // the manager adopts every well-formed shortcut — keep settings in sync even if availability regressed between check and save
+    // The manager adopts every well-formed shortcut, so keep settings in sync
+    // even if availability regressed between the check and the save.
     onSaved(nextShortcut, result.state);
     if (result.availability.available) {
       toastManager.add({

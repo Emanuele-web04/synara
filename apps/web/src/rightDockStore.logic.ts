@@ -21,6 +21,7 @@ const RIGHT_DOCK_PANE_KINDS = [
   "sidechat",
   "git",
   "pullRequest",
+  "subagents",
 ] as const;
 
 export type RightDockPaneKind = (typeof RIGHT_DOCK_PANE_KINDS)[number];
@@ -31,9 +32,12 @@ const RIGHT_DOCK_PANE_KIND_SET: ReadonlySet<string> = new Set(RIGHT_DOCK_PANE_KI
 export interface RightDockPane {
   id: string;
   kind: RightDockPaneKind;
+  // sidechat panes point at the embedded thread.
   threadId: ThreadId | null;
+  // diff panes remember which turn/file they were opened on.
   diffTurnId: TurnId | null;
   diffFilePath: string | null;
+  // file panes preview one workspace-relative file.
   filePath: string | null;
   pullRequestProjectId: ProjectId | null;
   pullRequestRepository: string | null;
@@ -80,7 +84,10 @@ export function isRightDockPaneKind(value: unknown): value is RightDockPaneKind 
   return typeof value === "string" && RIGHT_DOCK_PANE_KIND_SET.has(value);
 }
 
-// persisted state predates the current pane-kind union — drop unknown kinds and keep the active tab on a surviving pane
+// Persisted dock state predates the current pane-kind union, so a stale entry
+// (e.g. a kind that was renamed or removed) can crash the dock during render.
+// Drop any pane we no longer understand and keep the active tab pointing at a
+// surviving pane.
 function sanitizePersistedPane(value: unknown): RightDockPane | null {
   if (!isPlainObject(value)) {
     return null;
@@ -189,7 +196,9 @@ function createPane(input: OpenPaneInput): RightDockPane {
   };
 }
 
-// only overwrite content metadata when the caller targets new content — a bare re-open keeps the pane focused on what it shows
+// Payload to merge into an existing singleton pane when re-opening it. Only
+// overwrite content metadata when the caller explicitly targets new content,
+// so a bare re-open/toggle keeps the pane focused on what it currently shows.
 function singletonPaneReopenPatch(input: OpenPaneInput): Partial<RightDockPane> | null {
   if (input.kind === "sidechat" && input.threadId !== undefined) {
     return { threadId: input.threadId ?? null };
@@ -217,7 +226,8 @@ function singletonPaneReopenPatch(input: OpenPaneInput): Partial<RightDockPane> 
   return null;
 }
 
-// Multi-instance file panes reuse an existing pane when it already shows the requested path, so re-clicking a file focuses its tab instead of duplicating it.
+// Multi-instance file panes reuse an existing pane when it already shows the
+// requested path, so re-clicking a file focuses its tab instead of duplicating it.
 function findMatchingMultiInstancePane(
   state: RightDockThreadState,
   input: OpenPaneInput,
@@ -236,6 +246,9 @@ function findSingletonPane(
   return state.panes.find((pane) => pane.kind === kind);
 }
 
+// Opens (or focuses) a pane and makes the dock visible. Singleton kinds reuse
+// the existing pane and merge diff metadata; multi-instance kinds add a new
+// pane unless one already shows the same content (thread / file).
 export function openPaneInState(
   state: RightDockThreadState,
   input: OpenPaneInput,
@@ -292,7 +305,8 @@ export function closePaneInState(
     paneId,
   );
   return {
-    // An open dock with no panes is the launcher state. Closing the final tab returns to that launcher instead of collapsing the entire dock.
+    // An open dock with no panes is the launcher state. Closing the final tab
+    // returns to that launcher instead of collapsing the entire dock.
     open: state.open,
     panes: nextPanes,
     activePaneId: nextActiveId,
@@ -423,7 +437,9 @@ export function findMissingSidechatPaneIds(
   );
 }
 
-// an active sidechat embeds a full chat and needs a detail lease like a split pane; unrendered docks stay out of the live-stream budget
+// An active sidechat embeds a full chat, so it needs a detail lease just like a
+// split-view pane. Persisted inactive or currently unrendered docks stay out of
+// the scarce live-stream budget.
 export function resolveVisibleDockSidechatThreadIds(input: {
   dockRendered: boolean;
   dockStateByThreadId: Record<string, RightDockThreadState | undefined>;

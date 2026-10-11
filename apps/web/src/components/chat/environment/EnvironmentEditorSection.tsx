@@ -1,3 +1,10 @@
+// FILE: EnvironmentEditorSection.tsx
+// Purpose: "Editor" section of the Environment panel — the in-app Editor view as the
+//          default first row, followed by the "Open in <editor>" external-launcher picker
+//          (same skin as Commit and Push / env pickers). The menu lists every installed
+//          editor (same entries as the header OpenInPicker).
+// Layer: Environment panel section
+
 import type { EditorId, ResolvedKeybindingsConfig } from "@synara/contracts";
 
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
@@ -39,7 +46,8 @@ export function EnvironmentEditorSection({
     openInTarget,
   });
 
-  // render whenever at least one entry exists — in-app editor view, external editor, or both
+  // Render the section whenever there is at least one entry to show — the in-app
+  // editor view, an external editor, or both.
   if (options.length === 0 && !onOpenEditorView) {
     return null;
   }

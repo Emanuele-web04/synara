@@ -1,3 +1,6 @@
+// FILE: runEnvelope.ts
+// Purpose: Builds the single canonical synthetic message sent to automation runs.
+
 import type { AutomationDefinition, AutomationRun } from "@synara/contracts";
 import { automationContinuesThread, automationOwnsItsThread } from "@synara/shared/automationMode";
 
@@ -24,12 +27,14 @@ function iterationLabel(definition: AutomationDefinition, run: AutomationRun): s
   return `${iteration}/${definition.maxIterations ?? "∞"}`;
 }
 
-// every mode may retire its own automation — run-scoped auth in synara_cancel_automation covers standalone runs
+// Every mode may retire its own automation: the run-scoped authorization in
+// synara_cancel_automation covers standalone runs, whose per-run thread owns nothing else.
 const SELF_CANCEL_INSTRUCTION =
   "You may call synara_cancel_automation on this automation when it is no longer needed.";
 
 function reportingInstructions(mode: AutomationDefinition["mode"]): string {
-  // a run continuing a thread reports only what the user still needs; a run with its own thread reports fully
+  // A run that continues a thread leaves its work visible in that thread, so it reports
+  // only what the user still needs to see. A run with a thread to itself reports fully.
   if (automationContinuesThread(mode)) {
     return [
       "Before finishing, call synara_report_automation_result.",

@@ -1,3 +1,7 @@
+// FILE: EnvironmentNotesSection.browser.tsx
+// Purpose: Browser-level regression tests for the Environment panel notes autosave lifecycle.
+// Layer: Vitest browser tests
+
 import "../../../index.css";
 
 import { ThreadId } from "@synara/contracts";

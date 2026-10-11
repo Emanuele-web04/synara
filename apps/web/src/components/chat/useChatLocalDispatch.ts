@@ -186,7 +186,9 @@ export function useChatLocalDispatch({
     setLocalDispatch(null);
   }, [setLocalDispatch]);
 
-  // clears only the setup stepper: after "Work locally" the send continues (Thinking shimmer takes over) while the card animates out
+  // Clears only the setup stepper from the dispatch marker: after "Work
+  // locally" the send continues (composer stays busy, Thinking shimmer takes
+  // over) but the worktree card animates out.
   const clearLocalDispatchWorktreeSetup = useCallback(() => {
     setLocalDispatch((current) =>
       current?.worktreeSetup ? { ...current, worktreeSetup: null } : current,
@@ -239,7 +241,8 @@ export function useChatLocalDispatch({
     [threadId, setLocalDispatch],
   );
 
-  // fallback cleanup for a failed worktree setup; clears after the error hold unless a newer dispatch replaced it
+  // Fallback cleanup for a failed worktree setup: clears the dispatch after the
+  // error hold unless a newer dispatch already replaced it.
   const scheduleFailedWorktreeSetupDispatchReset = useCallback(() => {
     const failedDispatchStartedAt =
       useThreadDispatchStore.getState().threads[threadId]?.localDispatch?.startedAt;
@@ -263,7 +266,9 @@ export function useChatLocalDispatch({
     if (!turnTakenOver) {
       return;
     }
-    // a failed worktree setup would reset in the same commit that painted the error, so hold the row briefly before animating out
+    // A failed worktree setup would otherwise reset in the same commit that
+    // painted the error (thread errors count as takeover), so hold the
+    // row briefly before letting it animate out.
     if (localDispatchWorktreeSetupFailed) {
       const failedDispatchStartedAt = localDispatch?.startedAt;
       if (!failedDispatchStartedAt) {
@@ -292,7 +297,8 @@ export function useChatLocalDispatch({
     turnTakenOver,
   ]);
 
-  // fail-open: if takeover never arrives, clear the awaiting-turn bridge so Thinking can't stick forever; skipped during worktree setup
+  // Fail-open: if takeover never arrives, clear the awaiting-turn bridge so
+  // Thinking cannot stick forever. Skipped while worktree setup is active.
   useEffect(() => {
     if (!localDispatch || turnTakenOver || localDispatch.worktreeSetup) {
       return;

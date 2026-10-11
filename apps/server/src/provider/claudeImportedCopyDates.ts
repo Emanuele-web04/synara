@@ -7,6 +7,7 @@ import {
   readClaudeImportMessageDates,
 } from "./claudeProjectImport.ts";
 
+/** Restore original message dates only inside a newly created native copy. */
 export async function restoreClaudeImportedCopyDates(input: {
   readonly sourceSessionId: string;
   readonly copiedSessionId: string;
@@ -16,14 +17,16 @@ export async function restoreClaudeImportedCopyDates(input: {
   if (input.copiedSessionId === input.sourceSessionId) {
     throw new Error("The native Claude copy must have a different session ID.");
   }
-  // SDK SessionMessage doesn't declare timestamps — read persisted dates only for the selected source
+  // SDK SessionMessage does not declare timestamps. Read persisted dates only
+  // for the selected source and retain the SDK-selected frozen message chain.
   const sourceDates = await readClaudeImportMessageDates({
     sessionId: input.sourceSessionId,
     ...(input.configDir ? { configDir: input.configDir } : {}),
   });
   const dates = new Map<string, string>();
   for (const message of input.sourceMessages) {
-    // Some SDK versions expose a timestamp beyond the public SessionMessage declaration. Never substitute the time of import.
+    // Some SDK versions expose a timestamp beyond the public SessionMessage
+    // declaration. Never substitute the time of import.
     const timestamp =
       sourceDates.get(message.uuid) ??
       (message as SessionMessage & { timestamp?: unknown }).timestamp;

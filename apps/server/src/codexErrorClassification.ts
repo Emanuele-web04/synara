@@ -1,4 +1,8 @@
-/** startup failed before a turn could be sent, and process cleanup completed */
+// FILE: codexErrorClassification.ts
+// Purpose: Centralizes Codex runtime error classification shared across manager and adapter layers.
+// Exports: startup failure evidence and helpers for non-fatal Codex error messages
+
+/** Startup failed before a turn could be sent, and process cleanup completed. */
 export class CodexSessionStartError extends Error {
   override readonly name = "CodexSessionStartError";
 }

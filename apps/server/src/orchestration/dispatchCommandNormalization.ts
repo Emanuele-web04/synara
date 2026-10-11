@@ -12,7 +12,13 @@ import { slugifyGroupTitle } from "../groupWorkspaceScaffold";
 
 export interface DispatchCommandNormalizerResult<E> {
   readonly command: OrchestrationCommand;
-  /** callers must run this only after the decider accepted the command — a rejected dispatch never mutates the filesystem */
+  /**
+   * Deferred workspace-root scaffolding decided during normalization but NOT yet executed.
+   * Callers must run this only after the normalized command has been successfully accepted
+   * by the orchestration decider (e.g. after `orchestrationEngine.dispatch` resolves), so a
+   * rejected dispatch (for example a cross-kind workspace-root ownership conflict) never
+   * mutates the filesystem.
+   */
   readonly prepareWorkspaceRoot: Effect.Effect<void, E> | null;
 }
 
@@ -40,7 +46,14 @@ export interface DispatchCommandNormalizerOptions<E> {
   readonly prepareGroupWorkspaceRoot?: (workspaceRoot: string) => Effect.Effect<void, E>;
 }
 
-// scaffolding (idempotent mkdir) can transiently fail on a flaky fs; running AFTER acceptance means one failure would permanently strand the project row — chat roots have no other re-run site, so retry bounded with backoff
+// Deferred workspace-root scaffolding (mkdir of managed subdirectories like Inbox/Outbox/
+// work/outputs) can transiently fail on a flaky filesystem even though the underlying
+// operation is safe to retry (it's idempotent recursive directory creation). Since this runs
+// AFTER the orchestration decider has already accepted the dispatch (see wsRpc), a single
+// transient failure here would otherwise permanently strand the project row without its
+// managed subdirectories — Studio self-heals via studio.listThreadOutputs, but per-thread CHAT
+// workspace roots have no other re-run site. Retry a bounded number of times with a short
+// backoff before letting the failure surface to the caller.
 const WORKSPACE_ROOT_PREPARE_RETRY_SCHEDULE = Schedule.exponential("100 millis").pipe(
   Schedule.take(2),
 );
@@ -193,7 +206,10 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       prepareWhenEqualToRoot: false,
     });
 
-  // the decision logic is evaluated eagerly here (pure, side-effect-free) but the `prepare` effect is only constructed, never run until the caller executes it
+  // Combines the chat + studio scaffolding decisions into a single deferred effect. The
+  // decision logic (kinds, prepareWhenEqualToRoot, isWorkspaceRootWithin/workspaceRootsEqual)
+  // is evaluated eagerly here (it's pure and side-effect-free), but the resulting `prepare`
+  // effect is only *constructed*, never run, until the caller explicitly executes it.
   const deferredPrepareWorkspaceRoot = (
     command: Extract<
       ClientOrchestrationCommand,
@@ -300,7 +316,9 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
             };
           }
 
-          // binary attachment metadata resolves from the durable ledger immediately before the atomic event/receipt claim — client metadata is never authoritative
+          // Binary attachment metadata is resolved from the durable managed
+          // attachment ledger by OrchestrationEngine immediately before its
+          // atomic event/receipt claim. Client metadata is never authoritative.
           return attachment;
         }),
       { concurrency: 1 },

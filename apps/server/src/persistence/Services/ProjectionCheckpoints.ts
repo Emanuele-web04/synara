@@ -1,3 +1,11 @@
+/**
+ * ProjectionCheckpointRepository - Projection repository interface for checkpoints.
+ *
+ * Owns persistence operations for projected checkpoint summaries in thread
+ * timelines.
+ *
+ * @module ProjectionCheckpointRepository
+ */
 import {
   CheckpointRef,
   IsoDateTime,
@@ -36,17 +44,30 @@ export const GetByThreadAndTurnCountInput = Schema.Struct({
 });
 export type GetByThreadAndTurnCountInput = typeof GetByThreadAndTurnCountInput.Type;
 
+/**
+ * ProjectionCheckpointRepositoryShape - Service API for projected checkpoints.
+ */
 export interface ProjectionCheckpointRepositoryShape {
-  /** ascending checkpoint turn-count order */
+  /**
+   * List projected checkpoints for a thread.
+   *
+   * Returned in ascending checkpoint turn-count order.
+   */
   readonly listByThreadId: (
     input: ListByThreadIdInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionCheckpoint>, ProjectionRepositoryError>;
 
+  /**
+   * Read a projected checkpoint by thread and turn-count key.
+   */
   readonly getByThreadAndTurnCount: (
     input: GetByThreadAndTurnCountInput,
   ) => Effect.Effect<Option.Option<ProjectionCheckpoint>, ProjectionRepositoryError>;
 }
 
+/**
+ * ProjectionCheckpointRepository - Service tag for checkpoint projection persistence.
+ */
 export class ProjectionCheckpointRepository extends ServiceMap.Service<
   ProjectionCheckpointRepository,
   ProjectionCheckpointRepositoryShape

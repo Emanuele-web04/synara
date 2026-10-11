@@ -96,7 +96,8 @@ describe("inspectSubprocessActivity", () => {
   });
 
   it("inspects multiple terminals against one shared snapshot", () => {
-    // a single captured snapshot must yield independent correct results per terminal — the property per-cycle batching relies on
+    // A single captured snapshot must yield independent, correct results per
+    // terminal — this is the property the per-cycle batching relies on.
     const map = buildChildrenMap([
       { ppid: 100, pid: 200, command: "codex" },
       { ppid: 400, pid: 500, command: "zsh" },

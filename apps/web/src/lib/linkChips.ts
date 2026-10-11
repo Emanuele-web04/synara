@@ -1,3 +1,10 @@
+// FILE: linkChips.ts
+// Purpose: Single source of truth for turning URLs/domains into inline link
+//          chips — normalizing bare domains, GitHub-aware shortening, the icon
+//          variant (github vs favicon), and opening links externally. Shared by
+//          the composer Lexical link node and read-only message chips.
+// Layer: UI utilities
+
 import { readNativeApi } from "~/nativeApi";
 
 const LINK_BODY_SOURCE = String.raw`[^\s<>()\[\]]+`;
@@ -49,6 +56,7 @@ const COMMON_FILE_EXTENSION_TLDS = new Set([
  *  terminate the match so prose like `(see example.com)` keeps wrappers as text. */
 export const LINK_TOKEN_SOURCE = String.raw`(?:https?:\/\/${LINK_BODY_SOURCE}|${BARE_DOMAIN_SOURCE})`;
 
+// Trailing sentence punctuation that should not be swallowed into the URL.
 const TRAILING_PUNCTUATION_REGEX = /[.,;:!?'"]+$/;
 
 /** Trims trailing sentence punctuation so `https://x.com.` becomes `https://x.com`. */
@@ -111,7 +119,9 @@ export function parseBareComposerLink(text: string): string | null {
 }
 
 export interface LinkChipDescriptor {
+  /** Display label: shortened GitHub reference, or the de-schemed URL. */
   label: string;
+  /** Whether to show the GitHub mark (true) or the globe icon (false). */
   isGitHub: boolean;
 }
 
@@ -119,7 +129,10 @@ function stripGitSuffix(repo: string): string {
   return repo.endsWith(".git") ? repo.slice(0, -4) : repo;
 }
 
-// shorten common GitHub shapes: pull/issue → owner/repo#155, commit → owner/repo@abc1234, repo → owner/repo, user → owner; anything else → null (plain globe link)
+// Shortens the common GitHub URL shapes into compact references:
+//   pull/issue → owner/repo#155, commit → owner/repo@abc1234,
+//   repo root  → owner/repo,      user/org → owner.
+// Any other GitHub path returns null so it renders as a plain globe link.
 function shortenGitHubLink(url: string): string | null {
   const parsed = parseUrlForLinkChip(url);
   if (!parsed) return null;
@@ -137,11 +150,13 @@ function shortenGitHubLink(url: string): string | null {
 
   const repo = parts[1] ? stripGitSuffix(parts[1]) : undefined;
   if (!repo) {
+    // github.com/owner → owner
     return owner;
   }
 
   const kind = parts[2];
   if (!kind) {
+    // github.com/owner/repo → owner/repo
     return `${owner}/${repo}`;
   }
 
@@ -157,6 +172,8 @@ function shortenGitHubLink(url: string): string | null {
   return null;
 }
 
+/** De-schemes a URL for a compact non-GitHub label (drops protocol, `www.`,
+ *  and any trailing slash). */
 function prettifyUrl(url: string): string {
   return url
     .replace(/^https?:\/\//i, "")
@@ -164,6 +181,7 @@ function prettifyUrl(url: string): string {
     .replace(/\/$/, "");
 }
 
+/** Describes how a URL should render as an inline chip. */
 export function describeLinkChip(url: string): LinkChipDescriptor {
   const shortened = shortenGitHubLink(url);
   if (shortened) {
@@ -172,6 +190,7 @@ export function describeLinkChip(url: string): LinkChipDescriptor {
   return { label: prettifyUrl(url), isGitHub: false };
 }
 
+/** Opens a URL in the user's external browser, falling back to a new tab. */
 export function openExternalLink(url: string): void {
   const href = normalizeComposerLinkUrl(url) ?? url;
   const api = readNativeApi();

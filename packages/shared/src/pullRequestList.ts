@@ -9,14 +9,15 @@ type ProjectAwarePullRequestEntry = Pick<
   readonly projectContexts?: ReadonlyArray<PullRequestProjectContext> | undefined;
 };
 
-/** a PR belongs to a GitHub repository, not to each local project/worktree that has it checked out */
+/** Remote identity for a pull request. A PR belongs to a GitHub repository, not to each local
+ * project or worktree that happens to have that repository checked out. */
 export function pullRequestListRepositoryIdentity(
   entry: Pick<PullRequestListEntry, "repository" | "number">,
 ): string {
   return `${entry.repository.trim().toLowerCase()}#${entry.number}`;
 }
 
-/** project associations for a repository-level row, with a legacy fallback for older payloads */
+/** Project associations for a repository-level row, with a legacy fallback for older payloads. */
 export function pullRequestListProjectContexts(
   entry: ProjectAwarePullRequestEntry,
 ): PullRequestProjectContext[] {
@@ -128,7 +129,7 @@ export function coalescePullRequestListEntries<T extends CoalescibleListEntry>(
   });
 }
 
-/** update one project-owned pin without changing the row's selected context */
+/** Update one project-owned pin inside an aggregate row without changing its selected context. */
 export function updatePullRequestListEntryProjectPin<T extends ProjectAwarePullRequestEntry>(
   entry: T,
   projectId: ProjectId,

@@ -1,4 +1,19 @@
 #!/usr/bin/env node
+/**
+ * check-external-links.mjs
+ *
+ * Walks every .mdx file under content/docs (plus src/data/product.ts and
+ * src/lib/seo.ts, which are included whenever they contain external URLs) and
+ * verifies every https:// URL with an HTTP GET:
+ *   - follows up to 5 redirects
+ *   - 15s timeout, UA "Mozilla/5.0"
+ *   - 200-399 => pass
+ *   - one retry on network errors / 429 / 5xx
+ *   - hard failures (404, 410, refused-after-retry, persistent 5xx/429) exit non-zero
+ *   - ALLOWLIST entries downgrade hard failures to warnings
+ *
+ * Concurrency is capped at 4. Designed to run in <2 minutes and be idempotent.
+ */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -9,7 +24,12 @@ const TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
 const CONCURRENCY = 4;
 
+/**
+ * Known-flaky-but-legit URLs. A URL listed here that hard-fails is reported as
+ * a warning instead of failing the run. Each entry needs a short comment.
+ */
 const ALLOWLIST = new Map([
+  // x.ai blocks / rate-limits non-browser agents; the install scripts are real.
   [
     "https://x.ai/cli/install.sh",
     "x.ai CLI install script (macOS/Linux); x.ai occasionally rate-limits bot agents",
@@ -18,10 +38,17 @@ const ALLOWLIST = new Map([
     "https://x.ai/cli/install.ps1",
     "x.ai CLI install script (Windows); x.ai occasionally rate-limits bot agents",
   ],
+  // x.com frequently returns 4xx/5xx to headless agents; the profile is real.
   ["https://x.com/emanueledpt", "X profile; x.com frequently throttles non-browser requests"],
+  // pi.dev is a small personal-project domain; transient outages are expected.
   ["https://pi.dev/install.sh", "pi.dev install script; small domain, transient flakiness seen"],
+  // youtube.com sometimes times out for non-browser agents; the channel is real.
   ["https://youtube.com/@emanueledpt", "YouTube channel; occasional ETIMEDOUT for headless agents"],
 ]);
+
+// ---------------------------------------------------------------------------
+// Collection
+// ---------------------------------------------------------------------------
 
 function walkMdx(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -35,6 +62,7 @@ function walkMdx(dir, out = []) {
 
 function collectFiles() {
   const files = walkMdx(join(ROOT, "content", "docs"));
+  // Only include src files when they actually contain external URLs.
   for (const rel of ["src/data/product.ts", "src/lib/seo.ts"]) {
     const full = join(ROOT, rel);
     if (!statSync(full, { throwIfNoEntry: false })) continue;
@@ -43,9 +71,12 @@ function collectFiles() {
   return files;
 }
 
+/** Strip markdown/trailing punctuation artifacts from a raw extracted URL. */
 function cleanUrl(raw) {
   let u = raw.trim();
+  // Trailing common punctuation that cannot belong to a URL path.
   u = u.replace(/[.,;:!?'"`]+$/, "");
+  // Strip trailing ')' only when it is unbalanced (markdown link closer).
   for (;;) {
     const opens = (u.match(/\(/g) || []).length;
     const closes = (u.match(/\)/g) || []).length;
@@ -57,7 +88,7 @@ function cleanUrl(raw) {
 }
 
 function extractUrls(text) {
-  const urls = new Map();
+  const urls = new Map(); // url -> Set(files)
   const re = /https?:\/\/[^\s<>"'`]+/g;
   let m;
   while ((m = re.exec(text)) !== null) {
@@ -70,6 +101,10 @@ function extractUrls(text) {
   }
   return urls;
 }
+
+// ---------------------------------------------------------------------------
+// Checking
+// ---------------------------------------------------------------------------
 
 async function fetchOnce(url) {
   let current = url;
@@ -90,11 +125,13 @@ async function fetchOnce(url) {
       }
       continue;
     }
+    // Drain body so the connection is reusable.
     await res.arrayBuffer().catch(() => {});
     return { status: res.status, finalUrl: current };
   }
 }
 
+/** Returns { status, finalUrl, error } — one retry on network errors, 429, 5xx. */
 async function checkUrl(url) {
   const attempts = [1, 2];
   for (const attempt of attempts) {
@@ -102,11 +139,11 @@ async function checkUrl(url) {
       const r = await fetchOnce(url);
       if (attempt === 1 && (r.status === 429 || r.status >= 500)) {
         await new Promise((res) => setTimeout(res, 750));
-        continue;
+        continue; // retry once
       }
       return r;
     } catch (err) {
-      if (attempt === 1) continue;
+      if (attempt === 1) continue; // network error -> retry once
       const code = err?.cause?.code || err?.code || "";
       return {
         status: "ERR",
@@ -122,14 +159,18 @@ function classify(r) {
   if (typeof r.status === "number") {
     if (r.status >= 200 && r.status <= 399) return "PASS";
     if (r.status === 404 || r.status === 410) return "HARD";
-    if (r.status === 429 || r.status >= 500) return "HARD";
-    return "WARN";
+    if (r.status === 429 || r.status >= 500) return "HARD"; // persistent after retry
+    return "WARN"; // 401/403/451/… site is up but denies bots
   }
-  return "HARD";
+  return "HARD"; // network error / refused after retry
 }
 
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
 const files = collectFiles();
-const urlMap = new Map();
+const urlMap = new Map(); // url -> Set(source files)
 for (const file of files) {
   const text = readFileSync(file, "utf8");
   for (const [url] of extractUrls(text)) {
@@ -150,6 +191,10 @@ async function worker() {
 }
 
 await Promise.all(Array.from({ length: Math.min(CONCURRENCY, urls.length) }, worker));
+
+// ---------------------------------------------------------------------------
+// Reporting
+// ---------------------------------------------------------------------------
 
 const rows = urls.map((url) => {
   const r = results.get(url);

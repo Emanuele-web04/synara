@@ -15,7 +15,10 @@ import { preserveActivePullRequestActionGitFields } from "./pullRequestGitCache"
 import { capturePullRequestActionReadFence } from "./pullRequestMutationCoordinator";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
-// freshness is primarily event-driven (turn lifecycle + file-change domain events); the periodic timers are only a safety net for out-of-band edits so they run relaxed
+// Freshness is driven primarily by event-based invalidation (turn lifecycle +
+// file-change domain events in __root.tsx) plus refetchOnWindowFocus/reconnect.
+// The periodic timers are only a safety net for out-of-band edits while the tab
+// stays focused, so they run at a relaxed cadence instead of every minute.
 const GIT_STATUS_REFETCH_INTERVAL_MS = 300_000;
 const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 300_000;
@@ -51,7 +54,8 @@ export const gitQueryKeys = {
     filePath === null
       ? (["git", "working-tree-diff", cwd, scope, compareRef] as const)
       : (["git", "working-tree-diff", cwd, scope, compareRef, "file", filePath] as const),
-  // nested under the patch key so every existing working-tree-diff invalidation refreshes the counts too
+  // Deliberately nested under the patch key so every existing
+  // `["git", "working-tree-diff", ...]` invalidation refreshes the counts too.
   workingTreeDiffStats: (
     cwd: string | null,
     scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
@@ -107,7 +111,9 @@ type GitRefreshDepth = "availability" | "active-details";
 interface ActiveGitRefresh {
   depth: GitRefreshDepth;
   started: boolean;
+  /** Resolves after the availability phase (repository/status/branches). */
   availability: Promise<void>;
+  /** Resolves after the full refresh, including active detail reads when requested. */
   promise: Promise<void>;
 }
 
@@ -148,7 +154,13 @@ function trackGitRefresh(
   return entry.promise;
 }
 
-// an in-flight fetch may have read the repo before the triggering change, so it's cancelled first — refetchQueries' cancelRefetch only cancels fetches on queries holding data; a cold query's initial fetch would be joined
+/**
+ * Refetches the matching active queries from scratch. A fetch already in flight may have
+ * read the repository before whatever change triggered this refresh (e.g. a checkout or
+ * pull that just settled), so reusing it would mark stale data fresh. It is cancelled
+ * explicitly first because refetchQueries' cancelRefetch only cancels fetches on queries
+ * that already hold data — a cold query's initial fetch would otherwise be joined.
+ */
 async function refetchFreshGitQueries(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
@@ -201,7 +213,8 @@ function activeGitDetailQueries(queryClient: QueryClient, cwd: string) {
       type: "active",
     }),
     ...queryCache.findAll({ queryKey: gitQueryKeys.pullRequest(cwd), type: "active" }),
-    // a mounted diff editor keeps showing a base blob, and an open blame popover its attribution, until refetched
+    // A mounted diff editor keeps showing a base blob, and an open blame
+    // popover its attribution, until refetched.
     ...queryCache.findAll({ queryKey: ["git", "file-at-rev", cwd] as const, type: "active" }),
     ...queryCache.findAll({ queryKey: ["git", "blame-line", cwd] as const, type: "active" }),
   ];
@@ -227,7 +240,8 @@ async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): P
       queryKey: gitQueryKeys.pullRequest(cwd),
       refetchType: "none",
     }),
-    // after save/commit/branch-move the cached attribution/blobs would otherwise survive their stale windows
+    // Revision-dependent families: after a save, commit, or branch movement the
+    // cached attribution/blobs would otherwise survive their stale windows.
     queryClient.invalidateQueries({
       queryKey: ["git", "blame-line", cwd] as const,
       refetchType: "none",
@@ -336,7 +350,8 @@ export function refreshGitQueriesForCwd(
     entry.started = true;
     return refreshGitAvailability(queryClient, cwd);
   });
-  // read entry.depth after availability settles so a pre-start upgrade to active-details is honored even when the request was availability-only
+  // Read entry.depth only after availability settles so a pre-start upgrade to
+  // "active-details" is honored even when the original request was availability-only.
   entry.promise = entry.availability.then(() =>
     entry.depth === "active-details" ? refreshActiveGitDetails(queryClient, cwd) : undefined,
   );
@@ -344,6 +359,8 @@ export function refreshGitQueriesForCwd(
   return depth === "availability" ? entry.availability : entry.promise;
 }
 
+/** Resolves once repository/status/branches are fresh, even when the underlying refresh
+ * was upgraded to also re-read active details after the availability phase. */
 export function refreshGitActionAvailability(queryClient: QueryClient, cwd: string): Promise<void> {
   return refreshGitQueriesForCwd(queryClient, cwd, "availability");
 }
@@ -370,7 +387,8 @@ function cachedGitCwds(queryClient: QueryClient): string[] {
   return [...new Set(cwds)];
 }
 
-// excludeCwds lets a caller that already refreshed (and awaited) specific checkouts fan the rest out in the background without queueing duplicate refreshes for the awaited ones.
+// excludeCwds lets a caller that already refreshed (and awaited) specific checkouts fan the
+// rest out in the background without queueing duplicate refreshes for the awaited ones.
 export function invalidateGitQueries(
   queryClient: QueryClient,
   options?: { readonly excludeCwds?: Iterable<string> },
@@ -515,7 +533,8 @@ export function gitResolvePullRequestQueryOptions(input: {
   });
 }
 
-// cheap enough to poll while the panel is open; event-based invalidation covers pushes from this client
+// Refresh cadence for the Environment panel PR section: cheap enough to poll while the
+// panel is open, and event-based git invalidation covers pushes from this client.
 const GIT_PR_SNAPSHOT_STALE_TIME_MS = 30_000;
 const GIT_PR_SNAPSHOT_REFETCH_INTERVAL_MS = 60_000;
 
@@ -541,7 +560,8 @@ export function gitPullRequestSnapshotQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && input.reference !== null,
     staleTime: GIT_PR_SNAPSHOT_STALE_TIME_MS,
-    // Once the snapshot itself reports the PR merged/closed, stop polling it — the cached git status can lag behind and would otherwise keep the interval alive.
+    // Once the snapshot itself reports the PR merged/closed, stop polling it — the cached
+    // git status can lag behind and would otherwise keep the interval alive.
     refetchInterval: (query) =>
       query.state.data && query.state.data.pullRequest.state !== "open"
         ? false
@@ -553,7 +573,15 @@ export function gitPullRequestSnapshotQueryOptions(input: {
   });
 }
 
-// badge surfaces poll these numbers every few seconds while a turn is live — separate from the patch query because a 10k-line diff meant refetching megabytes just to show +N/-M; this response is three integers
+/**
+ * Line counts for the selected scope, resolved server-side.
+ *
+ * Separate from `gitWorkingTreeDiffQueryOptions` on purpose: the badge surfaces poll these
+ * numbers every few seconds while a turn is live, and the patch they used to be derived from
+ * grows with the working tree — on a 10k-line diff that meant refetching megabytes of text and
+ * reparsing it on the renderer's main thread just to show `+N/-M`. The response here is three
+ * integers regardless of diff size. Fetch the patch itself only when showing the diff.
+ */
 export function gitWorkingTreeDiffStatsQueryOptions(input: {
   cwd: string | null;
   scope?: GitReadWorkingTreeDiffInput["scope"];
@@ -685,7 +713,10 @@ export function gitBlameLineQueryOptions(input: {
 type GitMutationInvalidation = "all" | "cwd";
 type GitMutationInvalidateOn = "success" | "settled";
 
-// shared scaffolding for cwd-bound git mutations: resolve native API, guard missing cwd, run the call, invalidate caches — keeps each definition to key + one call
+// Shared scaffolding for cwd-bound git mutations: resolve the native API, guard a
+// missing cwd with a clear message, run the single call, then invalidate git
+// caches — globally or scoped to this cwd — on success or settle. Keeps each
+// mutation definition down to its key + the one API call it performs.
 function makeGitMutationOptions<TArgs, TResult>(config: {
   cwd: string | null;
   queryClient: QueryClient;

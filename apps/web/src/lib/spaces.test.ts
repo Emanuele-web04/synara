@@ -1,3 +1,6 @@
+// FILE: spaces.test.ts
+// Purpose: Verifies web-client Space command batching and partial-failure reporting.
+
 import {
   SPACE_PROJECTS_ASSIGN_MAX_COUNT,
   type NativeApi,

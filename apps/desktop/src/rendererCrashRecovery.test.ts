@@ -1,3 +1,7 @@
+// FILE: rendererCrashRecovery.test.ts
+// Purpose: Verifies renderer crash recovery reloads only recoverable reasons and stops
+//          before a deterministic crash can spin into a reload loop.
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -38,7 +42,8 @@ describe("RendererCrashPolicy", () => {
       });
     }
 
-    // the reload budget is a cap, not a throttle — further crashes in the same streak must never schedule another reload
+    // The reload budget is a cap, not a throttle: further crashes in the same streak
+    // must never schedule another reload, however many arrive.
     for (let extra = 0; extra < 5; extra += 1) {
       const response = crash(policy, "crashed", 1_000 + extra * 100);
       expect(response).toEqual({

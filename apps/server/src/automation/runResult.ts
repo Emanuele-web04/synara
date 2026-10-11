@@ -1,3 +1,9 @@
+// FILE: runResult.ts
+// Purpose: Builds and normalizes automation run-history result payloads.
+// Layer: Server automation helper
+// Exports: summary/reason normalizers plus AI completion-evaluation result builders.
+// Depends on: automation run-result contracts shared with the web app.
+
 import type { AutomationRunResult } from "@synara/contracts";
 
 const AUTOMATION_RUN_RESULT_SUMMARY_MAX_CHARS = 2_000;
@@ -48,7 +54,7 @@ export function failedAutomationCompletionEvaluation(
   };
 }
 
-// merges a stop-check evaluation into the latest run result without clobbering read/archive state
+// Merges a stop-check evaluation into the latest run result without clobbering read/archive state.
 export function automationCompletionRunResult(input: {
   readonly baseResult: AutomationRunResult | null;
   readonly evaluation: AutomationCompletionEvaluation;

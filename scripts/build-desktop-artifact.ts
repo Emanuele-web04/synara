@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// FILE: build-desktop-artifact.ts
+// Purpose: Stages and builds packaged desktop artifacts plus updater metadata for GitHub releases.
+// Layer: Release/build script
+// Depends on: apps/desktop package metadata, electron-builder, and GitHub release config.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -487,6 +491,7 @@ function stageMacIcons(
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
+    // The solid ICNS is the bundle icon on every macOS release; Icon Composer glass alters the mark.
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
@@ -771,7 +776,9 @@ function parsePatchAddedLines(patchContents: string): PatchFileExpectation[] {
   return expectations.filter((expectation) => expectation.addedLines.length > 0);
 }
 
-// staged installs can silently drop tracked patches (broke Windows provider updates in v0.5.2-v0.5.5)
+// Package managers can silently skip tracked patches when the staged install
+// diverges from the repo setup (that shipped broken Windows provider updates
+// in v0.5.2–v0.5.5), so fail the build unless every patched line is present.
 const verifyStagedPatchedDependencies = Effect.fn("verifyStagedPatchedDependencies")(function* (
   repoRoot: string,
   stageAppDir: string,
@@ -833,12 +840,16 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
     "[desktop-artifact] Installing staged production dependencies from the repository lockfile...",
   );
   if (platform === "win") {
-    // Bun 1.3.12 --production forces frozen mode; omit deps so only the staging copy rewrites the lockfile
+    // Bun 1.3.12 needs a platform-only lockfile rewrite while resolving this
+    // copied workspace on Windows even though the repository-level frozen
+    // install already passed. Its --production flag also forces frozen mode,
+    // so use the equivalent dependency omission and allow only the temporary
+    // staging copy to update; the verified source lockfile remains untouched.
     yield* runCommand(
       ChildProcess.make({
         cwd: stageAppDir,
         ...commandOutputOptions(verbose),
-        // Windows needs shell mode to resolve .cmd shims
+        // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
         shell: process.platform === "win32",
       })`bun install --omit=dev --ignore-scripts --linker hoisted`,
     );

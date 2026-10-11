@@ -1,4 +1,10 @@
-// plain text-only state block; for skeleton/loading states with aria-live use DiffPanelLoadingState
+// FILE: PanelStateMessage.tsx
+// Purpose: Centered muted "empty / unavailable / hint" text shared by dock panes
+//          (GitPanel, DiffPanel, right-dock placeholders) so the repeated
+//          flex-center + muted-foreground block lives in one place.
+// Layer: Chat/panel UI primitives
+// Note: For skeleton/loading states with aria-live semantics use DiffPanelLoadingState;
+//       this is the plain text-only state block.
 
 import { type ReactNode } from "react";
 

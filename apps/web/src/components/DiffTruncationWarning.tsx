@@ -1,3 +1,7 @@
+// FILE: DiffTruncationWarning.tsx
+// Purpose: Shared warning for repository diff surfaces backed by size-bounded patch reads.
+// Layer: Web diff presentation
+
 import type { HTMLAttributes } from "react";
 
 import { TriangleAlertIcon } from "~/lib/icons";

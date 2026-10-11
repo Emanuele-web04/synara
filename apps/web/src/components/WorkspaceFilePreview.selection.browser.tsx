@@ -1,3 +1,8 @@
+// FILE: WorkspaceFilePreview.selection.browser.tsx
+// Purpose: Browser regressions for the highlight -> "Add to Chat" flow in the
+//          rendered-markdown preview (snippet references) and source view.
+// Layer: Focused component integration tests
+
 import "../index.css";
 
 import type { NativeApi, ProjectReadFileResult } from "@synara/contracts";

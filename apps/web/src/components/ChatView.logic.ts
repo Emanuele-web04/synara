@@ -84,7 +84,8 @@ export function canApplyComposerFocus(input: {
 
 export interface PendingFileUndo {
   readonly threadId: ThreadIdType;
-  // A changes card can merge several turns; one Undo reverts all of them, so the request only settles once every targeted turn has settled (or one failed).
+  // A changes card can merge several turns; one Undo reverts all of them, so the
+  // request only settles once every targeted turn has settled (or one failed).
   readonly turnCounts: readonly number[];
   readonly existingFailureActivityIds: readonly string[];
 }
@@ -268,7 +269,8 @@ export function shouldRenderProviderHealthBanner(input: {
   return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
 }
 
-// Big-paste cards are sent only by the normal chat path; non-chat composer flows read plain editor text, so they must let Lexical insert pasted text normally.
+// Big-paste cards are sent only by the normal chat path; non-chat composer flows
+// read plain editor text, so they must let Lexical insert pasted text normally.
 export function shouldEnableComposerPastedTextCollapse(input: {
   isComposerApprovalState: boolean;
   hasPendingUserInput: boolean;
@@ -286,7 +288,13 @@ export function buildTranscriptAutoFollowSignal(input: {
   return `${input.messageCount}\u001f${input.tailKey}`;
 }
 
-// deliberately excludes the tail message's text length: while it streams, LegendList's maintainScrollAtEnd keeps the stick and re-arming auto-follow per flush would schedule a redundant scrollToEnd per flush for the whole stream — the key still moves on a new tail message, role change, stream start/settle, first content, completion
+// Deliberately excludes the tail message's text length: while a streamed
+// message grows, LegendList's own `maintainScrollAtEnd` keeps the bottom
+// stick, and re-arming the auto-follow re-snap on every store flush would
+// schedule a redundant scrollToEnd per flush for the whole stream. The key
+// still moves on every transition that needs an explicit re-snap: a new tail
+// message, role change, stream start/settle, first content landing, and
+// completion.
 export function buildTranscriptTailKey(
   tailMessage: {
     readonly id: string;
@@ -303,7 +311,10 @@ export function buildTranscriptTailKey(
     tailMessage.id,
     tailMessage.role,
     tailMessage.streaming ? "streaming" : "settled",
-    // while streaming, per-token growth is owned by maintainScrollAtEnd — only empty→content matters; once settled, a projection repair can replace text under the same id so length is back in the key
+    // While streaming, per-token growth is owned by LegendList's
+    // maintainScrollAtEnd — only the empty->content transition matters here.
+    // Once settled, a projection repair can replace the text under the same id
+    // with nothing else changing, so length is back in the key.
     tailMessage.streaming
       ? tailMessage.text.length > 0
         ? "content"
@@ -368,7 +379,11 @@ export interface PromptHistoryNavigationState {
 
 export type PromptHistoryDirection = "older" | "newer";
 
-// all prompt-history cursor values are EXPANDED offsets — raw string indices; collapsed composer cursors (inline token chips count as one unit) must be expanded before use
+// All cursor values in prompt history navigation are EXPANDED offsets — raw
+// indices into the prompt string. Collapsed composer cursors (where inline
+// token chips like mentions count as a single unit) must be expanded before
+// calling in and collapsed again before being applied to composer state, or
+// the line-boundary math below misfires on any prompt containing a chip.
 export interface PromptHistoryNavigationResult {
   handled: boolean;
   prompt: string;
@@ -482,7 +497,11 @@ export function resolvePromptHistoryNavigation(input: {
   if (!input.selectionCollapsed || input.history.length === 0) {
     return notHandled(input.state);
   }
-  // when the active history entry no longer matches (history changed or index out of range) the browse lost its place — never navigate from a bogus index, never abandon the saved draft; restart from newest going older, restore draft going newer
+  // The active history entry the composer should still be showing. When it no
+  // longer matches (history changed under us or the index fell out of range),
+  // the browse lost its place: never keep navigating from a bogus index, and
+  // never abandon the saved draft — restart from the newest entry when going
+  // older, or restore the draft when going newer.
   const activeEntry = input.state ? input.history[input.state.index] : undefined;
   const stateIsStale =
     input.state !== null && (activeEntry === undefined || input.currentPrompt !== activeEntry);
@@ -552,7 +571,9 @@ export function resolvePromptHistoryNavigation(input: {
   };
 }
 
-// settingsDefaultOpen is the user preference; landing, terminal-primary, and constrained layouts always start closed regardless
+// Default-open policy for the Environment panel; render-time visibility is resolved separately.
+// `settingsDefaultOpen` is the user preference (Settings → Environment panel). Landing,
+// terminal-primary, and constrained layouts always start closed regardless of that setting.
 export function resolveDefaultEnvironmentPanelOpen(input: {
   environmentEnabled: boolean;
   isCenteredEmptyLanding: boolean;
@@ -570,7 +591,9 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
   );
 }
 
-// ordered model list for next/previous cycling: favorites first (stable user order) then remaining discovered options; null when fewer than two selectable
+// Build the ordered model list used by model.next / model.previous: favorites first
+// (stable user order), then remaining discovered options. Returns null when cycling is
+// a no-op (fewer than two selectable models).
 export function resolveCycledModelSlug(input: {
   currentModel: string;
   options: ReadonlyArray<{ slug: string }>;
@@ -679,7 +702,12 @@ export function resolveSettledThreadBranchMismatch(input: {
   return { threadBranch, currentBranch };
 }
 
-// the live strip prefers the turn's computed diff (turn-diff-completed) for real per-file stats; before it lands it falls back to mid-turn file-edit work-log activity so the strip can appear while running but without a reviewable turn id; once a turn diff exists its empty file list is authoritative
+// The composer live strip prefers the turn's computed diff (the
+// `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
+// Before that lands, it falls back to mid-turn file-edit work-log activity so
+// the strip can appear while the turn is running, but without a reviewable
+// turn id. Once a turn diff exists, its empty file list is authoritative and
+// must not be overwritten by tool metadata.
 export function resolveActiveTurnLiveDiffState(input: {
   latestTurnId: TurnDiffSummary["turnId"] | null | undefined;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
@@ -716,7 +744,8 @@ export function resolveActiveTurnLiveDiffState(input: {
     };
   }
 
-  // No diff totals yet: keep the strip visible from in-turn file-edit work so it does not vanish between the first edit and the turn-diff-completed event.
+  // No diff totals yet: keep the strip visible from in-turn file-edit work so it
+  // does not vanish between the first edit and the turn-diff-completed event.
   const workLogFilePaths = new Set<string>();
   let hasFileEditWork = false;
   if (input.latestTurnId) {
@@ -761,7 +790,7 @@ export type ThreadDetailHydration = "ready" | "loading" | "failed";
 export function resolveThreadDetailHydration(input: {
   readonly isServerThread: boolean;
   readonly hasTimelineEntries: boolean;
-  readonly detailSyncState: "synced" | "failed" | null;
+  readonly detailSyncState: "synced" | "failed" | "cached" | null;
 }): ThreadDetailHydration {
   if (!input.isServerThread || input.hasTimelineEntries || input.detailSyncState === "synced") {
     return "ready";
@@ -845,7 +874,8 @@ export function resolveActiveThreadTitle(input: {
   return input.title;
 }
 
-// Sidechats carry imported fork history for provider context, but their transcript should start visually clean so only new sidechat turns appear in the pane.
+// Sidechats carry imported fork history for provider context, but their transcript should start
+// visually clean so only new sidechat turns appear in the pane.
 export function filterSidechatTranscriptMessages(
   messages: readonly ChatMessage[],
   isSidechat: boolean,
@@ -1057,7 +1087,9 @@ export interface PullRequestDialogState {
   key: number;
 }
 
-// Labels for the "New worktree" first-send setup steps, surfaced verbatim in the transcript's transient setup row. Single source — the ordered step list is assembled in `worktreeSetupStepDefinitions`.
+// Labels for the "New worktree" first-send setup steps, surfaced verbatim in
+// the transcript's transient setup row. Single source — the ordered step list
+// is assembled in `worktreeSetupStepDefinitions`.
 const WORKTREE_SETUP_STEP_LABELS: Record<WorktreeSetupStepId, string> = {
   "create-branch": "Creating branch",
   "create-worktree": "Creating worktree",
@@ -1067,7 +1099,9 @@ const WORKTREE_SETUP_STEP_LABELS: Record<WorktreeSetupStepId, string> = {
   "start-session": "Starting session",
 };
 
-// Creation phases mirror the server's real worktree setup progress events, so each row completes on an actual boundary instead of one row spinning through all of them.
+// Creation phases mirror the server's real worktree setup progress events, so
+// each row completes on an actual boundary instead of one row spinning through
+// all of them.
 export const WORKTREE_SETUP_STEP_ID_BY_PHASE: Record<GitWorktreeSetupPhase, WorktreeSetupStepId> = {
   branch: "create-branch",
   worktree: "create-worktree",
@@ -1109,7 +1143,8 @@ function worktreeSetupStepDefinitions(
   }));
 }
 
-// How long a failed setup step stays visible before the row is dismissed, so the error state can paint instead of being batched away with the reset.
+// How long a failed setup step stays visible before the row is dismissed, so
+// the error state can paint instead of being batched away with the reset.
 export const WORKTREE_SETUP_ERROR_HOLD_MS = 1200;
 
 export function createWorktreeSetupSnapshot(
@@ -1188,10 +1223,12 @@ export function createWorktreeSetupResolution(): WorktreeSetupResolution {
 }
 
 export interface WorktreeCreationFlowDeps<Result extends { worktree: { path: string } }> {
+  /** Correlates streamed progress events with this creation request. */
   progressId: string;
   subscribeToProgress: (listener: (event: GitWorktreeSetupProgressEvent) => void) => () => void;
   startCreation: () => Promise<Result>;
   resolution: WorktreeSetupResolution;
+  /** Advances the setup card to the step matching a streamed creation phase. */
   onCreationStep: (stepId: WorktreeSetupStepId) => void;
   removeWorktree: (worktreePath: string) => Promise<unknown>;
 }
@@ -1223,7 +1260,8 @@ export async function runWorktreeCreationFlow<Result extends { worktree: { path:
   });
   try {
     const creation = deps.startCreation();
-    // `git worktree add` is the longest step; let the card's buttons win the wait instead of only taking effect once the creation finishes.
+    // `git worktree add` is the longest step; let the card's buttons win the
+    // wait instead of only taking effect once the creation finishes.
     await Promise.race([creation, deps.resolution.promise]);
     if (deps.resolution.action !== null) {
       void creation
@@ -1237,7 +1275,12 @@ export async function runWorktreeCreationFlow<Result extends { worktree: { path:
   }
 }
 
-// once the turn RPC resolves the server provably owns the turn; the dispatch marker then only waits for the thread stream to echo it — a dead/stalled stream would leave the composer spinner stuck, so the marker force-clears after this bound and the watchdog re-syncs real state
+// Once the turn RPC has resolved the server provably owns the turn; the
+// dispatch marker then only waits for the thread stream to echo the change
+// (session running / message echo / turn change). A dead or stalled stream
+// would otherwise leave the composer spinner stuck forever, so the marker is
+// force-cleared after this bound and the catch-up watchdog re-syncs the real
+// thread state.
 export const LOCAL_DISPATCH_ACK_TIMEOUT_MS = 10_000;
 
 export interface LocalDispatchSnapshot {
@@ -1281,7 +1324,8 @@ export function createLocalDispatchSnapshot(
   };
 }
 
-// Computes the next client-side dispatch marker while preserving in-flight setup progress and dropping failed setup rows that are only being held for display.
+// Computes the next client-side dispatch marker while preserving in-flight setup
+// progress and dropping failed setup rows that are only being held for display.
 export function resolveNextLocalDispatchSnapshot(input: {
   current: LocalDispatchSnapshot | null;
   activeThread: Thread | undefined;
@@ -1293,7 +1337,9 @@ export function resolveNextLocalDispatchSnapshot(input: {
   }
 
   if (!worktreeSetupStepId) {
-    // Same in-flight send may call beginLocalDispatch() with no options to keep the marker. A new expectedUserMessageId means a fresh send — replace the snapshot so the awaiting-turn bridge and send-busy gate track the new one.
+    // Same in-flight send may call beginLocalDispatch() with no options to keep
+    // the marker. A new expectedUserMessageId means a fresh send — replace the
+    // snapshot so the awaiting-turn bridge and send-busy gate track the new one.
     if (
       input.options?.expectedUserMessageId != null &&
       input.options.expectedUserMessageId !== input.current.expectedUserMessageId
@@ -1446,7 +1492,9 @@ export function hasLiveTurnTakenOver(input: {
     return true;
   }
 
-  // Fail-open so Thinking cannot stick forever when a turn is requested but never becomes live and never surfaces an error. Worktree setup has its own lifecycle and must not be cut short by this bound.
+  // Fail-open so Thinking cannot stick forever when a turn is requested but
+  // never becomes live and never surfaces an error. Worktree setup has its own
+  // lifecycle and must not be cut short by this bound.
   if (!input.localDispatch.worktreeSetup && input.now !== undefined) {
     const startedAtMs = Date.parse(input.localDispatch.startedAt);
     if (
@@ -1469,8 +1517,11 @@ export function hasLiveTurnTakenOver(input: {
  * auto-dispatch through that gap.
  */
 export interface QueuedSteerGate {
+  /** The abort gap has been observed (phase left "running" after the steer). */
   sawInterruptGap: boolean;
+  /** Epoch ms when the gap started; null while the original turn still runs. */
   gapStartedAt: number | null;
+  /** Active turn id at steer time; a different live id means the steered turn started. */
   armedActiveTurnId: string | null;
 }
 
@@ -1497,7 +1548,8 @@ export function resolveQueuedSteerGateTransition(input: {
       // The steered turn is live; normal live-turn guards take over from here.
       return { kind: "clear" };
     }
-    // A fast interrupt→steered-turn handoff may never render an idle gap: the active turn id flipping while still "running" is the same signal.
+    // A fast interrupt→steered-turn handoff may never render an idle gap: the
+    // active turn id flipping while still "running" is the same signal.
     if (
       input.gate.armedActiveTurnId !== null &&
       input.activeTurnId !== null &&
@@ -1519,7 +1571,8 @@ export function resolveQueuedSteerGateTransition(input: {
   const gapStartedAt = input.gate.gapStartedAt ?? input.now;
   const expiresInMs = QUEUED_STEER_GATE_TIMEOUT_MS - (input.now - gapStartedAt);
   if (expiresInMs <= 0) {
-    // The steered turn never started (lost interrupt, provider failure that didn't surface as a session error). Fail open so the queue can't stall.
+    // The steered turn never started (lost interrupt, provider failure that
+    // didn't surface as a session error). Fail open so the queue can't stall.
     return { kind: "clear" };
   }
   return {
@@ -1863,11 +1916,65 @@ export function buildExpiredTerminalContextToastCopy(
   };
 }
 
+export type BlockedComposerSendReason = "send-in-flight" | "session-starting" | "no-project";
+
+// A user send refused by a guard must say why; a silent no-op makes people send again.
+// Expected no-ops (empty prompt, held cache review, expired sidechat, voice note still
+// transcribing) keep their own UI and are not reported here.
+export function resolveBlockedComposerSendReason(input: {
+  readonly sendInFlight: boolean;
+  readonly sessionStarting: boolean;
+  /** An empty composer has nothing to send, so pressing Send again needs no notice. */
+  readonly hasComposerContent: boolean;
+}): BlockedComposerSendReason | null {
+  if (!input.hasComposerContent) return null;
+  if (input.sendInFlight) return "send-in-flight";
+  if (input.sessionStarting) return "session-starting";
+  return null;
+}
+
+export function buildBlockedComposerSendToastCopy(reason: BlockedComposerSendReason): {
+  type: "info" | "warning";
+  title: string;
+  description: string;
+} {
+  switch (reason) {
+    case "send-in-flight":
+      return {
+        type: "info",
+        title: "Still sending your last message",
+        description: "Wait for it to show in the chat before sending again.",
+      };
+    case "session-starting":
+      return {
+        type: "info",
+        title: "The session is still starting",
+        description: "Send again once it is ready. Your message stays in the composer.",
+      };
+    case "no-project":
+      return {
+        type: "warning",
+        title: "This chat has no project",
+        description: "Choose a project for this chat, then send again.",
+      };
+  }
+}
+
+// The server already holds the user message, so a later failure in the send attempt
+// must not hand the prompt back to the composer or roll back the promoted thread.
+export function hasServerReceivedSentMessage(
+  thread: Pick<Thread, "messages"> | null | undefined,
+  messageId: ChatMessage["id"],
+): boolean {
+  return thread?.messages.some((message) => message.id === messageId) ?? false;
+}
+
 export function shouldRenderTerminalWorkspace(options: {
   presentationMode: "drawer" | "workspace";
   terminalOpen: boolean;
 }): boolean {
-  // The workspace shell should paint immediately; the terminal viewport gates the backend attach until a valid cwd is available.
+  // The workspace shell should paint immediately; the terminal viewport gates the
+  // backend attach until a valid cwd is available.
   return options.terminalOpen && options.presentationMode === "workspace";
 }
 
@@ -1996,7 +2103,10 @@ function humanizeSubagentRawStatus(rawStatus: string | undefined): string | unde
   return humanizeSubagentStatus(rawStatus);
 }
 
-// terminal work-log statuses are authoritative over child-thread session state — a finished subagent's thread parks in "Idle"/"Closed" which must not mask Completed/Failed/Stopped; per-agent rawStatus wins over the collab item's own status
+// Terminal work-log statuses are authoritative over child-thread session state:
+// a finished subagent's thread merely parks in an "Idle"/"Closed" session status,
+// which must not mask Completed/Failed/Stopped. The per-agent rawStatus wins over
+// the collab item's own status, which only covers the whole tool call.
 function terminalSubagentStatusLabel(
   rawStatus: string | undefined,
   entryStatus: string | undefined,
@@ -2103,7 +2213,13 @@ export function enrichSubagentWorkEntries(
       if (terminalStatusLabel ?? status.label ?? fallbackStatusLabel) {
         nextSubagent.statusLabel = terminalStatusLabel ?? status.label ?? fallbackStatusLabel;
       }
-      if (status.isActive || fallbackStatusLabel === "Running") {
+      if (
+        status.isActive ||
+        (fallbackStatusLabel === "Running" &&
+          status.label !== "Closed" &&
+          status.label !== "Error" &&
+          !matchedThread?.latestTurn?.completedAt)
+      ) {
         nextSubagent.isActive = true;
       }
       return nextSubagent;

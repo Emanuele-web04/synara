@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { ThreadId } from "@synara/contracts";
 import { DesktopBrowserManager } from "../src/browserManager";
 
+// Run the bundled script with Electron. Everything is synthetic and the only
+// native window stays hidden; no existing Synara profile or login is touched.
 void (async () => {
   const home = mkdtempSync(join(tmpdir(), "synara-hidden-popup-test-"));
   process.env.SYNARA_HOME = home;
@@ -132,6 +134,7 @@ void (async () => {
     let downloadPrevented: boolean | undefined;
     const observeDownload = (event: Electron.Event) => {
       downloadPrevented = event.defaultPrevented;
+      // Contain the synthetic download even if the production policy regresses.
       event.preventDefault();
     };
     child.session.once("will-download", observeDownload);

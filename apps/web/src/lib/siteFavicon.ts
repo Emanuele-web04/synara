@@ -1,3 +1,11 @@
+// FILE: siteFavicon.ts
+// Purpose: Client helpers for the website-favicon feature — build authenticated
+//          favicon proxy URLs (keyed by hostname so every link on a site shares
+//          one cacheable request) and track per-src load outcomes so repeat
+//          renders skip re-probing. Shared by <SiteFavicon> and every link chip
+//          surface (composer, user bubble, markdown).
+// Layer: UI utilities
+
 import { resolveWsHttpUrl } from "./wsHttpUrl";
 
 /** Per-favicon-src load outcome, shared module-wide to avoid re-probing within a session. */
@@ -6,7 +14,15 @@ export const siteFaviconStatusCache = new Map<string, "ok" | "fail">();
 /** In-flight probes keyed by favicon src, so concurrent callers share one Image() load. */
 const inFlightFaviconProbes = new Map<string, Promise<"ok" | "fail">>();
 
-// resolved outcomes memoized so later renders settle synchronously; concurrent callers share one Image() load yet EACH receives the result — every awaiting icon element runs its own .then and patches itself instead of one probe patching a possibly-stale element
+/**
+ * Probes a favicon src once and shares the outcome with every caller. Resolved
+ * outcomes are memoized in {@link siteFaviconStatusCache} so later renders settle
+ * synchronously; concurrent callers await a single shared Image() load yet EACH
+ * receives the result. That last part matters for imperative consumers (the
+ * composer link chip): every awaiting icon element runs its own `.then` and
+ * patches itself, instead of one shared probe patching a single — possibly stale —
+ * element.
+ */
 export function probeSiteFavicon(faviconSrc: string): Promise<"ok" | "fail"> {
   const cached = siteFaviconStatusCache.get(faviconSrc);
   if (cached) return Promise.resolve(cached);
@@ -29,6 +45,7 @@ export function probeSiteFavicon(faviconSrc: string): Promise<"ok" | "fail"> {
   return promise;
 }
 
+/** Extracts the hostname from a full URL, or null when it cannot be parsed. */
 export function extractHostname(url: string): string | null {
   try {
     return new URL(url).hostname || null;
@@ -45,6 +62,7 @@ export function extractHostname(url: string): string | null {
 export function resolveSiteFaviconUrl(urlOrHost: string): string {
   const host = extractHostname(urlOrHost) ?? urlOrHost;
   const params = new URLSearchParams({ domain: host });
-  // WS-derived HTTP helper so desktop/file-origin image tags carry the same legacy token as attachments
+  // Route through the WS-derived HTTP helper so desktop/file-origin image tags
+  // carry the same legacy token as attachments and local markdown images.
   return resolveWsHttpUrl(`/api/site-favicon?${params.toString()}`);
 }

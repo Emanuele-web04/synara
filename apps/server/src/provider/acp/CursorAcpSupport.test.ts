@@ -1476,6 +1476,7 @@ describe("buildCursorAcpModelDescriptorsFromAvailableModels", () => {
       defaultReasoningEffort: "medium",
     });
     expect(gpt?.supportsThinkingToggle).toBeUndefined();
+    // Cursor's "extra-high" reasoning value normalizes to Synara's "xhigh".
     expect(gpt?.supportedReasoningEfforts?.map((effort) => effort.value)).toEqual([
       "low",
       "medium",

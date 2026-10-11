@@ -12,7 +12,8 @@ export function stopTranscriptScrollAtCurrentOffset(
 ): Promise<void> {
   const scrollNode = target.getScrollableNode();
   const offset = scrollNode.scrollTop;
-  // cancel the native smooth animation immediately; the LegendList call then clears its imperative-scroll bookkeeping at the same spot
+  // Cancel the browser's native smooth animation immediately. The LegendList
+  // call below then clears its imperative-scroll bookkeeping at the same spot.
   scrollNode.scrollTo({ top: offset, behavior: "auto" });
   return target.scrollToOffset({
     offset,

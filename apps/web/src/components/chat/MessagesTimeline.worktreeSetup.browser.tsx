@@ -1,3 +1,7 @@
+// FILE: MessagesTimeline.worktreeSetup.browser.tsx
+// Purpose: Browser regression for the transient worktree-setup step card lifecycle.
+// Layer: Vitest browser tests
+
 import "../../index.css";
 
 import { MessageId } from "@synara/contracts";
@@ -226,7 +230,8 @@ describe("MessagesTimeline worktree setup card", () => {
       expect(workingRow()).toBeNull();
 
       document.querySelector<HTMLButtonElement>('[data-testid="clear-setup"]')?.click();
-      // The card stays mounted through the disclosure close animation while the working shimmer takes over immediately.
+      // The card stays mounted through the disclosure close animation while the
+      // working shimmer takes over immediately.
       expect(setupRow()).not.toBeNull();
       await expect.poll(() => workingRow() !== null).toBe(true);
       await expect.poll(() => setupRow() === null, { timeout: 2000 }).toBe(true);

@@ -1,3 +1,4 @@
+// Verify parsed totals against explicit counts for the patch shapes Git emits.
 import { describe, expect, it } from "vitest";
 
 import { summarizePatchTotals } from "./diffRendering";
@@ -81,7 +82,8 @@ index aaaaaaa..bbbbbbb 100644
 \\ No newline at end of file
 `;
 
-// content lines that look like diff syntax — a counter matching on ---/+++/diff --git without tracking hunk boundaries miscounts every one
+// Content lines that themselves look like diff syntax. A counter that pattern-matches on
+// `---`/`+++`/`diff --git` without tracking hunk boundaries miscounts every one of these.
 const DIFF_SHAPED_CONTENT = `diff --git a/README.md b/README.md
 index ccccccc..ddddddd 100644
 --- a/README.md

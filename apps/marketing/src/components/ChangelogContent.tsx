@@ -1,3 +1,10 @@
+// FILE: ChangelogContent.tsx
+// Purpose: Changelog page body — editorial layout for the full archive and
+//          per-release pages. Keeps release rendering shared while letting
+//          /changelog/v0.1.1 expose only that release for cleaner indexing.
+// Layer: Server component. Content mirrors the in-app "What's new" dialog
+//        (src/data/changelog.ts).
+
 import { Fragment, type ReactNode } from "react";
 import Link from "next/link";
 import { LuArrowDownToLine, LuLink } from "react-icons/lu";
@@ -9,7 +16,8 @@ import { type ChangelogEntry } from "@/data/changelog";
 import { GITHUB_RELEASES_URL } from "@/lib/seo";
 import { getSortedReleases, toAnchor, toVersionSlug } from "@/lib/changelog";
 
-// changelog data only uses backticks (no links/bold) so the inline-code renderer stays tiny
+// Render `backtick` spans as inline code chips; everything else is plain text.
+// The changelog data only uses backticks (no links/bold), so this stays tiny.
 function renderInline(text: string): ReactNode {
   return text.split(/(`[^`]+`)/g).map((part, i) => {
     if (part.length > 1 && part.startsWith("`") && part.endsWith("`")) {
@@ -122,6 +130,7 @@ function Release({ entry }: { entry: ChangelogEntry }) {
 
   return (
     <section id={anchor} className="scroll-mt-24">
+      {/* Date links to the shareable per-version URL (/changelog/v0.1.1). */}
       <Link
         href={`/changelog/${toVersionSlug(entry.version)}`}
         className="group inline-flex items-center gap-1.5 text-[13px] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)]"

@@ -1,3 +1,8 @@
+// FILE: ProviderCommandReactor.skillMentions.test.ts
+// Purpose: Covers provider-specific prompt text normalization for selected skills.
+// Layer: Server orchestration tests
+// Exports: Vitest cases for ProviderCommandReactor helpers.
+
 import { describe, expect, it } from "vitest";
 
 import { normalizeSkillMentionTextForProvider } from "./ProviderCommandReactor.ts";

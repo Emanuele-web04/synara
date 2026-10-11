@@ -1,3 +1,8 @@
+// FILE: RateLimitBanner.tsx
+// Purpose: Derives and renders provider rate-limit warnings for the active chat.
+// Layer: Chat status presentation
+// Exports: RateLimitBanner and rate-limit derivation helpers.
+
 import type { OrchestrationThreadActivity } from "@synara/contracts";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";

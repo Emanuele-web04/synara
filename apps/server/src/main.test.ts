@@ -78,6 +78,7 @@ function permissionMode(filePath: string): number {
   return fs.statSync(filePath).mode & 0o777;
 }
 
+// Shared service layer used by this CLI test suite.
 const testLayer = Layer.mergeAll(
   Layer.succeed(CliConfig, {
     cwd: "/tmp/synara-test-workspace",
@@ -853,6 +854,7 @@ it.layer(testLayer)("server CLI command", (it) => {
     Effect.gen(function* () {
       yield* runCli(["--port", "70000"]);
 
+      // effect/unstable/cli renders help/errors for parse failures and returns success.
       assert.equal(start.mock.calls.length, 0);
       assert.equal(stop.mock.calls.length, 0);
     }),

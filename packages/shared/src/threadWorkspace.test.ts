@@ -1,3 +1,8 @@
+// FILE: threadWorkspace.test.ts
+// Purpose: Verifies workspace-root containment used to attribute dev servers to projects.
+// Layer: Shared runtime utility tests
+// Depends on: Vitest and threadWorkspace helpers
+
 import { describe, expect, it } from "vitest";
 import {
   isScratchWorkspacePath,

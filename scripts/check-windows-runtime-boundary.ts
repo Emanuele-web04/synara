@@ -1,3 +1,6 @@
+// FILE: check-windows-runtime-boundary.ts
+// Purpose: Prevents application/provider code from reintroducing Windows process workarounds.
+
 import fs from "node:fs";
 import path from "node:path";
 

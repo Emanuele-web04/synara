@@ -1,3 +1,8 @@
+// FILE: scratchWorkspaces.test.ts
+// Purpose: Verifies per-thread scratch workspace paths stay inside their
+//          private root even when thread ids contain path-like characters.
+// Layer: Server filesystem utility tests
+
 import {
   chmodSync,
   mkdirSync,

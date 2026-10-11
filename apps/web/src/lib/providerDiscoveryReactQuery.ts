@@ -11,6 +11,10 @@ import type {
 } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  expensiveReadErrorRefetchInterval,
+  isRpcCapacityExceededError,
+} from "./expensiveReadRetry";
 
 const EMPTY_SKILLS_RESULT: ProviderListSkillsResult = {
   skills: [],
@@ -45,8 +49,11 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
   cached: false,
 };
 
-// the server admits at most two expensive reads and agent discovery shares that budget — keep model discovery to one at a time so opening the picker can't reject catalogs before their CLIs run
-// the server admits two expensive reads and agent discovery shares that budget — keep model discovery to one at a time so opening the picker cannot reject catalogs before their CLIs run; foreground may jump the queue but never interrupts the in-flight slot
+// The server admits at most two expensive reads at once, and agent discovery
+// uses the same budget. Keep model discovery to one request at a time so opening
+// the provider picker cannot reject most catalogs before their CLIs even run.
+// Foreground requests may move ahead of queued warming, but never interrupt the
+// discovery that already owns the single model slot.
 type ProviderModelDiscoveryPriority = "background" | "prefetch" | "foreground";
 
 interface ProviderModelDiscoveryTask {
@@ -165,7 +172,9 @@ export function prioritizeProviderModelDiscovery(
   for (const task of providerModelDiscoveryQueue) {
     const matches = queryKeysMatch(task.queryKey, queryKey);
     if (!matches && priority === "prefetch" && task.priority === "prefetch") {
-      // Only the newest hover target remains prefetch-priority. Foreground catalogs are not exclusive: split-view panes can observe distinct selected providers at the same time.
+      // Only the newest hover target remains prefetch-priority. Foreground
+      // catalogs are not exclusive: split-view panes can observe distinct
+      // selected providers at the same time.
       task.priority = "background";
     } else if (matches) {
       if (
@@ -174,7 +183,8 @@ export function prioritizeProviderModelDiscovery(
       ) {
         task.priority = priority;
       }
-      // A newly selected pane goes first without demoting catalogs selected in other active panes below speculative prefetch work.
+      // A newly selected pane goes first without demoting catalogs selected
+      // in other active panes below speculative prefetch work.
       task.priorityOrder = ++providerModelDiscoveryPriorityOrder;
     }
   }
@@ -397,7 +407,9 @@ export function providerSkillsQueryOptions(input: {
   });
 }
 
-// keep prior data during refetches so Settings doesn't flicker back to Scanning while the server refreshes
+// Unified cross-provider skills catalog (settings page); not filtered by toggles.
+// Keep prior data during refetches so Settings does not flicker back to "Scanning..."
+// while the server refreshes filesystem discovery in the background.
 export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled?: boolean }) {
   const cwd = input?.cwd ?? null;
   return queryOptions({
@@ -428,7 +440,8 @@ export function providerCommandsQueryOptions(input: {
     binaryPath: input.binaryPath ?? null,
     serverUrl: input.serverUrl ?? null,
     experimentalWebSockets: input.experimentalWebSockets ?? null,
-    // a Claude session fixes its Artifact opt-in at spawn — two threads can report different commands/artifacts states; other providers answer per workspace
+    // A Claude session fixes its Artifact opt-in at spawn, so two threads can report
+    // different commands and `artifacts` states; other providers answer per workspace.
     threadId: input.provider === "claudeAgent" ? (input.threadId ?? null) : null,
   });
   return queryOptions({
@@ -459,7 +472,9 @@ export function providerCommandsQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: 30_000,
-    // `artifacts` is dropped on refetch because the previous entry can belong to another Claude thread with a different opt-in — the warning waits for this thread's own answer
+    // Keeps the menu populated while refetching. `artifacts` is dropped because the
+    // previous entry can belong to another Claude thread, whose session may have a
+    // different Artifact opt-in; the warning waits for this thread's own answer.
     placeholderData: (previous) => {
       if (!previous) return EMPTY_COMMANDS_RESULT;
       const { artifacts: _previousArtifacts, ...rest } = previous;
@@ -496,12 +511,9 @@ export function providerModelsQueryOptions(input: {
   enabled?: boolean;
   priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
-  // The OMP catalog is global (`omp models --json` is not project-scoped), but
-  // `modelRoles` merge a project layer (`<cwd>/.omp/config.yml`), so cwd stays
-  // in the query key for roles to reflect the active project. The server still
-  // shares one catalog cache across cwds, so a per-cwd entry only pays for the
-  // role config reads.
-  const cwd = input.cwd ?? null;
+  // OMP's CLI catalog is account-global, not project-scoped. Share the query
+  // across projects while retaining the binary, agent directory and account keys.
+  const cwd = input.provider === "omp" ? null : (input.cwd ?? null);
   const queryKey = providerDiscoveryQueryKeys.models(
     input.provider,
     input.binaryPath ?? null,
@@ -539,16 +551,27 @@ export function providerModelsQueryOptions(input: {
         },
       ),
     enabled: input.enabled ?? true,
-    // Droid discovery starts a disposable ACP session — retain its longer cache and never repeat that work on window focus
-    retry: providerModelDiscoveryRetry(input.provider),
+    // Cached catalogs paint immediately while stale entries revalidate in the
+    // background. Droid discovery starts a disposable ACP session, so retain its
+    // longer cache and never repeat that work merely because the window regained focus.
+    // The transport already exhausted its bounded in-place admission retries.
+    // Repeating that budget here multiplies a saturated startup into 39–52
+    // probes per catalog and keeps the serialized discovery slot occupied.
+    retry: (failureCount, error) =>
+      !isRpcCapacityExceededError(error) &&
+      failureCount < providerModelDiscoveryRetry(input.provider),
+    refetchInterval: (query) => {
+      const capacityInterval = expensiveReadErrorRefetchInterval(query);
+      if (capacityInterval !== false) return capacityInterval;
+      if (input.provider === "devin" && (query.state.data?.error || query.state.error))
+        return 30_000;
+      return input.provider === "omp" ? 60_000 : false;
+    },
     // The server caches catalogs (30min fresh, then stale-while-revalidate,
     // persisted across restarts), so a refetch is a cheap RPC — but there is no
     // value in asking more often than the cache can change. Changes to paths,
     // endpoints, or cwd select a new key; CLI/account changes at the same paths
     // become visible on revalidation.
-    // OMP bypasses the server cache entirely: file-backed modelRoles are
-    // re-resolved per request, so role/config edits must reach the adapter on
-    // the ordinary focus/mount refetch cadence.
     staleTime:
       input.provider === "devin"
         ? (query) => (query.state.data?.error ? 0 : 15 * 60_000)
@@ -561,20 +584,13 @@ export function providerModelsQueryOptions(input: {
     // fails. Keep it visible, but retry while observed instead of treating the
     // degraded result as fresh — a failed refresh retains healthy data, so the
     // query error must also keep recovery polling alive.
-    ...(input.provider === "devin"
-      ? {
-          refetchInterval: (query) =>
-            query.state.data?.error || query.state.error ? 30_000 : false,
-        }
-      : {}),
     // Droid discovery starts a disposable ACP session, so it must not refetch
     // on focus. OMP discovery is a cheap `omp models` subprocess (server-cached
-    // 5min; modelRoles are re-read per request), so it refetches on focus and,
-    // where the renderer's timers allow, on an interval while observed —
-    // otherwise config/role edits only appear after an app restart.
+    // 5min), so it refetches on focus and, where the renderer's timers allow,
+    // on an interval while observed to pick up catalog changes.
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     ...(input.provider === "omp"
-      ? { refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: true }
+      ? { refetchOnWindowFocus: true, refetchIntervalInBackground: true }
       : {}),
     // Retain catalogs a full day — the server serves them stale-while-revalidate
     // for the same window, so an idle reopen paints instantly instead of

@@ -10,7 +10,11 @@ export interface ExternalMcpAuditCompletion {
 const describeFailure = (value: unknown) =>
   value instanceof Error ? value.message : String(value);
 
-/** a failed audit write stays pending for the request finalizer's retry; audit must never replace a produced tool result */
+/**
+ * Keep audit persistence best-effort without losing the intended completion.
+ * A failed write stays pending so the request finalizer can retry the same
+ * outcome; audit telemetry must never replace an already-produced tool result.
+ */
 export const makeExternalMcpAuditCompletion = (
   finishAudit: (input: ExternalMcpAuditCompletion) => Effect.Effect<void, unknown>,
 ) => {

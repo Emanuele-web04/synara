@@ -1,4 +1,9 @@
-// the live browser surface stays in Electron; the web app keeps only enough state to render tabs/toolbars across thread switches
+/**
+ * Lightweight browser metadata cache keyed by thread.
+ *
+ * The live browser surface stays in Electron; the web app only keeps enough
+ * state to render tabs/toolbars and survive thread switches predictably.
+ */
 
 import type { ThreadBrowserState, ThreadId } from "@synara/contracts";
 import { create } from "zustand";
@@ -88,7 +93,8 @@ function sanitizeBrowserHistoryEntry(rawEntry: unknown): BrowserHistoryEntry | n
   return { url, title, tabId };
 }
 
-// drop malformed persisted history so a corrupt entry can't reach the upsert path or render as a broken tab
+// Drops malformed persisted history so a corrupt entry can never reach the
+// upsert path (which dereferences `entry.url`) or render as a broken tab.
 export function sanitizeRecentHistoryByThreadId(
   value: unknown,
 ): Record<string, BrowserHistoryEntry[]> {
@@ -100,6 +106,8 @@ export function sanitizeRecentHistoryByThreadId(
       .map(sanitizeBrowserHistoryEntry)
       .filter((entry): entry is BrowserHistoryEntry => entry !== null)
       .slice(0, BROWSER_HISTORY_LIMIT);
+    // Drop threads whose history fully fails validation so we don't retain
+    // empty placeholder keys in storage.
     return entries.length > 0 ? entries : null;
   });
 }
@@ -137,7 +145,10 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
       upsertThreadState: (state) =>
         set((current) => {
           const previousState = current.threadStatesByThreadId[state.threadId];
-          // main pushes state before some invoke promises resolve — a delayed response must never roll chrome back to an older tab/runtime generation
+          // Main pushes state before some invoke Promises resolve. A delayed
+          // response can therefore arrive after a newer onState snapshot; it
+          // must never roll browser chrome (or the renderer binding inputs)
+          // back to an older tab/runtime generation.
           if (previousState && previousState.version >= state.version) {
             return current;
           }

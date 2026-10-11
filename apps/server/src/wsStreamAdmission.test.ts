@@ -85,7 +85,11 @@ describe("WsStreamAdmission", () => {
 
       yield* Deferred.await(started);
       expect(yield* admission.snapshot).toMatchObject({ active: 1, releasedTotal: 0 });
-      // a same-key resubscribe takes the lease over and tears the evicted stream down through its eviction latch — only the takeover's own release is counted since the evicted lease is already out of the ledger
+      // A same-key resubscribe takes the lease over and tears the evicted
+      // stream down through its eviction latch — the fiber draining it
+      // completes without manual interruption. The takeover's own release is
+      // the only one counted because the evicted lease is already gone from
+      // the ledger when the evicted stream finalizes.
       yield* Stream.runDrain(admission.guard(1, { key: "server.settings" }, Stream.empty));
       expect(yield* Ref.get(subscriptions)).toBe(1);
       yield* Fiber.join(fiber);
@@ -102,7 +106,8 @@ describe("WsStreamAdmission", () => {
   it("bounds live taps under repeated same-key resubscribes", async () => {
     await Effect.gen(function* () {
       const admission = yield* makeWsStreamAdmission();
-      // forks a guarded never-ending stream and waits until admitted so successive resubscribes evict deterministically
+      // Forks a guarded never-ending stream and waits until it is admitted, so
+      // successive resubscribes evict in a deterministic order.
       const forkGuardedNever = () =>
         Effect.gen(function* () {
           const admitted = yield* Deferred.make<void>();
@@ -120,7 +125,9 @@ describe("WsStreamAdmission", () => {
         });
       const first = yield* forkGuardedNever();
       const second = yield* forkGuardedNever();
-      // each takeover must terminate its predecessor — joining the evicted fibers completes without manual interruption and capacity never sees more than the single live lease
+      // Each takeover must terminate its predecessor: joining the evicted
+      // fibers completes without manual interruption, and capacity accounting
+      // never sees more than the single live lease.
       yield* Fiber.join(first);
       const third = yield* forkGuardedNever();
       yield* Fiber.join(second);
@@ -184,7 +191,8 @@ describe("WsStreamAdmission", () => {
         replacedDuplicateTotal: 1,
       });
 
-      // the evicted lease's release must be a no-op — its stream finalizes later and must not decrement the takeover's live lease
+      // The evicted lease's release must be a no-op: its stream finalizes
+      // later and must not decrement the takeover's live lease.
       yield* admission.release(first);
       expect(yield* admission.snapshot).toMatchObject({ active: 2, releasedTotal: 0 });
 

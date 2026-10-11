@@ -1,3 +1,7 @@
+// FILE: claudeAuthStatusLock.test.ts
+// Purpose: Regression tests for the in-process `claude auth status` mutex.
+// Layer: Provider utility tests.
+// Exports: Vitest coverage for apps/server/src/provider/claudeAuthStatusLock.ts.
 import { describe, it, assert } from "@effect/vitest";
 
 import { acquireClaudeAuthStatusLock } from "./claudeAuthStatusLock.ts";
@@ -26,7 +30,9 @@ describe("claudeAuthStatusLock", () => {
       }
     }
 
-    // three acquirers in the same tick: FIFO registration order, not timer delays, determines execution order
+    // Kick off three acquirers in the same tick (before any of them can have
+    // acquired the lock yet) so FIFO registration order -- not incidental
+    // timer delays -- is what determines execution order.
     const runs = [criticalSection(1, 20), criticalSection(2, 5), criticalSection(3, 15)];
     await Promise.all(runs);
 
@@ -56,7 +62,8 @@ describe("claudeAuthStatusLock", () => {
     release();
     release();
 
-    // The lock must still be free for the next acquirer -- a double release must not desynchronize the FIFO chain or deadlock later acquirers.
+    // The lock must still be free for the next acquirer -- a double release
+    // must not desynchronize the FIFO chain or deadlock later acquirers.
     const nextRelease = await acquireClaudeAuthStatusLock();
     nextRelease();
   });

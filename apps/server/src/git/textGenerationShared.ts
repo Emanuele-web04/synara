@@ -75,7 +75,9 @@ export function extractJsonObject(raw: string): string {
   return trimmed.slice(start);
 }
 
-// maxWords rejects sentence-length prose so it can't masquerade as a short field — the caller falls back to a message-derived default
+// Describes how to recover a single-field result from non-JSON output. `maxWords` rejects
+// sentence-length prose so it never masquerades as a short field (e.g. a title or branch),
+// letting the caller fall back to its own message-derived default instead.
 export interface RawTextFallback {
   readonly key: string;
   readonly maxWords?: number;
@@ -97,7 +99,8 @@ function tryParseJsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
-// prefer the requested field, else the first usable string — a wrong-key object yields "Foo" instead of the literal braces
+// Prefer the requested field, otherwise the first usable string value, so a wrong-key
+// JSON object (e.g. {"name":"Foo"}) yields "Foo" instead of the literal braces.
 function pickFallbackString(parsed: Record<string, unknown>, key: string): string | null {
   const preferred = parsed[key];
   if (typeof preferred === "string" && preferred.trim().length > 0) {
@@ -130,7 +133,10 @@ function coerceRawTextToFallback(raw: string, fallback: RawTextFallback): string
   return candidate;
 }
 
-// free-text providers are only *asked* for JSON (unlike Codex's --output-schema) — coerce bare values/prose into the expected field
+// Free-text providers (Cursor/OpenCode ACP) are only *asked* to emit JSON, unlike Codex
+// which enforces `--output-schema`. For single-field prompts (title/branch/summary) they often
+// reply with the bare value or surrounding prose, so coerce that raw text into the expected
+// single-string field instead of failing the whole generation.
 export function decodeStructuredTextGenerationOutput<S extends Schema.Top>(input: {
   readonly schema: S;
   readonly raw: string;
@@ -564,7 +570,8 @@ export function buildAutomationIntentPrompt(input: {
   };
 }
 
-// evaluated separately from the automation agent so the agent can't self-disable the loop
+// Evaluates a heartbeat stop clause from the completed run output, separate from the
+// automation agent so the agent cannot self-disable the loop.
 export function buildAutomationCompletionEvaluationPrompt(input: {
   readonly automationName: string;
   readonly automationPrompt: string;
@@ -690,7 +697,8 @@ export function buildThreadTitlePrompt(input: {
     outputSchemaJson: Schema.Struct({
       title: Schema.String,
     }),
-    // looser than the final cap — raw output is only rejected as "not a title" past this size; sanitize still trims to the cap
+    // Looser than the final cap: raw (non-JSON) output is only rejected as "not a
+    // title" past this size; sanitizeGeneratedThreadTitle still trims to the cap.
     rawTextFallback: {
       key: "title",
       maxWords: MAX_CHAT_THREAD_TITLE_WORDS + 4,

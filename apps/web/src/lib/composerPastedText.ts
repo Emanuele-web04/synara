@@ -1,8 +1,17 @@
+// FILE: composerPastedText.ts
+// Purpose: Shared helpers for the composer "collapsed big paste" feature. A large
+//   paste is held as an attachment card above the composer (not inline text); its
+//   full content rides to the provider in a trailing <pasted_text> block and is
+//   parsed back out to render the same card in the transcript.
+// Layer: Web composer utility
+// Depends on: nothing (kept import-free so both composer state and message display
+//   can consume it without cycles).
+
 export interface PastedTextDraft {
   id: string;
   createdAt: string;
   text: string;
-  // cached metrics so cards render a label without recomputing per render
+  // Cached metrics so cards render a label without recomputing on every render.
   lineCount: number;
   charCount: number;
 }
@@ -20,7 +29,8 @@ export interface ExtractedPastedTexts {
   previewTitle: string | null;
 }
 
-// A paste only collapses once it is large enough that inlining it would flood the composer. Either dimension trips the threshold.
+// A paste only collapses once it is large enough that inlining it would flood the
+// composer. Either dimension trips the threshold.
 export const PASTED_TEXT_MIN_LINES = 25;
 export const PASTED_TEXT_MIN_CHARS = 4000;
 
@@ -32,7 +42,8 @@ interface SerializedPastedTextEntry {
 }
 
 export function normalizePastedTextContent(text: string): string {
-  // normalize line endings only — leading/trailing whitespace can be meaningful in pasted content, never trim
+  // Normalize line endings only; leading/trailing whitespace can be meaningful in
+  // pasted content, so we never trim it.
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
@@ -86,6 +97,7 @@ export function formatPastedTextCountLabel(metrics: {
   return `${metrics.charCount.toLocaleString()} chars`;
 }
 
+// First non-empty line, trimmed; used as the card's title preview.
 export function pastedTextTitle(text: string): string {
   const normalized = normalizePastedTextContent(text);
   for (const line of normalized.split("\n")) {
@@ -96,6 +108,8 @@ export function pastedTextTitle(text: string): string {
   }
   return "Pasted text";
 }
+
+// --- Send-time serialization (cards -> trailing block)
 
 export function buildPastedTextBlock(pastedTexts: ReadonlyArray<{ text: string }>): string {
   const usable = filterPastedTextsWithText(pastedTexts);
@@ -119,6 +133,8 @@ export function appendPastedTextsToPrompt(
   }
   return trimmed.length > 0 ? `${trimmed}\n\n${block}` : block;
 }
+
+// --- Display-time extraction (trailing block -> cards)
 
 function buildParsedPastedTextEntry(index: number, text: string): ParsedPastedTextEntry {
   return {
@@ -147,7 +163,8 @@ function parseJsonPastedTextEntries(block: string): ParsedPastedTextEntry[] | nu
   }
 }
 
-// legacy delimiter parsing keeps already-sent messages renderable after the serializer moved to JSON to avoid collisions with arbitrary pasted content
+// Legacy delimiter parsing keeps already-sent messages renderable after the
+// serializer moved to JSON to avoid collisions with arbitrary pasted content.
 function parseLegacyPastedTextEntries(block: string): ParsedPastedTextEntry[] {
   const entries: ParsedPastedTextEntry[] = [];
   for (const match of block.matchAll(PASTED_TEXT_ENTRY_PATTERN)) {

@@ -1,6 +1,11 @@
+// FILE: providerDiscovery.ts
+// Purpose: Defines provider discovery request/response contracts shared across web and server.
+// Layer: Shared contracts
+// Exports: provider discovery schemas and inferred types used by the WS/native API.
+
 import { Schema } from "effect";
 import { ProcessEnvRecord, TrimmedNonEmptyString } from "./baseSchemas";
-import { OMP_THINKING_LEVEL_OPTIONS, ProviderOptionDescriptor } from "./model";
+import { ProviderOptionDescriptor } from "./model";
 import { ProviderInstanceId } from "./providerInstance";
 
 const ProviderDiscoveryKind = Schema.Literals([
@@ -86,7 +91,8 @@ export const ProviderListSkillsResult = Schema.Struct({
 });
 export type ProviderListSkillsResult = typeof ProviderListSkillsResult.Type;
 
-// `scope` carries the origin label ("synara", "codex", "claude", ...)
+// Unified cross-provider skills catalog (Synara portable skills). Descriptors use
+// `scope` to carry the origin label ("synara", "codex", "claude", "cursor", ...).
 export const ProviderSkillsCatalogInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
 });
@@ -123,7 +129,9 @@ export const ProviderListCommandsInput = Schema.Struct({
 });
 export type ProviderListCommandsInput = typeof ProviderListCommandsInput.Type;
 
-// `disabled` = host setting off; `unavailable` = the provider refused (plan, login, version, org policy)
+// Whether the provider can publish hosted artifacts in this session: `disabled`
+// means the host setting is off, `unavailable` means the provider refused it
+// (plan, login, version or organization policy).
 export const ProviderArtifactsState = Schema.Literals(["available", "disabled", "unavailable"]);
 export type ProviderArtifactsState = typeof ProviderArtifactsState.Type;
 
@@ -135,7 +143,7 @@ export const ProviderListCommandsResult = Schema.Struct({
 });
 export type ProviderListCommandsResult = typeof ProviderListCommandsResult.Type;
 
-// mirrors Codex app-server's marketplace + plugin summary surface
+// Plugin discovery mirrors Codex app-server's marketplace + plugin summary surface.
 export const ProviderPluginMarketplaceInterface = Schema.Struct({
   displayName: Schema.optional(TrimmedNonEmptyString),
 });
@@ -301,7 +309,9 @@ export const ProviderContextWindowDescriptor = Schema.Struct({
 });
 export type ProviderContextWindowDescriptor = typeof ProviderContextWindowDescriptor.Type;
 
-// family-level model with a matrix of process-start variants — keeps friendly effort/context/fast controls separate from the opaque model UID
+// Some provider CLIs expose a family-level model with a matrix of concrete
+// process-start variants. The web app uses this mapping to keep the friendly
+// effort/context/fast controls separate from the provider's opaque model UID.
 export const ProviderModelVariantDescriptor = Schema.Struct({
   model: TrimmedNonEmptyString,
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
@@ -319,7 +329,8 @@ export const ProviderModelDescriptor = Schema.Struct({
   upstreamProviderId: Schema.optional(TrimmedNonEmptyString),
   upstreamProviderName: Schema.optional(TrimmedNonEmptyString),
   optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
-  // normalized so legacy string arrays and Remodex-style reasoning objects consume uniformly
+  // Codex model/list results are normalized here so the web app can consume both
+  // the legacy string array and Remodex-style reasoning objects uniformly.
   supportedReasoningEfforts: Schema.optional(Schema.Array(ProviderReasoningEffortDescriptor)),
   defaultReasoningEffort: Schema.optional(TrimmedNonEmptyString),
   supportsFastMode: Schema.optional(Schema.Boolean),
@@ -331,19 +342,12 @@ export const ProviderModelDescriptor = Schema.Struct({
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 
-export const OmpRoleDescriptor = Schema.Struct({
-  name: TrimmedNonEmptyString,
-  model: TrimmedNonEmptyString,
-  thinkingLevel: Schema.optional(Schema.Literals(OMP_THINKING_LEVEL_OPTIONS)),
-});
-export type OmpRoleDescriptor = typeof OmpRoleDescriptor.Type;
-
 export const ProviderListModelsResult = Schema.Struct({
   models: Schema.Array(ProviderModelDescriptor),
-  roles: Schema.optional(Schema.Array(OmpRoleDescriptor)),
   source: Schema.optional(TrimmedNonEmptyString),
   cached: Schema.optional(Schema.Boolean),
-  // concise redacted explanation when live discovery failed and a static fallback was used
+  // A concise, redacted explanation when live discovery failed and the result
+  // was populated from a static fallback.
   error: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;

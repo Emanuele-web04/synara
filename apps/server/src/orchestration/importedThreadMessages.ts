@@ -1,3 +1,8 @@
+// FILE: importedThreadMessages.ts
+// Purpose: Normalizes provider-native transcript snapshots into Synara import messages.
+// Layer: Orchestration import mapping
+// Exports: Codex, Claude, OpenCode, and Factory Droid transcript mappers.
+
 import type { SessionMessage as ClaudeSessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { MessageId, type ThreadHandoffImportedMessage, type ThreadId } from "@synara/contracts";
 
@@ -34,7 +39,7 @@ interface CodexImportTurn {
 }
 
 type ClaudeImportMessage = ClaudeSessionMessage & {
-  // the SDK omits timestamps — the import reader recovers them by UUID from JSONL
+  // The SDK omits timestamps; the import reader can recover these by UUID from JSONL.
   readonly timestamp?: unknown;
   readonly createdAt?: unknown;
   readonly updatedAt?: unknown;
@@ -49,7 +54,7 @@ interface PendingImportMessage {
 }
 
 function readTimestamp(value: unknown): number | undefined {
-  // Codex turn times are Unix seconds; enriched local records may use milliseconds
+  // Codex turn times are Unix seconds; enriched local records may use milliseconds.
   const milliseconds =
     typeof value === "number"
       ? Math.abs(value) < 1e12
@@ -74,7 +79,8 @@ function finalizeImportedMessages(
       : Date.parse(importedAt) - 1;
 
   return messages.map((message) => {
-    // distinct milliseconds preserve source order when native records have absent/equal times, without depending on UUID ordering
+    // Projections sort by timestamp and ID. Distinct milliseconds preserve source order
+    // when native records have absent/equal times, without depending on UUID ordering.
     const createdAt = Math.max(message.createdAt ?? previousTimestamp + 1, previousTimestamp + 1);
     previousTimestamp = createdAt;
     return {

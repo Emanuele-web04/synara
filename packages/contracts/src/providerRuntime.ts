@@ -322,7 +322,7 @@ export type ThreadMetadataUpdatedPayload = typeof ThreadMetadataUpdatedPayload.T
 
 export const ThreadTokenUsageSnapshot = Schema.Struct({
   claudeCache: Schema.optional(ClaudeCacheObservation),
-  // session totals, distinct from the latest request/context snapshot
+  // Provider session totals, distinct from the latest request/context snapshot.
   cumulativeUsage: Schema.optional(
     Schema.Struct({
       inputTokens: NonNegativeInt,
@@ -336,7 +336,7 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
     Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
   ),
   totalProcessedTokens: Schema.optional(NonNegativeInt),
-  // Claude v1 counts API responses once — unversioned Claude totals are unreliable
+  // Claude v1 counts API responses once; unversioned Claude totals are unreliable.
   tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
   maxTokens: Schema.optional(PositiveInt),
   inputTokens: Schema.optional(NonNegativeInt),
@@ -392,13 +392,13 @@ export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
 const TurnCompletedPayload = Schema.Struct({
   state: RuntimeTurnState,
-  // present only for an explicitly requested native compaction
+  // Present only for an explicitly requested native compaction operation.
   contextCompacted: Schema.optional(Schema.Boolean),
   stopReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
   usage: Schema.optional(Schema.Unknown),
   modelUsage: Schema.optional(UnknownRecordSchema),
   tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
-  // per-turn usage, including observed usage when no result arrives
+  // Per-turn main-loop usage, including observed usage when no result arrives.
   mainLoopTokens: Schema.optional(NonNegativeInt),
   totalCostUsd: Schema.optional(Schema.Number),
   cumulativeCostUsd: Schema.optional(Schema.Number),
@@ -444,13 +444,17 @@ export const ItemLifecyclePayload = Schema.Struct({
   itemType: CanonicalItemType,
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
-  // free-form tool output legitimately carries whitespace — a TrimmedNonEmptyString here forces ordinary item events into quarantine
+  // Free-form body (e.g. raw tool output), which legitimately carries leading
+  // and/or trailing whitespace. Keep it unconstrained so item events from
+  // provider adapters (pi, opencode, codex, ...) always pass the durable
+  // journal's encode step; a TrimmedNonEmptyString here rejects ordinary
+  // tool output and forces the event into quarantine.
   detail: Schema.optional(Schema.String),
   data: Schema.optional(Schema.Unknown),
 });
 export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;
 
-// Codex-generated images persist as local file references, never inline bytes
+// Codex-generated images are persisted as local file references, never inline bytes.
 export const CODEX_GENERATED_IMAGE_ARTIFACT_KIND = "codex.generated_image" as const;
 export const CodexGeneratedImageArtifact = Schema.Struct({
   kind: Schema.Literal(CODEX_GENERATED_IMAGE_ARTIFACT_KIND),
@@ -508,21 +512,24 @@ const UserInputResolvedPayload = Schema.Struct({
 });
 export type UserInputResolvedPayload = typeof UserInputResolvedPayload.Type;
 
-// declared in the workflow script's `meta.phases` literal
+// Phase declared in a workflow script's `meta.phases` literal.
 const WorkflowPhase = Schema.Struct({
   title: TrimmedNonEmptyStringSchema,
   detail: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type WorkflowPhase = typeof WorkflowPhase.Type;
 
-// phaseIndex is 1-based in recent CLI output — prefer the title when both exist
+// Final per-agent snapshot from a settled workflow's progress file.
 const WorkflowAgentSnapshot = Schema.Struct({
   label: TrimmedNonEmptyStringSchema,
   phaseIndex: Schema.optional(Schema.Int),
+  // Authoritative phase name from the progress file; phaseIndex is 1-based in
+  // recent CLI output files, so prefer the title when both are present.
   phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),
   agentId: Schema.optional(TrimmedNonEmptyStringSchema),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
-  // backfilled at settle when the progress file carries no effort
+  // Backfilled from the live runtime snapshots at settle when the progress
+  // file itself carries no effort.
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
   state: Schema.optional(TrimmedNonEmptyStringSchema),
   tokens: Schema.optional(Schema.Int),
@@ -533,12 +540,14 @@ const WorkflowAgentSnapshot = Schema.Struct({
 });
 export type WorkflowAgentSnapshot = typeof WorkflowAgentSnapshot.Type;
 
-// best-effort join against progress descriptions — may be absent
+// Live per-agent snapshot polled from a running workflow's transcript directory
+// (journal.jsonl + agent-<id>.jsonl). The label is a best-effort join against
+// the workflow's progress descriptions and may be absent.
 const WorkflowAgentRuntimeSnapshot = Schema.Struct({
   agentId: TrimmedNonEmptyStringSchema,
   label: Schema.optional(TrimmedNonEmptyStringSchema),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
-  // the top-level `effort` field on transcript assistant lines
+  // Top-level `effort` field on the transcript's assistant lines.
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
   state: Schema.optional(Schema.Literals(["running", "completed"])),
   tokens: Schema.optional(Schema.Int),
@@ -550,7 +559,8 @@ const WorkflowAgentRuntimeSnapshot = Schema.Struct({
 });
 export type WorkflowAgentRuntimeSnapshot = typeof WorkflowAgentRuntimeSnapshot.Type;
 
-// string literals only
+// Per-agent() opts scanned statically from a workflow script (string literals
+// only): planned phase/model/effort for an agent label before it runs live.
 const WorkflowAgentPlan = Schema.Struct({
   phase: Schema.optional(TrimmedNonEmptyStringSchema),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -565,10 +575,13 @@ const TaskStartedPayload = Schema.Struct({
   subagentType: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowTaskId: Schema.optional(RuntimeTaskId),
-  // absent when the meta literal isn't parseable
+  // Parsed statically from the workflow script (task_started.prompt or the
+  // Workflow tool input); absent when the meta literal is not parseable.
   workflowPhases: Schema.optional(Schema.Array(WorkflowPhase)),
+  // agent() label -> phase title pairs scanned from the script text.
   workflowAgentPhases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-  // superset of workflowAgentPhases — kept for already-persisted events
+  // agent() label -> planned {phase, model, effort} opts scanned from the script
+  // text. Superset of workflowAgentPhases (kept for already-persisted events).
   workflowAgentPlans: Schema.optional(Schema.Record(Schema.String, WorkflowAgentPlan)),
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
@@ -581,8 +594,14 @@ const TaskProgressPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowTaskId: Schema.optional(RuntimeTaskId),
-  // polled from the run's transcript directory while running
+  // Live per-agent snapshots for workflow tasks, polled from the run's
+  // transcript directory while the workflow is running.
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentRuntimeSnapshot)),
+  // Set when the task is a provider-native subagent: the spawning tool call id
+  // (the child thread's provider thread id) and the subagent's own title, so
+  // progress is attributed to that subagent instead of the parent's reasoning.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentTitle: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
 
@@ -592,11 +611,12 @@ const TaskUpdatedPayload = Schema.Struct({
     Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
   ),
   error: Schema.optional(TrimmedNonEmptyStringSchema),
-  // set when the SDK moves a blocking Task call between foreground and background
+  // Set when the SDK moves a blocking Task call between foreground and background.
   isBackgrounded: Schema.optional(Schema.Boolean),
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowTaskId: Schema.optional(RuntimeTaskId),
-  // re-invoking the tool with {scriptPath, resumeFromRunId} resumes the run
+  // Persisted launch identifiers from the Workflow tool result; re-invoking the
+  // tool with {scriptPath, resumeFromRunId} resumes the run.
   workflowRunId: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowScriptPath: Schema.optional(TrimmedNonEmptyStringSchema),
 });
@@ -609,10 +629,17 @@ const TaskCompletedPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   workflowTaskId: Schema.optional(RuntimeTaskId),
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
+  // Spawning tool call id when the task is a provider-native subagent.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 
-// `target` decides whether the steer needs its own marker — "subagent" lands on a child thread where nothing else shows it; absent means "subagent" (the only producer before turn steering)
+// A user message was injected into running work without interrupting it.
+// `target` says where it landed, which decides whether the message needs its own
+// transcript marker: a `"subagent"` steer is delivered on the child thread where
+// nothing else shows it, while a `"turn"` steer is already rendered as the sent
+// user message on the thread it steers. Absent means `"subagent"` (the only
+// producer before turn steering existed).
 const TurnSteeredPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   target: Schema.optional(Schema.Literals(["turn", "subagent"])),
@@ -755,7 +782,8 @@ const RuntimeErrorPayload = Schema.Struct({
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;
 
-// the adapter bounds and redacts `data`; `detail` is a safe readable one-liner
+// Forward-compatible diagnostic for provider events without an explicit mapping.
+// The adapter bounds and redacts `data`; `detail` is a safe readable one-liner.
 const EventUnmappedPayload = Schema.Struct({
   nativeType: TrimmedNonEmptyStringSchema,
   detail: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -1195,7 +1223,7 @@ export type ProviderRuntimeEventV2 = typeof ProviderRuntimeEventV2.Type;
 export const ProviderRuntimeEvent = ProviderRuntimeEventV2;
 export type ProviderRuntimeEvent = ProviderRuntimeEventV2;
 
-// compatibility aliases for legacy import names
+// Compatibility aliases for call sites still importing legacy names.
 const ProviderRuntimeMessageDeltaEvent = ProviderRuntimeContentDeltaEvent;
 export type ProviderRuntimeMessageDeltaEvent = ProviderRuntimeContentDeltaEvent;
 const ProviderRuntimeMessageCompletedEvent = ProviderRuntimeItemCompletedEvent;
@@ -1209,7 +1237,7 @@ export type ProviderRuntimeApprovalRequestedEvent = ProviderRuntimeRequestOpened
 const ProviderRuntimeApprovalResolvedEvent = ProviderRuntimeRequestResolvedEvent;
 export type ProviderRuntimeApprovalResolvedEvent = ProviderRuntimeRequestResolvedEvent;
 
-// legacy helper aliases for adapters/tests
+// Legacy helper aliases retained for adapters/tests.
 const ProviderRuntimeToolKind = Schema.Literals(["command", "file-read", "file-change", "other"]);
 export type ProviderRuntimeToolKind = typeof ProviderRuntimeToolKind.Type;
 

@@ -2,6 +2,7 @@ import type { ServerConsumeCodexResetCreditInput } from "@synara/contracts";
 
 const storageKey = (accountId: string) => `synara:codex-reset-attempt:${accountId}`;
 
+/** An uncertain redemption survives popover unmounts, reconnects and page reloads. */
 export function readCodexResetAttempt(
   accountId: string,
 ): ServerConsumeCodexResetCreditInput | null {
@@ -39,7 +40,7 @@ export function prepareCodexResetAttempt(
     idempotencyKey: crypto.randomUUID(),
     ...(creditId ? { creditId } : {}),
   };
-  // persist before submitting — if storage is unavailable, fail before spending a credit
+  // Persist before submitting. If storage is unavailable, fail before spending a credit.
   localStorage.setItem(storageKey(accountId), JSON.stringify(attempt));
   return attempt;
 }

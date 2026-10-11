@@ -20,7 +20,11 @@ export function useDiffChangeNavigationShortcuts({
 }: {
   keybindings: ResolvedKeybindingsConfig;
   enabled: boolean;
-  // the panel stays mounted with warm queries while another editor pane shows — the shortcuts only act when this surface is displayed
+  /**
+   * The diff surface the shortcuts drive. The panel stays mounted (with warm
+   * queries) while another editor pane is shown, so the shortcuts only act
+   * when this surface is actually displayed.
+   */
   surfaceRef: RefObject<HTMLElement | null>;
   onNavigate: (direction: DiffChangeNavigationDirection) => void;
 }): void {

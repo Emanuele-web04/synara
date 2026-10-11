@@ -23,7 +23,8 @@ export function claudeCacheContextTokens(usage: {
     raw.cache_creation_input_tokens,
   ].map(tokenCount);
   const output = tokenCount(raw.output_tokens);
-  // the summary's total can be the last prompt alone — add its output only when native usage proves that correspondence, never to a newer estimate
+  // The summary's total can be the last prompt alone. Add its output only when
+  // the native usage proves that correspondence, never to a newer estimate.
   return counts.every((count) => count !== undefined) &&
     output !== undefined &&
     counts.reduce<number>((sum, count) => sum + count!, 0) === total

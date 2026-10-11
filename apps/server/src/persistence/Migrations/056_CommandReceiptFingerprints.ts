@@ -1,4 +1,6 @@
-// optional command fingerprint identity and its null-parity guards
+// FILE: 056_CommandReceiptFingerprints.ts
+// Purpose: Adds the optional command fingerprint identity and its null-parity guards.
+// Layer: SQLite migration
 
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";

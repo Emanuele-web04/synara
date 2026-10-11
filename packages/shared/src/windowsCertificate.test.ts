@@ -1,3 +1,7 @@
+// FILE: windowsCertificate.test.ts
+// Purpose: Keeps Windows signer identity matching consistent across desktop and release checks.
+// Layer: Shared utility tests
+
 import { describe, expect, it } from "vitest";
 
 import { matchesDistinguishedName, parseDistinguishedName } from "./windowsCertificate";

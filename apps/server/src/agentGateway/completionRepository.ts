@@ -11,7 +11,7 @@ export interface GatewayCompletionRow {
   readonly createdAt: string;
 }
 
-/** durable outbox + provider-send assignments sharing the command ledger's transaction */
+/** Durable outbox and provider-send assignments, sharing the command ledger's transaction. */
 export const makeCompletionRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const isOutputSettled = (childThreadId: string) =>
@@ -102,7 +102,9 @@ export const makeCompletionRepository = Effect.gen(function* () {
       }),
     );
 
-  // settle consumption and the receipt atomically — rejection releases results, safe retries keep the assignment, uncertain sends stay held
+  // Settle consumption and the existing provider-command receipt atomically.
+  // Rejection releases the results; safe retries retain the exact assignment.
+  // Uncertain sends remain held behind the existing reconciliation gate.
   const settleContext = <E, R>(
     eventSequence: number,
     accepted: boolean,

@@ -2,7 +2,7 @@ function trimTrailingZero(value: string): string {
   return value.endsWith(".0") ? value.slice(0, -2) : value;
 }
 
-// compact UI/prompt summaries without pulling locale state into tests
+// Formats byte counts for compact UI/prompt summaries without pulling locale state into tests.
 export function formatBytes(bytes: number): string {
   const normalized = Number.isFinite(bytes) ? Math.max(0, Math.floor(bytes)) : 0;
   if (normalized < 1024) {

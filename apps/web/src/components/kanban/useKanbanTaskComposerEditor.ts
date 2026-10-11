@@ -1,3 +1,8 @@
+// FILE: useKanbanTaskComposerEditor.ts
+// Purpose: Handles kanban task composer insertion, cursor, and menu key behavior.
+// Layer: Kanban UI hook
+// Exports: useKanbanTaskComposerEditor
+
 import type {
   ModelSlug,
   ProviderInteractionMode,

@@ -1,4 +1,6 @@
-// recompute denormalized shell summary from existing message/activity/plan state
+// FILE: 027_BackfillProjectionThreadShellSummary.ts
+// Purpose: Recomputes denormalized thread shell summary fields from existing message/activity/plan state.
+// Layer: Persistence migration
 
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";

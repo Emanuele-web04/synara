@@ -102,6 +102,7 @@ async function dispatchKanbanDraftCardInternal(
 interface KanbanDraftDispatchInput {
   threadId: ThreadId;
   projectId: ProjectId;
+  /** Backing summary; null for local-only draft threads not yet promoted. */
   thread: SidebarThreadSummary | null;
   defaultProvider: ProviderKind;
   assistantDeliveryMode: AssistantDeliveryMode;

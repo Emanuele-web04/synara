@@ -1,4 +1,4 @@
-// exercises the installed Effect patch including its compiled runtime entrypoint
+// Exercises the installed Effect patch, including its compiled runtime entrypoint.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";

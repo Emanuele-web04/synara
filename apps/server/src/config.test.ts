@@ -1,3 +1,10 @@
+// FILE: config.test.ts
+// Purpose: Verifies pure server configuration path derivation helpers, plus the
+//          realpath canonicalization applied to homeDir/chatWorkspaceRoot/
+//          studioWorkspaceRoot so reported roots match the REALPATH-canonicalized
+//          roots stored on project rows (see wsRpc.ts's
+//          canonicalizeProjectWorkspaceRoot).
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
 import fs from "node:fs";
@@ -106,7 +113,9 @@ describe("resolveCanonicalWorkspaceRoots", () => {
 
     const expectedHomeDir = fs.realpathSync(realHome);
     expect(result.homeDir).toBe(expectedHomeDir);
-    // the roots don't exist yet under the resolved home — re-derive from the canonicalized (symlink-free) home, not the raw symlinked input
+    // chatWorkspaceRoot/studioWorkspaceRoot don't exist yet under the resolved
+    // home, so they must be re-derived from the canonicalized (symlink-free)
+    // home rather than the raw, symlinked input.
     expect(result.chatWorkspaceRoot).toBe(path.join(expectedHomeDir, "Documents", "Synara"));
     expect(result.studioWorkspaceRoot).toBe(
       path.join(expectedHomeDir, "Documents", "Synara", "Studio"),
@@ -122,7 +131,9 @@ describe("resolveCanonicalWorkspaceRoots", () => {
     fs.mkdirSync(realDocuments, { recursive: true });
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    // symlink ~/Documents elsewhere, matching the bug scenario (e.g. iCloud-managed Documents) — neither Synara/ nor Synara/Studio exists beneath it
+    // Symlink ~/Documents to a real directory elsewhere, matching the bug
+    // report scenario (e.g. iCloud-managed Documents on macOS). Neither
+    // Synara/ nor Synara/Studio exist yet underneath it.
     const symlinkedDocuments = path.join(homeDir, "Documents");
     fs.symlinkSync(realDocuments, symlinkedDocuments, "dir");
 
@@ -140,7 +151,8 @@ describe("resolveCanonicalWorkspaceRoots", () => {
     expect(fs.existsSync(result.studioWorkspaceRoot)).toBe(false);
     expect(fs.existsSync(result.groupsWorkspaceRoot)).toBe(false);
 
-    // once the lazily-created dir appears, realpath must agree with the previously-reported pre-creation canonicalized root
+    // Once the lazily-created directory shows up on disk, realpath must agree
+    // with the previously-reported (pre-creation) canonicalized root.
     fs.mkdirSync(result.studioWorkspaceRoot, { recursive: true });
     expect(fs.realpathSync(result.studioWorkspaceRoot)).toBe(result.studioWorkspaceRoot);
     fs.mkdirSync(result.groupsWorkspaceRoot, { recursive: true });

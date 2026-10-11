@@ -9,6 +9,8 @@ import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurablePro
 import ProjectionThreadsGatewayProvenanceMigration from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
 import ProjectPullRequestPinsMigration from "./Migrations/069_ProjectPullRequestPins.ts";
 import PullRequestAutoFixMigration from "./Migrations/130_PullRequestAutoFix.ts";
+import ForkSourceMessageMigration from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
+import WorkspaceInitializationMigration from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -34,13 +36,18 @@ const tableIndexNames = (sql: SqlClient.SqlClient, tableName: string) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("reconcileMigrationLineage", (it) => {
-  // imported db whose tracker high-water mark reaches Synara's latest ID — the max-ID gate skips every migration including the #032 self-heal, and startup crashes on missing env_mode
+  // An imported database whose tracker high-water
+  // mark is at or beyond Synara's latest migration ID. The migrator's max-ID
+  // gate then skips every Synara migration — including the #032 self-heal —
+  // and startup crashes on the missing env_mode column.
   it.effect("re-runs skipped migrations when an imported tracker outruns Synara's latest ID", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
+      // Bring the schema to the last shared migration.
       yield* runMigrations({ toMigrationInclusive: 16 });
 
+      // Record a foreign lineage from 17 through past Synara's latest ID.
       const latestSynaraId = Math.max(...migrationEntries.map(([id]) => id));
       for (let id = 17; id <= latestSynaraId + 3; id++) {
         yield* sql`
@@ -49,7 +56,8 @@ layer("reconcileMigrationLineage", (it) => {
         `;
       }
 
-      // the foreign lineage added some of the same columns — the re-run must tolerate existing columns
+      // The foreign lineage added some of the same columns, so the
+      // re-run must tolerate columns that already exist.
       yield* sql`ALTER TABLE projection_threads ADD COLUMN archived_at TEXT`;
 
       const beforeColumns = yield* projectionThreadsColumnNames(sql);
@@ -65,6 +73,7 @@ layer("reconcileMigrationLineage", (it) => {
       assert.include(afterColumns, "env_mode");
       assert.include(afterColumns, "archived_at");
 
+      // The tracker now mirrors the Synara lineage exactly; foreign rows are gone.
       const rows = yield* trackerRows(sql);
       assert.deepStrictEqual(
         rows.map((row) => [row.migration_id, row.name]),
@@ -73,11 +82,57 @@ layer("reconcileMigrationLineage", (it) => {
     }),
   );
 
+  it.effect(
+    "adds workspace classification without changing existing turns or erasing it on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 132 });
+        yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, checkpoint_files_json)
+        VALUES ('old-workspace-thread', 'old-workspace-turn', 'completed', '2026-10-10T10:00:00.000Z', '[]')`;
+        yield* runMigrations();
+        const read = () => sql<{
+          state: string;
+          marker: number;
+        }>`SELECT state, started_without_git_workspace AS marker
+        FROM projection_turns WHERE turn_id = 'old-workspace-turn'`;
+        assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 0 }]);
+        yield* sql`UPDATE projection_turns SET started_without_git_workspace = 1 WHERE turn_id = 'old-workspace-turn'`;
+        yield* WorkspaceInitializationMigration;
+        assert.deepStrictEqual(yield* read(), [{ state: "completed", marker: 1 }]);
+      }),
+  );
+
+  it.effect(
+    "adds a nullable fork cutoff without modifying legacy threads or clearing it on replay",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 133 });
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+        VALUES ('legacy-fork', 'project', 'Keep this', '2026-10-10T10:00:00.000Z', '2026-10-10T10:00:00.000Z')`;
+        yield* runMigrations();
+        const read = () => sql<{
+          title: string;
+          cutoff: string | null;
+        }>`SELECT title, fork_source_message_id AS cutoff
+        FROM projection_threads WHERE thread_id = 'legacy-fork'`;
+        assert.deepStrictEqual(yield* read(), [{ title: "Keep this", cutoff: null }]);
+        yield* sql`UPDATE projection_threads SET fork_source_message_id = 'chosen-message' WHERE thread_id = 'legacy-fork'`;
+        yield* ForkSourceMessageMigration;
+        assert.deepStrictEqual(yield* read(), [{ title: "Keep this", cutoff: "chosen-message" }]);
+      }),
+  );
+
   it.effect("leaves a healthy tracker alone", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
       yield* runMigrations();
+      assert.include(
+        yield* tableColumnNames(sql, "projection_turns"),
+        "started_without_git_workspace",
+      );
       const executed = yield* runMigrations();
       assert.lengthOf(executed, 0);
 
@@ -130,6 +185,7 @@ layer("reconcileMigrationLineage", (it) => {
       const rows = yield* trackerRows(sql);
       assert.deepStrictEqual(rows, rowsBefore);
 
+      // The suite shares one in-memory database through the layer.
       yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${futureId}`;
     }),
   );
@@ -149,6 +205,7 @@ layer("reconcileMigrationLineage", (it) => {
       const error = yield* Effect.flip(runMigrations());
       assert.strictEqual(error._tag, "MigrationLineageError");
 
+      // Nothing was deleted on the unrecognized database.
       const rowsAfter = yield* trackerRows(sql);
       assert.deepStrictEqual(rowsAfter, rowsBefore);
     }),
@@ -622,6 +679,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -706,6 +765,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 130, name: "PullRequestAutoFix" },
           { migration_id: 131, name: "ProjectSourceFolders" },
           { migration_id: 132, name: "ExternalMcpTurnCapacityRecovery" },
+          { migration_id: 133, name: "ProjectionTurnsWorkspaceInitialization" },
+          { migration_id: 134, name: "ProjectionThreadsForkSourceMessage" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -870,6 +931,8 @@ agentGatewayRetentionLegacyLayer(
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -916,7 +979,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 69 });
 
-      // private builds of the original Spaces branch claimed migration 70 before main assigned it to AgentGatewayOperations
+      // Private builds of the original Spaces branch claimed migration 70 before
+      // current main assigned that ID to AgentGatewayOperations.
       yield* SpacesMigration;
       yield* sql`
         INSERT INTO projection_spaces (
@@ -996,6 +1060,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1064,6 +1130,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
         ],
       );
 
@@ -1107,7 +1175,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 74 });
 
-      // PR #365 previously published Spaces as 74; main owns 74–78 for External MCP — reconciliation replays that range and applies Spaces at 79 without dropping the table
+      // PR #365 previously published Spaces as migration 74. Main now owns 74–78 for
+      // External MCP, so lineage reconciliation must replay that canonical range and
+      // apply Spaces at 79 without dropping the already-created table or rows.
       yield* SpacesMigration;
       yield* sql`
         INSERT INTO projection_spaces (
@@ -1184,6 +1254,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
         [132, "ExternalMcpTurnCapacityRecovery"],
+        [133, "ProjectionTurnsWorkspaceInitialization"],
+        [134, "ProjectionThreadsForkSourceMessage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1248,6 +1320,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
           [132, "ExternalMcpTurnCapacityRecovery"],
+          [133, "ProjectionTurnsWorkspaceInitialization"],
+          [134, "ProjectionThreadsForkSourceMessage"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -1397,7 +1471,8 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
 
 const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
 
-// migrationEntries is `as const` — an inferred Map keys on the literal union and rejects plain `number`; widen once here
+// `migrationEntries` is `as const`, so an inferred Map keys on the literal id union and rejects
+// the plain `number` ids these helpers are looked up with. Widen the key type once, here.
 const canonicalNamesById = new Map<number, string>(
   migrationEntries.map(([id, name]) => [id, name] as const),
 );
@@ -1419,7 +1494,8 @@ releasedV055Layer("released v0.5.5 database", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // a v0.5.5 database: canonical 1-53 then the pins migration at the ID that release shipped it at
+      // Reproduce a database written by v0.5.5: canonical rows 1-53, then the
+      // pins migration recorded under the ID that release shipped it at.
       yield* runMigrations({ toMigrationInclusive: 53 });
       yield* ProjectPullRequestPinsMigration;
       yield* sql`
@@ -1434,7 +1510,7 @@ releasedV055Layer("released v0.5.5 database", (it) => {
       const createdAtBefore = yield* trackerCreatedAtById(sql);
       const executed = yield* runMigrations();
 
-      // migration 54 is never replayed — its tracker row was renamed in place
+      // Migration 54 is never replayed: its tracker row was renamed in place.
       assert.deepStrictEqual(
         executed.map(([id]) => id),
         migrationEntries.map(([id]) => id).filter((id) => id >= 55),
@@ -1446,13 +1522,14 @@ releasedV055Layer("released v0.5.5 database", (it) => {
         migrationEntries.map(([id, name]) => [id, name]),
       );
 
-      // every row survived as a row — a metadata fix-up, not delete-and-replay; created_at would change on re-insert
+      // Every pre-existing row survived as a row — a metadata fix-up, not a
+      // delete-and-replay. `created_at` would change if rows were re-inserted.
       const createdAtAfter = yield* trackerCreatedAtById(sql);
       for (const [id, createdAt] of createdAtBefore) {
         assert.strictEqual(createdAtAfter.get(id), createdAt, `migration ${id} row was recreated`);
       }
 
-      // the pins migration re-runs at 69 and must be a no-op over real data
+      // The pins migration re-runs at 69 and must be a no-op over real data.
       const pins = yield* sql<{ readonly projectId: string; readonly number: number }>`
         SELECT project_id AS "projectId", pull_request_number AS "number"
         FROM project_pull_request_pins
@@ -1469,7 +1546,9 @@ divergedBeyondAliasLayer("tracker that diverges beyond a known alias", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // a dev-build db where 54 matches the alias but 55 was claimed by an unrelated migration — not a v0.5.5 db, keeps the replay path
+      // A development build between v0.5.5 and v0.6.0: migration 54 matches the
+      // alias but 55 was claimed by an unrelated migration, so this is not a
+      // v0.5.5 database and must keep taking the existing replay path.
       yield* runMigrations({ toMigrationInclusive: 53 });
       yield* ProjectPullRequestPinsMigration;
       yield* sql`

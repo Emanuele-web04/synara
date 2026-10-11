@@ -5,7 +5,9 @@ import * as OS from "node:os";
 import type { BrowserToolName, ProviderKind, ThreadId } from "@synara/contracts";
 
 const FRAME_HEADER_BYTES = 4;
-// an 8 MiB PNG is ~10.7 MiB as base64 in the envelope — cap the private transport well under arbitrary-memory framing
+// A bounded 8 MiB PNG expands to roughly 10.7 MiB as base64 inside the
+// snapshot host envelope. Leave protocol overhead while keeping the private
+// transport capped well below arbitrary-memory framing.
 const MAX_FRAME_BYTES = 12 * 1024 * 1024;
 const CONNECT_TIMEOUT_MS = 5_000;
 const INFO_TIMEOUT_MS = 5_000;
@@ -259,7 +261,7 @@ export interface BrowserHostToolCall {
   readonly threadId: ThreadId;
   readonly name: BrowserToolName;
   readonly arguments: Record<string, unknown>;
-  /** server-resolved authenticated thread workspace — never sourced from MCP arguments */
+  /** Server-resolved authenticated thread workspace. Never sourced from MCP arguments. */
   readonly workspaceRoot?: string;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
@@ -300,7 +302,9 @@ export async function callBrowserHostTool(input: BrowserHostToolCall): Promise<u
     );
     assertCompatibleHostInfo(hostInfo, input.sessionKey);
     const executeBudget = Math.floor(remainingOrThrow(deadline, "executeTool"));
-    // if transport/auth overhead consumed all but a sub-action quantum, fail here rather than minting a fresh desktop budget
+    // The desktop validates the public timeout lower bound. If transport/auth
+    // overhead consumed all but a sub-action quantum, fail here instead of
+    // manufacturing a fresh desktop budget beyond the caller's deadline.
     if (executeBudget < MIN_DESKTOP_TIMEOUT_MS) {
       throw new BrowserHostRpcError("timeout", "Browser host executeTool timed out.");
     }
@@ -348,7 +352,7 @@ export function resolveBrowserHostCapability(env: NodeJS.ProcessEnv = process.en
     try {
       FS.closeSync(fd);
     } catch {
-      // the inherited one-shot descriptor may already have been closed by the runtime
+      // The inherited one-shot descriptor may already have been closed by the runtime.
     }
   }
   return inheritedCapabilityFromFd;

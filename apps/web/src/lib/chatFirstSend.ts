@@ -87,7 +87,8 @@ export function resolveFirstSendTarget(input: {
     };
   }
 
-  // home-chat folder mentions intentionally escape the generic-chat workspace and become normal projects
+  // Home-chat folder mentions intentionally escape the generic-chat workspace and become
+  // normal projects.
   if (!selectedWorkspaceRoot) {
     if (!chatWorkspaceRoot) {
       return {

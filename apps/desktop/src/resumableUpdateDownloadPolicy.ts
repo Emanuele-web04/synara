@@ -1,3 +1,8 @@
+// FILE: resumableUpdateDownloadPolicy.ts
+// Purpose: Defines the synchronous HTTP, retry, progress, and checksum policy for resumable updates.
+// Layer: Desktop updater policy
+// Depends on: URL and plain data only; no filesystem, socket, Electron, or updater lifecycle.
+
 export interface ResumableProgressInfo {
   readonly total: number;
   readonly delta: number;
@@ -7,14 +12,19 @@ export interface ResumableProgressInfo {
 }
 
 export interface ResumableDownloadConfig {
+  // Abort a connection that delivers no bytes for this long, then resume.
   readonly idleTimeoutMs: number;
+  // Backoff between reconnect attempts (the first reconnect is immediate).
   readonly retryBaseDelayMs: number;
   readonly retryMaxDelayMs: number;
+  // Give up after this many consecutive attempts that add zero new bytes.
   readonly maxConsecutiveStallRetries: number;
-  // absolute caps so a flapping connection can never loop forever
+  // Absolute caps so a flapping connection can never loop forever.
   readonly maxTotalAttempts: number;
   readonly overallTimeoutMs: number;
+  // Throttle for emitted progress events.
   readonly progressThrottleMs: number;
+  // Cap on redirect hops we follow within a single connection attempt.
   readonly maxRedirects: number;
 }
 
@@ -45,6 +55,7 @@ export function computeProgressInfo(args: {
   };
 }
 
+// Total size from a Content-Range header, e.g. "bytes 200-1000/1001" -> 1001.
 export function parseContentRangeTotal(headerValue: string | null | undefined): number | null {
   if (!headerValue) {
     return null;
@@ -57,7 +68,8 @@ export function parseContentRangeTotal(headerValue: string | null | undefined): 
   return Number.isFinite(total) && total > 0 ? total : null;
 }
 
-// mirror electron-updater's DigestTransform heuristic so standalone verification reads the latest-mac.yml checksum in the same encoding
+// Mirror electron-updater's DigestTransform heuristic so our standalone
+// verification interprets the latest-mac.yml checksum in the same encoding.
 export function selectSha512Encoding(sha512: string): "hex" | "base64" {
   return sha512.length === 128 &&
     !sha512.includes("+") &&
@@ -68,10 +80,15 @@ export function selectSha512Encoding(sha512: string): "hex" | "base64" {
 }
 
 export type DownloadResponseAction =
+  // 206 Partial Content: append the body at the current offset.
   | { readonly kind: "append"; readonly total: number | null }
+  // 200 OK: body starts at byte 0 (first attempt, or server ignored Range).
   | { readonly kind: "fromStart"; readonly total: number | null }
+  // 416: range not satisfiable — we already hold every byte.
   | { readonly kind: "complete" }
+  // 429 / 5xx: transient, worth retrying.
   | { readonly kind: "retryable"; readonly statusCode: number }
+  // Anything else (e.g. 403/404): not recoverable by retrying.
   | { readonly kind: "fatal"; readonly statusCode: number };
 
 export function classifyDownloadResponse(args: {
@@ -137,7 +154,8 @@ function effectivePort(url: URL): string {
   return "";
 }
 
-// cross-origin check decides when to drop the auth token (GitHub release URL → signed CDN URL)
+// Two URLs are cross-origin if scheme, host, or effective port differ. Used to
+// decide when to drop the auth token (GitHub release URL -> signed CDN URL).
 export function isCrossOrigin(a: URL, b: URL): boolean {
   return (
     a.protocol !== b.protocol ||
@@ -146,7 +164,9 @@ export function isCrossOrigin(a: URL, b: URL): boolean {
   );
 }
 
-// attachAuth is false once a redirect left the feed origin so the GitHub token never reaches the signed CDN — mirrors builder-util-runtime
+// Build the request headers for one hop. `attachAuth` is false once a redirect
+// has taken us cross-origin from the feed, so the GitHub token never reaches the
+// signed CDN. Mirrors builder-util-runtime's cross-origin auth stripping.
 export function buildDownloadHeaders(args: {
   readonly callHeaders: Record<string, string> | null | undefined;
   readonly startOffset: number;

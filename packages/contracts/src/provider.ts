@@ -102,8 +102,15 @@ export const ProviderForkThreadInput = Schema.Struct({
   sourceThreadId: ThreadId,
   threadId: ThreadId,
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
-  /** external imports must pin a completed native transcript boundary */
+  /** External imports must pin a completed native transcript boundary. */
   requireCompletedSource: Schema.optional(Schema.Boolean),
+  /**
+   * Fork only the native history through the end of this source turn ("Fork
+   * from this turn"). Absent = the source's latest point. An adapter that
+   * cannot honor the boundary must not fork at the latest point instead; the
+   * caller then rebuilds the fork from its imported transcript.
+   */
+  throughTurnId: Schema.optional(TurnId),
   providerInstanceId: Schema.optional(ProviderInstanceId),
   sourceResumeCursor: Schema.optional(Schema.Unknown),
   sourceCwd: Schema.optional(TrimmedNonEmptyString),

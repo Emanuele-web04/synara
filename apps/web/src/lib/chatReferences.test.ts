@@ -1,3 +1,7 @@
+// FILE: chatReferences.test.ts
+// Purpose: Guards reference formatting and selection line-range math for chat references.
+// Layer: Web UI utility tests
+
 import { describe, expect, it } from "vitest";
 
 import {

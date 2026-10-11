@@ -1,3 +1,7 @@
+// FILE: outboundHttp.ts
+// Purpose: Owns bounded, origin-pinned, DNS-safe outbound HTTP for server integrations.
+// Layer: Shared Node/Electron network security boundary
+
 import { randomUUID } from "node:crypto";
 import type { LookupAddress } from "node:dns";
 import * as Dns from "node:dns/promises";
@@ -49,7 +53,7 @@ export interface OutboundHttpPolicy {
   readonly maxConcurrent: number;
   readonly maxQueued: number;
   readonly requirePublicAddress?: boolean;
-  /** permits HTTP only for localhost, 127.0.0.1, or ::1 */
+  /** Permits HTTP only for localhost, 127.0.0.1, or ::1. */
   readonly allowLoopbackHttp?: boolean;
   /**
    * Permits the RFC 2544 benchmarking range 198.18.0.0/15, which fake-ip DNS
@@ -325,7 +329,8 @@ async function resolvePinnedAddress(
 export function invokePinnedDnsLookup(
   pinned: { readonly address: string; readonly family: 4 | 6 },
   options: { readonly all?: boolean | undefined } | undefined,
-  // match Node/Bun's Happy Eyeballs callback shape (LookupAddress[], not a readonly twin) so `lookup` typechecks
+  // Match Node/Bun's Happy Eyeballs lookup callback shape (`LookupAddress[]`, not
+  // a readonly structural twin) so `http.request({ lookup })` typechecks.
   callback: (
     err: NodeJS.ErrnoException | null,
     address: string | LookupAddress[],
@@ -436,13 +441,19 @@ async function requestHop(input: {
             url: input.url.href,
           });
         });
-        // `on`, not `once`: a stream can emit `error` more than once and a second emit with no listener is fatal
+        // `on`, not `once`: a stream can emit `error` more than once, and a
+        // second emit with no listener attached is fatal to the process.
         response.on("error", (cause) => {
           settle(new OutboundHttpError("request", "Outbound response failed.", cause));
         });
       },
     );
-    // Happy Eyeballs tries each address in turn — a host refusing all emits `error` per attempt; `once` detaches after the first and the later emits kill the process
+    // Also `on` rather than `once`. Happy Eyeballs tries each resolved address
+    // in turn, so a host that refuses all of them emits `error` once per
+    // attempt. `once` detaches after the first, `settle` correctly ignores the
+    // rest as duplicates, and those later emits then reach a request with no
+    // error listener. Node treats an unhandled `error` event as fatal, so the
+    // whole server exits: a failed favicon fetch could take the process down.
     request.on("error", (cause) => {
       if (input.signal.aborted) {
         settle(abortedError(input.signal.reason));

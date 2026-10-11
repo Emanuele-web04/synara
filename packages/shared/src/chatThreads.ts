@@ -1,3 +1,8 @@
+// FILE: chatThreads.ts
+// Purpose: Shared chat-thread title helpers used by web and server flows.
+// Layer: Shared util
+// Exports: generic title checks plus fallback/generated title sanitizers
+
 export const GENERIC_CHAT_THREAD_TITLE = "New thread";
 const MAX_CHAT_THREAD_TITLE_LENGTH = 60;
 export const THREAD_TITLE_CONTEXT_MAX_CHARS = 8_000;
@@ -14,7 +19,9 @@ const GENERIC_GENERATED_THREAD_TITLES = new Set([
   "thread",
   "untitled",
 ]);
-// the title prompt derives its wording and limits from this number so the two can't drift
+// Single source for the title word cap. Exported so the server-side title prompt
+// (textGenerationShared.buildThreadTitlePrompt) derives its wording and fallback
+// limits from the same number the sanitizers enforce here.
 export const MAX_CHAT_THREAD_TITLE_WORDS = 6;
 
 function normalizeTitleWhitespace(value: string): string {
@@ -142,7 +149,7 @@ export function truncateChatThreadTitle(
   return `${trimmed.slice(0, maxLength)}...`;
 }
 
-// deterministic short title while the model-generated rename is pending
+// Build a short deterministic title while the model-generated rename is pending.
 export function buildPromptThreadTitleFallback(message: string): string {
   const words = titleWords(message).slice(0, MAX_CHAT_THREAD_TITLE_WORDS);
   if (words.length === 0) {
@@ -151,7 +158,7 @@ export function buildPromptThreadTitleFallback(message: string): string {
   return truncateChatThreadTitle(words.join(" "));
 }
 
-// keep generated titles compact so the sidebar never renders sentence-length prompts
+// Keep generated titles compact so the sidebar never renders sentence-length prompts.
 export function sanitizeGeneratedThreadTitle(raw: string): string {
   const unquoted = firstGeneratedTitleLine(raw).replace(/^['"`]+|['"`]+$/g, "");
   const words = titleWords(unquoted).slice(0, MAX_CHAT_THREAD_TITLE_WORDS);

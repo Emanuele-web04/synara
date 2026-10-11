@@ -5,6 +5,7 @@ import { WebSocketServer } from "ws";
 import { BetterwrightCdpTarget } from "./betterwrightCdp";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 
+/** Private loopback transport. The capability is passed only to the trusted worker. */
 export async function openBetterwrightConnection(
   contents: WebContents,
   diagnostic?: (method: string, outcome: string) => void,
@@ -58,6 +59,8 @@ export async function openBetterwrightConnection(
           expectAgentInput,
         );
       } catch {
+        // The lease never came up: release the backend session and transport,
+        // otherwise the debugger attachment and loopback server leak.
         void close().catch(() => {});
         client.close();
         return;

@@ -80,7 +80,8 @@ export function useChatProviderModels({
       activeThread.messages.length > 0 ||
       activeThread.session !== null),
   );
-  // side chats import source history as fork-import rows; those must not lock the provider picker before the Side's first native turn (#810)
+  // Side chats import source history as fork-import rows. Those imports must not lock the
+  // provider picker before the Side produces its first native turn (#810).
   const hasProviderLockingActivity = Boolean(
     activeThread && threadHasProviderLockingActivity(activeThread),
   );

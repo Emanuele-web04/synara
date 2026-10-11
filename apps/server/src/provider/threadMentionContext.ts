@@ -128,7 +128,8 @@ export function resolveThreadMentionPromptProjection(input: {
     (maxTotalContextChars + THREAD_MENTION_CONTEXT_SEPARATOR_CHARS) /
       (THREAD_MENTION_MIN_CONTEXT_CHARS + THREAD_MENTION_CONTEXT_SEPARATOR_CHARS),
   );
-  // the minimum block size also bounds projection reads — callers can't submit an unbounded references array and make the server hydrate every thread
+  // A minimum useful block size also bounds projection reads: callers cannot
+  // submit an unbounded references array and make the server hydrate every thread.
   const contextMentions = threadMentions.slice(0, maxResolvedMentionCount);
   if (contextMentions.length === 0) {
     return Effect.succeed({
@@ -179,7 +180,10 @@ export function resolveThreadMentionPromptProjection(input: {
   );
 }
 
-// suffix after the provider input so mentioned-thread context never lands inside <latest_user_message> wrappers
+/**
+ * Suffix appended after the provider input so mentioned-thread context never
+ * lands inside `<latest_user_message>` wrappers. Empty when nothing resolved.
+ */
 export function threadMentionContextSuffix(contextBlocks: readonly string[]): string {
   return contextBlocks.length > 0 ? `\n\n${contextBlocks.join("\n\n")}` : "";
 }

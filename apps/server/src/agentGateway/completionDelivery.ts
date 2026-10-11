@@ -13,21 +13,22 @@ interface CompletionDeliveryDependencies {
   readonly orchestrationEngine: OrchestrationEngineShape;
 }
 
-/** re-read durable state on every pass — no in-memory terminal-event ownership */
+/** Re-read durable state on every pass; no in-memory terminal-event ownership. */
 export const deliverGatewayCompletions = (dependencies: CompletionDeliveryDependencies) =>
   Effect.gen(function* () {
     const { repository, snapshotQuery, projectionTurns, orchestrationEngine } = dependencies;
     for (const row of yield* repository.pending()) {
       yield* Effect.gen(function* () {
         const childThreadId = ThreadId.makeUnsafe(row.childThreadId);
-        // session settlement precedes buffered assistant finalization — wait for ingestion's durable ack
+        // Session settlement precedes buffered assistant finalization. Wait for
+        // ingestion's durable acknowledgement before reading the final response.
         if (row.resultJson === null && !(yield* repository.isOutputSettled(row.childThreadId)))
           return;
         const child = Option.getOrUndefined(yield* snapshotQuery.getThreadShellById(childThreadId));
         let resultJson = row.resultJson;
         if (resultJson === null) {
           const turns = yield* projectionTurns.listByThreadId({ threadId: childThreadId });
-          // the initial message owns the run, never whichever turn is latest at poll time
+          // The initial message owns the run, never whichever turn is latest at poll time.
           const turn = turns.find(
             (entry) => entry.pendingMessageId === row.initialMessageId && entry.turnId !== null,
           );
@@ -106,10 +107,11 @@ export const deliverGatewayCompletions = (dependencies: CompletionDeliveryDepend
         const parentId = ThreadId.makeUnsafe(row.creatorThreadId);
         const parent = Option.getOrUndefined(yield* snapshotQuery.getThreadShellById(parentId));
         const available = parent !== undefined && parent.archivedAt == null;
-        // receipts fingerprint the entire intent including timestamps — replays must use the frozen result's timestamp
+        // Command receipts fingerprint the entire intent, including timestamps.
+        // Replays must use the frozen result's timestamp, never the current clock.
         const createdAt = result.completedAt ?? row.createdAt;
         if (available) {
-          // the decider checks archive state inside the command queue too
+          // The decider checks archive state inside the command queue too.
           yield* orchestrationEngine.dispatch({
             type: "thread.activity.append",
             commandId: CommandId.makeUnsafe(`gateway-completion:${row.childThreadId}`),

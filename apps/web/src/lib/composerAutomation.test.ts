@@ -1,3 +1,8 @@
+// FILE: composerAutomation.test.ts
+// Purpose: Locks down composer-to-automation orchestration outside ChatView.
+// Layer: Web lib test
+// Depends on: composerAutomation resolver and automation form helpers.
+
 import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -398,7 +403,8 @@ describe("composerAutomation", () => {
     expect(generateIntent).toHaveBeenCalledTimes(1);
     expect(decision).toMatchObject({
       type: "needs-clarification",
-      // the accumulated request is the cleaned invocation (filler stripped) so folding the next reply never re-parses scaffolding as the task
+      // The accumulated request is the cleaned invocation (politeness, "?", and "for me"
+      // filler stripped), so folding the next reply never re-parses scaffolding as the task.
       automationMessage: "create an automation",
       missingFields: ["taskPrompt", "schedule"],
       reason: "Tell me what to automate.",
@@ -682,7 +688,8 @@ describe("composerAutomation", () => {
   });
 
   it("keeps 'please' as task content when generation is unavailable", async () => {
-    // generation fails so the deterministic invocation is carried forward; "please" must survive (real task content) unlike "for me" filler
+    // Generation fails, so the deterministic invocation is carried forward. "please" must
+    // survive (it is real task content here), unlike "for me" possessive filler.
     const offline = vi.fn(async () => {
       throw new Error("generation unavailable");
     });
@@ -713,13 +720,16 @@ describe("composerAutomation", () => {
     });
 
     it("asks for task and cadence when nothing was reported, so setup can recover", () => {
-      // empty missingFields (generation timed out) must not loop on cadence for a bare request that has no task yet
+      // Empty missingFields (generation timed out/failed) must not loop on cadence for a
+      // bare request that has no task yet.
       expect(automationClarificationPrompt([])).toContain("what should this automation do");
     });
   });
 
   it("asks how often instead of accepting a defaulted manual schedule", async () => {
-    // the generator extracts the task but reports schedule missing — must not be silently accepted as a manual automation; the "how often?" follow-up should fire
+    // The generator extracts the task but reports the schedule as missing; it must not be
+    // silently accepted as a manual automation — the conversational "how often?" follow-up
+    // should fire for the common "create an automation to check the build" case.
     const generateIntent = vi.fn(async () => ({
       isAutomation: true,
       confidence: 0.92,
@@ -765,7 +775,8 @@ describe("composerAutomation", () => {
       nowIso: NOW_ISO,
       generateIntent,
     });
-    // the marker is stripped so carry-forward re-seeds a creation scaffold instead of leaving a cadence-only fragment the next turn couldn't re-detect
+    // The marker is stripped, so the carry-forward re-seeds a creation scaffold instead
+    // of leaving a cadence-only fragment that the next turn could not re-detect.
     expect(first).toMatchObject({
       type: "needs-clarification",
       automationMessage: "create an automation every 6 hours",

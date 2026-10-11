@@ -251,7 +251,7 @@ layer("ProjectionPendingInteractionRepository", (it) => {
         responseRequestedAt: "2026-07-14T12:30:00.000Z",
       });
 
-      // inside the grace period the in-flight claim still shields the row
+      // Inside the grace period the in-flight claim still shields the row.
       assert.strictEqual(
         yield* repository.claimResponse({
           threadId,
@@ -264,7 +264,7 @@ layer("ProjectionPendingInteractionRepository", (it) => {
         }),
         false,
       );
-      // a claim that never settled must not lock the interaction out forever
+      // A claim that never settled must not lock the interaction out forever.
       assert.strictEqual(
         yield* repository.claimResponse({
           threadId,
@@ -277,7 +277,7 @@ layer("ProjectionPendingInteractionRepository", (it) => {
         }),
         true,
       );
-      // a responding row without a claim timestamp is orphaned by definition
+      // A responding row without a claim timestamp is orphaned by definition.
       yield* repository.upsert({
         ...base,
         requestId: ApprovalRequestId.makeUnsafe("request-reclaim-no-timestamp"),

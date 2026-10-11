@@ -1,3 +1,8 @@
+// FILE: AcpLoadReplayGate.ts
+// Purpose: Suppresses ACP session/load transcript replay until the inbound stream settles.
+// Layer: Provider ACP helper
+// Exports: makeAcpLoadReplayGate and its policy/evidence contracts.
+
 import { Clock, Deferred, Effect, Ref } from "effect";
 
 const REPLAY_SETTLE_POLL_MAX_MS = 50;
@@ -119,7 +124,8 @@ export const makeAcpLoadReplayGate = (
           }
           return next;
         }).pipe(
-          // state must never become Ready without completing its waiter — scope release uses it to decide whether unblocking is still needed
+          // State must never become Ready without completing its waiter: scope
+          // release uses that state to decide whether it still needs to unblock.
           Effect.uninterruptible,
         );
 

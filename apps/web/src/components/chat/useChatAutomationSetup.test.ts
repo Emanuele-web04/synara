@@ -1,3 +1,7 @@
+// FILE: useChatAutomationSetup.test.ts
+// Purpose: Characterizes automation draft restoration and draft warning rebuilds.
+// Layer: Chat automation setup hook tests
+
 import { ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

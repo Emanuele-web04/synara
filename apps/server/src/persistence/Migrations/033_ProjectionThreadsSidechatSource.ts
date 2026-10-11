@@ -1,4 +1,6 @@
-/** tracks sidechat source threads separately from durable forks */
+/**
+ * Tracks sidechat source threads separately from durable forks.
+ */
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";
 

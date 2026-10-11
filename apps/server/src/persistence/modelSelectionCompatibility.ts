@@ -53,7 +53,7 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-// imported instance ids may be runtime names rather than provider literals
+// Imported instance ids may be runtime names rather than Synara provider literals.
 function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   const lowerLabel = label.toLowerCase();
   // OMP must win over the `pi` token check: "Oh My Pi" and "OMP" labels would
@@ -92,14 +92,15 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
   }
-  // Windsurf shares Devin credentials — its labels attribute to the Devin provider
+  // Windsurf shares Devin credentials, so its labels attribute to the Devin provider.
   if (lowerLabel.includes("windsurf")) {
     return "devin";
   }
   if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
     return "droid";
   }
-  // word-boundary match only — a bare substring would catch "speech recognition"
+  // Word-boundary match only: a bare substring would also catch unrelated
+  // labels like "speech recognition".
   if (/(^|[^a-z0-9])cognition([^a-z0-9]|$)/u.test(lowerLabel)) {
     return "devin";
   }
@@ -141,7 +142,8 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
 
 function inferSpecificModelProvider(model: string): ModelProviderKind | undefined {
   const lowerModel = model.toLowerCase();
-  // shared Claude/Gemini/OpenAI slugs are ambiguous without an instance label — only Factory-exclusive built-ins are safe to attribute to Droid
+  // Shared Claude/Gemini/OpenAI slugs remain ambiguous without an instance label;
+  // only Factory-exclusive built-ins are safe to attribute to Droid.
   if (DROID_ONLY_MODEL_SLUGS.has(lowerModel)) {
     return "droid";
   }
@@ -168,7 +170,8 @@ function readLegacyProviderOptions(
   if (!isRecord(options)) {
     return options;
   }
-  // selections migrated from a renamed provider (kilo → opencode) keep options scoped under the original key
+  // Selections migrated from a renamed provider (e.g. kilo → opencode) keep
+  // their options scoped under the original provider key.
   const providerScopedOptions =
     options[provider] ?? (legacyProvider === undefined ? undefined : options[legacyProvider]);
   return providerScopedOptions === undefined ? options : providerScopedOptions;

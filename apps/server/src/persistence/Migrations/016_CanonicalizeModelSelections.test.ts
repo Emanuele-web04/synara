@@ -14,6 +14,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
 
+        // Setup base state
         {
           yield* runMigrations({ toMigrationInclusive: 15 });
 
@@ -186,8 +187,10 @@ layer("016_CanonicalizeModelSelections", (it) => {
       `;
         }
 
+        // Execute migration under test
         yield* runMigrations({ toMigrationInclusive: 16 });
 
+        // Assert expected state
         {
           const projectRows = yield* sql<{
             readonly projectId: string;

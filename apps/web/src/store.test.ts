@@ -1,3 +1,6 @@
+// FILE: store.test.ts
+// Purpose: Exercises the public store facade, persistence, and simple UI actions.
+
 import {
   ProjectId,
   SpaceId,
@@ -45,7 +48,8 @@ const makeProjectsReadModel = (
 
 describe("store facade", () => {
   it("frees a batch of thread details in a single store write", () => {
-    // Dropping several leases at once must not cost one update per thread: every update re-runs the retention reconcile that decides what to evict next.
+    // Dropping several leases at once must not cost one update per thread: every
+    // update re-runs the retention reconcile that decides what to evict next.
     const first = ThreadId.makeUnsafe("thread-batch-1");
     const second = ThreadId.makeUnsafe("thread-batch-2");
     const kept = ThreadId.makeUnsafe("thread-batch-kept");

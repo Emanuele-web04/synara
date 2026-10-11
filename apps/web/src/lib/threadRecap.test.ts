@@ -1,3 +1,7 @@
+// FILE: threadRecap.test.ts
+// Purpose: Verify compact recap inputs only advance on real transcript messages.
+// Layer: Unit test
+
 import { describe, expect, it } from "vitest";
 
 import type { MessageId, ThreadId } from "@synara/contracts";

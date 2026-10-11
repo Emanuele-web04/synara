@@ -92,7 +92,9 @@ const AUTOMATION_ERROR_MAX_CHARS = 4_000;
 const FAST_INTERVAL_ACKNOWLEDGED_MINIMUM_SECONDS = 1;
 const AUTOMATION_COMPLETION_EVALUATION_WORKERS = 2;
 const AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY = 100;
-// hard ceiling on a stop-evaluation — a hung provider call must not pin a worker and starve other heartbeats
+// Hard ceiling on a single AI stop-evaluation. With only a couple of evaluation
+// workers, a hung provider call would otherwise pin a worker indefinitely and
+// starve stop checks for every other heartbeat automation.
 const AUTOMATION_COMPLETION_EVALUATION_TIMEOUT_MS = 30_000;
 const AUTOMATION_HEARTBEAT_DEFER_RETRY_MS = 15_000;
 const AUTOMATION_HEARTBEAT_DEFER_WINDOW_MS = 10 * 60_000;
@@ -274,7 +276,7 @@ function deriveAutomationRunIds(runId: AutomationRunId) {
   };
 }
 
-/** redact common secret shapes before persisting/surfacing an error string */
+/** Redact common secret shapes before persisting/surfacing an automation error string. */
 function redactSecrets(text: string): string {
   return text
     .replace(/\b(sk|pk|ghp|gho|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/g, "[redacted]")
@@ -290,7 +292,11 @@ function errorMessage(cause: unknown): string {
   return redactSecrets(raw).slice(0, AUTOMATION_ERROR_MAX_CHARS);
 }
 
-// the real driver failure sits at the bottom of the .cause chain (wrapper messages are generic); bounded walk guards cycles
+// Recovery/reconcile failures arrive multiply wrapped: toServiceError ->
+// AutomationServiceError whose `.cause` is often a PersistenceSqlError whose own `.cause`
+// holds the real driver failure ("database is locked", a constraint, ...). Each layer's
+// own `message` is a generic wrapper string, so walk down the `.cause` chain to the root
+// and log that, otherwise the warning is unactionable. Bounded to avoid a cyclic cause.
 function recoveryErrorMessage(error: unknown): string {
   let current: unknown = error;
   for (let depth = 0; depth < 8; depth += 1) {
@@ -533,7 +539,11 @@ function effectiveMinimumIntervalSeconds(input: {
   return input.minimumIntervalSeconds;
 }
 
-// single source for the risks an automation must acknowledge — enforced at create/update/dispatch; `local` worktree check applies to every mode
+// Single source of truth for the runtime risks an automation must acknowledge before it can
+// run. Enforced uniformly at create, update, and run (dispatchRun) so an automation can never
+// reach a run unacknowledged. The `local` worktree check applies to every mode: a heartbeat
+// reuses its target thread, but that thread can itself sit on the local checkout, so continuing
+// it still runs the provider against the active project root.
 function riskAcknowledgementError(input: {
   readonly runtimeMode: AutomationDefinition["runtimeMode"];
   readonly worktreeMode: AutomationDefinition["worktreeMode"];
@@ -549,7 +559,11 @@ function riskAcknowledgementError(input: {
   return null;
 }
 
-// sub-minute schedule needs `fast-interval` ack AND a bounded iteration cap, as a pair; may throw on invalid cron/tz — callers wrap in Effect.try
+// Single source of truth for the fast-interval policy: a sub-minute schedule needs the
+// `fast-interval` acknowledgement AND a bounded iteration cap, treated as a pair so an
+// acknowledged loop can't run unbounded. Shared by validateSchedulePolicy (create/update) and
+// the dispatch gate (the run-path backstop). May throw if the schedule has an invalid cron or
+// timezone, so callers must wrap it (Effect.try) to surface a typed error.
 function fastIntervalPolicyError(input: {
   readonly schedule: AutomationDefinition["schedule"];
   readonly enabled: boolean;
@@ -567,7 +581,8 @@ function fastIntervalPolicyError(input: {
   const exceedsFastIterationCap =
     input.maxIterations === null ||
     input.maxIterations > DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS;
-  // pausing a legacy fast loop must always stay possible — enforce the hard cap only for definitions that keep running
+  // Pausing a legacy fast loop must always remain possible; enforce the hard cap only for
+  // definitions that will continue running.
   if (input.enabled && exceedsFastIterationCap) {
     return `Fast interval automations must set max iterations to ${DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS} runs or fewer.`;
   }
@@ -657,7 +672,10 @@ function mergeDefinitionUpdate(
     currentCompletionPolicy,
     completionPolicy,
   );
-  // a dedicated automation owns its thread; changing mode always releases the previous one
+  // A dedicated automation owns its continuation thread, so the caller never picks it and
+  // an update must not move it. Changing mode always releases the previous thread: the new
+  // mode either needs none (standalone), needs a caller-supplied one (heartbeat), or must
+  // create its own on the next run (dedicated).
   const targetThreadId =
     mode !== current.mode
       ? automationRequiresTargetThread(mode)
@@ -668,7 +686,8 @@ function mergeDefinitionUpdate(
         : hasOwn(input, "targetThreadId")
           ? ((input.targetThreadId as AutomationDefinition["targetThreadId"] | undefined) ?? null)
           : current.targetThreadId;
-  // run caps apply to every mode (chat parsing uses them for "every 15s for 3 times")
+  // Run caps apply to every mode; chat parsing uses them for bounded requests like
+  // "every 15 seconds for 3 times".
   const maxIterations = hasOwn(input, "maxIterations")
     ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
     : current.maxIterations;
@@ -835,9 +854,11 @@ export const AutomationServiceLive = Layer.effect(
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
-    // unbounded — never silently drop updates under burst, matching the rest of server PubSub usage
+    // Unbounded so we never silently drop run/definition updates under a burst, matching
+    // the rest of the server's PubSub usage.
     const events = yield* PubSub.unbounded<AutomationStreamEvent>();
-    // stop-check AI calls can be slow — cap queued+active jobs; DB reconciliation rediscovers pending rows
+    // Stop-condition AI calls can be slow; cap queued+active jobs and let DB
+    // reconciliation rediscover excess pending rows when worker capacity frees up.
     const completionEvaluationQueue = yield* Queue.bounded<AutomationCompletionEvaluationJob>(
       AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY,
     );
@@ -961,7 +982,8 @@ export const AutomationServiceLive = Layer.effect(
       readonly projectId: AutomationDefinition["projectId"];
       readonly targetThreadId: AutomationDefinition["targetThreadId"];
     }) => {
-      // only heartbeat validates a thread here — a dedicated automation's thread is created by its first run
+      // Only heartbeat validates a thread here. A dedicated automation's thread is created
+      // by its own first run, so there is nothing to check until then.
       if (!automationRequiresTargetThread(input.mode)) {
         return Effect.void;
       }
@@ -1079,7 +1101,10 @@ export const AutomationServiceLive = Layer.effect(
         : Effect.fail(new AutomationServiceError({ message: issue }));
     };
 
-    // run-path backstop for the fast-interval policy; Effect.try turns a bad persisted cron into a typed failure instead of a defect
+    // Run-path backstop for the fast-interval policy. validateSchedulePolicy enforces this at
+    // create/update; this guards the run path it never covers. Effect.try converts a throwing
+    // schedule (invalid cron/timezone in a persisted row) into a typed error so the dispatch
+    // failure path records the run as failed instead of dying on a defect.
     const validateFastIntervalPolicy = (input: {
       readonly schedule: AutomationDefinition["schedule"];
       readonly enabled: boolean;
@@ -1162,7 +1187,8 @@ export const AutomationServiceLive = Layer.effect(
       );
     };
 
-    // reconcile only against the turn created from this run's message id — the shell's latest turn may be someone else's
+    // Heartbeat runs reuse busy user threads, so reconcile only against the turn created
+    // from this run's stored message id; the shell's latest turn may belong to someone else.
     const resolveRunTurn = (
       run: AutomationRun,
       shell: OrchestrationThreadShell,
@@ -1207,7 +1233,10 @@ export const AutomationServiceLive = Layer.effect(
         turn?.turnId !== undefined &&
         shell.latestTurn?.turnId === turn.turnId);
 
-    // dispatch: no thread → fresh thread+turn, else append to the continued thread; failure marks the run failed before re-raising
+    // Dispatch a run: with no thread to continue it creates a fresh thread + turn, otherwise
+    // it appends a turn to the thread the definition continues (the heartbeat target, or the
+    // thread a dedicated automation owns). A failure marks the run failed before re-raising
+    // so the scheduler/caller still observes the error.
     const dispatchRun = (
       definition: AutomationDefinition,
       run: AutomationRun,
@@ -1218,7 +1247,8 @@ export const AutomationServiceLive = Layer.effect(
       }
       return Effect.gen(function* () {
         const plannedIds = deriveAutomationRunIds(run.id);
-        // read the thread from the definition — a dedicated automation can claim its thread after this run was planned
+        // Read the thread from the definition rather than the run: a dedicated automation can
+        // claim its thread after this run was planned, and continuing it beats creating a second.
         const continuationThreadId = automationContinuationThreadId(definition);
         if (automationRequiresTargetThread(definition.mode) && continuationThreadId === null) {
           return yield* Effect.fail(
@@ -1424,11 +1454,13 @@ export const AutomationServiceLive = Layer.effect(
             commandId: threadCreateCommandId,
             threadId: plannedThreadId,
             projectId: definition.projectId,
-            // a dedicated thread outlives the run — titled for the automation, not the occurrence
+            // A dedicated thread outlives this run, so it is titled for the automation
+            // rather than for the occurrence that happened to open it.
             title: automationOwnsItsThread(definition.mode)
               ? definition.name
               : `${definition.name} - ${now}`,
-            // a per-run throwaway thread is marked for the sidebar to hide; a dedicated thread stays unmarked
+            // A per-run throwaway thread is marked so the sidebar can hide it; a
+            // dedicated thread is a persistent conversation and stays unmarked.
             ...(automationOwnsItsThread(definition.mode)
               ? {}
               : { creationSource: "automation_run" as const }),
@@ -1456,7 +1488,8 @@ export const AutomationServiceLive = Layer.effect(
             ),
           );
 
-        // claim the thread before the turn starts so a concurrent run continues it instead of opening another
+        // Claim the thread before the turn starts, so a run dispatched while this one is
+        // still working already sees the thread and continues it instead of opening another.
         if (automationOwnsItsThread(definition.mode)) {
           const attached = yield* automationRepository
             .attachDefinitionThread({
@@ -1536,7 +1569,10 @@ export const AutomationServiceLive = Layer.effect(
         .pipe(Effect.as(normalized));
     };
 
-    // occurrences dedupe via INSERT OR IGNORE on (automationId, scheduledFor); only fresh runs count+dispatch, schedule advances only after durable success
+    // Create + persist a pending run and return whether it was a fresh insert. Scheduled
+    // occurrences dedupe via INSERT OR IGNORE on (automationId, scheduledFor), so createRun
+    // may return a pre-existing row (inserted === false); callers count + dispatch only
+    // fresh runs, and the schedule is only advanced once the run has durably succeeded.
     const pendingRunInput = (
       definition: AutomationDefinition,
       trigger: AutomationRun["trigger"],
@@ -1551,7 +1587,8 @@ export const AutomationServiceLive = Layer.effect(
     ) => {
       const runId = makeAutomationRunId();
       const ids = deriveAutomationRunIds(runId);
-      // a dedicated automation continues its own thread from the second run on
+      // A dedicated automation continues its own thread from the second run on; before that
+      // it plans a thread creation exactly like a standalone run.
       const continuationThreadId = automationContinuationThreadId(definition);
       return {
         excludeProjectManaged: !isServerGroupsEnabled(),
@@ -1652,7 +1689,8 @@ export const AutomationServiceLive = Layer.effect(
         ),
       );
 
-    // a durable run+thread without the queued turn row is retired so future ticks aren't blocked forever
+    // Recovery may find a durable run + thread without the queued turn row; retire it so
+    // future heartbeat ticks and scheduled occurrences are not blocked forever.
     const interruptRunForRecovery = (run: AutomationRun, now: string) =>
       automationRepository.markRunInterrupted({ id: run.id, turnId: null, finishedAt: now }).pipe(
         Effect.flatMap((interrupted) =>
@@ -1672,7 +1710,7 @@ export const AutomationServiceLive = Layer.effect(
         Effect.tap((updated) => publish({ type: "run-upserted", run: updated })),
       );
 
-    // stop checks must only evaluate evidence from the just-finished heartbeat turn
+    // Stop checks must only evaluate evidence from the just-finished heartbeat turn.
     const findRunCompletionMessages = (input: {
       readonly run: AutomationRun;
       readonly thread: {
@@ -1724,7 +1762,7 @@ export const AutomationServiceLive = Layer.effect(
         })
         .pipe(Effect.mapError(toServiceError("Failed to disable automation.")));
 
-    // the AI check runs after the run publishes — reload so read/archive changes win the race
+    // The AI check runs after the run is published; reload so read/archive changes win the race.
     const latestRunForCompletionResult = (run: AutomationRun) =>
       automationRepository.getRunById({ id: run.id }).pipe(
         Effect.mapError(toServiceError("Failed to load automation run.")),
@@ -1776,7 +1814,8 @@ export const AutomationServiceLive = Layer.effect(
       policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
     ): boolean => {
       const currentPolicy = completionPolicyForDefinition(definition);
-      // a stop clause decides when the automation retires — orthogonal to thread-continuation mode
+      // Mode-independent: a stop clause decides when the automation retires, which is
+      // orthogonal to whether its runs continue a target thread or open a fresh one.
       return (
         definition.enabled &&
         definition.archivedAt === null &&
@@ -1864,7 +1903,11 @@ export const AutomationServiceLive = Layer.effect(
             Effect.timeoutOption(AUTOMATION_COMPLETION_EVALUATION_TIMEOUT_MS),
           );
         if (Option.isNone(evaluationOption)) {
-          // on timeout, reload the definition — record the stale-check result, not a misleading "timed out" for a changed policy; never retry a stuck worker
+          // Timed out. Reload the definition first: if the automation was edited, disabled,
+          // archived, or its policy changed while the provider call hung, record the same
+          // stale-check result the success path uses rather than surfacing a misleading live
+          // "Stop check timed out." warning for a policy the user already changed. Either way
+          // keep the heartbeat alive without retrying (a retry would risk another stuck worker).
           const reason = normalizeAutomationCompletionReason("Stop check timed out.");
           const timedOut = failedAutomationCompletionEvaluation(reason);
           const stillCurrent = Option.isSome(yield* loadCurrentStopDefinition(definition, policy));
@@ -1909,7 +1952,7 @@ export const AutomationServiceLive = Layer.effect(
           return false;
         }
         const currentDefinition = Option.getOrThrow(currentDefinitionOption);
-        // disable before clearing the pending stop-check marker so no extra heartbeat launches
+        // Disable before clearing the pending stop-check marker, so no extra heartbeat can launch.
         const disabled = yield* disableDefinitionForCompletionMatch(currentDefinition);
         if (!disabled) {
           yield* recordCompletionEvaluation({
@@ -1952,7 +1995,7 @@ export const AutomationServiceLive = Layer.effect(
               runId: run.id,
               error: errorMessage(error),
             });
-            // keep the heartbeat active but surface the failed check in run history
+            // Keep the heartbeat active, but make the failed stop check visible in run history.
             yield* recordCompletionEvaluation({
               run,
               evaluation: failedAutomationCompletionEvaluation(reason),
@@ -2317,7 +2360,9 @@ export const AutomationServiceLive = Layer.effect(
       assistantText: string | null,
     ): AutomationRunResult => {
       const reportedDecision = run.result?.decision;
-      // a run continuing a thread stays silent unless it said something; a fresh thread per run is the result itself
+      // A run that continues a thread is one iteration of a loop the user can already read,
+      // so it stays silent unless it actually said something. A fresh thread per run is the
+      // result itself and always deserves attention.
       const decision =
         reportedDecision ??
         (automationContinuesThread(definition.mode)
@@ -2385,7 +2430,11 @@ export const AutomationServiceLive = Layer.effect(
         }
 
         if (!turn || turn.turnId === null || turn.state === "pending" || turn.state === "running") {
-          // a manual turn on the same thread supersedes the run's turn mid-flight — detect a strictly-newer owner and close as interrupted
+          // A heartbeat run's turn can be abandoned mid-flight when the user sends a
+          // manual turn on the same thread: the provider session moves on, the run's
+          // turn row stays pending/running forever, and no reconcile event ever flips
+          // the run terminal. Detect the supersession (a strictly newer turn owns the
+          // thread) and close the run out as interrupted instead of looping here.
           if (
             runUsesExistingThread(run) &&
             turn !== null &&
@@ -2414,7 +2463,9 @@ export const AutomationServiceLive = Layer.effect(
             run.threadId &&
             run.messageId &&
             run.turnStartCommandId &&
-            // resume only our run — a foreign turn owning pending input must not resurrect it
+            // Only resume *our* run: if a later, foreign turn now owns the thread's
+            // pending input, flipping back to running would resurrect a run that no
+            // longer owns the turn (mirrors the entry guard above).
             runTurnOwnsPendingInput(run, shell, turn)
           ) {
             const running = yield* automationRepository
@@ -2556,7 +2607,7 @@ export const AutomationServiceLive = Layer.effect(
       const now = isoNow();
       const threadId = run.threadId;
       if (!threadId) {
-        // orphaned between create and dispatch — no thread was created
+        // Orphaned before any thread was created (crash between create and dispatch).
         return interruptRunForRecovery(run, now).pipe(
           Effect.mapError(toServiceError("Failed to recover automation run.")),
           Effect.asVoid,
@@ -2633,7 +2684,9 @@ export const AutomationServiceLive = Layer.effect(
         Effect.mapError(toServiceError("Failed to list automations.")),
       );
 
-    // the run-scoped claim is a standalone run's only authority: its thread matches neither sourceThreadId nor targetThreadId
+    // Resolves the automation run that dispatched the caller's active turn, if any.
+    // This is the only authority a standalone run has over its own automation: its
+    // thread is created per run, so it matches neither sourceThreadId nor targetThreadId.
     const resolveCallerAutomationRun = (input: {
       readonly callerThreadId: ThreadId;
       readonly callerTurnId: TurnId | null;
@@ -2924,7 +2977,8 @@ export const AutomationServiceLive = Layer.effect(
         ) {
           return;
         }
-        // the first run may already be opening its task — don't change its provider mid-dispatch
+        // The first run may already be opening its task before targetThreadId is
+        // attached. Do not change its provider while that dispatch is in flight.
         const activeRuns = yield* automationRepository
           .listActiveRunsForDefinition({ automationId: current.id })
           .pipe(Effect.mapError(toServiceError("Failed to load active automation runs.")));
@@ -3141,7 +3195,9 @@ export const AutomationServiceLive = Layer.effect(
         return { activeRuns, pendingCompletionEvaluations };
       });
 
-    // dedicated is the only writer on its own thread — it waits only for its predecessor, but checks still apply since a user can drive it by hand
+    // Gate a run that would append to an existing thread. A dedicated automation is the only
+    // writer on its own thread, so in practice it only ever waits for its predecessor; the
+    // same checks still apply, because a user can open and drive that thread by hand.
     const continuationEligibility = (
       definition: AutomationDefinition,
       now: string,
@@ -3188,7 +3244,9 @@ export const AutomationServiceLive = Layer.effect(
             Number.isFinite(nowMs) &&
             nowMs - completedAtMs < cooldownSeconds * 1_000
           ) {
-            // the cooldown protects foreign activity — the automation's own previous run must not throttle its successor
+            // The cooldown protects user/agent activity on the target thread; the
+            // automation's own previous run must not throttle its successor, or every
+            // schedule faster than the cooldown silently degrades to cooldown cadence.
             const ownLatestRun = yield* automationRepository
               .getLatestFinishedRunForDefinition({ automationId: definition.id })
               .pipe(Effect.mapError(toServiceError("Failed to load the automation's latest run.")));
@@ -3239,7 +3297,8 @@ export const AutomationServiceLive = Layer.effect(
                 now,
                 jitterContextFor(definition.id),
               );
-        // manual reruns must not revive legacy definitions that fail today's schedule policy
+        // Manual reruns should not revive legacy definitions that cannot pass today's
+        // active-schedule policy, such as oversized sub-minute loops.
         let canBecomeEnabled = false;
         if (
           definition.schedule.type === "manual" ||
@@ -3325,7 +3384,8 @@ export const AutomationServiceLive = Layer.effect(
             }),
           );
         }
-        // a dedicated automation without its thread has nothing to wait for — this run creates it like a standalone
+        // A dedicated automation that has not opened its thread yet has nothing to wait for:
+        // this run creates the thread, exactly like a standalone one.
         const continuationThreadId = automationContinuationThreadId(definition);
         if (continuationThreadId) {
           heartbeatRunState = yield* heartbeatThreadRunState(continuationThreadId);
@@ -3441,7 +3501,9 @@ export const AutomationServiceLive = Layer.effect(
               Effect.andThen(publishDefinition(definition.id)),
             );
 
-    // the run row is durable before schedule advancement — dispatch failures still leave auditable history
+    // Run one due definition: enforce the iteration cap, apply misfire policy, skip when a
+    // prior heartbeat run is still in flight, then dispatch. The run row is durable before
+    // schedule advancement, so dispatch failures still leave auditable history.
     const runDueDefinition = (definition: AutomationDefinition, now: string) =>
       Effect.gen(function* () {
         if (!isAutomationAvailable(definition)) return Option.none<AutomationRunNowResult>();
@@ -3534,7 +3596,9 @@ export const AutomationServiceLive = Layer.effect(
               now,
               {
                 nextRunAt,
-                // a deferred one-shot stays enabled so listDueDeferredRuns sees it — disabled on dispatch or terminal skip
+                // A deferred one-shot must remain enabled so listDueDeferredRuns
+                // can see it. It is disabled when that durable run is dispatched
+                // or terminally skipped.
                 disable: false,
               },
               deferState.expired ? null : deferState.deferredUntil,
@@ -3624,7 +3688,9 @@ export const AutomationServiceLive = Layer.effect(
         yield* publishDefinition(definition.id);
 
         if (Option.isNone(claimedRun)) {
-          // existing durable row (crash before the schedule advanced) — don't re-dispatch or double-count
+          // This scheduled occurrence already had a durable row (e.g. a run interrupted by a
+          // crash before the schedule advanced). Don't re-dispatch or double-count it; the
+          // occurrence is already recorded and the schedule has now moved past it.
           return Option.none<AutomationRunNowResult>();
         }
 
@@ -3786,7 +3852,8 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to acquire automation scheduler lease.")));
         if (!acquired) {
-          // another instance holds the lease — debug level so contention is observable without noise
+          // Another instance holds the scheduler lease. Expected under multi-instance;
+          // logged at debug so lease contention is observable without log noise.
           yield* Effect.logDebug("automation scheduler lease not acquired", { ownerId });
           return [];
         }

@@ -1,3 +1,6 @@
+// FILE: modelFavorites.migration.test.ts
+// Purpose: Verifies Kilo favorite models survive the provider migration to OpenCode.
+
 import { describe, expect, it } from "vitest";
 
 import { FAVORITE_MODEL_STORAGE_KEYS, migrateLegacyKiloFavoriteModelSlugs } from "./modelFavorites";

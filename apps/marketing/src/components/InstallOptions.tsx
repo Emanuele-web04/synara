@@ -1,3 +1,10 @@
+// FILE: InstallOptions.tsx
+// Purpose: Renders the three platform download cards (macOS / Windows / Linux),
+//          detects the visitor's OS to highlight the recommended one, and lets
+//          Mac users switch between the Apple Silicon and Intel builds.
+// Layer: Client component
+// Depends on: src/lib/platform, src/lib/releases (ReleaseDownloads type), InstallerCount
+
 "use client";
 
 import { useState, useSyncExternalStore, type ReactNode } from "react";
@@ -13,7 +20,9 @@ const OS_LABEL: Record<Exclude<OS, "unknown">, string> = {
   linux: "Linux",
 };
 
-// one-time client-only browser read exposed via useSyncExternalStore instead of setState-in-effect; memoized at module scope so the WebGL probe runs at most once
+// Detection is a one-time, client-only browser read, so we expose it through
+// useSyncExternalStore (like DownloadButton) instead of a setState-in-effect.
+// Results are memoized at module scope so the WebGL probe runs at most once.
 const subscribe = () => () => {};
 
 let cachedOS: OS | undefined;
@@ -35,9 +44,11 @@ export default function InstallOptions({
   downloads: ReleaseDownloads;
   installerCount: number | null;
 }) {
+  // "unknown"/"arm64" during SSR + first client render, then the real values.
   const os = useSyncExternalStore<OS>(subscribe, getOSSnapshot, () => "unknown");
   const detectedArch = useSyncExternalStore(subscribe, getArchSnapshot, () => "arm64" as MacArch);
 
+  // User can override the detected Mac architecture via the toggle.
   const [archOverride, setArchOverride] = useState<MacArch | null>(null);
   const arch = archOverride ?? detectedArch;
 
@@ -150,6 +161,7 @@ function PlatformCard({
       </h2>
       <p className="mt-1 text-[12px] text-[var(--text-tertiary)]">{subtitle}</p>
 
+      {/* Pinned to the bottom so every card's Download button lines up. */}
       <div className="mt-auto w-full pt-6">
         {children ? <div className="mb-3 flex justify-center">{children}</div> : null}
         <a
@@ -178,6 +190,7 @@ function ArchToggle({ arch, onChange }: { arch: MacArch; onChange: (arch: MacArc
       role="group"
       aria-label="macOS chip"
     >
+      {/* Dark indicator that slides to the selected segment. */}
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0.5 left-0.5 rounded-full bg-[var(--btn-primary-bg)] transition-transform duration-300 ease-out"

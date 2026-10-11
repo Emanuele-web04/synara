@@ -5,6 +5,7 @@ import {
   preserveDependencyDiagnostics,
 } from "./lib/desktop-bundle-files.ts";
 
+// These are the real platform preference names, not a second copy of the UI map.
 import { desktopAppIconResourceName } from "../apps/desktop/src/desktopAppIcon.ts";
 
 import { matchesGlob } from "node:path";

@@ -1,3 +1,7 @@
+// FILE: useSmoothStreamedText.test.ts
+// Purpose: Pins the pure reveal stepper — velocity-driven drain plus quantized commits.
+//          The hook itself is thin wiring (refs + rAF scheduling) around this function.
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,7 +11,7 @@ import {
   type SmoothRevealState,
 } from "./useSmoothStreamedText";
 
-const FRAME_MS = 8;
+const FRAME_MS = 8; // ~120Hz display
 
 interface DrainRun {
   emits: { at: number; count: number }[];
@@ -15,6 +19,7 @@ interface DrainRun {
   state: SmoothRevealState;
 }
 
+/** Drive the stepper frame-by-frame until the backlog drains (or maxFrames). */
 function drain(
   state: SmoothRevealState,
   targetLength: number,
@@ -49,11 +54,13 @@ describe("stepSmoothReveal", () => {
         MIN_EMIT_INTERVAL_MS,
       );
     }
+    // Quantization is the point: far fewer commits than frames.
     expect(run.emits.length).toBeLessThan(run.frames / 3);
   });
 
   it("emits the catch-up commit even when the interval has not elapsed", () => {
-    // Mid-burst, one frame from catching up, with a commit only 4ms ago: the final characters must not be held hostage to the quantization gate.
+    // Mid-burst, one frame from catching up, with a commit only 4ms ago: the
+    // final characters must not be held hostage to the quantization gate.
     const state: SmoothRevealState = {
       shown: 101.5,
       velocity: 500,
@@ -68,6 +75,7 @@ describe("stepSmoothReveal", () => {
 
   it("clamps the frame delta after a background-tab resume", () => {
     const state = createSmoothRevealState(0);
+    // Prime one frame so velocity builds, then jump far ahead as if rAF was paused.
     stepSmoothReveal(state, 1_000, 500, 0);
     stepSmoothReveal(state, 1_008, 500, 0);
     const shownBefore = state.shown;
@@ -95,6 +103,7 @@ describe("stepSmoothReveal", () => {
 
     expect(run.state.velocity).toBe(0);
     expect(run.state.lastFrameAt).toBe(0);
+    // A later burst starting fresh emits its first advanced frame promptly.
     const next = drain(run.state, 120, 2_000 + run.frames * FRAME_MS + 100);
     expect(next.emits.length).toBeGreaterThan(0);
   });

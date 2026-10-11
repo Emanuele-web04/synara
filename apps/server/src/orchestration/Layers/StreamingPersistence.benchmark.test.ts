@@ -31,7 +31,7 @@ const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshot
   Layer.provide(ServerSettingsService.layerTest()),
 );
 
-// opt-in only — fresh process and disposable database per invocation
+// Opt-in only. Each invocation uses a fresh process and a disposable database.
 it.skipIf(!process.env.SYNARA_STREAMING_BENCHMARK_OUTPUT)(
   "measures the production streaming engine",
   async () => {
@@ -115,7 +115,7 @@ it.skipIf(!process.env.SYNARA_STREAMING_BENCHMARK_OUTPUT)(
           const memory = process.memoryUsage();
           peakRss = Math.max(peakRss, memory.rss);
           peakHeapUsed = Math.max(peakHeapUsed, memory.heapUsed);
-          // yield every 100 chunks so timer delay has a reproducible sampling window
+          // Yield every 100 chunks so timer delay has a reproducible sampling window.
           await setImmediate();
         }
       }

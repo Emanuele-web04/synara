@@ -1,4 +1,8 @@
-import type { MessageId, ThreadId, TurnId } from "@synara/contracts";
+// FILE: storeState.ts
+// Purpose: Defines the normalized web-store state shape and stable empty slice sentinels.
+// Exports: AppState, its initial value, and immutable empty normalized records.
+
+import type { MessageId, ThreadId, TurnId, OrchestrationThreadHistory } from "@synara/contracts";
 
 import type {
   ChatMessage,
@@ -15,7 +19,7 @@ import type {
  * Per-thread detail hydration status. Absence means "idle": no detail snapshot
  * has been applied yet, so shell-only threads must not be treated as empty.
  */
-export type ThreadDetailSyncState = "synced" | "failed";
+export type ThreadDetailSyncState = "synced" | "failed" | "cached";
 
 export interface AppState {
   /** Highest authoritative snapshot integrated by this store instance. */
@@ -36,6 +40,9 @@ export interface AppState {
   proposedPlanByThreadId?: Record<ThreadId, Record<string, Thread["proposedPlans"][number]>>;
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
+  threadHistoryById?: Record<ThreadId, OrchestrationThreadHistory>;
+  /** Cursor that describes committed detail, never the queued event fence. */
+  threadDetailAppliedSequenceById?: Record<ThreadId, number>;
   threadDetailSyncById?: Record<ThreadId, ThreadDetailSyncState>;
   /**
    * Deletion tombstones, keyed by id, valued by the snapshot sequence at (or after) which the
@@ -48,7 +55,8 @@ export interface AppState {
   deletedThreadIdsById?: Record<ThreadId, number>;
 }
 
-// These references are shared by selectors and projection writes. Keep them stable so empty fallbacks cannot create render loops or needless outer-record churn.
+// These references are shared by selectors and projection writes. Keep them stable
+// so empty fallbacks cannot create render loops or needless outer-record churn.
 export const EMPTY_THREAD_IDS: ThreadId[] = [];
 Object.freeze(EMPTY_THREAD_IDS);
 export const EMPTY_THREAD_SHELL_BY_ID: Record<ThreadId, ThreadShell> = {};
@@ -91,6 +99,8 @@ export const initialState: AppState = {
   turnDiffIdsByThreadId: {},
   turnDiffSummaryByThreadId: {},
   threadDetailSyncById: {},
+  threadHistoryById: {},
+  threadDetailAppliedSequenceById: {},
   deletedProjectIdsById: {},
   deletedThreadIdsById: {},
 };

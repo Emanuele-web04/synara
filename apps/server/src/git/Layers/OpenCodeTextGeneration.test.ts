@@ -1,3 +1,8 @@
+// FILE: OpenCodeTextGeneration.test.ts
+// Purpose: Locks down OpenCode git text-generation behavior around server reuse,
+// plain-text JSON parsing, and upstream structured-output failures.
+// Depends on: OpenCodeTextGenerationServiceLive, OpenCodeRuntime, ServerConfig, TestClock.
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Duration, Effect, Fiber, Layer } from "effect";
@@ -63,7 +68,7 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       runtimeMock.state.startCalls.push(binaryPath);
       runtimeMock.state.startCwds.push(cwd);
 
-      // mirror the production scoped cleanup to assert idle shutdown
+      // Mirror the production scoped cleanup so we can assert idle shutdown behavior.
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           runtimeMock.state.closeCalls.push(url);
@@ -183,7 +188,7 @@ beforeEach(() => {
   runtimeMock.reset();
 });
 
-// advance the shared-server idle timer without real sleeping
+// Advance the shared-server idle timer without sleeping in real time.
 const advanceIdleClock = Effect.gen(function* () {
   yield* Effect.yieldNow;
   yield* TestClock.adjust(Duration.millis(OPENCODE_TEXT_GENERATION_IDLE_TTL_MS + 1));

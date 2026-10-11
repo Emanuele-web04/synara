@@ -117,7 +117,8 @@ export function KanbanOverview({
   nowMs?: number;
   viewMode: KanbanViewMode;
 }) {
-  // projects without cards are pure noise on the overview; their boards stay reachable via /kanban/$projectId
+  // Projects without any cards are pure noise on the overview; their boards stay
+  // reachable through /kanban/$projectId if linked directly.
   const visibleProjects = board.projects.filter((projectBoard) => projectBoard.totalCount > 0);
 
   if (visibleProjects.length === 0) {

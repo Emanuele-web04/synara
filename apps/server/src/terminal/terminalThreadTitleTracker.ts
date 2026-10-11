@@ -1,3 +1,8 @@
+// FILE: terminalThreadTitleTracker.ts
+// Purpose: Tracks per-terminal input buffers and emits safe one-shot thread title updates.
+// Layer: Server terminal metadata helper
+// Exports: TerminalThreadTitleTracker
+
 import {
   consumeTerminalThreadTitleInput,
   isGenericTerminalThreadTitle,
@@ -22,7 +27,7 @@ export class TerminalThreadTitleTracker {
     }
   }
 
-  // returns a title only when a submitted command should rename a generic thread
+  // Returns a safe title only when a submitted command should rename a generic thread.
   consumeWrite(input: {
     currentTitle: string | null | undefined;
     data: string;

@@ -2,7 +2,9 @@ import { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card
 
 import { cn } from "~/lib/utils";
 
-// unlike a Tooltip it stays open while the pointer moves into the popup, so content can hold clickable controls
+// Hover-triggered, interactive card (Base UI PreviewCard). Unlike a Tooltip it
+// stays open while the pointer moves into the popup, so its content can hold
+// clickable controls (used by the sidebar project/folder hover card).
 const PreviewCard = PreviewCardPrimitive.Root;
 
 function PreviewCardTrigger(props: PreviewCardPrimitive.Trigger.Props) {
@@ -23,7 +25,8 @@ function PreviewCardPopup({
   side?: PreviewCardPrimitive.Positioner.Props["side"];
   sideOffset?: PreviewCardPrimitive.Positioner.Props["sideOffset"];
   anchor?: PreviewCardPrimitive.Positioner.Props["anchor"];
-  // stacking lives on the positioner (the portaled element), so a z-index override must land here not on the popup className
+  // Stacking lives on the positioner (the portaled, positioned element), so a
+  // z-index override has to land here rather than on the popup className.
   positionerClassName?: string;
 }) {
   const align = alignProp ?? "start";

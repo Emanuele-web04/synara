@@ -1,4 +1,11 @@
-/** the point of per-capability probing: one moved symbol costs exactly one feature; drives a real backend with a stubbed runner */
+/**
+ * Degraded-capability behavior at the backend boundary.
+ *
+ * The point of the per-capability probe is that one moved symbol costs exactly
+ * one feature. These tests drive a real `IosSimulatorBackend` with a stubbed
+ * process runner so a broken capability can be simulated without an Xcode that
+ * actually broke.
+ */
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -14,7 +21,7 @@ import {
 import { IosSimulatorBackend } from "./IosSimulatorBackend.ts";
 import type { HelperClient } from "./helperClient.ts";
 
-/** the real helper sources, whose digest forms part of the cache key */
+/** The real helper sources, whose digest forms part of the cache key. */
 const HELPER_SOURCE_DIR = path.resolve(import.meta.dirname, "..", "..", "native", "device-helper");
 
 const DEVICE = "AAAA-1111";
@@ -50,7 +57,7 @@ const ALL_OK = {
   encoder: "ok",
 } as const;
 
-/** a helper whose attach always succeeds — capability gating runs before it */
+/** A helper whose attach always succeeds; capability gating runs before it. */
 class StubHelper {
   get attachedDevice() {
     return {
@@ -80,7 +87,10 @@ class StubHelper {
   async dispose() {}
 }
 
-/** derived rather than hardcoded so the fixture keeps matching when the helper sources change */
+/**
+ * The cache directory name the backend will look for, derived rather than
+ * hardcoded so this fixture keeps matching when the helper sources change.
+ */
 async function capabilityCacheKey(): Promise<string> {
   const sourcesDir = path.join(HELPER_SOURCE_DIR, "Sources");
   const names = await readdir(sourcesDir);
@@ -95,10 +105,16 @@ async function capabilityCacheKey(): Promise<string> {
   return deviceHelperCacheKey("Xcode 26.3\nBuild version 17D1", revision)!;
 }
 
-/** a backend wired to a cache dir containing a fake helper binary so `cachedHelperPath()` resolves and the probe runs */
+/**
+ * A backend wired to a cache directory containing a fake helper binary, so
+ * `cachedHelperPath()` resolves and the probe runs.
+ */
 async function makeBackend(capabilities: Record<string, unknown>) {
   const cacheRoot = await mkdtemp(path.join(tmpdir(), "synara-capability-"));
-  // the dir name must match the key the backend derives (toolchain + source digest) or the cache lookup misses — derived here the same way
+  // The directory name must match the key the backend derives, or the cache
+  // lookup misses and no probe runs. That key is the stubbed `xcodebuild
+  // -version` output plus a digest of the helper sources, so it is derived here
+  // the same way rather than hardcoded — a helper change must move the cache.
   const binaryDir = path.join(cacheRoot, await capabilityCacheKey());
   await mkdir(binaryDir, { recursive: true });
   const binaryPath = path.join(binaryDir, DEVICE_HELPER_BINARY_NAME);
@@ -111,7 +127,9 @@ async function makeBackend(capabilities: Record<string, unknown>) {
     helperCacheRoot: cacheRoot,
     makeHelperClient: () => new StubHelper() as unknown as HelperClient,
     run: async (command, args) => {
-      // the probe is confined like the real run — arrives as `sandbox-exec ... <binary> --probe` on macOS
+      // The probe is confined like the real run, so on macOS it arrives as
+      // `sandbox-exec ... <binary> --probe`. Match either shape and record the
+      // helper's own argv, so this asserts on the probe rather than the wrapper.
       const probeIndex = args.indexOf(binaryPath);
       if (command === binaryPath || (command.endsWith("sandbox-exec") && probeIndex !== -1)) {
         probeCalls.push(command === binaryPath ? args : args.slice(probeIndex + 1));
@@ -160,7 +178,8 @@ describe("availability from the capability probe", () => {
     await backend.availability();
     await backend.availability();
 
-    // the answer only changes when the toolchain does — which produces a different binary path
+    // The answer only changes when the toolchain does, and that produces a
+    // different binary path.
     expect(probeCalls).toHaveLength(1);
     expect(probeCalls[0]).toEqual(["--probe"]);
   });
@@ -192,7 +211,10 @@ describe("hardware buttons", () => {
   it("presses every button the chassis draws", async () => {
     const { backend } = await makeBackend(ALL_OK);
 
-    // volume reaches the guest as a HID Consumer-page event (0x0C, 0xE9/0xEA) — the encoding Simulator.app's menu items use; verified on a booted iPhone 17 Pro
+    // Volume reaches the guest as a HID Consumer-page event (page 0x0C,
+    // 0xE9/0xEA) rather than an Indigo button source, which is the encoding
+    // Simulator.app's own Increase/Decrease Volume menu items use. Verified on
+    // a booted iPhone 17 Pro by the volume HUD appearing in the framebuffer.
     for (const button of ["home", "lock", "volume-up", "volume-down"] as const) {
       await expect(backend.pressButton(DEVICE, button)).resolves.toBeUndefined();
     }

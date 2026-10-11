@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { makeStatusUpstreamRefreshCacheTimeToLive } from "./GitCore.ts";
 
-// backoff is keyed by the full status cache key — same-named remotes in different repos must not share backoff state
+// The backoff map is keyed by the full status cache key, so every key needs
+// all four fields; same-named remotes in different repositories must not
+// share backoff state.
 function cacheKey(
   overrides: Partial<{
     cwd: string;
@@ -36,7 +38,7 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
 
   it("caches handled failures for 30 seconds instead of Duration.zero", () => {
     const failed = Exit.succeed("failed" as const);
-    // a zero TTL re-ran fetch on every git.status for unreachable remotes
+    // A zero TTL re-ran fetch on every git.status for unreachable remotes.
     expect(Duration.toMillis(policy.timeToLive(failed, cacheKey()))).toBe(30_000);
   });
 
@@ -71,11 +73,13 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
     });
     const failed = Exit.succeed("failed" as const);
 
+    // Push origin to the cap.
     for (let index = 0; index < 5; index += 1) {
       policy.timeToLive(failed, originKey);
     }
     expect(Duration.toMillis(policy.timeToLive(failed, originKey))).toBe(300_000);
 
+    // Fork starts from zero and only reaches the second backoff tier.
     expect(Duration.toMillis(policy.timeToLive(failed, forkKey))).toBe(30_000);
     expect(Duration.toMillis(policy.timeToLive(failed, forkKey))).toBe(60_000);
   });
@@ -85,15 +89,17 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
     const repoBKey = cacheKey({ cwd: "/repo-b" });
     const failed = Exit.succeed("failed" as const);
 
+    // Push repo A's origin to the cap.
     for (let index = 0; index < 5; index += 1) {
       policy.timeToLive(failed, repoAKey);
     }
     expect(Duration.toMillis(policy.timeToLive(failed, repoAKey))).toBe(300_000);
 
-    // repo B's origin is a different key — starts from zero instead of inheriting A's poisoned backoff
+    // Repo B's origin is a different cache key: it starts from zero instead of
+    // inheriting repo A's poisoned backoff.
     expect(Duration.toMillis(policy.timeToLive(failed, repoBKey))).toBe(30_000);
 
-    // a success in repo A only resets repo A's backoff
+    // A success in repo A only resets repo A's backoff.
     expect(Duration.toMillis(policy.timeToLive(Exit.succeed("refreshed"), repoAKey))).toBe(15_000);
     expect(Duration.toMillis(policy.timeToLive(failed, repoBKey))).toBe(60_000);
   });
@@ -121,7 +127,7 @@ describe("status-upstream-refresh cache TTL (#515)", () => {
 
     expect(Duration.toMillis(policy.timeToLive(Exit.succeed("refreshed"), key))).toBe(15_000);
 
-    // after success the remote is back to the baseline failure TTL
+    // After success the remote is back to the baseline failure TTL.
     expect(Duration.toMillis(policy.timeToLive(failed, key))).toBe(30_000);
   });
 });

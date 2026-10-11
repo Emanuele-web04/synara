@@ -1,3 +1,8 @@
+// FILE: splitView.logic.test.ts
+// Purpose: Verify pure pane-tree helpers used by the store and chat surfaces.
+// Layer: UI state helpers test
+// Targets: tree traversal, immutable replace, leaf removal/collapse, depth-cap rule, legacy migration.
+
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

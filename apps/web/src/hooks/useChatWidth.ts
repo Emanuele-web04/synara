@@ -1,3 +1,8 @@
+// FILE: useChatWidth.ts
+// Purpose: Applies the selected chat column width preset as a root CSS variable.
+// Layer: Web route lifecycle hook
+// Exports: useChatWidth
+
 import { useEffect } from "react";
 
 import { useAppSettings } from "../appSettings";

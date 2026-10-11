@@ -1,4 +1,7 @@
-// restores deterministic ordering for legacy thread activities
+// FILE: 053_BackfillThreadActivitySequence.ts
+// Purpose: Restores deterministic ordering for legacy thread activities.
+// Layer: SQLite migration
+// Depends on: orchestration_events as the authoritative append order.
 
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -6,7 +9,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // a correlated lookup over a materialized CTE is quadratic on large histories — build an indexed temp lookup once, then backfill by primary key
+  // A correlated lookup over a materialized CTE becomes quadratic on large
+  // histories. Build an indexed temporary lookup once, then backfill each
+  // projection row through its primary key.
   yield* sql`DROP TABLE IF EXISTS temp_synara_activity_sequences`;
 
   yield* sql`

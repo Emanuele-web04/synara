@@ -1,4 +1,9 @@
-// dynamic load so bundlers don't resolve the runtime-only "bun:sqlite" specifier
+// FILE: providerUsage/sqlite.ts
+// Purpose: Read-only key/value lookups from VS Code-style `ItemTable` SQLite databases
+// (e.g. Cursor's state.vscdb). Mirrors the bun:sqlite / node:sqlite runtime branching used in
+// homeMigration.ts so it works under both runtimes. Defensive: returns {} on any failure.
+
+// Loaded dynamically so bundlers don't try to resolve the runtime-only "bun:sqlite" specifier.
 const importRuntimeModule = (specifier: string): Promise<unknown> =>
   Function("specifier", "return import(specifier)")(specifier) as Promise<unknown>;
 
@@ -33,7 +38,10 @@ function coerceCell(value: unknown): string | undefined {
   return undefined;
 }
 
-/** never throws — missing/locked DB or missing table → {} */
+/**
+ * Look up several keys from an `ItemTable(key, value)` SQLite DB in one open. Returns a map of
+ * the keys that were found. Never throws; missing DB / locked DB / missing table -> {}.
+ */
 export async function readItemTableValues(input: {
   dbPath: string;
   keys: ReadonlyArray<string>;

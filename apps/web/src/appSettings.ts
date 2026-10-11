@@ -94,7 +94,10 @@ export const MIN_TERMINAL_FONT_SIZE_PX = 10;
 export const MAX_TERMINAL_FONT_SIZE_PX = 22;
 export const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
 
-// free-form font-family — the list below is autocomplete inspiration only, not a restriction
+// Terminal font is a free-form font-family value: the user can type any font
+// installed on their machine. An empty value keeps the bundled default stack
+// (defined in index.css). The list below is only autocomplete inspiration shown
+// in the settings input — it does NOT restrict what can be entered.
 export const DEFAULT_TERMINAL_FONT_FAMILY = "";
 
 export const TERMINAL_FONT_FAMILY_SUGGESTIONS: ReadonlyArray<string> = [
@@ -293,7 +296,10 @@ const PersistedProviderKind = Schema.Literals([
   ),
 );
 
-// gemini→antigravity carries list entries over; removed providers with no successor (kilo) must not transfer prefs, and unknown values drop instead of failing the decode
+// gemini was renamed to antigravity, so its list entries carry over. Removed
+// providers with no successor subscription (kilo) must not transfer prefs like
+// "hidden" onto another provider, so their list entries are dropped. Unknown
+// values are dropped too instead of failing the whole settings decode.
 const RENAMED_PROVIDERS: Readonly<Record<string, ProviderKind>> = {
   gemini: "antigravity",
 };
@@ -336,6 +342,7 @@ const PersistedHiddenModels = Schema.Array(
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   claudeEnableArtifacts: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Server-backed first-run marker; see ServerSettings.onboardingCompletedAt.
   onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(withDefaults((): string | null => null)),
   claudeHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
@@ -434,6 +441,11 @@ export const AppSettingsSchema = Schema.Struct({
   // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
   // listed on the automation's page and findable via search either way.
   showAutomationRunThreads: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only UI preferences: which optional sections of the chat Environment panel are
+  // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
+  // toggle the sections beneath it via the panel header's gear menu.
+  // When false (default), normal chats start with the Environment panel closed. User toggles
+  // also write back here so the last explicit open/close survives reloads.
   environmentPanelDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
   // Legacy provider selection, retained to migrate existing sidebar preferences.
@@ -459,6 +471,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentSubagents: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
@@ -484,7 +497,9 @@ export const AppSettingsSchema = Schema.Struct({
   lowerProviderProcessPriority: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
-  // Electron `frame` is fixed at window creation — the main process persists this too and a relaunch is required to apply it
+  // Local desktop preference: frameless custom title bar on Windows/Linux.
+  // Electron `frame` is fixed at window creation, so the desktop main process also
+  // persists this value and a relaunch is required for the live window to match.
   useCustomTitleBar: Schema.Boolean.pipe(withDefaults(() => true)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -496,8 +511,9 @@ export const AppSettingsSchema = Schema.Struct({
   // Input Monitoring and Screen Recording permissions.
   enableAppSnap: Schema.Boolean.pipe(withDefaults(() => false)),
   appSnapShortcut: AppSnapShortcut.pipe(withDefaults(() => DEFAULT_APP_SNAP_SHORTCUT)),
+  // Local desktop preference: play the shutter cue when an AppSnap lands in a composer.
   appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
-  // rename bridge — normalization migrates this value then omits the key
+  // Deprecated rename bridge. Normalization migrates this value and then omits the key.
   enableAppshots: Schema.optionalKey(Schema.Boolean),
   // Show the in-chat Computer preview when an agent starts driving the desktop.
   autoOpenComputerPane: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -551,12 +567,17 @@ export const AppSettingsSchema = Schema.Struct({
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
-  // the active/locked provider for a thread is always shown — hiding never strands a thread on a hidden provider
+  // Local-only UI preference: providers explicitly hidden from the composer picker.
+  // The active/locked provider for a thread is always shown regardless, so users
+  // never get stuck on a thread whose provider they later chose to hide.
   hiddenProviders: PersistedProviderKindList.pipe(withDefaults(() => [])),
-  // server-backed shutdown policy: unlike hiddenProviders, entries here can't run discovery, health checks, updates, or new turns until re-enabled
+  // Server-backed provider shutdown policy. Unlike `hiddenProviders`, entries here
+  // cannot run discovery, health checks, updates, or new turns until re-enabled.
   disabledProviders: PersistedProviderKindList.pipe(withDefaults(() => [])),
+  // Local-only UI preference: top-level provider order in Settings and the composer picker.
   providerOrder: PersistedProviderKindList.pipe(withDefaults(() => [...DEFAULT_PROVIDER_ORDER])),
-  // model-level hiding caused too many edge cases — normalized away now
+  // Deprecated local-only preference kept for backward-compatible decoding.
+  // Model-level hiding caused too many edge cases, so the app now normalizes it away.
   hiddenModels: PersistedHiddenModels.pipe(withDefaults(() => [])),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
@@ -701,7 +722,8 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
 
-// Droid's ACP catalog rejects unknown slugs — preserve its config but don't offer an editor it can't honor
+// Droid's ACP catalog is authoritative and rejects unknown slugs. Preserve its
+// persisted config for compatibility, but do not offer an editor it cannot honor.
 export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS.filter(
   (config) => config.provider !== "droid",
 );
@@ -781,10 +803,20 @@ export function resolveAgentCursorColors(
 }
 
 export function normalizeTerminalFontFamily(value: string | null | undefined): string {
-  // strip only chars that can't appear in a CSS font-family (`;`, `{}`, angle brackets, newlines) so the value can't break out of the custom property; whitespace stays so multi-word names remain typable — the CSS resolver trims
+  // Free-form font-family text. Only strip characters that can't legitimately
+  // appear in a CSS font-family value so the typed name can't break out of the
+  // custom property (`;`, `{}`, angle brackets, newlines) or smuggle in other
+  // declarations. Whitespace is intentionally preserved here so multi-word names
+  // ("Fira Code") remain typable in a controlled input; the CSS resolver trims.
   return (value ?? "").replace(/[;{}<>\n\r]/g, "").slice(0, 256);
 }
 
+// Build the CSS font-family stack written to `--terminal-font-family`, or null
+// when the bundled default (defined in index.css) should stay in effect.
+//
+// Accepts either a single family name (`Fira Code`) or a full comma-separated
+// stack (`"Fira Code", Menlo, monospace`). Single names are quoted when needed,
+// and a `monospace` fallback is appended so an uninstalled font degrades.
 export function resolveTerminalFontFamilyStack(value: string | null | undefined): string | null {
   const normalized = normalizeTerminalFontFamily(value).replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -1476,6 +1508,7 @@ export function didProviderEnablementChange(
   );
 }
 
+/** Server settings that change which native commands a provider reports. */
 export function didProviderCommandDiscoverySettingsChange(
   previous: Pick<ServerSettingsView, "providers"> | undefined,
   next: Pick<ServerSettingsView, "providers">,
@@ -1897,7 +1930,8 @@ export function buildInitialServerSettingsMigrationPatch(
     }
   }
 
-  // migrate legacy browser-stored passwords once, before normalize scrubs them — subsequent reads use redacted server views
+  // Migrate legacy browser-stored passwords once before normalizeAppSettings
+  // scrubs them from local state. All subsequent reads use redacted server views.
   if (settings.openCodeServerPassword.trim()) {
     patch.openCodeServerPassword = settings.openCodeServerPassword;
   }
@@ -1972,7 +2006,8 @@ function redactAppSettingsSecretsForClient(settings: AppSettings): AppSettings {
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
   return redactAppSettingsSecretsForClient({
     ...normalizeAppSettings(settings),
-    // provider enablement belongs to the connected server — scrub legacy values so a browser profile can't project one server's shutdown onto another
+    // Provider enablement belongs to the connected server. Scrub legacy values
+    // so a browser profile cannot project one server's shutdown state onto another.
     disabledProviders: [],
   });
 }
@@ -2528,7 +2563,10 @@ export function resolveAssistantDeliveryMode(
   return settings.enableAssistantStreaming ? "streaming" : "buffered";
 }
 
-// the preference applies only while a turn is live; Ctrl/Cmd+Enter temporarily selects the opposite mode
+/**
+ * Resolves the dispatch mode for a composer submit. The preference applies only
+ * while a turn is live; Ctrl/Cmd+Enter temporarily selects the opposite mode.
+ */
 export function resolveFollowUpDispatchMode(input: {
   behavior: FollowUpBehavior;
   hasLiveTurn: boolean;
@@ -2792,7 +2830,8 @@ export function useAppSettings() {
   };
 
   const resetSettings = async (): Promise<void> => {
-    // restore defaults resets preferences, not lifecycle markers — clearing onboarding completion would replay the first-run tour
+    // "Restore defaults" resets preferences, not lifecycle markers: clearing the
+    // onboarding completion timestamp would replay the first-run tour on the next launch.
     const { onboardingCompletedAt: _keepOnboardingCompletedAt, ...resettableDefaults } = defaults;
     setSettings((prev) => ({
       ...DEFAULT_APP_SETTINGS,

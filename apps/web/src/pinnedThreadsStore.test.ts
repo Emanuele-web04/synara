@@ -1,3 +1,7 @@
+// FILE: pinnedThreadsStore.test.ts
+// Purpose: Verifies the global pinned-thread store mutates ids predictably.
+// Layer: UI state store test
+
 import { beforeEach, describe, expect, it } from "vitest";
 import { ThreadId } from "@synara/contracts";
 import { usePinnedThreadsStore } from "./pinnedThreadsStore";

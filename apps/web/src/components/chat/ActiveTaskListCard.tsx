@@ -1,3 +1,8 @@
+// FILE: ActiveTaskListCard.tsx
+// Purpose: Renders the active plan/task activity panel used above the composer.
+// Layer: Chat composer UI
+// Exports: ActiveTaskListCard
+
 import { pluralize } from "@synara/shared/text";
 import {
   PiArrowsInSimple,

@@ -1,3 +1,11 @@
+/**
+ * GitCore - Effect service contract for low-level Git operations.
+ *
+ * Wraps core repository primitives used by higher-level orchestration
+ * services and WebSocket routes.
+ *
+ * @module GitCore
+ */
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 import type {
@@ -78,7 +86,7 @@ export interface GitPreparedCommitContext {
 }
 
 export interface ExecuteGitProgress {
-  /** NUL records for machine-readable output containing arbitrary paths */
+  /** Use NUL records for machine-readable Git output containing arbitrary paths. */
   readonly stdoutLineDelimiter?: "\n" | "\0";
   readonly onStdoutLine?: (line: string) => Effect.Effect<void, never>;
   readonly onStderrLine?: (line: string) => Effect.Effect<void, never>;
@@ -147,7 +155,7 @@ export interface GitWorktreeOwnershipProof {
   readonly gitDir: string;
   readonly branch: string | null;
   readonly head: string;
-  /** includes copied tracked, untracked, and .worktreeinclude files */
+  /** Baseline state, including copied tracked, untracked, and .worktreeinclude files. */
   readonly stateHash?: string;
 }
 
@@ -170,7 +178,7 @@ export interface GitFetchPullRequestBranchInput {
 export interface GitFetchPullRequestCommitInput {
   cwd: string;
   prNumber: number;
-  /** when a full PR URL, must match the remote used for the fetch */
+  /** When provided by a full PR URL, must match the remote used for the fetch. */
   expectedRepositoryNameWithOwner?: string;
 }
 
@@ -199,8 +207,11 @@ export interface GitPublishBranchInput {
   branch: string;
 }
 
+/**
+ * GitCoreShape - Service API for low-level Git repository interactions.
+ */
 export interface GitCoreShape {
-  /** serialize one mutation saga per canonical repository common dir */
+  /** Serialize one complete mutation saga by canonical repository common directory. */
   readonly withMutation: <A, E, R>(
     cwd: string,
     effect: Effect.Effect<A, E, R>,
@@ -237,17 +248,28 @@ export interface GitCoreShape {
   /** Read only branch identity, without diff stats or remote refresh work. */
   readonly readBranchContext: (cwd: string) => Effect.Effect<GitBranchContext, GitCommandError>;
 
-  /** optional path limits the patch to that literal path and its rename source */
+  /**
+   * Read a unified patch for the current working tree, including untracked files.
+   * An optional file path limits the patch to that literal path and its rename source.
+   */
   readonly readWorkingTreePatch: (
     cwd: string,
     filePath?: string,
   ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
+  /**
+   * Read only unstaged tracked changes plus untracked files.
+   */
   readonly readUnstagedPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
+  /**
+   * Read only staged changes.
+   */
   readonly readStagedPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
-  /** aggregate from the upstream/base merge-base through the working tree */
+  /**
+   * Read aggregate branch changes from the upstream/base merge-base through the working tree.
+   */
   readonly readBranchPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
   readonly blameLine: (
@@ -263,18 +285,24 @@ export interface GitCoreShape {
     ref: string,
   ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
-  /** aggregate diff counts without materializing a unified patch */
+  /** Read aggregate diff counts without materializing a unified patch. */
   readonly readDiffStats: (
     cwd: string,
     scope: GitDiffScope,
     ref?: string,
   ) => Effect.Effect<GitWorkingTreeDiffStatsResult, GitCommandError>;
 
+  /**
+   * Build staged change context for commit generation.
+   */
   readonly prepareCommitContext: (
     cwd: string,
     filePaths?: readonly string[],
   ) => Effect.Effect<GitPreparedCommitContext | null, GitCommandError>;
 
+  /**
+   * Create a commit with provided subject/body.
+   */
   readonly commit: (
     cwd: string,
     subject: string,
@@ -282,21 +310,33 @@ export interface GitCoreShape {
     options?: GitCommitOptions,
   ) => Effect.Effect<{ commitSha: string }, GitCommandError>;
 
+  /**
+   * Push current branch, setting upstream if needed.
+   */
   readonly pushCurrentBranch: (
     cwd: string,
     fallbackBranch: string | null,
   ) => Effect.Effect<GitPushResult, GitCommandError>;
 
+  /**
+   * Collect commit/diff context between base branch and current HEAD.
+   */
   readonly readRangeContext: (
     cwd: string,
     baseBranch: string,
   ) => Effect.Effect<GitRangeContext, GitCommandError>;
 
+  /**
+   * Read a Git config value from the local repository.
+   */
   readonly readConfigValue: (
     cwd: string,
     key: string,
   ) => Effect.Effect<string | null, GitCommandError>;
 
+  /**
+   * List local + remote branches and branch metadata.
+   */
   readonly listBranches: (
     input: GitListBranchesInput,
   ) => Effect.Effect<GitListBranchesResult, GitCommandError>;
@@ -305,31 +345,40 @@ export interface GitCoreShape {
     input: GitListRecentCommitsInput,
   ) => Effect.Effect<GitListRecentCommitsResult, GitCommandError>;
 
+  /**
+   * Pull current branch from upstream using fast-forward only.
+   */
   readonly pullCurrentBranch: (cwd: string) => Effect.Effect<GitPullResult, GitCommandError>;
 
+  /**
+   * Create a worktree and branch from a base branch.
+   */
   readonly createWorktree: (
     input: GitCreateWorktreeInput,
   ) => Effect.Effect<GitCreateWorktreeResult, GitCommandError>;
 
-  /** non-versioned marker on a linked worktree's Git admin entry */
+  /** Attach a non-versioned marker to a newly-created linked worktree's Git admin entry. */
   readonly recordWorktreeOwnership: (input: {
     readonly path: string;
     readonly branch: string | null;
     readonly token: string;
   }) => Effect.Effect<GitWorktreeOwnershipProof, GitCommandError>;
 
-  /** verify a linked worktree is still the unchanged marked object */
+  /** Verify that a linked worktree is still the unchanged object carrying a marker. */
   readonly verifyWorktreeOwnership: (input: {
     readonly path: string;
     readonly proof: GitWorktreeOwnershipProof;
   }) => Effect.Effect<GitVerifyWorktreeOwnershipResult, GitCommandError>;
 
-  /** snapshot tracked changes + transferable local files before managed cleanup */
+  /** Snapshot tracked changes and transferable local files before managed cleanup. */
   readonly snapshotWorktree: (
     input: GitSnapshotWorktreeInput,
   ) => Effect.Effect<void, GitCommandError>;
 
-  /** `onPhase` fires as each setup phase (branch → worktree → copy-changes) begins */
+  /**
+   * Create a detached worktree from a branch or ref. `onPhase` fires as each
+   * setup phase (branch → worktree → copy-changes) begins, for progress UIs.
+   */
   readonly createDetachedWorktree: (
     input: GitCreateDetachedWorktreeInput,
     options?: {
@@ -337,80 +386,132 @@ export interface GitCoreShape {
     },
   ) => Effect.Effect<GitCreateDetachedWorktreeResult, GitCommandError>;
 
-  /** materialize a PR head as a local branch without switching checkout */
+  /**
+   * Materialize a GitHub pull request head as a local branch without switching checkout.
+   */
   readonly fetchPullRequestBranch: (
     input: GitFetchPullRequestBranchInput,
   ) => Effect.Effect<void, GitCommandError>;
 
-  /** fetch a PR head without creating or occupying a local branch */
+  /** Fetch a GitHub pull request head without creating or occupying a local branch. */
   readonly fetchPullRequestCommit: (
     input: GitFetchPullRequestCommitInput,
   ) => Effect.Effect<string, GitCommandError>;
 
+  /**
+   * Ensure a named remote exists for the provided URL, returning the reused or created remote name.
+   */
   readonly ensureRemote: (input: GitEnsureRemoteInput) => Effect.Effect<string, GitCommandError>;
 
+  /**
+   * Fetch a remote branch into a local branch without checkout.
+   */
   readonly fetchRemoteBranch: (
     input: GitFetchRemoteBranchInput,
   ) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * Set the upstream tracking branch for a local branch.
+   */
   readonly setBranchUpstream: (
     input: GitSetBranchUpstreamInput,
   ) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * Remove an existing worktree.
+   */
   readonly removeWorktree: (input: GitRemoveWorktreeInput) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * Delete an existing local branch.
+   */
   readonly deleteBranch: (input: GitDeleteBranchInput) => Effect.Effect<void, GitCommandError>;
 
-  /** atomic delete only when the branch still points at the expected object id */
+  /** Atomically delete a local branch only when it still points at the expected object id. */
   readonly deleteBranchIfUnchanged: (input: {
     readonly cwd: string;
     readonly branch: string;
     readonly expectedHead: string;
   }) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * Rename an existing local branch.
+   */
   readonly renameBranch: (
     input: GitRenameBranchInput,
   ) => Effect.Effect<GitRenameBranchResult, GitCommandError>;
 
+  /**
+   * Create a local branch.
+   */
   readonly createBranch: (input: GitCreateBranchInput) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * Publish a local branch and set upstream tracking.
+   */
   readonly publishBranch: (input: GitPublishBranchInput) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * Checkout an existing branch and refresh its upstream metadata in background.
+   */
   readonly checkoutBranch: (
     input: GitCheckoutInput,
   ) => Effect.Effect<void, GitCommandError | GitCheckoutDirtyWorktreeError, Scope.Scope>;
 
+  /**
+   * Stash local changes, checkout a branch, and re-apply the stash.
+   */
   readonly stashAndCheckout: (
     input: GitStashAndCheckoutInput,
   ) => Effect.Effect<void, GitCommandError | GitCheckoutDirtyWorktreeError, Scope.Scope>;
 
-  /** drop the stash entry the caller inspected */
+  /** Drop the stash entry the caller inspected. */
   readonly stashDrop: (input: GitStashDropInput) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * Read metadata for the latest stash entry.
+   */
   readonly stashInfo: (
     input: GitStashInfoInput,
   ) => Effect.Effect<GitStashInfoResult, GitCommandError>;
 
+  /**
+   * Remove the repository index lock file after Git reports a stale lock.
+   */
   readonly removeIndexLock: (
     input: GitRemoveIndexLockInput,
   ) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * Initialize a repository in the provided directory.
+   */
   readonly initRepo: (input: GitInitInput) => Effect.Effect<void, GitCommandError>;
 
+  /**
+   * List local branch names (short format).
+   */
   readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
 
+  /**
+   * Stage the provided paths into the index (`git add`).
+   */
   readonly stageFiles: (
     cwd: string,
     paths: readonly string[],
   ) => Effect.Effect<void, GitCommandError>;
 
-  /** handles the pre-initial-commit case */
+  /**
+   * Unstage the provided paths from the index, handling the pre-initial-commit case.
+   */
   readonly unstageFiles: (
     cwd: string,
     paths: readonly string[],
   ) => Effect.Effect<void, GitCommandError>;
 }
 
+/**
+ * GitCore - Service tag for low-level Git repository operations.
+ */
 export class GitCore extends ServiceMap.Service<GitCore, GitCoreShape>()(
   "synara/git/Services/GitCore",
 ) {}

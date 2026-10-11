@@ -1,11 +1,15 @@
-/** durable worktree ref so detached worktrees can be materialized again with no branch name */
+/**
+ * Stores a durable worktree ref so detached worktrees can be materialized
+ * again even when no branch name is available.
+ */
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // legacy desktop DBs already recorded unrelated 17-22 ids — must rebuild the missing metadata columns before finishing
+  // Some legacy desktop databases already recorded unrelated 17-22 migration ids,
+  // so 023 must rebuild the missing thread/message metadata columns before it can finish.
   const projectionThreadsColumnExists = (columnName: string) =>
     sql<{ readonly exists: number }>`
       SELECT EXISTS(

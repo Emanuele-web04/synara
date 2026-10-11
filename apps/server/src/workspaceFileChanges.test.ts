@@ -1,3 +1,7 @@
+// FILE: workspaceFileChanges.test.ts
+// Purpose: Verifies bounded file watching across replace/delete/recreate saves.
+// Layer: Server filesystem utility tests
+
 import * as NodeFileSystem from "node:fs/promises";
 import * as NodeOs from "node:os";
 import * as NodePath from "node:path";

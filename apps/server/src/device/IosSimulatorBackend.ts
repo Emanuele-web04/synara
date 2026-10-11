@@ -1,4 +1,21 @@
-/** simctl (public, stable, no permissions) for discovery/boot/install/screenshots/recordings; the native helper for input injection, accessibility tree, and video — private CoreSimulator APIs compiled on demand; every availability probe maps onto one pane checklist step */
+/**
+ * IosSimulatorBackend - the one DeviceBackend implementation today.
+ *
+ * Split by capability:
+ *
+ * - Discovery, boot/shutdown, install/launch/openurl, screenshots, and screen
+ *   recordings go through `xcrun simctl`, which is public, stable, and needs
+ *   no permissions.
+ * - Input injection, the accessibility tree, and the video stream need private
+ *   CoreSimulator/SimulatorKit APIs, so they go through the native helper
+ *   (see `helperClient.ts`), compiled on demand against the user's Xcode.
+ *
+ * Availability is modelled rather than inferred from errors: the pane renders a
+ * checklist (`DeviceAvailability`) instead of a stack trace, so every probe
+ * here maps onto exactly one setup step.
+ *
+ * @module device/IosSimulatorBackend
+ */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, existsSync } from "node:fs";
 import { access, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -64,12 +81,19 @@ const RECORDING_START_TIMEOUT_MS = 10_000;
 const RECORDING_STOP_GRACE_MS = 15_000;
 const RECORDING_KILL_GRACE_MS = 1_000;
 const MAX_RECORDING_STDERR_LENGTH = 64 * 1024;
-/** screenshots are PNGs on temp files; cap what we read */
+/** Screenshots are PNG on stdout-adjacent temp files; cap what we will read. */
 const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
 
 export const DEVICE_HELPER_CACHE_ROOT = path.join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS);
 
-/** resolves helper sources in both layouts — src/ in dev, beside the bundled dist/ in packaged builds */
+/**
+ * Resolve the helper sources in both execution layouts.
+ *
+ * Source modules live under `src/device`, while tsdown collapses the server into
+ * `dist/index.*` and the build copies the helper beside that bundle. Checking
+ * the bundled layout first makes packaged desktop and published CLI builds use
+ * their staged asset without changing the development path.
+ */
 export function resolveDeviceHelperSourceDir(
   moduleDirectory: string,
   sourceExists: (candidate: string) => boolean = (candidate) =>
@@ -91,9 +115,9 @@ export type SpawnRecordingProcess = (
 ) => ChildProcessWithoutNullStreams;
 
 export interface IosSimulatorBackendOptions {
-  /** overridden in tests; defaults to `process.platform` */
+  /** Overridden in tests; defaults to `process.platform`. */
   readonly platform?: NodeJS.Platform;
-  /** absolute path to `apps/server/native/device-helper` */
+  /** Absolute path to `apps/server/native/device-helper`. */
   readonly helperSourceDir?: string;
   readonly helperCacheRoot?: string;
   readonly run?: typeof runProcess;
@@ -102,16 +126,16 @@ export interface IosSimulatorBackendOptions {
     env?: NodeJS.ProcessEnv,
     launch?: HelperSandboxCommand,
   ) => HelperClient;
-  /** keeps the long-lived simctl process controllable in tests */
+  /** Keeps the long-lived simctl process controllable in tests. */
   readonly spawnProcess?: SpawnRecordingProcess;
-  /** tests isolate output without changing the user's save location */
+  /** Tests isolate output without changing the user's normal save location. */
   readonly recordingDirectory?: string;
   readonly now?: () => number;
-  /** overridden in tests to exercise DEVELOPER_DIR without mutating process.env */
+  /** Overridden in tests to exercise DEVELOPER_DIR without mutating process.env. */
   readonly processEnv?: NodeJS.ProcessEnv;
-  /** overridden in tests to simulate `/Applications` without touching the disk */
+  /** Overridden in tests to simulate `/Applications` without touching the disk. */
   readonly listApplications?: () => Promise<readonly string[]>;
-  /** overridden alongside listApplications to control which bundles look real */
+  /** Overridden alongside listApplications to control which bundles look real. */
   readonly xcodeBundleUsable?: (developerDir: string) => Promise<boolean>;
 }
 
@@ -151,7 +175,11 @@ function formatRuntimeIdentifier(identifier: string): string {
   return `${match[1]} ${match[2]!.replace(/-/gu, ".")}`;
 }
 
-/** unavailable devices (runtime deleted, profile missing) are dropped — listing them only produces boots that fail */
+/**
+ * Parse `simctl list devices --json`. Unavailable devices (runtime deleted,
+ * profile missing) are dropped: showing them in the picker only produces boots
+ * that fail.
+ */
 export function parseSimctlDevices(
   json: string,
   catalogue: DeviceTypeCatalogue = new Map(),
@@ -186,9 +214,11 @@ export function parseSimctlDevices(
         name,
         runtime,
         state: mapSimctlState(raw.state),
-        // discovery cannot attribute a boot; DeviceManager overrides the ones it booted
+        // Discovery cannot attribute a boot; DeviceManager overrides the ones
+        // it booted itself.
         bootSource: "user",
-        // known from the device type profile — the pane draws the right chassis before the stream arrives
+        // Known from the device type profile, so the pane can draw the right
+        // chassis the moment a device is picked rather than after it streams.
         ...(deviceType ? { family: deviceType.family, geometry: deviceType.geometry } : {}),
       });
     }
@@ -200,7 +230,13 @@ export function hasBootableIosRuntime(devices: readonly DeviceDescriptor[]): boo
   return devices.length > 0;
 }
 
-/** stable `Xcode.app` wins; a beta or versioned install is picked only when it's the sole full Xcode — exported for tests */
+/**
+ * Order `/Applications` entries into Xcode bundle candidates, stable first.
+ *
+ * Stable `Xcode.app` wins when present because it is the predictable default;
+ * a beta or versioned install (`Xcode-beta.app`, `Xcode-27.0.app`) is only
+ * picked when it is the sole full Xcode on the machine. Exported for tests.
+ */
 export function orderXcodeAppCandidates(entries: readonly string[]): readonly string[] {
   return entries
     .filter((name) => name.startsWith("Xcode") && name.endsWith(".app"))
@@ -243,21 +279,26 @@ export class IosSimulatorBackend implements DeviceBackend {
     env?: NodeJS.ProcessEnv,
     launch?: HelperSandboxCommand,
   ) => HelperClient;
-  /** one warning per backend when the helper runs unconfined */
+  /** One warning per backend when the helper runs unconfined. */
   private warnedUnsandboxed = false;
   private readonly spawnProcess: SpawnRecordingProcess;
   private readonly recordingDirectoryOverride: string | undefined;
   private readonly now: () => number;
-  /** injected so a test can set DEVELOPER_DIR without touching the real process */
+  /** Injected so a test can set DEVELOPER_DIR without touching the real process. */
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly listApplications: () => Promise<readonly string[]>;
   private readonly xcodeBundleUsable: (developerDir: string) => Promise<boolean>;
 
-  /** geometry learned from helper attachments, keyed by udid */
+  /** Geometry learned from helper attachments, keyed by udid. */
   private readonly deviceGeometry = new Map<string, DeviceGeometry>();
-  /** cached for the process lifetime and shared by concurrent callers — it only changes when a runtime is installed; rebuilding per listing would spawn ~a hundred processes per picker open */
+  /**
+   * Screen geometry and product family per device type, read from the installed
+   * simulator profiles. Cached for the process lifetime and shared by concurrent
+   * callers: it only changes when a runtime is installed, and rebuilding it on
+   * every listing would spawn a hundred processes per picker open.
+   */
   private deviceTypes: Promise<DeviceTypeCatalogue> | null = null;
-  /** one `/Applications` scan per process */
+  /** One `/Applications` scan per process; see discoverXcodeDeveloperDir. */
   private xcodeDiscovery: Promise<string | null> | null = null;
   private xcodeSelectCache: {
     readonly resolvedAtMs: number;
@@ -270,7 +311,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
-  /** keyed on the binary so a rebuilt helper is re-probed rather than assumed */
+  /** Keyed on the binary so a rebuilt helper is re-probed rather than assumed. */
   private helperProbe: { binaryPath: string; result: HelperProbeResult } | null = null;
   private readonly recordings = new Map<string, ActiveRecording>();
   private readonly recordingStarts = new Map<string, Promise<DeviceStartRecordingResult>>();
@@ -302,12 +343,15 @@ export class IosSimulatorBackend implements DeviceBackend {
     this.xcodeBundleUsable =
       options.xcodeBundleUsable ??
       ((developerDir) =>
-        // `xcrun` presence separates a full Xcode from a leftover or half-deleted bundle
+        // `xcrun` is what every downstream command needs; its presence is what
+        // separates a full Xcode from a leftover or half-deleted bundle.
         access(path.join(developerDir, "usr", "bin", "xcrun")).then(
           () => true,
           () => false,
         ));
   }
+
+  // ── Availability ───────────────────────────────────────────────────
 
   async availability(): Promise<DeviceAvailability> {
     if (this.osPlatform !== "darwin") {
@@ -352,7 +396,8 @@ export class IosSimulatorBackend implements DeviceBackend {
       detail: runtimeInstalled ? undefined : "xcodebuild -downloadPlatform iOS",
     });
 
-    // the helper is only built at first attach — report the cache rather than forcing a compile during an availability probe
+    // The helper is only built at first attach, so this step reports the cache
+    // rather than forcing a compile during a routine availability probe.
     const helperBuilt = runtimeInstalled ? await this.cachedHelperPath().then(Boolean) : false;
     steps.push({
       id: "build-device-helper",
@@ -365,18 +410,28 @@ export class IosSimulatorBackend implements DeviceBackend {
       return { kind: "setup-required", steps };
     }
 
-    // a capability failure is degraded, not setup-required — nothing is left to install
+    // Setup is complete, so the remaining question is whether the private
+    // symbols the helper needs still exist on this Xcode. A failure there is
+    // degraded, not setup-required: nothing is left for the user to install.
     const probe = await this.probeHelperCapabilities();
     return probe === null ? { kind: "available" } : availabilityFromProbe(probe);
   }
 
-  /** cached per process, keyed on the binary path — the answer only changes with the toolchain, which produces a different cache key and path; null when nothing is built yet */
+  /**
+   * Run the built helper's per-capability preflight.
+   *
+   * Cached for the process lifetime, keyed on the helper binary path: the
+   * answer only changes when the toolchain does, and a new toolchain produces a
+   * different cache key and therefore a different path. Returns null when no
+   * helper is built yet, since there is nothing to probe.
+   */
   private async probeHelperCapabilities(): Promise<HelperProbeResult | null> {
     const binaryPath = await this.cachedHelperPath();
     if (binaryPath === null) return null;
     if (this.helperProbe?.binaryPath === binaryPath) return this.helperProbe.result;
 
-    // confined exactly like the real run — a looser preflight would report capabilities the sandboxed helper cannot deliver
+    // Confined exactly like the real run: a preflight under looser privileges
+    // would report capabilities the sandboxed helper cannot actually deliver.
     const env = await this.toolchainEnv();
     const launch = await this.sandboxFor([binaryPath, "--probe"], env);
     const result = await this.run(launch.command, [...launch.args], {
@@ -385,7 +440,8 @@ export class IosSimulatorBackend implements DeviceBackend {
       env,
     }).catch(() => null);
 
-    // a helper that won't launch is reported through the same shape — one path to handle
+    // A helper that will not launch is reported through the same shape, so
+    // callers have one path to handle rather than two.
     const probe: HelperProbeResult =
       result === null
         ? {
@@ -400,7 +456,11 @@ export class IosSimulatorBackend implements DeviceBackend {
     return probe;
   }
 
-  /** operations backed by a working capability never call this — one missing symbol cannot take the rest of the pane down */
+  /**
+   * Throw when `capability` is broken on this machine, naming it and the Xcode
+   * it broke on. Operations backed by a working capability never call this, so
+   * one missing symbol cannot take the rest of the pane down.
+   */
   async assertCapability(capability: DeviceCapabilityId): Promise<void> {
     const probe = await this.probeHelperCapabilities();
     if (probe === null) return;
@@ -408,6 +468,8 @@ export class IosSimulatorBackend implements DeviceBackend {
     if (!status || status.ok) return;
     throw new DeviceBackendError(capabilityUnavailableMessage(status, probe.toolchain));
   }
+
+  // ── Discovery and lifecycle ────────────────────────────────────────
 
   async listDevices(options: DeviceListOptions = {}): Promise<readonly DeviceDescriptor[]> {
     const devices = await this.listDevicesUnchecked();
@@ -418,7 +480,8 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   async boot(udid: string): Promise<DeviceDescriptor> {
     const result = await this.simctl(["boot", udid], { timeoutMs: BOOT_TIMEOUT_MS });
-    // booting an already-booted device is success — the pane and an agent can race on the same device
+    // Booting an already-booted device is success, not failure: the pane and an
+    // agent can race on the same device and neither should see an error.
     if (result.code !== 0 && !/current state: Booted/iu.test(result.stderr)) {
       throw this.simctlError("boot", result);
     }
@@ -432,7 +495,9 @@ export class IosSimulatorBackend implements DeviceBackend {
   async shutdown(udid: string): Promise<void> {
     await this.stopRecordingForLifecycle(udid);
     await this.detachStream(udid);
-    // the helper outlives the simulator and its attachment holds a descriptor bound to this boot — dropping it forces the next attach to rebind
+    // The helper outlives the simulator, and its attachment holds a display
+    // descriptor bound to this boot. Dropping it here means the next attach
+    // rebinds instead of reusing a descriptor whose framebuffer is gone.
     this.helper?.invalidateAttachment(udid);
     const result = await this.simctl(["shutdown", udid]);
     if (result.code !== 0 && !/current state: Shutdown/iu.test(result.stderr)) {
@@ -454,6 +519,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   ): Promise<DeviceLaunchAppResult> {
     const result = await this.simctl(["launch", udid, bundleId, ...launchArguments]);
     if (result.code !== 0) throw this.simctlError("launch", result);
+    // `simctl launch` prints `<bundleId>: <pid>`.
     const match = /:\s*(\d+)\s*$/u.exec(result.stdout.trim());
     return { udid, bundleId, pid: match ? Number.parseInt(match[1]!, 10) : null };
   }
@@ -467,7 +533,9 @@ export class IosSimulatorBackend implements DeviceBackend {
     udid: string,
     options: { readonly save?: boolean; readonly maxInlineBytes?: number } = {},
   ): Promise<DeviceScreenshotResult> {
-    // captured to a temp file either way — `simctl io screenshot` only writes to a path; moved beside recordings when kept
+    // Captured to a temp file either way, because `simctl io screenshot` only
+    // writes to a path. When the caller wants it kept, it is moved next to the
+    // recordings afterwards rather than captured somewhere different.
     const directory = await mkdtemp(path.join(tmpdir(), "synara-device-"));
     const file = path.join(directory, "screenshot.png");
     try {
@@ -552,7 +620,8 @@ export class IosSimulatorBackend implements DeviceBackend {
       await writeFile(target, bytes);
       return target;
     } finally {
-      // the reservation only guards against two captures in the same millisecond choosing one name
+      // The reservation only guards against two captures in the same
+      // millisecond choosing one name; the file on disk owns it from here.
       this.reservedRecordingPaths.delete(target);
     }
   }
@@ -592,9 +661,23 @@ export class IosSimulatorBackend implements DeviceBackend {
     }
   }
 
-  // each operation asserts only the capability it needs; screenshots/recordings run on public `simctl io` so they survive a broken framebuffer path
+  // ── Helper-backed capabilities ─────────────────────────────────────
+  //
+  // Each operation asserts only the capability it actually needs, so a symbol
+  // Apple moved in one area cannot disable the others. Screenshots and screen
+  // recordings are absent from this list on purpose: both run on public
+  // `simctl io`, so they survive even a completely broken framebuffer path.
 
-  /** the helper's HID client is bound to one boot; when stale the injection silently vanishes — the helper reports non-delivery and a forced re-attach rebuilds the client so the retry lands live */
+  /**
+   * Send one HID injection, rebinding the helper's input client if the first
+   * attempt was accepted but never reached the guest.
+   *
+   * The helper's HID client is bound to one boot of one simulator. When it goes
+   * stale (the app under test relaunched, the device was rebooted outside
+   * Synara, SimulatorKit dropped the connection) the injection silently
+   * vanishes. The helper now reports that instead of acking it, and a forced
+   * re-attach rebuilds the client, so the retry lands on a live one.
+   */
   private async injectInput(
     udid: string,
     method: string,
@@ -635,7 +718,8 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
-    // the helper takes one HID usage per call and tracks held modifiers itself
+    // The helper takes one USB HID usage per call and tracks held modifiers
+    // itself, so a chord is sent as its modifier keys around the main key.
     for (const modifier of event.modifiers) {
       const usage = HID_MODIFIER_USAGES[modifier];
       if (usage === undefined) continue;
@@ -652,7 +736,13 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
     if (button === "rotate") {
-      // rotation is a Simulator.app window command with no HID usage and no simctl equivalent; the Purple event port isn't wired on a headless boot (silent no-op) — refused explicitly, same reason the pane ships no rotate control
+      // Rotation is a Simulator.app window command, not a HID button: there is
+      // no HID usage for it and no simctl equivalent. Simulator.app posts a
+      // Purple event through a category it compiles into its own executable,
+      // and that port is not wired on a headless boot — calling it there is a
+      // silent no-op (docs/archive/device-pane-spec.md has the full probe). Refused
+      // explicitly rather than pretending to work; the pane ships no rotate
+      // control for the same reason, and this keeps the agent tool honest.
       throw new DeviceBackendError(
         "Rotating a headless simulator is not supported; rotate the device from inside the app or use Simulator.app.",
       );
@@ -681,7 +771,8 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
-    // streaming needs both halves: framebuffer to read, encoder to compress
+    // Streaming needs both halves of the pipeline: the framebuffer to read and
+    // the encoder to compress it.
     await this.assertCapability("framebuffer");
     await this.assertCapability("encoder");
     const helper = await this.attachedHelper(udid);
@@ -689,7 +780,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async detachStream(udid: string): Promise<void> {
-    // the helper holds one attachment — its stream is this device's stream
+    // The helper holds one attachment, so its stream is this device's stream.
     if (!this.helper || this.helper.attachedDevice?.udid !== udid) return;
     await this.helper.stopStream().catch(() => undefined);
   }
@@ -864,7 +955,7 @@ export class IosSimulatorBackend implements DeviceBackend {
     await this.stopRecording(udid).catch(() => undefined);
   }
 
-  /** unique capture path shared by recordings (mp4) and screenshots (png) */
+  /** Unique path for a capture, shared by recordings (mp4) and screenshots (png). */
   private async nextCapturePath(
     deviceName: string,
     startedAt: string,
@@ -902,6 +993,8 @@ export class IosSimulatorBackend implements DeviceBackend {
     );
   }
 
+  // ── simctl plumbing ────────────────────────────────────────────────
+
   private async simctl(
     args: readonly string[],
     options: { readonly timeoutMs?: number } = {},
@@ -925,7 +1018,7 @@ export class IosSimulatorBackend implements DeviceBackend {
     const detail = result.stderr.trim() || result.stdout.trim();
     return new DeviceBackendError(
       `simctl ${action} failed${detail ? `: ${detail}` : ""}`,
-      // a timeout may still be progressing on the device; a refusal will not
+      // A timeout may still be progressing on the device; a refusal will not.
       { retryable: result.timedOut },
     );
   }
@@ -973,18 +1066,32 @@ export class IosSimulatorBackend implements DeviceBackend {
     this.deviceTypes ??= readDeviceTypeCatalogue({
       run: this.run,
       env: await this.toolchainEnv(),
-      // a failed read means no pre-boot geometry — not remembered as a failure the way a helper build is
+      // A failed read means no pre-boot geometry, not a broken pane, so it is
+      // not remembered as a failure the way a helper build is.
     }).catch(() => new Map<string, never>());
     return await this.deviceTypes;
   }
 
-  /** DEVELOPER_DIR wins over the machine selection — pointing one process at Xcode-beta.app is the whole point; `sudo xcode-select -s` would move every other build onto the beta */
+  /**
+   * The developer directory every simulator command runs against.
+   *
+   * `DEVELOPER_DIR` wins over the machine-wide selection, because that is how a
+   * beta Xcode gets targeted: pointing one process at `Xcode-beta.app` is the
+   * whole point, and `sudo xcode-select -s` would move every other build on the
+   * machine onto the beta as well. Reading only `xcode-select -p` meant a user
+   * who set the variable silently got the stable toolchain instead.
+   */
   private developerDirOverride(): string | null {
     const override = this.processEnv.DEVELOPER_DIR?.trim();
     return override !== undefined && override.length > 0 ? override : null;
   }
 
-  /** pins simctl, xcodebuild, and the helper build to one toolchain — a child resolving `xcode-select -p` itself could pick a different Xcode than availability just reported */
+  /**
+   * Environment for `simctl`, `xcodebuild` and the helper build, pinning them
+   * all to one toolchain. Without it a child process resolving `xcode-select -p`
+   * for itself could pick a different Xcode than the one availability just
+   * reported, which is how a beta run ends up half on each.
+   */
   private async toolchainEnv(): Promise<NodeJS.ProcessEnv | undefined> {
     const developerDir = await this.xcodeSelectPath();
     return developerDir === null ? undefined : { ...this.processEnv, DEVELOPER_DIR: developerDir };
@@ -1018,11 +1125,20 @@ export class IosSimulatorBackend implements DeviceBackend {
         ? result.stdout.trim()
         : null;
     if (selected !== null && !selected.includes("CommandLineTools")) return selected;
-    // CommandLineTools is the macOS default after installing git; a full Xcode may still exist (beta-only machines commonly never ran `xcode-select -s`) — discovering it turns a setup blocker into a fallback
+    // The machine-wide selection is CommandLineTools (the macOS default after
+    // installing git) or absent, but a full Xcode may still be installed —
+    // beta-only machines commonly have `Xcode-beta.app` and never ran
+    // `xcode-select -s`. Discovering it here turns "run sudo xcode-select"
+    // from a setup blocker into a fallback instruction.
     return (await this.discoverXcodeDeveloperDir()) ?? selected;
   }
 
-  /** cached per process — installs are rare, and this backs `toolchainEnv()` which runs for every simctl call */
+  /**
+   * Find a full Xcode under `/Applications` without `xcode-select`.
+   *
+   * Cached for the process lifetime: installs are rare, and this backs
+   * `toolchainEnv()`, which runs for every simctl call.
+   */
   private discoverXcodeDeveloperDir(): Promise<string | null> {
     this.xcodeDiscovery ??= (async () => {
       const entries = await this.listApplications().catch(() => [] as string[]);
@@ -1058,6 +1174,8 @@ export class IosSimulatorBackend implements DeviceBackend {
     return bundleId;
   }
 
+  // ── Helper lifecycle ───────────────────────────────────────────────
+
   private async helperRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
     const helper = await this.requireHelper();
     try {
@@ -1071,12 +1189,16 @@ export class IosSimulatorBackend implements DeviceBackend {
     const helperError = error as DeviceHelperError;
     return new DeviceBackendError(
       helperError?.message ?? "Device helper failed",
-      // a timeout may still be progressing; a refusal will not
+      // A timeout may still be progressing on the device; a refusal will not.
       { retryable: helperError?.code === "helper_timeout", cause: error },
     );
   }
 
-  /** the helper binds one simulator at a time and every input/read acts on that binding — each call re-asserts it; no-op when already attached */
+  /**
+   * The helper is bound to one simulator at a time and every input and read
+   * method acts on that binding, so each call re-asserts it. `attach` is a
+   * no-op when the device is already the attached one.
+   */
   private async attachedHelper(
     udid: string,
     options: { readonly force?: boolean } = {},
@@ -1096,7 +1218,10 @@ export class IosSimulatorBackend implements DeviceBackend {
       await helper.attach(udid, options);
       remember();
     } catch (error) {
-      // a device can reboot outside Synara with no observable invalidation hook — a dead-descriptor failure is retried once with a forced re-attach
+      // A device can also be rebooted outside Synara (Simulator.app, or simctl
+      // in the agent's own shell), which no invalidation hook here can observe.
+      // A dead-descriptor failure is therefore retried once with a forced
+      // re-attach, which rebinds against the current boot.
       if (!isStaleDescriptorError(error)) throw this.helperError(error);
       try {
         await helper.attach(udid, { force: true });
@@ -1111,7 +1236,8 @@ export class IosSimulatorBackend implements DeviceBackend {
   private async requireHelper(): Promise<HelperClient> {
     if (this.helper?.running) return this.helper;
     const binaryPath = await this.compileHelperIfNeeded();
-    // the helper resolves CoreSimulator out of DEVELOPER_DIR at runtime — it must inherit the toolchain it was built against
+    // The helper resolves CoreSimulator out of DEVELOPER_DIR at runtime, so it
+    // has to inherit the same toolchain the binary was built against.
     const env = await this.toolchainEnv();
     const helper = this.makeHelperClient(binaryPath, env, await this.sandboxFor([binaryPath], env));
     helper.start();
@@ -1119,7 +1245,14 @@ export class IosSimulatorBackend implements DeviceBackend {
     return helper;
   }
 
-  /** keyed by Xcode build number — the helper links private frameworks whose symbols move between releases, so a stale cache hit would crash at runtime; concurrent callers share one compilation */
+  /**
+   * Build the helper against the current Xcode, or reuse the cached binary.
+   *
+   * Keyed by the Xcode build number because the helper links private
+   * frameworks whose symbols move between releases: a cache hit from a previous
+   * Xcode would crash at runtime rather than fail to compile. Concurrent
+   * callers share one compilation.
+   */
   async compileHelperIfNeeded(): Promise<string> {
     const cached = await this.cachedHelperPath();
     if (cached) return cached;
@@ -1136,7 +1269,8 @@ export class IosSimulatorBackend implements DeviceBackend {
       timeoutMs: 300_000,
       allowNonZeroExit: true,
       outputMode: "truncate",
-      // the helper links this toolchain's private frameworks — build against the same Xcode the session talks to
+      // The helper links this toolchain's private frameworks, so it must build
+      // against the same Xcode the rest of the session talks to.
       env: await this.toolchainEnv(),
     }).catch((error: unknown) => {
       throw this.recordHelperFailure(
@@ -1162,7 +1296,8 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   private recordHelperFailure(message: string): DeviceBackendError {
-    // remembered so availability reports `helper-unavailable` instead of retrying a build that fails the same way
+    // Remembered so `availability()` reports `helper-unavailable` instead of
+    // the pane retrying a build that will keep failing the same way.
     this.helperBuildFailure = message;
     return new DeviceBackendError(message);
   }
@@ -1178,7 +1313,14 @@ export class IosSimulatorBackend implements DeviceBackend {
     );
   }
 
-  /** shared by the long-lived RPC helper and the one-shot `--probe` — preflighting unconfined while the real run is confined would let a broken profile pass the checklist then hang on attach */
+  /**
+   * The Seatbelt-wrapped command for a helper run, or the plain one.
+   *
+   * Shared by the long-lived RPC helper and the one-shot `--probe`: preflighting
+   * unconfined while the real run is confined would let a broken profile pass
+   * the setup checklist and then hang on attach. Logs once when confinement is
+   * skipped, since a silently unconfined helper is the thing worth noticing.
+   */
   private async sandboxFor(
     argv: readonly string[],
     env: NodeJS.ProcessEnv | undefined,
@@ -1201,8 +1343,21 @@ export class IosSimulatorBackend implements DeviceBackend {
     return launch;
   }
 
-  /** read fresh, not memoised — a stale digest reintroduces the bug it prevents; unreadable sources fall back to keying on toolchain alone rather than failing the attach */
-  /** derived through the shared reader the smoke CLI also uses — a second derivation is what made smoke builds land in a dir the server never read */
+  /**
+   * Digest of the helper's sources, so a helper fix invalidates the cache.
+   *
+   * Read fresh rather than memoised: it runs once per attach, and a stale
+   * digest would reintroduce exactly the bug it exists to prevent. If the
+   * sources cannot be read the digest is omitted, which falls back to keying on
+   * the toolchain alone rather than failing the attach outright.
+   */
+  /**
+   * Digest of the helper's sources, so a helper fix invalidates the cache.
+   *
+   * Derived through the shared reader that `scripts/device-helper-smoke.ts`
+   * also uses: a second derivation here is what made the smoke run build into a
+   * directory this backend never read.
+   */
   private async helperSourceRevision(): Promise<string | undefined> {
     return await readDeviceHelperSourceRevision(this.helperSourceDir, {
       listSources: readdir,
@@ -1217,7 +1372,8 @@ export class IosSimulatorBackend implements DeviceBackend {
       allowNonZeroExit: true,
       env: await this.toolchainEnv(),
     }).catch(() => null);
-    // derived by the shared helper so the smoke CLI writes the directory the server reads
+    // Derived by the shared helper so the smoke CLI writes the directory the
+    // server reads; deriving it here independently is what let them diverge.
     const key =
       result?.code === 0
         ? deviceHelperCacheKey(result.stdout, await this.helperSourceRevision())
@@ -1293,7 +1449,7 @@ export function isStaleDescriptorError(error: unknown): boolean {
   return /framebuffer surface|display has no|not attached/iu.test(message);
 }
 
-/** USB HID usage codes for the modifiers the contract exposes */
+/** USB HID keyboard usage codes for the modifiers the contract exposes. */
 const HID_MODIFIER_USAGES: Partial<Record<DeviceKeyModifier, number>> = {
   control: 0xe0,
   shift: 0xe1,
@@ -1301,7 +1457,11 @@ const HID_MODIFIER_USAGES: Partial<Record<DeviceKeyModifier, number>> = {
   command: 0xe3,
 };
 
-/** the helper omits absent attributes and reports display coordinates — fill the contract's shape so pane and agent see one predictable node type */
+/**
+ * The helper omits absent accessibility attributes rather than sending nulls,
+ * and its frames are in display coordinates. Fill in the contract's shape so
+ * the pane and the agent see one predictable node type.
+ */
 export function normalizeUiNode(raw: unknown): DeviceUiNode {
   const node = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const frame =
@@ -1316,7 +1476,8 @@ export function normalizeUiNode(raw: unknown): DeviceUiNode {
     const value = node[key];
     return typeof value === "string" && value.length > 0 ? value : null;
   };
-  // only a complete pair of finite coordinates is worth surfacing — half a point aims taps at (0, y)
+  // Only a complete pair of finite coordinates is worth surfacing: half a point
+  // would aim taps at (0, y) instead of the control.
   const readActivationPoint = (): DeviceUiPoint | null => {
     const raw = node.activationPoint;
     if (typeof raw !== "object" || raw === null) return null;
@@ -1343,7 +1504,7 @@ export function normalizeUiNode(raw: unknown): DeviceUiNode {
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-/** width/height live in the IHDR chunk at a fixed offset — no decoder needed */
+/** Width/height live in the IHDR chunk at a fixed offset; no decoder needed. */
 export function readPngDimensions(
   bytes: Buffer,
 ): { readonly width: number; readonly height: number } | null {

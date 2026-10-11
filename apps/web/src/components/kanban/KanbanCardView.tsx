@@ -72,7 +72,10 @@ function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
   );
 }
 
-// pills that restate the column add nothing ("Working"≈"In Progress", "Completed"≈"Done"); distinct actionable states still surface as pills
+// Pills that merely restate the card's column add nothing, so we drop them and
+// let the column label speak: "Working"/"Connecting" duplicate the "In Progress"
+// column, and "Completed" duplicates "Done". Distinct, actionable states
+// (Pending Approval, Awaiting Input, Plan Ready) still surface as pills.
 const REDUNDANT_COLUMN_PILL_LABELS = new Set(["Working", "Connecting", "Completed"]);
 
 function KanbanCardStatusPill({ card }: { card: KanbanCard }) {
@@ -150,7 +153,8 @@ function KanbanCardViewComponent({
 }: KanbanCardViewProps) {
   const isOverlay = isOverlayProp ?? false;
   const isDragSource = isDragSourceProp ?? false;
-  // thread-backed draft cards keep their own title so the unsent prompt shows separately
+  // Thread-backed draft cards keep their own title, so the unsent prompt is shown
+  // separately; local drafts and unsent-prompt cards already title themselves from it.
   const showDraftPreview =
     card.column === "draft" &&
     card.draftPrompt.length > 0 &&
@@ -161,7 +165,9 @@ function KanbanCardViewComponent({
     envMode: card.envMode,
     worktreePath: card.worktreePath,
   }).worktreeBadgeLabel;
-  // explicit null from the resolver means the persisted PR was ruled out; unresolved rows get the same validation without live status instead of the possibly-stale persisted badge
+  // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
+  // checkout moved on); rows the board root has not resolved yet get the same validation
+  // without live status instead of the raw — possibly stale — persisted badge.
   const pr = card.thread
     ? prByThreadId.has(card.threadId)
       ? (prByThreadId.get(card.threadId) ?? null)
@@ -186,7 +192,9 @@ function KanbanCardViewComponent({
       className={cn(
         "flex w-full cursor-pointer flex-col gap-1.5 rounded-lg bg-card/70 px-3 py-2.5 text-left transition-colors",
         RAISED_SURFACE_CHROME_CLASS_NAME,
-        // the shared raised chrome drops its border in dark mode (shadow-only) — re-add a faint hairline so cards stay separated
+        // The shared raised chrome drops its border in dark mode (shadow-only),
+        // which leaves kanban cards edgeless against the column. Re-add a faint
+        // hairline so each card stays visually separated in dark mode.
         "dark:border dark:border-white/[0.05]",
         "hover:bg-card focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
         // A dragged card floats over the board, so it keeps its opaque fill on a glass window.
@@ -244,7 +252,8 @@ function KanbanCardViewComponent({
         ) : null}
         <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
           {card.isOptimisticDispatch ? (
-            // optimistically In Progress — the thread's real status would contradict the column until the first runtime signal arrives
+            // Optimistically In Progress — the thread's real status (Draft/Completed)
+            // would contradict the column until the first runtime signal arrives.
             <>
               <span className="flex shrink-0 items-center gap-1.5 text-ui-sm leading-snug text-sky-600 dark:text-sky-300/90">
                 <LoaderIcon className="size-3 shrink-0 animate-spin" aria-hidden />

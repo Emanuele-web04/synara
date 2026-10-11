@@ -210,7 +210,9 @@ describe("git query invalidation", () => {
     const first = refreshGitActionAvailability(queryClient, cwd);
     await vi.waitFor(() => expect(statusCalls).toBe(1));
 
-    // a mutation settling while the first refresh is mid-read: its in-flight fetch observed the pre-mutation repo, so the follow-up must issue new reads instead of joining
+    // A mutation (e.g. checkout or pull) settles while the first refresh is mid-read:
+    // its in-flight fetch observed the pre-mutation repository, so the follow-up refresh
+    // must issue new reads instead of joining it.
     branch = "feature";
     const second = refreshGitActionAvailability(queryClient, cwd);
     expect(second).not.toBe(first);
@@ -229,7 +231,8 @@ describe("git query invalidation", () => {
     let branch = "main";
     let statusCalls = 0;
     const firstStatusGate = deferredVoid();
-    // no initial cache data: the mount fetch is the query's first ever fetch, which cancelRefetch alone would join instead of cancelling
+    // No initial cache data: the observer's mount fetch is the query's first ever fetch,
+    // which refetchQueries' cancelRefetch alone would join instead of cancelling.
     const observer = new QueryObserver(queryClient, {
       queryKey: statusKey,
       queryFn: async () => {
@@ -246,6 +249,7 @@ describe("git query invalidation", () => {
     const unsubscribe = observer.subscribe(() => undefined);
     await vi.waitFor(() => expect(statusCalls).toBe(1));
 
+    // A mutation settles while the initial fetch is still reading pre-mutation state.
     branch = "feature";
     await refreshGitActionAvailability(queryClient, cwd);
 

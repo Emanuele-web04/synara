@@ -1,4 +1,13 @@
-/** one DeviceManager per server; exists on every platform so no caller branches on null — off darwin the backend reports `unsupported-platform` and calls fail through the same path a missing Xcode takes */
+/**
+ * DeviceServiceLive - one DeviceManager for the server process.
+ *
+ * The manager exists on every platform so no caller has to branch on `null`;
+ * off darwin its backend reports `unsupported-platform` and every device call
+ * fails cleanly through the same path a missing Xcode would take. `supported`
+ * is what callers use to decide whether to expose the surface at all.
+ *
+ * @module device/Layers/DeviceService
+ */
 import { Effect, Layer } from "effect";
 import { homedir } from "node:os";
 import * as path from "node:path";
@@ -10,11 +19,18 @@ import { DeviceService, type DeviceServiceShape } from "../Services/DeviceServic
 
 export interface DeviceServiceLiveOptions {
   readonly platform?: NodeJS.Platform;
-  /** where to remember this run's boots; omit to remember nothing */
+  /** Where to remember this run's boots; omit to remember nothing. */
   readonly bootOwnershipPath?: string;
 }
 
-/** resolved here rather than ServerConfig — this layer is built before that config is in scope, and a wrong path only costs crash-recovery */
+/**
+ * Where the boot record lives, derived the way the server derives its state
+ * directory so both land in the same place under a custom SYNARA_HOME.
+ *
+ * Resolved here rather than taken from ServerConfig because this layer is built
+ * before that config is in scope, and getting the path wrong only costs the
+ * crash-recovery, not the feature.
+ */
 function defaultBootOwnershipPath(): string {
   const baseDir = process.env.SYNARA_HOME?.trim() || path.join(homedir(), ".synara");
   const stateDir = path.join(baseDir, process.env.VITE_DEV_SERVER_URL ? "dev" : "userdata");
@@ -27,14 +43,16 @@ export function makeDeviceServiceLayer(options: DeviceServiceLiveOptions = {}) {
     Effect.gen(function* () {
       const platform = options.platform ?? process.platform;
       const backend = new IosSimulatorBackend({ platform });
-      // only darwin can boot anything, so only darwin needs to remember doing so
+      // Only darwin can boot anything, so only darwin needs to remember doing so.
       const bootOwnership =
         platform === "darwin"
           ? makeBootOwnershipStore(options.bootOwnershipPath ?? defaultBootOwnershipPath())
           : NULL_BOOT_OWNERSHIP;
       const manager = new DeviceManager({ backend, bootOwnership });
 
-      // a crashed run left simulators booted and unowned — reclaim before this run counts boots or they linger outside the cap and sweep
+      // A previous run that crashed left its simulators booted and no longer
+      // owned by anyone: reclaim them before this run starts counting boots,
+      // or they linger forever outside the cap and the idle sweep.
       if (platform === "darwin") {
         yield* Effect.promise(async () => {
           const reclaimed = await manager.reclaimOrphanedBoots().catch(() => []);
@@ -47,7 +65,8 @@ export function makeDeviceServiceLayer(options: DeviceServiceLiveOptions = {}) {
         });
       }
 
-      // quit shuts down every simulator Synara booted; user devices keep running
+      // App quit shuts down every simulator Synara booted and leaves the
+      // user's own devices running.
       yield* Effect.addFinalizer(() => Effect.promise(() => manager.dispose()));
       return { supported: platform === "darwin", manager } satisfies DeviceServiceShape;
     }),

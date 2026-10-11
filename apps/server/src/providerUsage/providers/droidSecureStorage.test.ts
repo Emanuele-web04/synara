@@ -22,7 +22,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-// run only our fake CLI, never an OS credential utility, on any host
+// Run only our fake CLI, never an OS credential utility, on every host.
 function fakeCli(script: string, shortenTimeout = false) {
   let child: childProcess.ChildProcess | undefined;
   const spy = vi.mocked(childProcess.execFile).mockImplementation(((
@@ -113,7 +113,7 @@ describe("bounded Droid secure storage reads", () => {
   });
 });
 
-// compile only our fixed C# declaration on Windows CI — never call CredRead or touch a keyring
+// Compile only our fixed C# declaration on Windows CI; never call CredRead or touch a keyring.
 it.skipIf(process.platform !== "win32")(
   "compiles the Windows bridge with the production clean environment",
   async () => {
@@ -138,7 +138,7 @@ it.skipIf(process.platform !== "win32")(
         ),
         options,
         (error, stdout, stderr) => {
-          // Get() is replaced with a literal — this invocation cannot read credentials
+          // This invocation cannot read credentials: Get() is replaced above with a literal.
           compilationError = error;
           callback(error, stdout, stderr);
         },

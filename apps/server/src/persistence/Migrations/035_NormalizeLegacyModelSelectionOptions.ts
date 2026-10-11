@@ -1,3 +1,7 @@
+// FILE: 035_NormalizeLegacyModelSelectionOptions.ts
+// Purpose: Repairs persisted modelSelection JSON whose legacy options are stored as option rows.
+// Layer: Persistence migration
+
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

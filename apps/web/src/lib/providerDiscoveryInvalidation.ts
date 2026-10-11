@@ -1,3 +1,8 @@
+// FILE: providerDiscoveryInvalidation.ts
+// Purpose: Keeps provider-discovery cache invalidation tied to meaningful provider changes.
+// Layer: Web UI provider discovery
+// Exports: providerModelDiscoveryInvalidationFingerprint
+
 import type { ServerProviderStatus } from "@synara/contracts";
 
 type ProviderModelDiscoveryFingerprintEntry = readonly [

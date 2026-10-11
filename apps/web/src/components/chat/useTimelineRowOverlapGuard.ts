@@ -7,11 +7,14 @@
 
 import { useCallback, useEffect, useRef } from "react";
 
-// LegendList parks recycled containers at top: -10000000; anything that far up isn't in the visible layout
+// LegendList parks recycled containers at top: -10000000; anything that far up
+// is not part of the visible layout.
 const OUT_OF_VIEW_THRESHOLD_PX = -100_000;
-// sub-pixel rounding between the integer size model and border-box measurement
+// Sub-pixel rounding between the list's integer size model and border-box
+// measurement; intrusions this small are not visible.
 const OVERLAP_EPSILON_PX = 1;
-// a row's positioned container is expected within a few wrappers; reaching the document root means it isn't inside a LegendList container
+// A row's positioned container is expected within a few wrappers; walking to
+// the document root would mean the row is not inside a LegendList container.
 const MAX_CONTAINER_ANCESTOR_DEPTH = 8;
 
 /**
@@ -67,7 +70,11 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
       return;
     }
 
-    // fast path: while text streams, only the bottom-most container changes size and can't intrude — skip the getBoundingClientRect pass entirely
+    // Fast path: while text streams, the only row changing size each frame is
+    // the growing tail. A resize confined to the single bottom-most placed
+    // container cannot intrude on anything (nothing is placed below it, and
+    // this guard only ever pushes rows down), so the measurement pass — the
+    // one getBoundingClientRect per frame — is skipped entirely.
     if (entries !== undefined) {
       let maxTop = Number.NEGATIVE_INFINITY;
       let maxTopCount = 0;
@@ -87,7 +94,8 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
             continue;
           }
           const container = resolvePositionedContainer(target);
-          // rows outside a placed container (parked/recycled) can't intrude on the visible layout
+          // Rows outside a placed container (parked/recycled) can't intrude
+          // on the visible layout — same as being dropped from `placed` below.
           if (!container) {
             continue;
           }

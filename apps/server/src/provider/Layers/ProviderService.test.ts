@@ -1,3 +1,8 @@
+// FILE: ProviderService.test.ts
+// Purpose: Verifies cross-provider routing, persistence, recovery, and runtime lifecycle behavior.
+// Layer: Provider service integration tests
+// Depends on: ProviderServiceLive with in-memory adapter and SQLite fakes.
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +26,7 @@ import {
   type ServerSettings,
   type ProviderKind,
   ProviderSessionStartInput,
+  RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
   TurnId,
@@ -213,7 +219,7 @@ const makeProviderServiceLive = (options?: Parameters<typeof makeProviderService
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
-  readonly provider: ProviderKind;
+  readonly provider: ProviderRuntimeEvent["provider"];
   readonly createdAt: string;
   readonly threadId: ThreadId;
   readonly turnId?: string | undefined;
@@ -302,6 +308,7 @@ function makeFakeCodexAdapter(
   provider: ProviderKind = "codex",
   options?: {
     readonly conversationRollback?: "native" | "restart-session";
+    readonly runtimeEventDelivery?: "fresh-ids-once";
     readonly didResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
     >;
@@ -471,6 +478,9 @@ function makeFakeCodexAdapter(
     startSession,
     ...(provider === "claudeAgent" ? { prepareSessionReplacement } : {}),
     ...(options?.didResumeSession ? { didResumeSession: options.didResumeSession } : {}),
+    ...(options?.runtimeEventDelivery
+      ? { runtimeEventDelivery: options.runtimeEventDelivery }
+      : {}),
     sendTurn,
     steerTurn,
     startReview,
@@ -577,6 +587,7 @@ const waitUntilEffect = <E = never, R = never>(
 function makeProviderServiceLayer(
   options?: Parameters<typeof makeProviderServiceLive>[0],
   providers?: {
+    readonly freshRuntimeEventDelivery?: boolean;
     readonly includeRestartRollbackDroid?: boolean;
     readonly includePi?: boolean;
     readonly codexDidResumeSession?: NonNullable<
@@ -592,6 +603,9 @@ function makeProviderServiceLayer(
   },
 ) {
   const codex = makeFakeCodexAdapter("codex", {
+    ...(providers?.freshRuntimeEventDelivery
+      ? { runtimeEventDelivery: "fresh-ids-once" as const }
+      : {}),
     ...(providers?.codexDidResumeSession
       ? { didResumeSession: providers.codexDidResumeSession }
       : {}),
@@ -696,6 +710,7 @@ replacementRouting.layer("Claude replacement preparation", (it) => {
                   preparedInput.runtimeMode,
                   failure === "background" ? "full-access" : "auto",
                 );
+                // Background output arrives during asynchronous preparation with no activeTurnId.
                 replacementRouting.claude.emit({
                   type: "content.delta",
                   eventId: asEventId(`${failure}-background-output`),
@@ -1916,6 +1931,32 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("skips a native fork through an earlier turn the provider cannot cut at", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const sourceThreadId = asThreadId("thread-fork-through-turn-source");
+      const targetThreadId = asThreadId("thread-fork-through-turn-target");
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: "codex",
+        threadId: sourceThreadId,
+        runtimeMode: "full-access",
+      });
+      const forkCallCount = routing.codex.forkThread.mock.calls.length;
+
+      const result = yield* provider.forkThread!({
+        sourceThreadId,
+        threadId: targetThreadId,
+        throughTurnId: TurnId.makeUnsafe("turn-earlier"),
+        runtimeMode: "full-access",
+      });
+
+      // Forking at the latest point would hand the model turns the fork does not show.
+      assert.equal(result, null);
+      assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 0);
+    }),
+  );
+
   it.effect("reuses a deferred native fork binding and preserves its inherited cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -2503,7 +2544,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-stale-terminal-no-generation");
         yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
 
-        // a thread with no current generation must still accept the old session's terminal events — the only signal left to settle binding+projection; non-terminal stale events stay dropped
+        // A thread with no current lifecycle generation (retired/stopped runtime)
+        // must still accept the old session's terminal events: they are the only
+        // signal left that can settle the binding and projection. Non-terminal
+        // stale events stay dropped.
         staleSettlementRouting.codex.emit({
           type: "content.delta",
           eventId: asEventId("stale-delta-no-generation"),
@@ -2571,7 +2615,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
         assert.equal(typeof activeTurnId, "string");
 
-        // a stale terminal naming the binding's active turn is accepted; one naming a different turn stays dropped
+        // A stale terminal event that still names the binding's active turn is
+        // accepted (it settles the same turn a newer epoch has not replaced); a
+        // stale terminal event for a different turn stays dropped.
         staleSettlementRouting.codex.emit({
           type: "turn.aborted",
           eventId: asEventId("stale-abort-matching-turn"),
@@ -2603,6 +2649,139 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(asRuntimePayloadRecord(settledBinding?.runtimePayload).activeTurnId, null);
         assert.equal(settledBinding?.status, "stopped");
         assert.equal(staleSettlementPersistedEvents.has("stale-abort-other-turn"), false);
+      }),
+    );
+
+    it.effect("keeps a stale item closure that names the binding's active turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-item-closure");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = String(asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId);
+
+        // An interrupt that rotated the generation still force-closes the
+        // turn's open calls (a subagent launch with its stopped state); those
+        // closures settle the same turn, while one for another turn stays dropped.
+        staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-item-closure-active-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(activeTurnId),
+          itemId: RuntimeItemId.makeUnsafe("toolu_launch"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            status: "failed",
+            data: { agentStates: { toolu_launch: { status: "stopped" } } },
+          },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-item-closure-other-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-some-other"),
+          itemId: RuntimeItemId.makeUnsafe("toolu_other"),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { itemType: "command_execution", status: "failed" },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-item-closure-active-turn"),
+          500,
+          10,
+          "stale item closure for the active turn to be persisted",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-item-closure-other-turn"), false);
+      }),
+    );
+
+    it.effect("settles a superseded session's subagent child turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-subagent-child");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
+
+        // An interrupt that replaced the session leaves a subagent's synthetic
+        // turn open on its child thread; the old generation's settling event for
+        // that child is the only thing that can close it. It must never touch the
+        // parent binding, and non-settling child events stay dropped.
+        const childRefs = {
+          providerThreadId: "toolu_child",
+          providerParentThreadId: String(threadId),
+        };
+        staleSettlementRouting.codex.emit({
+          type: "content.delta",
+          eventId: asEventId("stale-child-delta"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { streamKind: "assistant_text", delta: "invisible" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "item.completed",
+          eventId: asEventId("stale-child-tool-closed"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          itemId: RuntimeItemId.makeUnsafe("toolu_child_bash"),
+          createdAt: "2026-07-14T14:00:00.500Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { itemType: "command_execution", status: "failed", title: "Command run" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("stale-child-turn-completed"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-child-synthetic"),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          providerRefs: childRefs,
+          payload: { state: "interrupted" },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-child-turn-completed"),
+          500,
+          10,
+          "stale child turn.completed to be persisted",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-child-delta"), false);
+        assert.equal(staleSettlementPersistedEvents.has("stale-child-tool-closed"), true);
+        const parentBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(
+          asRuntimePayloadRecord(parentBinding?.runtimePayload).activeTurnId,
+          activeTurnId,
+        );
       }),
     );
 
@@ -2758,7 +2937,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
           cwd: "/tmp/project",
           runtimeMode: "full-access",
         });
-        // rotate the generation, keep a live zombie session, rewind the binding — a send must not fast-path into the session whose events the stale-generation gate rejects
+        // Rotate the runtime generation (as a stop does), keep a live adapter
+        // session around (the zombie), and rewind the persisted binding to the
+        // old generation — a turn send must not fast-path into that session,
+        // whose events the stale-generation gate would reject.
         assert.equal(typeof provider.stopRuntimeSession, "function");
         if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
         yield* provider.stopRuntimeSession({ threadId });
@@ -2781,7 +2963,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
         yield* provider.sendTurn({ threadId, input: "after the wedge", attachments: [] });
         assert.equal(staleSettlementRouting.codex.sendTurn.mock.calls.length, sendCallsBefore + 1);
 
-        // recovery re-adopts the persisted generation so the still-live session's events become visible again
+        // Recovery re-adopts the persisted generation, so the still-live
+        // session's events become visible again instead of being dropped.
         staleSettlementRouting.codex.emit({
           type: "content.delta",
           eventId: asEventId("stale-binding-delta"),
@@ -3838,7 +4021,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.match(failure.issue, /could not be retired safely/);
       }
 
-      // An explicit session replacement is the recovery authority after a failed teardown and clears the fail-closed fence.
+      // An explicit session replacement is the recovery authority after a
+      // failed teardown and clears the fail-closed fence.
       yield* provider.startSession(threadId, {
         provider: "codex",
         threadId,
@@ -5109,7 +5293,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       yield* provider.sendTurn({ threadId, input: "spawn a subagent", attachments: [] });
       yield* routing.codex.waitForRuntimeSubscribers();
 
-      // a stopped subagent's child events ride the parent thread id with child identity in providerRefs — neither may clear the parent's active turn
+      // A stopped subagent completes its child turn and flips its child session
+      // to ready — both events ride the parent thread id with the child
+      // identity in providerRefs. Neither may clear the parent's active turn.
       const subagentRefs = {
         providerThreadId: "toolu_subagent_1",
         providerParentThreadId: String(threadId),
@@ -6801,6 +6987,8 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       assert.equal(typeof binding?.lifecycleGeneration, "string");
       const lifecycleGeneration = String(binding?.lifecycleGeneration);
 
+      // Park the idle stop inside its lifecycle run, right where it re-checks
+      // whether new work displaced it.
       const defaultHasSession = idleCleanup.codex.hasSession.getMockImplementation();
       if (!defaultHasSession) assert.fail("Expected the fake adapter hasSession implementation");
       let releaseIdleStop: () => void = () => undefined;
@@ -6830,7 +7018,8 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntil(() => idleStopParked, 2000, 10, "idle stop reaching the session probe");
 
-      // new runtime work displacing a parked idle stop must abandon it without touching the still-live session
+      // New runtime work displaces the idle stop while it is parked, so the
+      // stop must abandon itself without touching the still-live session.
       idleCleanup.codex.emit({
         type: "task.started",
         eventId: asEventId("runtime-idle-superseded-task"),
@@ -6852,7 +7041,8 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
       assert.equal(yield* idleCleanup.codex.hasSession(threadId), true);
 
-      // the abandoned stop must leave the live generation intact — otherwise every later runtime event is silently dropped
+      // The abandoned stop must leave the live runtime's generation intact:
+      // otherwise every later event from that runtime is silently dropped.
       const turnId = asTurnId("turn-after-superseded-idle-stop");
       idleCleanup.codex.emit({
         type: "turn.started",
@@ -7357,6 +7547,8 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       requireReleaseListSessions(release)([staleReadySession]);
       yield* Fiber.join(stopFiber);
 
+      // The explicit stop also crosses the idempotent cleanup barrier after
+      // the idle stop settles, even though the session is no longer routable.
       assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 2);
       assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
     }),
@@ -7726,6 +7918,376 @@ persistedFanout.layer("ProviderServiceLive durable fanout", (it) => {
       assert.equal(canonicalEvent.eventId, completedEvent.eventId);
       assert.equal(persistedEvent.event.eventId, completedEvent.eventId);
       assert.equal(persistedEvent.sequence > 0, true);
+    }),
+  );
+});
+
+const batchFanoutEvents: ProviderRuntimeEvent[] = [];
+let batchFanoutRelease = Effect.void;
+const batchFanout = makeProviderServiceLayer(
+  {
+    persistRuntimeEvent: (event) =>
+      Effect.sync(() => {
+        batchFanoutEvents.push(event);
+      }).pipe(
+        Effect.andThen(Effect.suspend(() => batchFanoutRelease)),
+        Effect.map(() => ({ sequence: batchFanoutEvents.length, event })),
+      ),
+  },
+  { freshRuntimeEventDelivery: true },
+);
+batchFanout.layer("ProviderServiceLive durable text batches", (it) => {
+  it.effect(
+    "publishes a shared combined journal row to consumers only after durable acceptance",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("thread-batch-fanout");
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const release = yield* Deferred.make<void>();
+        batchFanoutRelease = Deferred.await(release);
+        batchFanoutEvents.length = 0;
+        const canonical: ProviderRuntimeEvent[] = [];
+        const persisted: Array<{ sequence: number; event: ProviderRuntimeEvent }> = [];
+        yield* provider.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              canonical.push(event);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* provider.streamPersistedEvents!.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              persisted.push(event);
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* sleep(20);
+        const turnId = asTurnId("turn-batch-fanout");
+        const first: ProviderRuntimeEvent = {
+          type: "content.delta",
+          eventId: asEventId("batch-fanout-first"),
+          provider: "codex",
+          createdAt: "2026-10-10T00:00:00.000Z",
+          threadId,
+          turnId,
+          itemId: RuntimeItemId.makeUnsafe("batch-fanout-item"),
+          payload: { streamKind: "assistant_text", delta: "A" },
+        };
+        batchFanout.codex.emit(first);
+        batchFanout.codex.emit({
+          ...first,
+          eventId: asEventId("batch-fanout-second"),
+          payload: { streamKind: "assistant_text", delta: "B" },
+        });
+        batchFanout.codex.emit({
+          ...first,
+          type: "turn.completed",
+          eventId: asEventId("batch-fanout-terminal"),
+          payload: { state: "completed" },
+        });
+        yield* waitUntil(() => batchFanoutEvents.length === 1);
+        const acceptedPayload = batchFanoutEvents[0]?.payload;
+        assert.equal(canonical.length, 0);
+        assert.equal(persisted.length, 0);
+        yield* Deferred.succeed(release, undefined);
+        batchFanoutRelease = Effect.void;
+        assert.deepEqual(acceptedPayload, { streamKind: "assistant_text", delta: "AB" });
+        yield* waitUntil(() => persisted.length === 2);
+        assert.deepEqual(
+          canonical,
+          persisted.map((row) => row.event),
+        );
+        assert.deepEqual(
+          persisted.map((row) => row.sequence),
+          [1, 2],
+        );
+      }),
+  );
+});
+
+for (const stop of ["interrupt", "session", "dispose"] as const) {
+  const stopEvents: ProviderRuntimeEvent[] = [];
+  const stopBatch = makeProviderServiceLayer(
+    {
+      persistRuntimeEvent: (event) =>
+        Effect.sync(() => {
+          stopEvents.push(event);
+          return { sequence: stopEvents.length, event };
+        }),
+    },
+    { freshRuntimeEventDelivery: true },
+  );
+  stopBatch.layer(`ProviderServiceLive text flush on ${stop}`, (it) => {
+    it.effect(
+      "accepts admitted text before generation retirement without advancing the batch timer",
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const threadId = asThreadId(`thread-batch-${stop}`);
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+          yield* stopBatch.codex.waitForRuntimeSubscribers();
+          const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+          const event: ProviderRuntimeEvent = {
+            type: "content.delta",
+            eventId: asEventId(`batch-${stop}-text`),
+            provider: "codex",
+            createdAt: "2026-10-10T00:00:00.000Z",
+            threadId,
+            turnId: sent.turnId,
+            lifecycleGeneration: binding.lifecycleGeneration,
+            payload: { streamKind: "assistant_text", delta: "Preserve this text." },
+          };
+          stopBatch.codex.emit(event);
+          yield* sleep(20);
+          assert.lengthOf(stopEvents, 0);
+          if (stop === "interrupt")
+            yield* provider.interruptTurn({ threadId, turnId: sent.turnId });
+          else if (stop === "session") yield* provider.stopSession({ threadId });
+          else yield* provider.closeRuntimeEvents;
+          assert.equal(
+            stopEvents.find((accepted) => accepted.eventId === event.eventId)?.payload,
+            event.payload,
+          );
+        }),
+    );
+  });
+}
+
+let stopRetryAttempts = 0;
+const stopRetryAccepted: ProviderRuntimeEvent[] = [];
+const stopRetry = makeProviderServiceLayer(
+  {
+    persistRuntimeEvent: (event) =>
+      Effect.suspend(() => {
+        if (event.type === "content.delta" && ++stopRetryAttempts === 1)
+          return Effect.fail(new Error("sqlite busy"));
+        stopRetryAccepted.push(event);
+        return Effect.succeed({ sequence: stopRetryAttempts, event });
+      }),
+    runtimeEventRetryBaseDelayMs: 1,
+    runtimeEventRetryMaxDelayMs: 1,
+  },
+  { freshRuntimeEventDelivery: true },
+);
+stopRetry.layer("ProviderServiceLive urgent Stop with text persistence retry", (it) => {
+  it.effect("starts native interruption before waiting for a failed text append", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stop-text-retry");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+      yield* stopRetry.codex.waitForRuntimeSubscribers();
+      const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      stopRetry.codex.emit({
+        type: "content.delta",
+        eventId: asEventId("urgent-stop-text"),
+        provider: "codex",
+        createdAt: "2026-10-10T00:00:00.000Z",
+        threadId,
+        turnId: sent.turnId,
+        lifecycleGeneration: binding.lifecycleGeneration,
+        payload: { streamKind: "assistant_text", delta: "Preserved through Stop." },
+      });
+      yield* sleep(20);
+      const interrupted = yield* provider
+        .interruptTurn({ threadId, turnId: sent.turnId })
+        .pipe(Effect.forkChild);
+      yield* waitUntil(() => stopRetryAttempts === 1);
+      const nativeStartedBeforeRetry = stopRetry.codex.interruptTurn.mock.calls.length === 1;
+      yield* TestClock.adjust("1 millis");
+      yield* Fiber.join(interrupted);
+      assert.equal(nativeStartedBeforeRetry, true);
+      assert.equal(stopRetryAttempts, 2);
+      assert.deepEqual(
+        stopRetryAccepted
+          .filter((event) => event.type === "content.delta")
+          .map((event) => event.payload),
+        [{ streamKind: "assistant_text", delta: "Preserved through Stop." }],
+      );
+    }),
+  );
+});
+
+for (const stopKind of ["stopSession", "stopRuntimeSession"] as const) {
+  for (const stopFails of [false, true]) {
+    let appendAttempts = 0;
+    let acceptedText = Effect.void;
+    const acceptedEvents: ProviderRuntimeEvent[] = [];
+    const batchStop = makeProviderServiceLayer(
+      {
+        persistRuntimeEvent: (event) =>
+          Effect.suspend(() => {
+            if (event.type === "content.delta" && ++appendAttempts === 1)
+              return Effect.fail(new Error("sqlite busy during session stop"));
+            acceptedEvents.push(event);
+            return (event.type === "content.delta" ? acceptedText : Effect.void).pipe(
+              Effect.map(() => ({ sequence: acceptedEvents.length, event })),
+            );
+          }),
+        runtimeEventRetryBaseDelayMs: 1,
+        runtimeEventRetryMaxDelayMs: 1,
+      },
+      { freshRuntimeEventDelivery: true },
+    );
+    batchStop.layer(`ProviderServiceLive durable ${stopKind} (stopFails=${stopFails})`, (it) => {
+      it.effect(
+        "starts physical session stop before retry and drains under the old generation",
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* ProviderService;
+            const directory = yield* ProviderSessionDirectory;
+            const threadId = asThreadId(`thread-durable-${stopKind}-${stopFails}`);
+            yield* provider.startSession(threadId, {
+              provider: "codex",
+              threadId,
+              runtimeMode: "full-access",
+            });
+            const sent = yield* provider.sendTurn({ threadId, input: "brief" });
+            yield* batchStop.codex.waitForRuntimeSubscribers();
+            const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+            const textDrained = yield* Deferred.make<void>();
+            acceptedText = Deferred.succeed(textDrained, undefined).pipe(Effect.asVoid);
+            let physicalStopStarted = false;
+            const originalStop = batchStop.codex.stopSession.getMockImplementation()!;
+            const stopError = new ProviderAdapterProcessError({
+              provider: "codex",
+              threadId,
+              detail: "session teardown could not prove exit",
+            });
+            batchStop.codex.stopSession.mockImplementation((stoppedThreadId) =>
+              Effect.gen(function* () {
+                physicalStopStarted = true;
+                if (stopFails) return yield* Effect.fail(stopError);
+                // A teardown may await its runtime consumer. Serially awaiting
+                // the adapter before flushing would strand this drain too.
+                yield* Deferred.await(textDrained);
+                yield* originalStop(stoppedThreadId);
+              }),
+            );
+            const first: ProviderRuntimeEvent = {
+              type: "content.delta",
+              eventId: asEventId(`durable-${stopKind}-${stopFails}-first`),
+              provider: "codex",
+              providerInstanceId: binding.providerInstanceId,
+              threadId,
+              turnId: sent.turnId,
+              lifecycleGeneration: binding.lifecycleGeneration,
+              createdAt: "2026-10-10T00:00:00.000Z",
+              payload: { streamKind: "assistant_text", delta: "A" },
+            };
+            batchStop.codex.emit(first);
+            batchStop.codex.emit({
+              ...first,
+              eventId: asEventId(`durable-${stopKind}-${stopFails}-second`),
+              payload: { streamKind: "assistant_text", delta: "B" },
+            });
+            yield* sleep(20);
+            assert.lengthOf(acceptedEvents, 0);
+            const stop = provider[stopKind];
+            if (stop === undefined) assert.fail(`Expected ${stopKind} implementation`);
+            const stopping = yield* stop({ threadId }).pipe(Effect.exit, Effect.forkChild);
+            yield* waitUntil(() => appendAttempts === 1);
+            const physicalStopStartedBeforeRetry = physicalStopStarted;
+            const bindingDuringRetry = Option.getOrThrow(yield* directory.getBinding(threadId));
+            yield* TestClock.adjust("1 millis");
+            const stopExit = yield* Fiber.join(stopping);
+            assert.equal(physicalStopStartedBeforeRetry, true);
+            assert.equal(bindingDuringRetry.lifecycleGeneration, binding.lifecycleGeneration);
+            assert.equal(appendAttempts, 2);
+            assert.deepEqual(acceptedEvents, [
+              { ...first, payload: { streamKind: "assistant_text", delta: "AB" } },
+            ]);
+            const finalBinding = yield* directory.getBinding(threadId);
+            if (stopFails) {
+              assert.equal(Exit.isFailure(stopExit), true);
+              if (Exit.isFailure(stopExit))
+                assert.match(Cause.pretty(stopExit.cause), /could not prove exit/);
+              assert.equal(
+                Option.getOrThrow(finalBinding).lifecycleGeneration,
+                binding.lifecycleGeneration,
+              );
+              assert.equal(Option.getOrThrow(finalBinding).status, binding.status);
+            } else {
+              assert.equal(Exit.isSuccess(stopExit), true);
+              if (stopKind === "stopSession") assert.equal(Option.isNone(finalBinding), true);
+              else {
+                const stoppedBinding = Option.getOrThrow(finalBinding);
+                assert.equal(stoppedBinding.status, "stopped");
+                assert.notEqual(stoppedBinding.lifecycleGeneration, binding.lifecycleGeneration);
+              }
+            }
+          }),
+      );
+    });
+  }
+}
+
+const originalIdEvents: ProviderRuntimeEvent[] = [];
+const originalIdFanout = makeProviderServiceLayer({
+  persistRuntimeEvent: (event) =>
+    Effect.sync(() => {
+      originalIdEvents.push(event);
+      return { sequence: originalIdEvents.length, event };
+    }),
+});
+originalIdFanout.layer("ProviderServiceLive original delta identities", (it) => {
+  it.effect("keeps every original delta for an adapter without fresh-ids-once capability", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-original-ids");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* originalIdFanout.codex.waitForRuntimeSubscribers();
+      originalIdEvents.length = 0;
+      const first: ProviderRuntimeEvent = {
+        type: "content.delta",
+        eventId: asEventId("original-first"),
+        provider: "codex",
+        createdAt: "2026-10-10T00:00:00.000Z",
+        threadId,
+        turnId: asTurnId("turn-original-ids"),
+        payload: { streamKind: "assistant_text", delta: "A" },
+      };
+      originalIdFanout.codex.emit(first);
+      originalIdFanout.codex.emit({
+        ...first,
+        eventId: asEventId("original-second"),
+        payload: { streamKind: "assistant_text", delta: "B" },
+      });
+      yield* waitUntil(() => originalIdEvents.length === 2);
+      assert.deepEqual(
+        originalIdEvents.map((event) => event.eventId),
+        ["original-first", "original-second"],
+      );
+      assert.deepEqual(
+        originalIdEvents.map((event) => event.payload),
+        [
+          { streamKind: "assistant_text", delta: "A" },
+          { streamKind: "assistant_text", delta: "B" },
+        ],
+      );
     }),
   );
 });
@@ -8314,6 +8876,8 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       });
       liveFallback.codex.sendTurn.mockImplementationOnce((input: ProviderSendTurnInput) =>
         Effect.gen(function* () {
+          // The terminal runtime event is fully processed before sendTurn
+          // returns, so the post-dispatch write takes the settled-turn branch.
           liveFallback.codex.emit({
             type: "turn.completed",
             eventId: asEventId("evt-live-fallback-settled"),

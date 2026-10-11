@@ -94,7 +94,7 @@ export function indexProjectRepositoryInventories(
   return { errors, repositoryKeysByProject, uniqueRepositories };
 }
 
-/** remove pins only when an explicitly authoritative inventory proves ownership ended */
+/** Remove pins only when an explicitly authoritative inventory proves ownership ended. */
 export function cleanupUnconfiguredPullRequestPins(input: {
   pins: ProjectPullRequestPinsShape;
   pinnedRows: ReadonlyArray<ProjectPullRequestPin>;

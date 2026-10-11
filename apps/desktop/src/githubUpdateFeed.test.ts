@@ -1,3 +1,7 @@
+// FILE: githubUpdateFeed.test.ts
+// Purpose: Verifies GitHub release fallback URL helpers for desktop updates.
+// Layer: Desktop update tests
+
 import { describe, expect, it } from "vitest";
 
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";

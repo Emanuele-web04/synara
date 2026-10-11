@@ -1,3 +1,8 @@
+/**
+ * Grok ACP support - builds the Grok Build stdio command and resolves auth.
+ *
+ * @module GrokAcpSupport
+ */
 import { type GrokModelOptions, type RuntimeMode } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
@@ -76,7 +81,9 @@ export function runGrokAcpCompactionCommand(
       (command) => command.name.trim().toLowerCase() === GROK_COMPACT_COMMAND_NAME,
     );
 
-    // older Grok builds didn't advertise commands reliably — keep /compact working on an empty list but reject a definitive non-support signal
+    // Older Grok ACP releases did not advertise commands reliably. Preserve
+    // their working /compact path when the list is empty, but reject a
+    // definitive non-support signal with an actionable error.
     if (commands.length > 0 && !compactAvailable) {
       return yield* new AcpErrors.AcpRequestError({
         code: -32601,
@@ -85,7 +92,9 @@ export function runGrokAcpCompactionCommand(
       });
     }
 
-    // maintenance commands must not inherit a Plan-mode tracker from an earlier turn — Grok uses _meta.mode to reconcile interaction mode
+    // Maintenance commands must not inherit a native Plan-mode tracker left
+    // behind by an earlier turn. Grok uses this metadata to reconcile its
+    // interaction mode; the normal default-mode prompt path does the same.
     return yield* runtime.prompt({
       prompt: [{ type: "text", text: GROK_COMPACT_PROMPT }],
       _meta: { mode: "agent" },
@@ -98,7 +107,11 @@ export function buildGrokAcpSpawnInput(
   cwd: string,
   runtimeMode: RuntimeMode,
 ): AcpSpawnInput {
-  // Full Access also needs the process-scoped override — some Grok builds deny before emitting an ACP permission request
+  // Keep Grok's request-based mode as the explicit baseline. Full Access also
+  // needs the process-scoped override because some Grok builds deny before
+  // emitting an ACP permission request. Runtime-mode changes restart the Grok
+  // process, while native Plan mode plus Synara's pre-tool hook still gate
+  // writes on Plan turns.
   const args = ["--permission-mode", "default", "agent", "--no-leader"];
   if (runtimeMode === "full-access") {
     args.push("--always-approve");
@@ -249,6 +262,8 @@ export function applyGrokAcpModelSelection<E>(input: {
   readonly mapError: (context: GrokAcpModelSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
   void input;
-  // Grok ACP 0.1.210 advertises models but doesn't implement set_config_option — model/effort are process-start settings
+  // Grok ACP 0.1.210 advertises models in initialize/session responses but does
+  // not implement `session/set_config_option`. Model and effort are therefore
+  // process-start settings supplied by `buildGrokAcpSpawnInput`.
   return Effect.void;
 }

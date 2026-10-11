@@ -97,6 +97,7 @@ import {
   clearThreadDetailResumeCursor,
   resetThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
+import { adoptVerifiedThreadCacheIdentity } from "./threadDetailCacheIdentity";
 import { trackWsTurnSettlement, type WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
@@ -139,7 +140,14 @@ export class WsTransportRequestInterruptedError extends Data.TaggedError(
   readonly retryable?: boolean;
 }> {}
 
-// classifies the transport's own interrupt (runtime interrupted/disposed mid-flight) — these surface as the squashed "All fibers interrupted" Error, the raw leakage this exists to stop
+/**
+ * True when a request failure is the transport's own doing — the Effect runtime
+ * that carried the request was interrupted or disposed mid-flight (reconnect,
+ * runtime swap) — rather than an error the server returned. Interrupts have no
+ * typed channel out of `runPromise`; they surface as the squashed
+ * "All fibers interrupted without error" Error or as runtime-disposal defects,
+ * which is exactly the raw leakage this classification exists to stop.
+ */
 export function isRuntimeInterruptFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (
@@ -237,6 +245,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 const INITIAL_RECONNECT_RETRY_MS = 500;
 const MAX_RECONNECT_RETRY_MS = 5_000;
 
+/** Keeps outages gentle on the backend while still recovering promptly. */
 export function getReconnectRetryDelayMs(attempt: number): number {
   const exponent = Math.max(0, Math.min(Math.trunc(attempt), 16));
   return Math.min(INITIAL_RECONNECT_RETRY_MS * 2 ** exponent, MAX_RECONNECT_RETRY_MS);
@@ -331,7 +340,12 @@ export async function negotiateOverHttp(
   explicitUrl: string | null,
   lifetimeSignal?: AbortSignal,
 ): Promise<WsBootstrapNegotiateResult | null> {
-  // browsers have no default fetch timeout: a connection that accepts then stalls would wedge the transport without this deadline (the legacy socket path got a backstop from the WS handshake timeout); the caller's lifetime signal composes in so dispose aborts too
+  // Browsers apply no default fetch timeout. Without the deadline, a
+  // connection that accepts and then stalls (the WAN/tunnel case this
+  // endpoint exists to improve) never settles, so the bootstrap fallback
+  // never runs and the transport wedges; the legacy socket path got that
+  // backstop for free from the browser's WS handshake timeout. The caller's
+  // lifetime signal is composed in so disposal aborts the request too.
   const deadline = AbortSignal.timeout(NEGOTIATE_HTTP_TIMEOUT_MS);
   const signal = lifetimeSignal ? AbortSignal.any([lifetimeSignal, deadline]) : deadline;
   let response: Response;
@@ -487,9 +501,15 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   "WS_NEGOTIATION_REQUIRED",
   "WS_PROTOCOL_INCOMPATIBLE",
   "WS_CAPABILITIES_INCOMPATIBLE",
-  // A local filesystem watcher failure is scoped to its optional panel subscription. Reconnecting every RPC stream cannot repair that path.
+  // A local filesystem watcher failure is scoped to its optional panel
+  // subscription. Reconnecting every RPC stream cannot repair that path.
   "PROJECT_FILE_WATCH_FAILED",
-  // snapshot-fence failures are a property of one stream's read model, not the socket — tearing the transport down interrupts every unrelated request while fixing nothing; RESNAPSHOT retries in place, STALLED recovers via the slow snapshot-fault retry
+  // Snapshot-fence failures are a property of one stream's read model, not of
+  // the socket. Tearing the whole transport down for them interrupts every
+  // unrelated in-flight request while fixing nothing — the same fence is
+  // re-read on the next connect. RESNAPSHOT retries in place with a fresh
+  // snapshot request; STALLED / STATE_INCOMPLETE surface as stream failures
+  // and recover via the slow snapshot-fault retry (see startStream).
   "ORCHESTRATION_RESNAPSHOT_REQUIRED",
   "ORCHESTRATION_SNAPSHOT_STALLED",
   // Retry only the overflowing subscription, preserving its applied cursor.
@@ -502,7 +522,20 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
 
 const RESNAPSHOT_REQUIRED_ERROR_CODE = "ORCHESTRATION_RESNAPSHOT_REQUIRED";
 
-// snapshot faults clear only via server-side recovery — the stream must neither die (the shell stream has no route fallback) nor hammer; RESNAPSHOT lands here only after bounded fast retries, i.e. the advancing-but-behind fence
+// Server-diagnosed snapshot faults: the projection fence is stalled or
+// underivable, and only server-side recovery (a restart's bootstrap replay, a
+// repair, or the deferred catch-up advancing the fence) can clear them. The
+// stream must neither die permanently — the shell stream has no route-level
+// fallback, so a dead stream means a silently stale sidebar — nor hammer the
+// server; a slow in-place retry converges as soon as the server heals.
+//
+// RESNAPSHOT_REQUIRED belongs here too, but only as a fallback: this
+// classifier is consulted after the bounded fast retries are exhausted (the
+// admission-retry path returns first), which is precisely the
+// advancing-but-still-behind fence — a projector working through a backlog
+// larger than the replay limit. The server keeps that demand retryable
+// because progress is real, so the stream must keep slow-retrying until the
+// gap closes rather than dying while recovery is succeeding.
 const SNAPSHOT_FAULT_ERROR_CODES = new Set([
   "ORCHESTRATION_SNAPSHOT_STALLED",
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
@@ -874,7 +907,8 @@ export class WsTransport {
   >();
   private runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never> | null = null;
   private clientScope: Scope.Closeable | null = null;
-  // Aborted by dispose() so an in-flight HTTP negotiation cannot outlive the transport and resurrect a runtime after teardown returned.
+  // Aborted by dispose() so an in-flight HTTP negotiation cannot outlive the
+  // transport and resurrect a runtime after teardown returned.
   private readonly lifetime = new AbortController();
   private clientPromise: Promise<RpcClientInstance>;
   private reconnectPromise: Promise<RpcClientInstance> | null = null;
@@ -892,14 +926,20 @@ export class WsTransport {
   private readonly streamCompletionRetryTimers = new Map<string, number>();
   private readonly activeThreadStreamInputs = new Map<string, unknown>();
   private shellSubscribed = false;
-  // explicit subscribeShell while true restarts the stream (caller reset its fence); while false the pending snapshot satisfies the caller — bootstrap coalescing
+  // Whether the active shell stream has already delivered its snapshot item.
+  // An explicit subscribeShell while this is true must restart the stream (the
+  // caller reset its fence and needs a new snapshot); while false, the pending
+  // snapshot of the just-started stream will satisfy the caller, so the call
+  // is absorbed (bootstrap coalescing).
   private shellSnapshotDelivered = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
   private readonly projectFileSubscriptions = new Map<string, ProjectFileChangeSubscription>();
   private readonly projectAgentSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
-  // track the last observed server generation so cross-restart reconnects still reset push state after the negotiation cache was cleared
+  // Tracks the last server generation this transport observed so cross-restart
+  // reconnects still reset replayed push state even after the negotiation
+  // cache was cleared by an intervening failure.
   private lastServerInstanceId: string | null = null;
 
   constructor(url?: string) {
@@ -977,7 +1017,8 @@ export class WsTransport {
         const threadId = (params as { threadId: string }).threadId;
         this.resetStreamCapacityRetry(`orchestration.thread:${threadId}`);
         this.resetStreamCompletionRetry(`orchestration.thread:${threadId}`);
-        // Preserve the stored input identity across explicit refreshes so stale restart callbacks cannot supersede the newly requested stream.
+        // Preserve the stored input identity across explicit refreshes so stale
+        // restart callbacks cannot supersede the newly requested stream.
         const existingInput = this.threadSubscriptions.get(threadId);
         const wasSubscribed = existingInput !== undefined;
         const input = threadStreamInputsEqual(existingInput, params) ? existingInput : params;
@@ -1257,6 +1298,7 @@ export class WsTransport {
     };
   }
 
+  /** Fires when a per-thread stream dies with no retry or reconnect left. */
   onThreadStreamFailure(listener: (failure: WsThreadStreamFailure) => void): () => void {
     this.threadStreamFailureListeners.add(listener);
     return () => {
@@ -1295,7 +1337,8 @@ export class WsTransport {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    // Abort before anything else: a pending negotiate must fail now rather than resolve later and build a runtime this teardown will not see.
+    // Abort before anything else: a pending negotiate must fail now rather
+    // than resolve later and build a runtime this teardown will not see.
     this.lifetime.abort(new Error("Transport disposed"));
     this.setState("disposed");
     this.serverBusy?.dispose();
@@ -1318,10 +1361,16 @@ export class WsTransport {
     if (resources) await this.closeRuntime(resources);
   }
 
+  /**
+   * Resolves negotiation without burning a WebSocket handshake: the HTTP
+   * endpoint answers directly on current servers, and only servers predating
+   * it fall back to the legacy `/ws/bootstrap` socket round trip.
+   */
   private async negotiateCompatibility(): Promise<WsBootstrapNegotiateResult> {
     const httpResult = await negotiateOverHttp(this.explicitUrl, this.lifetime.signal);
     if (httpResult) return httpResult;
-    // dispose() may have run while the request was in flight; it captured a null runtime and returned, so building one here would strand it.
+    // dispose() may have run while the request was in flight; it captured a
+    // null runtime and returned, so building one here would strand it.
     if (this.disposed) {
       throw new Error("WebSocket transport was disposed during negotiation.");
     }
@@ -1359,12 +1408,23 @@ export class WsTransport {
     if (serverIdentityChanged(this.lastServerInstanceId, compatibility.serverInstanceId)) {
       this.latestPushByChannel.clear();
       this.sequence = 0;
-      // a resume cursor is valid only against the journal that issued its sequences — a new server instance may serve a different journal, so all cursors reset to force full snapshots; lastServerInstanceId survives failed reconnects, unlike compatibility (trades resume-across-restart until the protocol carries a durable journal epoch)
+      // A resume cursor is only valid against the journal that issued its
+      // sequences. A new server instance may serve a different journal (fresh
+      // install, restored backup), so every cursor must reset to force full
+      // snapshots. `lastServerInstanceId` survives failed reconnects, unlike
+      // `compatibility`, so an outage longer than the first retry still
+      // detects the change. Interim tradeoff: this also drops resume across
+      // plain restarts of the same journal, acceptable until the protocol
+      // carries a durable journal epoch.
       resetThreadDetailResumeCursors();
-      // the per-thread device version restarts at 0 — a stale higher version would reject the new instance's snapshots as stragglers forever, so it drops with the cursors
+      // Device thread state is gated on a per-thread version that the server
+      // restarts at 0. A stale higher version would reject the new instance's
+      // snapshots as stragglers and leave the pane showing pre-restart devices
+      // and attachments forever, so the cache is dropped with the cursors.
       useDeviceStateStore.getState().clear();
       useComputerStateStore.getState().clear();
     }
+    adoptVerifiedThreadCacheIdentity(compatibility.serverInstanceId);
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);
     this.setCompatibilityIssue(null);
@@ -1392,6 +1452,8 @@ export class WsTransport {
 
   private createSession() {
     const sessionVersion = ++this.sessionVersion;
+    // Reconnects reuse the cached negotiation while the server generation is
+    // unchanged, so a reconnect costs exactly one WebSocket handshake.
     const cachedCompatibility = this.compatibility;
     const clientPromise = (async () => {
       const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
@@ -1450,7 +1512,9 @@ export class WsTransport {
   }
 
   private async getClient(): Promise<RpcClientInstance> {
-    // Once recovery starts, the last fulfilled client belongs to a runtime that reconnect() has detached. New work must join the shared recovery promise instead of briefly reusing that stale socket.
+    // Once recovery starts, the last fulfilled client belongs to a runtime
+    // that reconnect() has detached. New work must join the shared recovery
+    // promise instead of briefly reusing that stale socket.
     if (this.reconnectPromise) return this.reconnectPromise;
     try {
       return await this.clientPromise;
@@ -1601,7 +1665,9 @@ export class WsTransport {
   ): void {
     if (this.sessionVersion !== streamSessionVersion) return;
 
-    // Subscription streams send an initial snapshot, so receiving an event does not prove the stream is healthy. Only a stream that remained alive for a meaningful interval resets the backoff.
+    // Subscription streams send an initial snapshot, so receiving an event
+    // does not prove the stream is healthy. Only a stream that remained alive
+    // for a meaningful interval resets the backoff.
     const streamLifetimeMs = performance.now() - streamStartedAt;
     const previousAttempt =
       streamLifetimeMs >= STABLE_STREAM_LIFETIME_MS
@@ -1622,10 +1688,15 @@ export class WsTransport {
         return;
       }
 
-      // an infinite subscription completing cleanly usually means the RPC socket is a zombie — reopening on that client can complete immediately forever; a full reconnect re-registers subscriptions and replays the persisted tail
+      // An infinite subscription completing successfully usually means the
+      // RPC feature socket became a zombie. Reopening the stream on that same
+      // client can complete immediately forever. A full reconnect restores all
+      // registered subscriptions and lets the server replay the persisted tail.
       void this.reconnect().catch((error) => {
         if (!this.disposed && !this.streamCleanups.has(key)) {
           console.warn("WebSocket RPC stream reconnect failed", error);
+          // getClient() inside the registered restart applies the normal
+          // reconnect backoff after a failed reconnect.
           restart();
         }
       });
@@ -1675,7 +1746,8 @@ export class WsTransport {
         if (this.shellSubscribed) {
           await this.startShellStream(client);
         }
-        // Refreshing only overwrites existing keys, so iterating the live key set is safe here. Each stream starts at most once for this session.
+        // Refreshing only overwrites existing keys, so iterating the live key
+        // set is safe here. Each stream starts at most once for this session.
         for (const threadId of this.threadSubscriptions.keys()) {
           const input = this.refreshThreadSubscriptionInput(threadId);
           if (input === undefined) continue;
@@ -1694,6 +1766,8 @@ export class WsTransport {
         if (failedResources) await this.closeRuntime(failedResources);
         if (this.disposed) throw new Error("Transport disposed");
         if (isTerminalCompatibilityFailure(error)) throw error;
+        // The backend may still be starting. Continue with bounded backoff;
+        // the transport lifetime aborts this loop immediately on disposal.
       }
     }
   }
@@ -1899,7 +1973,10 @@ export class WsTransport {
   private async startShellStream(client: RpcClientInstance, forceRestart = false): Promise<void> {
     if (this.disposed || !this.shellSubscribed) return;
     if (forceRestart) {
-      // an explicit resubscribe expects a fresh snapshot — a surviving stream whose snapshot already delivered would dedupe the start and leave the caller buffering forever
+      // An explicit resubscribe expects a fresh snapshot: the caller has reset
+      // its shell fence and buffers events until one arrives. A surviving
+      // stream whose snapshot was already delivered would dedupe the start and
+      // leave the caller buffering forever.
       const sessionVersion = this.sessionVersion;
       await this.stopStream("orchestration.shell", { resetCapacityRetry: false });
       if (this.disposed || this.sessionVersion !== sessionVersion || !this.shellSubscribed) {
@@ -2107,7 +2184,12 @@ export class WsTransport {
                       : this.streamResnapshotRetries;
               retries.set(key, admissionRetry.attempt);
               if (admissionRetry.kind === "resnapshot") {
-                // a resume cursor makes the retry request the same overflowing gap replay; dropping it makes the restart fetch a full fresh snapshot (the store discards cached detail when it lands)
+                // The server refused the stream because its snapshot trails the
+                // journal beyond the replay limit. A resume cursor makes the
+                // retry ask for the same gap replay again; dropping it makes
+                // the restart request a full fresh snapshot instead. The store
+                // discards its cached detail when the new snapshot arrives, so
+                // the cursor's coherence invariant is preserved.
                 const threadId = threadIdFromStreamKey(key);
                 if (threadId !== null) {
                   clearThreadDetailResumeCursor(ThreadId.makeUnsafe(threadId));

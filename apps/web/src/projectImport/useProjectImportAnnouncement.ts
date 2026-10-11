@@ -28,7 +28,7 @@ export function useProjectImportAnnouncement() {
     if (installation)
       setSeen((current) => (current.includes(installation) ? current : [...current, installation]));
   }, [installation, setSeen]);
-  // the welcome tour already presents this feature — don't announce it again
+  // The welcome tour already presents this feature; don't announce it again afterwards.
   useEffect(() => {
     if ((onboardingOpen || dialogOpen) && installation && !seen.includes(installation)) markSeen();
   }, [dialogOpen, installation, markSeen, onboardingOpen, seen]);

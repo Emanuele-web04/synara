@@ -1,3 +1,7 @@
+// FILE: types.ts
+// Purpose: Shared web-app view models for threads, projects, terminal layout, and sidebar rows.
+// Exports: Runtime UI types consumed across store, routes, and components.
+
 import type {
   ModelSelection,
   MessageDispatchOrigin,
@@ -81,6 +85,7 @@ export interface ChatMessage {
   id: MessageId;
   role: "user" | "assistant" | "system";
   text: string;
+  /** Slices of streamed assistant text between row-making provider events. */
   textSegments?: OrchestrationMessageTextSegment[];
   asyncUserInput?: import("@synara/contracts").AsyncUserInput;
   attachments?: ChatAttachment[];
@@ -116,6 +121,8 @@ export interface TurnDiffFileChange {
 
 export interface TurnDiffSummary {
   turnId: TurnId;
+  /** When the provider started the turn (absent on older snapshots). */
+  startedAt?: string | undefined;
   completedAt: string;
   status?: string | undefined;
   files: TurnDiffFileChange[];
@@ -125,7 +132,9 @@ export interface TurnDiffSummary {
   checkpointTurnCounts?: number[] | undefined;
 }
 
-// ephemeral first-send worktree-setup progress rendered as a transient transcript row — never persisted
+// Ephemeral client-side progress of the "New worktree" first-send setup
+// sequence (create branch → create worktree → copy changes → link thread →
+// start session). Rendered as a transient transcript row; never persisted.
 export type WorktreeSetupStepId =
   | "create-branch"
   | "create-worktree"
@@ -232,6 +241,8 @@ export interface Thread extends ThreadWorkspaceState {
   goalAchievements?: ThreadGoalAchievement[];
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  /** Pending request; null means consumed/cancelled, undefined means not observed. */
+  pendingTurnStartMessageId?: MessageId | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
@@ -246,6 +257,7 @@ export interface Thread extends ThreadWorkspaceState {
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   claudeCacheReview?: PendingClaudeCacheReview | null;
+  /** Client projection cursor shared by shell and detail cache-review updates. */
   claudeCacheReviewSequence?: number;
   /** Last snapshot/event sequence carrying snooze metadata. */
   snoozeSequence?: number;
@@ -277,7 +289,10 @@ export interface ThreadShell extends ThreadWorkspaceState {
   snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
-  // workspace annotations don't arrive on the shell snapshot — the snapshot path preserves them from the previous shell instead of clobbering with undefined
+  // Per-thread workspace annotations carried through the normalized projection so
+  // `getThreadFromState` reconstructs them (the shell is the source of truth for a Thread).
+  // These do not arrive on the sidebar shell snapshot, so the snapshot path preserves them
+  // from the previous shell rather than clobbering with `undefined`.
   pinnedMessages?: PinnedMessage[];
   notes?: string;
   goal?: string;
@@ -313,6 +328,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
 export interface ThreadTurnState {
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+  pendingTurnStartMessageId?: MessageId | null;
 }
 
 export interface SidebarThreadSummary {
@@ -340,6 +356,8 @@ export interface SidebarThreadSummary {
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
+  /** For a nested subagent, the subagent thread that launched it. */
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -359,6 +377,7 @@ export interface SidebarThreadSummary {
   lastKnownPr?: OrchestrationThreadPullRequest | null;
 }
 
+/** Lightweight composer identity that ignores live turn/status churn. */
 export interface ComposerThreadMentionSource {
   id: ThreadId;
   projectId: ProjectId;

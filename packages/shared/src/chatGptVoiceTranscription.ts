@@ -1,3 +1,7 @@
+// FILE: chatGptVoiceTranscription.ts
+// Purpose: Owns the exact ChatGPT voice-upload origin, multipart, and resource policy.
+// Layer: Shared Node/Electron provider transport
+
 import { SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES } from "@synara/contracts";
 
 import { encodeOutboundMultipart, outboundHttp, type OutboundHttpResponse } from "./outboundHttp";

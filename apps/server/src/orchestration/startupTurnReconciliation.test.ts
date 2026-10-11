@@ -365,7 +365,7 @@ describe("planRestartTurnReconciliation", () => {
     expect(commands[1]).toMatchObject({
       commandId: `restart-reconcile:errored-with-requests:user-input:input-after-error:${NOW}`,
     });
-    // only the stale turn pointer is settled — the error status and banner survive
+    // Only the stale turn pointer is settled: the error status and its banner survive.
     expect(commands[2]).toEqual({
       type: "thread.session.set",
       commandId: `restart-reconcile-active-turn:errored-with-requests:${NOW}`,

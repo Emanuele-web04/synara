@@ -1,3 +1,7 @@
+// FILE: subagents.ts
+// Purpose: Shared parsing helpers for subagent runtime payloads used by server ingestion and web UI.
+// Exports: Payload decoders for receiver ids, receiver agents, agent states, and identity hints.
+
 export interface ParsedSubagentReceiverAgent {
   providerThreadId: string;
   agentId?: string | undefined;
@@ -40,7 +44,8 @@ export interface ParsedSubagentIdentityDirectory {
   readonly byAgentId: ReadonlyMap<string, ParsedSubagentIdentityHint>;
 }
 
-// internal agents that only carry effort must never render as a subagent role/nickname suffix
+// Internal agent definitions that only exist to carry effort (already surfaced
+// separately); they must never render as a subagent role/nickname suffix.
 const WORKER_TIER_ROLE_PATTERN = /^worker-(?:low|medium|high|xhigh)$/i;
 
 export function isWorkerTierSubagentRole(role: string | null | undefined): boolean {

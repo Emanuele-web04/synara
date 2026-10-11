@@ -1,3 +1,8 @@
+// FILE: ChatMarkdown.tsx
+// Purpose: Renders assistant and plan markdown with syntax highlighting and local file links.
+// Layer: Web chat presentation component
+// Exports: ChatMarkdown
+
 import {
   CheckIcon,
   CopyIcon,
@@ -44,6 +49,7 @@ import remarkMath from "remark-math";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
+import { MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS } from "../lib/syntaxHighlightingLimits";
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
@@ -99,7 +105,8 @@ import {
 } from "./ChatMarkdownFind";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
-// Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on the href (so opening jumps to the line) but stripped for icon/title resolution.
+// Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
+// the href (so opening jumps to the line) but stripped for icon/title resolution.
 const MARKDOWN_LINK_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
   "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
@@ -134,6 +141,12 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   wikiLinkRoot?: string | undefined;
+  /**
+   * Assigns native bidi ownership to transcript markdown blocks. The default
+   * keeps the shared renderer's existing direction behavior for previews,
+   * plans, and other non-transcript consumers.
+   */
+  directionMode?: "off" | "auto-blocks";
   isStreaming?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
@@ -142,6 +155,7 @@ interface ChatMarkdownProps {
     | undefined;
   /** Case-insensitive substring to wrap while in-thread find is open. */
   findQuery?: string | undefined;
+  /** Active occurrence in this markdown body; other hits stay dimmer. */
   findActiveRange?: ThreadFindRange | null | undefined;
   /**
    * "user" renders a sent prompt: GFM plus hard line breaks (single newlines
@@ -150,6 +164,7 @@ interface ChatMarkdownProps {
    * (skills, mentions, agents, bare links) render as the shared chips.
    */
   variant?: "assistant" | "user";
+  /** Mention metadata for chip icon resolution; only used by the user variant. */
   mentionReferences?: ReadonlyArray<ProviderMentionReference> | undefined;
   /**
    * Parses and sanitizes authored HTML embedded in the markdown. Keep this
@@ -174,7 +189,9 @@ interface ChatMarkdownProps {
   knownAbsoluteFilePaths?: ReadonlyArray<string> | undefined;
 }
 
-// Source line of the enclosing task-list item, provided by the `li` override. The checkbox `input` element is synthesized by mdast-util-to-hast without position info, so it cannot read its own source location.
+// Source line of the enclosing task-list item, provided by the `li` override.
+// The checkbox `input` element is synthesized by mdast-util-to-hast without
+// position info, so it cannot read its own source location.
 const TaskItemSourceLineContext = React.createContext<number | null>(null);
 
 function MarkdownTaskCheckbox(props: {
@@ -228,11 +245,18 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGithubAlerts,
   remarkHtmlBreaks,
 ];
-// user prompts are casual typing, not authored markdown: hard-break single newlines and skip math entirely (the composer chip plugin is appended per render because it closes over the message's mention refs)
+// User prompts are casual typing, not authored markdown: hard-break single
+// newlines and skip math entirely (the composer chip plugin is appended per
+// render because it closes over the message's mention references).
 const USER_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [remarkGfm, remarkBreaks];
 const USER_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [];
 const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
-// `\$` is two source chars rendering as one `$` — a one-char placeholder would shorten the protected string and shift downstream source offsets (find positions resolve against raw text, applied against mdast positions); the two-char placeholder keeps protectLiteralMarkdownDollars length-preserving
+// `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used
+// to shorten the protected string, which shifted every downstream source offset (find positions
+// are resolved against the raw text but applied against the parsed mdast positions). A two-character
+// placeholder keeps `protectLiteralMarkdownDollars` length-preserving so those offsets stay aligned;
+// it is restored ahead of the single-char placeholder (the two share no characters, so order is
+// only for clarity).
 const ESCAPED_DOLLAR_PLACEHOLDER = "\uE001\uE002";
 
 function restoreLiteralDollarPlaceholders(value: string): string {
@@ -287,6 +311,63 @@ const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
 ];
+
+type BidiHastNode = {
+  type?: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: BidiHastNode[];
+};
+
+const TOP_LEVEL_BIDI_OWNER_TAGS = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6"]);
+const NESTED_BIDI_OWNER_TAGS = new Set(["li", "blockquote", "th", "td"]);
+
+function setBidiDirection(node: BidiHastNode, direction: "auto" | "ltr"): void {
+  node.properties = { ...node.properties, dir: direction };
+}
+
+function applyNestedBidiOwners(node: BidiHastNode): void {
+  if (node.type === "element" && node.tagName) {
+    if (NESTED_BIDI_OWNER_TAGS.has(node.tagName)) {
+      setBidiDirection(node, "auto");
+    } else if (
+      node.tagName === "pre" ||
+      node.tagName === "table" ||
+      (Array.isArray(node.properties?.className) && node.properties.className.includes("katex")) ||
+      node.properties?.className === "katex"
+    ) {
+      // Code, tables, and rendered math retain source/LTR ordering and must
+      // not contribute their Latin text to an enclosing prose block's scan.
+      setBidiDirection(node, "ltr");
+    }
+  }
+
+  for (const child of node.children ?? []) {
+    applyNestedBidiOwners(child);
+  }
+}
+
+/**
+ * Let the browser's Unicode bidi algorithm choose each prose block's first
+ * strong direction. Regular anchors intentionally remain direction-neutral:
+ * a link label is part of its paragraph's content, so setting dir=auto on the
+ * anchor would isolate it and make a link-only Arabic paragraph resolve LTR.
+ */
+function rehypeBidiBlockDirection() {
+  return (tree: BidiHastNode) => {
+    for (const child of tree.children ?? []) {
+      if (
+        child.type === "element" &&
+        child.tagName &&
+        TOP_LEVEL_BIDI_OWNER_TAGS.has(child.tagName)
+      ) {
+        setBidiDirection(child, "auto");
+      }
+      applyNestedBidiOwners(child);
+    }
+  };
+}
+
 type MarkdownTextNode = {
   type: "text";
   value: string;
@@ -462,7 +543,8 @@ function canOpenInlineMath(value: string, index: number): boolean {
     if (closingIndex === -1 || /\d/.test(value[closingIndex + 1] ?? "")) {
       return false;
     }
-    // a numeric prefix can be a coefficient — require a complete expression on this line; don't pair prices across lines or consume `$5-$10`
+    // A numeric prefix can be a coefficient. Require a complete expression
+    // on this line; do not pair prices across lines or consume `$5-$10`.
     const content = value.slice(index + 1, closingIndex);
     return !/[\r\n]/.test(content) && looksLikeInlineMath(content);
   }
@@ -487,7 +569,8 @@ function findInlineMathClosingDollar(value: string, index: number): number {
     }
     const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
     if (linkEnd !== -1) {
-      // Dollars in Markdown links/images cannot close preceding literal text. Dollar-free [f](x) remains valid inside a TeX expression.
+      // Dollars in Markdown links/images cannot close preceding literal text.
+      // Dollar-free [f](x) remains valid inside a TeX expression.
       if (value.slice(cursor, linkEnd).includes("$")) {
         return -1;
       }
@@ -513,7 +596,9 @@ function protectLiteralDollarsInMarkdownLinks(value: string): string {
       continue;
     }
 
-    // scan links and math together — splitting at every `[` breaks TeX like \left[...\right] before its closing dollars; a math span is consumed whole so brackets inside it never enter link detection
+    // Scan links and math together: splitting at every `[` breaks TeX such as
+    // \left[...\right] before its closing dollars can be found. A math span is
+    // consumed whole below, so brackets inside it never enter link detection.
     const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
     if (linkEnd !== -1) {
       result += value.slice(cursor, linkEnd).replaceAll("$", LITERAL_DOLLAR_PLACEHOLDER);
@@ -670,7 +755,9 @@ function protectLiteralMarkdownDollars(value: string): string {
   return result;
 }
 
-// raw fence info string (token after ```), e.g. "ts" or the Cursor form "173:186:packages/shared/src/model.ts" — parsing into language + file metadata lives in `parseCodeFenceInfo`
+// Returns the raw fence info string (the token after ```), e.g. "ts" or the
+// Cursor reference form "173:186:packages/shared/src/model.ts". Parsing into a
+// highlighter language + file metadata is handled by `parseCodeFenceInfo`.
 function extractRawFenceInfo(className: string | undefined): string {
   const match = className?.match(CODE_FENCE_LANGUAGE_REGEX);
   return match?.[1] ?? "text";
@@ -697,7 +784,10 @@ function extractCodeBlock(
     return null;
   }
 
-  // the single child is the fenced code element — its rendered `type` is the custom `code` component (not the string "code") once we override `code` below, so detect by shape not tag identity
+  // The single child is the fenced code element. Its rendered `type` is the
+  // custom `code` component (not the string "code") once we override `code`
+  // below, so detect by shape (a valid element carrying the code text) rather
+  // than by tag identity. `pre` only ever wraps a code element in markdown.
   const onlyChild = childNodes[0];
   if (!isValidElement<{ className?: string; children?: ReactNode }>(onlyChild)) {
     return null;
@@ -711,14 +801,21 @@ function extractCodeBlock(
 
 const INLINE_CODE_FILE_PATH_MAX_LENGTH = 120;
 
-// conservative on purpose: requires a recognized filename/extension and rejects whitespace + URLs so ordinary prose tokens stay plain inline code
+// Decides whether an inline code span names a file/path that should render as a
+// mention chip (icon + medium label), matching how a file reads in the composer.
+// Conservative on purpose: requires a recognized filename/extension and rejects
+// whitespace and URLs so ordinary prose tokens stay plain inline code.
 function inlineCodeFilePath(raw: string): string | null {
+  // Strip a pair of surrounding quotes/backticks the author may have wrapped the
+  // path in (e.g. `'src/data/social-metrics.ts'`).
   const value = raw.trim().replace(/^['"`]+|['"`]+$/g, "");
   if (value.length === 0 || /\s/.test(value) || value.includes("://")) {
     return null;
   }
   const withoutPosition = value.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
-  // absolute local files and directories chip even without a known extension; relative names still need a recognizable file so ordinary tokens stay code
+  // Absolute local files and directories (`/Users/…/annotate-pr`) are chips
+  // even without a known filename extension. Relative names still need a
+  // recognizable file so ordinary tokens stay code.
   if (resolveMarkdownFileLinkTarget(withoutPosition)) {
     return value;
   }
@@ -759,7 +856,12 @@ function VerifiedWorkspaceFileChip(props: {
   );
 }
 
-// shared openable file chip for assistant markdown file links and inline code naming a file: plain click prefers the in-app viewer, meta/ctrl-click (or no viewer) opens the external editor; `targetPath` may carry a `:line` suffix (used to open), the chip icon/title use the position-free path
+// Shared openable file chip: the same mention-chip UI (file icon + medium label)
+// used for both assistant markdown file links and inline code that names a file.
+// A plain click prefers the surface's in-app viewer (right-dock file pane);
+// meta/ctrl-click — or a surface without a viewer — opens the preferred
+// external editor. `targetPath` may carry a `:line` suffix (used to open); the
+// chip icon and title use the position-free path.
 function OpenableFileChip(props: {
   targetPath: string;
   theme: "light" | "dark";
@@ -798,7 +900,8 @@ function OpenableFileChip(props: {
   );
 }
 
-// Renders the custom element emitted by the composer-chips remark plugin with the shared chip components, so chips in a sent message match the composer exactly.
+// Renders the custom element emitted by the composer-chips remark plugin with the
+// shared chip components, so chips in a sent message match the composer exactly.
 function ComposerChipElement(props: {
   serializedSegment: string | undefined;
   theme: "light" | "dark";
@@ -856,10 +959,12 @@ function MarkdownCodeBlock({
   code,
   fence,
   children,
+  direction,
 }: {
   code: string;
   fence: CodeFenceInfo;
   children: ReactNode;
+  direction?: "ltr" | undefined;
 }) {
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
@@ -891,7 +996,7 @@ function MarkdownCodeBlock({
   );
 
   return (
-    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"}>
+    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"} dir={direction}>
       <div className="chat-markdown-codeblock__header">
         <CodeBlockHeaderTitle fence={fence} />
         <div className="chat-markdown-codeblock__actions">
@@ -940,8 +1045,15 @@ function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule>
   return syntaxHighlightingModulePromise;
 }
 
-// while streaming, the open code block re-tokenizes on every reveal commit (~25/s) — quadratic in block length, the largest renderer cost of a code-heavy turn; highlight at most this often, the trailing value always lands so it converges to the settled highlight
-// each highlight costs ~linear in block length so the cadence stretches with size — small blocks stay at base interval, a block at the SLOW_CHARS threshold highlights at most once per MAX_INTERVAL
+// While a message streams, its open code block grows on every reveal commit (~25/s) and
+// each commit re-tokenizes the whole block — quadratic in block length and the single
+// largest renderer cost of a code-heavy turn. Highlight at most this often while
+// streaming; the prefix already on screen stays put and the trailing value always lands,
+// so the block converges to exactly the settled highlight.
+// Each highlight costs roughly linearly in block length, so the cadence also stretches
+// with size: small blocks stay at the base interval, a block at
+// `STREAMING_CODE_HIGHLIGHT_SLOW_CHARS` is highlighted at most once per
+// `STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS`, keeping per-second tokenization work bounded.
 const STREAMING_CODE_HIGHLIGHT_INTERVAL_MS = 160;
 const STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS = 1_000;
 const STREAMING_CODE_HIGHLIGHT_BASE_CHARS = 8_000;
@@ -1004,7 +1116,8 @@ function LoadedShikiCodeBlock({
     return <FindAwareShikiHtml html={cachedHighlightedHtml} sourceOffset={sourceOffset} />;
   }
 
-  // the uncached path lives in its own component: an early return above must not change this component's hook order once the cache fills
+  // The uncached path lives in its own component: an early return above must
+  // not change this component's hook order once the cache fills.
   return (
     <UncachedShikiCodeBlock
       syntaxHighlighting={syntaxHighlighting}
@@ -1054,6 +1167,7 @@ interface MarkdownRenderContextValue {
   diffThemeName: DiffThemeName;
   isStreaming: boolean;
   isUserVariant: boolean;
+  usesAutomaticBlockDirection: boolean;
   mentionReferences: ChatMarkdownProps["mentionReferences"];
   onImageExpand: ChatMarkdownProps["onImageExpand"];
   onOpenThread: ChatMarkdownProps["onOpenThread"];
@@ -1074,6 +1188,17 @@ const GITHUB_ALERTS: Record<GithubAlertKind, { title: string; icon: LucideIcon }
   caution: { title: "Caution", icon: OctagonAlertIcon },
 };
 
+function TechnicalBidiIsolate(props: { active: boolean; children: ReactNode }) {
+  if (!props.active) {
+    return <>{props.children}</>;
+  }
+  return (
+    <bdi className="chat-markdown-technical-isolate" dir="ltr">
+      {props.children}
+    </bdi>
+  );
+}
+
 const MARKDOWN_COMPONENTS: Components = {
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
     const kind = (props as { "data-github-alert"?: GithubAlertKind })["data-github-alert"];
@@ -1092,7 +1217,14 @@ const MARKDOWN_COMPONENTS: Components = {
   },
   a: function MarkdownLink({ node: _node, href, children, ...props }) {
     const context = useContext(MarkdownRenderContext)!;
-    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme, onOpenThread } = context;
+    const {
+      isUserVariant,
+      usesAutomaticBlockDirection,
+      cwd,
+      knownAbsoluteFilePaths,
+      resolvedTheme,
+      onOpenThread,
+    } = context;
     const linkedContext = useMemo(
       () => ({ ...context, onImageExpand: undefined, isInsideLink: true }),
       [context],
@@ -1123,14 +1255,21 @@ const MARKDOWN_COMPONENTS: Components = {
     }
     const isExternalHttp = isExternalHttpHref(restoredHref);
     if (isUserVariant && isExternalHttp) {
-      // GFM autolinks a pasted URL before the chips plugin sees it — when the link text is just the URL, render the composer link chip so a pasted link looks identical in composer and bubble; authored [label](url) links keep the regular anchor
+      // GFM autolinks a pasted URL before the chips plugin can see it; when the
+      // link text is just the URL itself, render the composer's link chip so a
+      // pasted link looks identical in the composer and in the sent bubble.
+      // Authored `[label](url)` links keep the regular anchor treatment below.
       const plainText = nodeToPlainText(children);
       if (
         plainText === restoredHref ||
         restoredHref === `http://${plainText}` ||
         restoredHref === `https://${plainText}`
       ) {
-        return <InlineLinkChip url={restoredHref} interactive />;
+        return (
+          <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+            <InlineLinkChip url={restoredHref} interactive />
+          </TechnicalBidiIsolate>
+        );
       }
     }
     const targetPath = isExternalHttp
@@ -1176,16 +1315,21 @@ const MARKDOWN_COMPONENTS: Components = {
     }
 
     return (
-      <OpenableFileChip
-        targetPath={targetPath}
-        theme={resolvedTheme}
-        label={linkedChildren}
-        {...(restoredHref ? { href: restoredHref } : {})}
-      />
+      <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+        <OpenableFileChip
+          targetPath={targetPath}
+          theme={resolvedTheme}
+          label={
+            usesAutomaticBlockDirection ? <bdi dir="auto">{linkedChildren}</bdi> : linkedChildren
+          }
+          {...(restoredHref ? { href: restoredHref } : {})}
+        />
+      </TechnicalBidiIsolate>
     );
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { sourceText, diffThemeName, isStreaming } = useContext(MarkdownRenderContext)!;
+    const { sourceText, diffThemeName, isStreaming, usesAutomaticBlockDirection } =
+      useContext(MarkdownRenderContext)!;
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -1205,25 +1349,36 @@ const MARKDOWN_COMPONENTS: Components = {
     );
 
     return (
-      <MarkdownCodeBlock code={code} fence={fence}>
-        <CodeHighlightErrorBoundary fallback={highlightedFallback}>
-          <Suspense fallback={highlightedFallback}>
-            <SuspenseShikiCodeBlock
-              language={fence.language}
-              code={code}
-              themeName={diffThemeName}
-              isStreaming={isStreaming}
-              sourceOffset={sourceOffset}
-            />
-          </Suspense>
-        </CodeHighlightErrorBoundary>
+      <MarkdownCodeBlock
+        code={code}
+        fence={fence}
+        direction={usesAutomaticBlockDirection ? "ltr" : undefined}
+      >
+        {code.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS ? (
+          highlightedFallback
+        ) : (
+          <CodeHighlightErrorBoundary fallback={highlightedFallback}>
+            <Suspense fallback={highlightedFallback}>
+              <SuspenseShikiCodeBlock
+                language={fence.language}
+                code={code}
+                themeName={diffThemeName}
+                isStreaming={isStreaming}
+                sourceOffset={sourceOffset}
+              />
+            </Suspense>
+          </CodeHighlightErrorBoundary>
+        )}
       </MarkdownCodeBlock>
     );
   },
   code: function MarkdownInlineCode({ node, className, children, ...props }) {
-    const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme } =
+    const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme, usesAutomaticBlockDirection } =
       useContext(MarkdownRenderContext)!;
-    // fenced blocks carry a `language-*` class rendered by `pre`; only inline code (no class) naming a file becomes an openable chip — absolute paths chip immediately, relative names only when the file exists in the workspace
+    // Fenced blocks carry a `language-*` class and are rendered by `pre`;
+    // only inline code (no class) that names a file becomes an openable
+    // mention chip. Absolute local paths chip immediately. Relative names
+    // chip only when that file actually exists in the chat workspace.
     if (!className) {
       const filePath = inlineCodeFilePath(nodeToPlainText(children));
       if (filePath) {
@@ -1236,23 +1391,31 @@ const MARKDOWN_COMPONENTS: Components = {
         const knownTarget = resolveChatFileChipTarget(filePath, undefined, knownAbsoluteFilePaths);
         if (knownTarget) {
           return (
-            <OpenableFileChip targetPath={knownTarget} theme={resolvedTheme} {...findLabelProps} />
+            <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+              <OpenableFileChip
+                targetPath={knownTarget}
+                theme={resolvedTheme}
+                {...findLabelProps}
+              />
+            </TechnicalBidiIsolate>
           );
         }
         if (resolveMarkdownFileLinkTarget(filePath, cwd) && cwd) {
           return (
-            <VerifiedWorkspaceFileChip
-              rawReference={filePath}
-              cwd={cwd}
-              theme={resolvedTheme}
-              {...findLabelProps}
-            />
+            <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+              <VerifiedWorkspaceFileChip
+                rawReference={filePath}
+                cwd={cwd}
+                theme={resolvedTheme}
+                {...findLabelProps}
+              />
+            </TechnicalBidiIsolate>
           );
         }
       }
     }
     return (
-      <code className={className} {...props}>
+      <code className={className} {...props} dir={usesAutomaticBlockDirection ? "ltr" : undefined}>
         {children}
       </code>
     );
@@ -1321,25 +1484,31 @@ const MARKDOWN_COMPONENTS: Components = {
     }
     return <input {...props} />;
   },
-  // custom elements from the composer-chips plugin (user variant only — never in assistant markdown); `Components` only models intrinsic tags so these are typed and cast into the map
+  // Custom elements emitted by the composer-chips remark plugin (user
+  // variant only; they never appear in assistant markdown). `Components`
+  // only models intrinsic tags, so these entries are typed on their own
+  // and cast into the map.
   ...({
     [COMPOSER_CHIP_TAG_NAME]: function MarkdownComposerChip(props: {
       className?: string | undefined;
       [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
     }) {
-      const { resolvedTheme, mentionReferences } = useContext(MarkdownRenderContext)!;
+      const { resolvedTheme, mentionReferences, usesAutomaticBlockDirection } =
+        useContext(MarkdownRenderContext)!;
       return (
-        <ComposerChipElement
-          serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
-          theme={resolvedTheme}
-          mentionReferences={mentionReferences ?? []}
-        />
+        <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+          <ComposerChipElement
+            serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
+            theme={resolvedTheme}
+            mentionReferences={mentionReferences ?? []}
+          />
+        </TechnicalBidiIsolate>
       );
     },
     [TERMINAL_CONTEXT_CHIP_TAG_NAME]: function MarkdownTerminalChip(props: {
       [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
     }) {
-      const { terminalContexts } = useContext(MarkdownRenderContext)!;
+      const { terminalContexts, usesAutomaticBlockDirection } = useContext(MarkdownRenderContext)!;
       const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
       const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
       const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
@@ -1348,7 +1517,11 @@ const MARKDOWN_COMPONENTS: Components = {
       }
       const tooltipText =
         context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
-      return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+      return (
+        <TechnicalBidiIsolate active={usesAutomaticBlockDirection}>
+          <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />
+        </TechnicalBidiIsolate>
+      );
     },
     [CHAT_FIND_TEXT_TAG_NAME]: function MarkdownFindText(props: {
       children?: ReactNode;
@@ -1369,6 +1542,7 @@ const MARKDOWN_COMPONENTS: Components = {
 function ChatMarkdown({
   text,
   cwd,
+  directionMode: directionModeProp,
   wikiLinkRoot,
   isStreaming: isStreamingProp,
   className: classNameProp,
@@ -1384,10 +1558,14 @@ function ChatMarkdown({
   onOpenThread,
   parseHtml: parseHtmlProp,
 }: ChatMarkdownProps) {
-  // defaults applied with ?? in the body, not destructuring — defaults in parameter destructuring make React Compiler 1.0.0 bail on the whole component (BuildHIR AssignmentPattern), losing auto-memoization
+  // Defaults applied with ?? in the body, not in the destructuring: default
+  // values in parameter destructuring make React Compiler 1.0.0 bail on the
+  // whole component (BuildHIR AssignmentPattern), losing its auto-memoization.
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-chat leading-relaxed";
   const variant = variantProp ?? "assistant";
+  const directionMode = directionModeProp ?? "off";
+  const usesAutomaticBlockDirection = directionMode === "auto-blocks";
   const parseHtml = parseHtmlProp ?? false;
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;
@@ -1404,9 +1582,14 @@ function ChatMarkdown({
     }
     return [...new Set([...(knownAbsoluteFilePathsProp ?? []), ...extractedAbsoluteFilePaths])];
   }, [extractedAbsoluteFilePaths, knownAbsoluteFilePathsProp]);
-  // reveal streamed text at a steady adaptive cadence instead of the ~100ms network clumps that land in the store; no-ops when not streaming or under reduced motion — governs cadence only, the deferred value below still bounds re-parse cost
+  // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
+  // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
+  // streaming or under reduced motion. Governs cadence only; the deferred value below still
+  // bounds the markdown re-parse cost.
   const smoothedText = useSmoothStreamedText(text, isStreaming);
-  // the dollar rewrite exists to disambiguate math from currency; the user variant has no math so its text must stay byte-for-byte what was typed — table repair runs first so find offsets use the same normalized text
+  // The dollar rewrite exists to disambiguate math from currency; the user
+  // variant has no math, so its text must stay byte-for-byte what was typed.
+  // Table repair runs first so find offsets use the same normalized text.
   const normalizedText = useMemo(
     () =>
       isUserVariant
@@ -1414,7 +1597,10 @@ function ChatMarkdown({
         : protectLiteralMarkdownDollars(repairMarkdownTableDelimiters(smoothedText)),
     [isUserVariant, smoothedText],
   );
-  // while streaming, deprioritize+coalesce the markdown re-parse so a fast token stream doesn't re-render the full ReactMarkdown tree per flush; deferred always converges to latest and completed messages render exact text immediately
+  // While streaming, let React deprioritize and coalesce the markdown re-parse so a
+  // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
+  // tree on every flush. The deferred value always converges to the latest text, and
+  // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
   const sourceText = useMemo(
@@ -1445,17 +1631,16 @@ function ChatMarkdown({
     ];
   }, [composerChipsRemarkPlugin, wikiLinkRoot, cwd]);
   const rehypePlugins = useMemo<MarkdownRehypePlugins>(() => {
-    if (isUserVariant) {
-      return USER_MARKDOWN_REHYPE_PLUGINS;
-    }
-    if (parseHtml) {
-      // Raw HTML is only enabled for authored local-file previews. Sanitize
-      // immediately after parsing so scripts, event handlers, and unsafe URL
-      // schemes never reach React's renderer.
-      return [rehypeRaw, [rehypeSanitize, AUTHORED_HTML_SCHEMA], ...MARKDOWN_REHYPE_PLUGINS];
-    }
-    return MARKDOWN_REHYPE_PLUGINS;
-  }, [isUserVariant, parseHtml]);
+    // Raw HTML is only enabled for authored local-file previews. Sanitize
+    // immediately after parsing so scripts, event handlers, and unsafe URL
+    // schemes never reach React's renderer.
+    const basePlugins: MarkdownRehypePlugins = isUserVariant
+      ? USER_MARKDOWN_REHYPE_PLUGINS
+      : parseHtml
+        ? [rehypeRaw, [rehypeSanitize, AUTHORED_HTML_SCHEMA], ...MARKDOWN_REHYPE_PLUGINS]
+        : MARKDOWN_REHYPE_PLUGINS;
+    return usesAutomaticBlockDirection ? [...basePlugins, rehypeBidiBlockDirection] : basePlugins;
+  }, [isUserVariant, parseHtml, usesAutomaticBlockDirection]);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     applyActiveChatFindMatch(rootRef.current, findActiveRange);
@@ -1468,6 +1653,7 @@ function ChatMarkdown({
       diffThemeName,
       isStreaming,
       isUserVariant,
+      usesAutomaticBlockDirection,
       mentionReferences,
       onImageExpand,
       onOpenThread,
@@ -1482,6 +1668,7 @@ function ChatMarkdown({
       diffThemeName,
       isStreaming,
       isUserVariant,
+      usesAutomaticBlockDirection,
       mentionReferences,
       onImageExpand,
       onOpenThread,
@@ -1496,6 +1683,7 @@ function ChatMarkdown({
     <div
       ref={rootRef}
       className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
+      {...(usesAutomaticBlockDirection ? { "data-direction-mode": "auto-blocks" } : {})}
       style={style}
     >
       <ChatFindRenderProvider

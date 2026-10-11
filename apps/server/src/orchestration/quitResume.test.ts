@@ -67,7 +67,7 @@ const makeThread = (id: string, overrides: Partial<QuitResumeThread> = {}): Quit
   ...overrides,
 });
 
-/** a thread whose latest turn is genuinely running right now */
+/** A thread whose latest turn is genuinely running right now. */
 const makeRunningThread = (id: string, overrides: Partial<QuitResumeThread> = {}) =>
   makeThread(id, {
     latestTurn: makeLatestTurn(`${id}-turn`, "running"),
@@ -88,7 +88,7 @@ const makeRecord = (
   })),
 });
 
-/** provider still connecting — session starting, no turn yet */
+/** A thread whose provider is still connecting: session starting, no turn yet. */
 const makeConnectingThread = (id: string, overrides: Partial<QuitResumeThread> = {}) =>
   makeThread(id, {
     latestTurn: null,
@@ -116,8 +116,10 @@ describe("buildQuitResumeRecord", () => {
       },
       threads: [
         makeRunningThread("a"),
+        // Finished while the dialog was open: nothing to resume.
         makeThread("finished", { latestTurn: makeLatestTurn("finished-turn", "completed") }),
         makeRunningThread("deleted", { deletedAt: "2026-06-14T09:30:00.000Z" }),
+        // Provider still starting: in flight, but no turn to name yet.
         makeConnectingThread("connecting"),
         makeConnectingThread("reconnecting", {
           latestTurn: makeLatestTurn("reconnecting-old", "completed", BEFORE_RECORD),
@@ -195,11 +197,12 @@ describe("planQuitResumeTurns", () => {
         dispatchOrigin: "automation",
         runtimeMode: "approval-required",
         interactionMode: "plan",
+        // Re-checked by the decider inside the serialized dispatch.
         resumePrecondition: { recordedTurnId: turnId("a-turn"), recordedAt: RECORDED_AT },
         createdAt: NOW,
       },
     ]);
-    // model selection intentionally omitted — the thread's current selection is used
+    // Model selection is intentionally omitted so the thread's current selection is used.
     expect(plan.commands[0]).not.toHaveProperty("modelSelection");
   });
 
@@ -208,7 +211,7 @@ describe("planQuitResumeTurns", () => {
       record: makeRecord([
         { threadId: "interrupted", turnId: "interrupted-turn" },
         { threadId: "errored", turnId: "errored-turn" },
-        // a later turn interrupted by the quit still counts as "where you left off"
+        // A later turn interrupted by the quit still counts as "where you left off".
         { threadId: "superseded", turnId: "superseded-turn" },
         { threadId: "completed", turnId: "completed-turn" },
         { threadId: "completed-later", turnId: "completed-later-turn" },
@@ -246,15 +249,15 @@ describe("planQuitResumeTurns", () => {
         { threadId: "answered", turnId: null },
       ]),
       threads: [
-        // never reached the provider — still no turn after restart reconciliation
+        // Never reached the provider: still no turn after restart reconciliation.
         makeThread("fresh", { latestTurn: null }),
-        // previous turn completed before the record; the new one never started
+        // Previous turn had completed before the record; the new one never started.
         makeThread("follow-up", {
           latestTurn: makeLatestTurn("follow-up-old", "completed", BEFORE_RECORD),
         }),
-        // the pending turn started after the record and was interrupted by the quit
+        // The pending turn started after the record and was interrupted by the quit.
         makeThread("started-then-stopped", { latestTurn: makeLatestTurn("started-turn") }),
-        // a turn finished on its own after the record — nothing left to continue
+        // A turn finished on its own after the record: nothing left to continue.
         makeThread("answered", {
           latestTurn: makeLatestTurn("answered-turn", "completed", AFTER_RECORD),
         }),
@@ -329,6 +332,7 @@ describe("quit resume record file", () => {
         const persisted = yield* readQuitResumeRecord(path);
         yield* clearQuitResumeRecord(path);
         const cleared = yield* readQuitResumeRecord(path);
+        // Clearing twice is fine (force remove).
         yield* clearQuitResumeRecord(path);
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(path, "{ not json");
@@ -358,7 +362,7 @@ describe("quit resume record file", () => {
         yield* persistQuitResumeRecord({ path, record: first });
         const claimed = yield* claimQuitResumeRecord(path);
         const afterClaim = yield* readQuitResumeRecord(path);
-        // a quit prepared while boot is running must keep its own record
+        // A quit prepared while boot is still running must keep its own record.
         yield* persistQuitResumeRecord({ path, record: second });
         const next = yield* claimQuitResumeRecord(path);
         yield* persistQuitResumeRecord({ path, record: first });
@@ -407,7 +411,7 @@ describe("quit resume record file", () => {
           abandonAfter: Duration.millis(50),
         });
         const persisted = yield* readQuitResumeRecord(path);
-        // still alive well after the abandon delay — the quit was cancelled
+        // Still alive well after the abandon delay → the quit was cancelled.
         const abandoned = yield* Effect.sleep(Duration.millis(400)).pipe(
           Effect.andThen(readQuitResumeRecord(path)),
         );

@@ -53,6 +53,7 @@ describe("production icon pruning", () => {
         );
       }
     }
+    // A repeated/watch pass is safe even though unused outputs are already gone.
     await pruneProductionIcons(f.publicDir, f.dist, [f.source, f.contracts]);
   });
 

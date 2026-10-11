@@ -38,6 +38,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { TodoService } from "../../todo/Services/TodoService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -432,7 +433,7 @@ function makeHarnessLayer(
       readonly id: string;
       readonly automationId: AutomationDefinition["id"];
     }>;
-    /** the automation run that dispatched the caller's active turn, if any */
+    /** The automation run that dispatched the caller's active turn, if any. */
     readonly callerAutomationRun?: {
       readonly callerThreadId: string;
       readonly id: string;
@@ -871,6 +872,11 @@ function makeHarnessLayer(
     excludeThread: () => Effect.fail(new Error("not configured")),
     backfillSummaries: () => Effect.fail(new Error("not configured")),
   } as unknown as (typeof ProjectAgentService)["Service"]);
+
+  // To-do tool behavior is covered in todoTools.test.ts; the gateway only needs the service.
+  const todoLayer = Layer.succeed(TodoService, {
+    list: () => Effect.succeed({ todos: [] }),
+  } as unknown as (typeof TodoService)["Service"]);
 
   const gitLayer = Layer.succeed(GitCore, {
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
@@ -1339,7 +1345,7 @@ function makeHarnessLayer(
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
-    Layer.provide(projectAgentLayer),
+    Layer.provide(Layer.mergeAll(projectAgentLayer, todoLayer)),
     Layer.provide(gitLayer),
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
@@ -1610,7 +1616,7 @@ describe("AgentGateway", () => {
               ["auto", "200k", "1m"],
             );
 
-            // a rejected window must fail before creating a thread or starting a turn
+            // A rejected window must fail before creating a thread or starting a turn.
             const invalid = yield* harness.callTool({
               token: "token-parent",
               name: "synara_create_thread",
@@ -2250,6 +2256,9 @@ describe("AgentGateway", () => {
         "synara_set_kanban_goal",
         "synara_delete_kanban_card",
         "synara_move_kanban_card",
+        "synara_create_todo",
+        "synara_list_todos",
+        "synara_update_todo",
         // Group tools the coordinator delegates through — the playbook names
         // these, so a capability regression would silently gut delegation.
         "synara_project_get_overview",
@@ -2395,7 +2404,8 @@ describe("AgentGateway", () => {
   });
 
   it.effect("lists only ordinary projects, excluding system-managed containers", () => {
-    // layerTest realpaths the home dir — the legacy Home row must use the same canonical form for the match to hold
+    // ServerConfig.layerTest canonicalizes the home dir via realpath, so the legacy
+    // Home row must use the same canonical form for the workspace-root match to hold.
     const homeDir = realpathSync(homedir());
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
       extraProjects: [
@@ -2899,15 +2909,16 @@ describe("AgentGateway", () => {
       const create = harness.dispatched[0]!;
       assert.equal(create.type, "thread.create");
       if (create.type === "thread.create") {
-        // gateway-created threads are top-level, not subagents
+        // Gateway-created threads are ordinary top-level threads, not subagents.
         assert.strictEqual("parentThreadId" in create, false);
         assert.strictEqual("subagentNickname" in create, false);
         assert.equal(create.modelSelection.provider, "grok");
         assert.equal(create.modelSelection.model, DEFAULT_MODEL_BY_PROVIDER.grok);
-        // project and runtime mode default from the calling thread
+        // Project and runtime mode default from the calling thread.
         assert.equal(create.projectId, PROJECT_ID);
         assert.equal(create.runtimeMode, "approval-required");
-        // same placeholder-title flow as UI threads so the reactor replaces it with a generated title
+        // Same placeholder title flow as UI threads so the first-turn reactor
+        // replaces it with a model-generated title.
         assert.equal(create.title, "analyze the feature");
       }
       const turn = harness.dispatched[1]!;
@@ -3082,7 +3093,8 @@ describe("AgentGateway", () => {
       assert.deepEqual(harness.fetchedPullRequests, [425]);
       assert.deepEqual(harness.fetchedPullRequestRepositories, ["example/repo"]);
       assert.equal(harness.worktreeCreates[0]?.ref, "fedcba9876543210fedcba9876543210fedcba98");
-      // the worktree is born on a temporary synara/* branch; no branch is created for the PR itself
+      // The worktree is born on a temporary synara/* branch, but no branch is
+      // ever created for the pull request itself.
       assert.isTrue(isTemporaryWorktreeBranch(harness.worktreeCreates[0]?.newBranch ?? ""));
     }).pipe(Effect.provide(gatewayLayer));
   });
@@ -4226,7 +4238,9 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  // with the setup script inside the uninterruptible section, this interrupt would stall 30s and trip the test timeout instead of compensating
+  // Regression guard: with the setup script inside the uninterruptible creation
+  // section, the interrupt below would stall for the script's full 30s runtime
+  // and trip the test timeout instead of compensating promptly.
   it.effect("interrupts a long worktree setup script instead of waiting it out", () => {
     const worktreeCreated = Deferred.makeUnsafe<void>();
     const releaseWorktreeCreate = Deferred.makeUnsafe<void>();
@@ -5159,7 +5173,8 @@ describe("AgentGateway", () => {
         },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
-      // the projection snapshot can lag the runtime either way — the gateway must not downgrade; the reactor rechecks live
+      // The projection snapshot can lag the runtime in both directions, so
+      // the gateway must not downgrade; the reactor rechecks live state.
       assert.equal(toolResultJson(response.result).dispatched, "steer");
       const turn = harness.dispatched[0]!;
       assert.equal(turn.type, "thread.turn.start");
@@ -5318,7 +5333,7 @@ describe("AgentGateway", () => {
       assert.include(toolErrorText(rejected.result), "isolated worktree");
       assert.equal(harness.dispatched.length, 0);
 
-      // omitting environment defaults to an isolated worktree, not local
+      // Omitting environment defaults to an isolated worktree, not local.
       const defaulted = yield* harness.callTool({
         token: "token-parent",
         name: "synara_create_thread",
@@ -5382,10 +5397,12 @@ describe("AgentGateway", () => {
       });
       assert.equal(created.maxIterations, 50);
       assert.equal(created.stopAfterConsecutiveFailures, 3);
-      // omitting target keeps legacy behavior — the heartbeat inherits the continued thread's exact provider session
+      // Omitting target keeps the legacy behavior: the heartbeat inherits the
+      // continued thread's exact provider session.
       assert.deepEqual(created.modelSelection, { provider: "codex", model: "gpt-5.5" });
       assert.isTrue(created.enabled);
-      // local-checkout targets must carry the matching environment + risk ack so AutomationService policy stays enforced
+      // Local-checkout targets must carry the matching environment + risk
+      // acknowledgement so AutomationService policy checks stay enforced.
       assert.equal(created.worktreeMode, "local");
       assert.deepEqual(created.acknowledgedRisks, ["local-checkout"]);
       const payload = toolResultJson(response.result);
@@ -5473,7 +5490,7 @@ describe("AgentGateway", () => {
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       const created = harness.automationCreates[0]!;
       assert.equal(created.mode, "dedicated");
-      // the server assigns the thread on the first run
+      // The server assigns the thread on the first run, so creation carries none.
       assert.isNull(created.targetThreadId);
       assert.equal(created.worktreeMode, "worktree");
       assert.equal(created.completionPolicy?.type, "ai-evaluated");
@@ -5554,7 +5571,8 @@ describe("AgentGateway", () => {
         const created = harness.automationCreates[0]!;
         assert.equal(created.maxIterations, 10);
         assert.include(created.acknowledgedRisks ?? [], "fast-interval");
-        // the default cooldown must not exceed schedule spacing or the acked fast interval silently degrades to cooldown cadence
+        // The default cooldown must not exceed the schedule spacing, or the
+        // acknowledged fast interval would silently degrade to cooldown cadence.
         assert.equal(created.heartbeatCooldownSeconds, 15);
       }).pipe(Effect.provide(gatewayLayer));
     },
@@ -5677,7 +5695,8 @@ describe("AgentGateway", () => {
   });
 
   it.effect("lets a standalone run cancel the automation that dispatched it", () => {
-    // a standalone run's per-run thread owns neither source nor target — run context is the only authority it can present
+    // A standalone run executes in a per-run thread: it owns neither the source nor a
+    // target thread, so run context is the only authority it can present.
     const { gatewayLayer, makeHarness } = makeHarnessLayer(
       baseThreads,
       [
@@ -5876,7 +5895,7 @@ describe("AgentGateway", () => {
         { provider: "codex", model: "gpt-5.6-sol", options: { reasoningEffort: "high" } },
         { provider: "opencode", model: "deepseek/deepseek-flash", options: { variant: "high" } },
         { provider: "antigravity", model: "Gemini 3.8 Flash", options: { reasoningEffort: "low" } },
-        // the discovered alias resolves to the concrete model before persistence
+        // The discovered alias resolves to the concrete model before persistence.
         { provider: "claudeAgent", model: "sonnet", options: { autoCompactWindow: "200k" } },
       ] as const;
 
@@ -5904,7 +5923,7 @@ describe("AgentGateway", () => {
         assert.deepEqual(payload.modelSelection, harness.automationCreates[index]?.modelSelection);
         assert.isTrue(payload.enabled as boolean);
       }
-      // resolution ran against the automation project's workspace root, like threads
+      // Resolution ran against the automation project's workspace root, like threads.
       assert.deepEqual([...new Set(discoveryCalls.map((call) => call.cwd))], ["/tmp/demo"]);
     }).pipe(Effect.provide(gatewayLayer));
   });
@@ -6025,7 +6044,7 @@ describe("AgentGateway", () => {
         (toolResultJson(invalidOption.result).error as { code: string }).code,
         "model_option_unavailable",
       );
-      // unknown option keys must reach the resolver instead of being silently stripped
+      // Unknown option keys must reach the resolver instead of being silently stripped.
       const inventedOption = yield* create({
         provider: "codex",
         model: "gpt-5.6-sol",
@@ -6127,7 +6146,7 @@ describe("AgentGateway", () => {
       const payload = toolResultJson(disabled.result);
       assert.isFalse(payload.enabled as boolean);
       assert.isNull(payload.proposalState);
-      // a plain disabled definition isn't a proposal — no card is surfaced
+      // A plain disabled definition is not a proposal, so no card is surfaced.
       assert.equal(harness.dispatched.length, 0);
 
       const conflicting = yield* harness.callTool({

@@ -91,6 +91,8 @@ export function spawnSourceDesktop({
     ) {
       throw new Error("LaunchServices requires a macOS application bundle.");
     }
+    // LaunchServices makes the app responsible for TCC access instead of the caller.
+    // Keep secrets in the inherited environment, never in open's --env arguments.
     executable = "/usr/bin/open";
     args = ["-W", "-n", "-a", bundle, "--args", resolve(desktopDirectory, "dist-electron/main.js")];
   }

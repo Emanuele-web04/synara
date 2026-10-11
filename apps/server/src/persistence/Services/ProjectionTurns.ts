@@ -1,3 +1,11 @@
+/**
+ * ProjectionTurnRepository - Projection repository interface for unified turn state.
+ *
+ * Owns persistence operations for pending starts, running/completed turn lifecycle,
+ * and checkpoint metadata in a single projection table.
+ *
+ * @module ProjectionTurnRepository
+ */
 import {
   CheckpointRef,
   IsoDateTime,
@@ -34,6 +42,10 @@ export const ProjectionTurn = Schema.Struct({
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
   checkpointTurnCount: Schema.NullOr(NonNegativeInt),
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
@@ -52,6 +64,10 @@ export const ProjectionTurnById = Schema.Struct({
   requestedAt: IsoDateTime,
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
   checkpointTurnCount: Schema.NullOr(NonNegativeInt),
   checkpointRef: Schema.NullOr(CheckpointRef),
   checkpointStatus: Schema.NullOr(OrchestrationCheckpointStatus),
@@ -65,6 +81,10 @@ export const ProjectionPendingTurnStart = Schema.Struct({
   sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
   requestedAt: IsoDateTime,
+  /** True when the turn began before its workspace was initialized as a Git repository. */
+  startedWithoutGitWorkspace: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
 });
 export type ProjectionPendingTurnStart = typeof ProjectionPendingTurnStart.Type;
 
@@ -106,52 +126,75 @@ export const ClearCheckpointTurnConflictInput = Schema.Struct({
 export type ClearCheckpointTurnConflictInput = typeof ClearCheckpointTurnConflictInput.Type;
 
 export interface ProjectionTurnRepositoryShape {
-  /** upserts the canonical row for a concrete {threadId, turnId} lifecycle state */
+  /**
+   * Inserts or updates the canonical row for a concrete `{threadId, turnId}` turn lifecycle state.
+   */
   readonly upsertByTurnId: (
     row: ProjectionTurnById,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /** replaces pending-start placeholder rows with exactly one latest */
+  /**
+   * Replaces any existing pending-start placeholder rows for a thread with exactly one latest pending-start row.
+   */
   readonly replacePendingTurnStart: (
     row: ProjectionPendingTurnStart,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /** newest pending-start placeholder; at most one row after replacement writes */
+  /** Records workspace classification on the request's current pending or concrete row. */
+  readonly markStartedWithoutGitWorkspace: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Returns the newest pending-start placeholder for a thread; this is expected to be at most one row after replacement writes.
+   */
   readonly getPendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
   ) => Effect.Effect<Option.Option<ProjectionPendingTurnStart>, ProjectionRepositoryError>;
 
-  /** deletes only pending-start placeholders (turnId = null); concrete turn rows untouched */
+  /**
+   * Deletes only pending-start placeholder rows (`turnId = null`) for a thread and leaves concrete turn rows untouched.
+   */
   readonly deletePendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /** all rows for a thread including placeholders, checkpoint rows first */
+  /**
+   * Lists all projection rows for a thread, including pending placeholders, with checkpoint rows ordered before non-checkpoint rows.
+   */
   readonly listByThreadId: (
     input: ListProjectionTurnsByThreadInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionTurn>, ProjectionRepositoryError>;
 
-  /** concrete turn by {threadId, turnId}; never returns placeholders */
+  /**
+   * Looks up a concrete turn row by `{threadId, turnId}` and never returns pending placeholder rows.
+   */
   readonly getByTurnId: (
     input: GetProjectionTurnByTurnIdInput,
   ) => Effect.Effect<Option.Option<ProjectionTurnById>, ProjectionRepositoryError>;
 
-  /** batch lookup for long-poll readers — avoids one query per turn */
+  /** Batch lookup used by long-poll status readers to avoid one query per turn. */
   readonly getManyByTurnId: (
     input: ReadonlyArray<GetProjectionTurnByTurnIdInput>,
   ) => Effect.Effect<ReadonlyArray<ProjectionTurnById>, ProjectionRepositoryError>;
 
-  /** one query for pinned turn states plus thread existence */
+  /** One lightweight query for pinned turn states plus current thread existence. */
   readonly getManyWaitSnapshot: (input: {
     readonly threadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
     readonly turns: ReadonlyArray<GetProjectionTurnByTurnIdInput>;
   }) => Effect.Effect<ProjectionTurnWaitSnapshot, ProjectionRepositoryError>;
 
-  /** clears checkpoint fields on rows reusing the same checkpoint turn count, excluding the provided turn */
+  /**
+   * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.
+   */
   readonly clearCheckpointTurnConflict: (
     input: ClearCheckpointTurnConflictInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  /**
+   * Hard-deletes all projection rows for a thread, including pending-start placeholders and checkpoint metadata rows.
+   */
   readonly deleteByThreadId: (
     input: DeleteProjectionTurnsByThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

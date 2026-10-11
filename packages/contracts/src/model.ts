@@ -3,7 +3,7 @@ import { TrimmedNonEmptyString } from "./baseSchemas";
 import type { ProviderKind } from "./orchestration";
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
-// runtime discovery can add model-specific efforts
+// Codex app-server can add model-specific efforts through runtime discovery.
 export type CodexReasoningEffort = string;
 export const CLAUDE_API_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type ClaudeApiEffort = (typeof CLAUDE_API_EFFORT_OPTIONS)[number];
@@ -55,7 +55,8 @@ export const DROID_REASONING_EFFORT_OPTIONS = [
   "xhigh",
   "max",
 ] as const;
-// Droid exposes efforts dynamically over ACP — the static list is an offline fallback so new values survive transport and drafts
+// Droid exposes effort values dynamically over ACP; keep the static list only
+// as an offline fallback so newly added values survive transport and drafts.
 export type DroidReasoningEffort = string;
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
@@ -110,7 +111,7 @@ export const ProviderOptionSelections = Schema.Array(ProviderOptionSelection);
 export type ProviderOptionSelections = typeof ProviderOptionSelections.Type;
 
 export const CodexModelOptions = Schema.Struct({
-  // runtime discovery can expose early-access efforts outside this enum
+  // Codex runtime discovery can expose early-access effort values outside the built-in enum.
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
 });
@@ -121,7 +122,7 @@ export const ClaudeModelOptions = Schema.Struct({
   effort: Schema.optional(Schema.Literals(CLAUDE_CODE_EFFORT_OPTIONS)),
   fastMode: Schema.optional(Schema.Boolean),
   autoCompactWindow: Schema.optional(Schema.String),
-  // legacy persisted field — normalization migrates to autoCompactWindow
+  // Legacy persisted field. Normalization migrates this to autoCompactWindow.
   contextWindow: Schema.optional(Schema.String),
 });
 export type ClaudeModelOptions = typeof ClaudeModelOptions.Type;
@@ -169,7 +170,9 @@ export const DevinModelOptions = Schema.Struct({
   fastMode: Schema.optional(Schema.Boolean),
   thinking: Schema.optional(Schema.Boolean),
   contextWindow: Schema.optional(TrimmedNonEmptyString),
-  // populated from runtime discovery when an abstract selection must resolve to a concrete variant
+  // Devin's ACP command accepts a concrete model UID at process start. This
+  // is populated from runtime discovery when an abstract effort/context
+  // selection needs to resolve to a specific variant.
   modelVariant: Schema.optional(TrimmedNonEmptyString),
 });
 export type DevinModelOptions = typeof DevinModelOptions.Type;
@@ -253,7 +256,8 @@ const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
   ],
 };
 
-// GPT-6 Astra is the app-server default; its ladder extends past xhigh with max/ultra, mirroring `model/list`
+// GPT-6 Astra is the Codex app-server default. Its ladder extends past xhigh with
+// max/ultra and defaults to medium, mirroring `model/list`.
 const CODEX_GPT_6_CAPABILITIES: ModelCapabilities = {
   ...CODEX_GPT_5_CAPABILITIES,
   reasoningEffortLevels: [
@@ -322,7 +326,10 @@ const GROK_4_6_CAPABILITIES = grokCapabilities([
   grokCliEffortOption("xhigh"),
 ]);
 
-// cold-start fallback mirroring the ACP session's base model ids — fast/effort/thinking as per-model controls, not the CLI's -fast/-high slugs
+// Cursor's live catalog is discovered per session (see CursorAdapter.listModels);
+// these entries are the cold-start fallback and mirror the base model ids the
+// `cursor-agent` ACP session advertises, with fast/effort/thinking expressed as
+// per-model controls rather than the CLI's expanded `-fast`/`-high` slugs.
 const CURSOR_EFFORT_LABELS = {
   none: "None",
   minimal: "Minimal",
@@ -479,7 +486,9 @@ const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
   contextWindowOptions: [],
 };
 
-// shared capability shapes declared once — each model entry overrides only what genuinely differs
+// Shared Claude building blocks. Capability shapes repeat across Claude
+// generations, so declare them once and let each model entry override only the
+// fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
 const CLAUDE_AUTO_COMPACT_WINDOWS: readonly ContextWindowOption[] = [
   { value: "auto", label: "Auto (Claude Code)", isDefault: true },
   { value: "200k", label: "200k" },
@@ -507,7 +516,8 @@ function claudeCodeModeOption(
   return { value, label, description, apiEffortValue, controlSource: "provider-setting" };
 }
 
-// newer Claude Code models: xhigh/max API efforts + ultracode, but no ultrathink prompt mode or fast mode
+// No-fast xhigh ladder: newer Claude Code models with xhigh/max API efforts and
+// the ultracode mode setting, but no ultrathink prompt mode or fast mode.
 const CLAUDE_NO_FAST_XHIGH_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [
     claudeApiEffortOption("low", "Low"),
@@ -525,7 +535,8 @@ const CLAUDE_NO_FAST_XHIGH_CAPABILITIES: ModelCapabilities = {
   contextWindowTokens: 1_000_000,
 };
 
-// thinking always on, effort low..max, no fast-mode lane
+// Fable 5 and 5.1 share the ladder: thinking is always on (no toggle, no
+// ultrathink prompt mode), effort runs low..max, and there is no fast-mode lane.
 const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
 
 // Opus 5 and 5.5 keep the Claude 5 ladder (thinking is adaptive, so no ultrathink prompt
@@ -535,7 +546,7 @@ const CLAUDE_OPUS_5_CAPABILITIES: ModelCapabilities = {
   supportsFastMode: true,
 };
 
-// full reasoning ladder: xhigh + ultracode + ultrathink
+// Full reasoning ladder: xhigh + ultracode + ultrathink (Opus 4.7/4.8).
 const CLAUDE_FLAGSHIP_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [
     claudeApiEffortOption("low", "Low"),
@@ -554,7 +565,7 @@ const CLAUDE_FLAGSHIP_CAPABILITIES: ModelCapabilities = {
   contextWindowTokens: 1_000_000,
 };
 
-// ladder before xhigh/ultracode landed
+// Reasoning ladder before xhigh/ultracode landed (Opus 4.6, Sonnet 4.6).
 const CLAUDE_EXTENDED_THINKING_CAPABILITIES: ModelCapabilities = {
   ...CLAUDE_FLAGSHIP_CAPABILITIES,
   reasoningEffortLevels: [
@@ -566,7 +577,7 @@ const CLAUDE_EXTENDED_THINKING_CAPABILITIES: ModelCapabilities = {
   ],
 };
 
-// adds xhigh for long agentic work, stays in the Sonnet no-fast lane
+// Sonnet 5 adds xhigh for long agentic work, while staying in the Sonnet no-fast-mode lane.
 const CLAUDE_SONNET_5_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
 
 type ModelDefinition = {
@@ -575,7 +586,8 @@ type ModelDefinition = {
   readonly capabilities: ModelCapabilities;
 };
 
-// static entries relying on live CLI discovery advertise no capabilities of their own
+// Static catalog entries that rely on live CLI discovery advertise no
+// capabilities of their own.
 const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [],
   supportsFastMode: false,
@@ -718,7 +730,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
-  // Antigravity owns its catalog — populated from `agy models` so CLI updates appear without a Synara release
+  // Antigravity owns its model catalog. The web app populates this provider from
+  // `agy models` so CLI updates appear without a Synara release.
   antigravity: [],
   grok: [
     {
@@ -729,7 +742,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   droid: [
     {
-      // Factory routes to a model automatically at its lowest rate — no picker
+      // Factory routes to a model automatically at its lowest (1x) token rate.
+      // Reasoning effort follows the routed model's default, so no picker.
       slug: "auto",
       name: "Auto Model",
       capabilities: droidCapabilities([]),
@@ -922,11 +936,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: EMPTY_MODEL_CAPABILITIES,
     },
   ],
-  // Pi discovery owns the live catalog, including auth-gated Anthropic models
+  // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
   cursor: [
     {
-      // Cursor exposes auto as the `default` model id over ACP
+      // Cursor exposes auto as the `default` model id over ACP; the adapter maps it.
       slug: "auto",
       name: "Auto",
       capabilities: cursorCapabilities(),
@@ -1122,7 +1136,9 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: cursorCapabilities({ efforts: ["high", "max"] }),
     },
   ],
-  // the model is selected at process start; no live list — static fallback for when the CLI is unreachable
+  // Devin selects its model at process start via `devin acp --model`; the ACP
+  // session does not expose a live model list. This list is a static fallback
+  // for when the CLI is unreachable.
   devin: [
     {
       slug: "adaptive",
@@ -1172,7 +1188,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   opencode: "openai/gpt-5",
 };
 
-// back-compat for Codex-only call sites
+// Backward compatibility for existing Codex-only call sites.
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
@@ -1243,7 +1259,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "claude-haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-4-5-20251001": "claude-haiku-4-5",
   },
-  // retired slugs are remapped, not dropped — the agent answers -32602 for dead ids so persisted selections must migrate to live ones
+  // Retired Cursor slugs are remapped, not dropped: the agent answers -32602 for
+  // ids it no longer serves, so persisted selections must migrate to live ones.
   cursor: {
     auto: "auto",
     default: "auto",
@@ -1353,7 +1370,8 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   omp: {},
 };
 
-// re-exported for backward compatibility
+// ── Agent mention aliases ─────────────────────────────────────────────
+// Re-exported from agentMentions.ts for backward compatibility
 export {
   AGENT_MENTION_ALIASES,
   getAgentMentionAutocompleteAliases,
@@ -1364,6 +1382,8 @@ export {
   type AgentAliasDefinition,
   type ResolvedAgentAlias,
 } from "./agentMentions";
+
+// ── Model capabilities index ──────────────────────────────────────────
 
 export const MODEL_CAPABILITIES_INDEX = Object.fromEntries(
   Object.entries(MODEL_OPTIONS_BY_PROVIDER).map(([provider, models]) => [
@@ -1377,6 +1397,8 @@ Object.assign(MODEL_CAPABILITIES_INDEX.grok, {
   "grok-build": GROK_BUILD_CAPABILITIES,
   "grok-4.5": GROK_4_5_CAPABILITIES,
 });
+
+// ── Provider display names ────────────────────────────────────────────
 
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",

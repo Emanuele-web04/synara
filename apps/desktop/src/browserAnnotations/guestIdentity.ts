@@ -8,7 +8,8 @@ export function createGuestIdentifier(crypto: GuestCrypto): string {
     return crypto.randomUUID();
   }
   const bytes = crypto.getRandomValues(new Uint8Array(16));
-  // UUID v4 layout keeps the fallback compact, unpredictable, and accepted by the same main-process validation as randomUUID()
+  // UUID v4 layout keeps the fallback compact, unpredictable and accepted by
+  // the same main-process identifier validation as native randomUUID().
   bytes[6] = (bytes[6]! & 0x0f) | 0x40;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");

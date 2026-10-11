@@ -74,7 +74,9 @@ function waitForFileContent(filePath: string, containing: string): Effect.Effect
         if (content.includes(containing)) {
           return content;
         }
-      } catch {}
+      } catch {
+        // The child process may not have flushed the file yet.
+      }
       if (Date.now() >= deadline) {
         throw new Error(`Timed out waiting for file content: ${filePath}`);
       }

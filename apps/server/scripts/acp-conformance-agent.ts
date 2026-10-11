@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// Official-SDK ACP subprocess used only by the transport conformance suite.
 
 import { appendFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";

@@ -632,11 +632,11 @@ layer("ProviderRuntimeEventRepository", (it) => {
       );
       assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
 
-      // no projection thread row (hard-purged) — the open turn is dead
+      // No projection thread row at all (hard-purged): the open turn is dead.
       yield* repository.pruneSettledOpenTurns;
       assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
 
-      // re-open the turn under a live thread — the replay row must survive
+      // Re-open the turn under a live thread: the replay row must survive.
       const reopened = yield* repository.append({
         ...runtimeEvent("runtime-event-orphaned-turn-2", "live replay"),
         threadId: orphanThreadId,
@@ -653,7 +653,8 @@ layer("ProviderRuntimeEventRepository", (it) => {
       yield* repository.pruneSettledOpenTurns;
       assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
 
-      // archiving doesn't interrupt a turn the projection still considers running — the replay row survives
+      // Archiving does not interrupt a turn the projection still considers
+      // running, so that replay row must survive the archive.
       yield* sql`
         INSERT INTO projection_turns (
           thread_id, turn_id, state, requested_at, checkpoint_files_json
@@ -669,7 +670,8 @@ layer("ProviderRuntimeEventRepository", (it) => {
       yield* repository.pruneSettledOpenTurns;
       assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
 
-      // an archived thread whose turn the projection never tracked has nothing left to replay
+      // An archived thread whose turn the projection never tracked (or has
+      // settled) has nothing left to replay.
       yield* sql`
         DELETE FROM projection_turns
         WHERE thread_id = ${orphanThreadId} AND turn_id = ${orphanTurnId}
@@ -866,7 +868,8 @@ layer("ProviderRuntimeEventRepository", (it) => {
   );
 });
 
-// isolated in-memory db — exact row counts only hold when no other test shares the journal
+// Fresh (isolated in-memory) database: retention behaviour is asserted through
+// exact row counts, which only hold when no other test shares the journal.
 const retentionLayer = it.layer(
   Layer.fresh(ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory))),
 );
@@ -919,7 +922,8 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
           assert.isTrue(accepted);
         });
 
-      // a long open turn — every accepted event must stay replayable, including ones crossing a throttled scan boundary
+      // A long open turn: every accepted event must stay replayable, including
+      // the ones that crossed a throttled scan boundary.
       const openTurnEvents = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 88;
       for (let index = 0; index < openTurnEvents; index += 1) {
         yield* acceptEvent(deltaEvent("a", index));
@@ -927,11 +931,14 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
       assert.strictEqual(yield* replayable, openTurnEvents);
       assert.strictEqual(yield* journalSize, openTurnEvents);
 
+      // The terminal event settles the turn and forces a scan, leaving exactly
+      // the bounded diagnostic tail behind.
       yield* acceptEvent(terminalEvent("a"));
       assert.strictEqual(yield* replayable, 0);
       assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
 
-      // a shorter turn stays below the scan interval — the quadratic-delete behaviour this throttle removes
+      // A shorter follow-up turn stays below the scan interval: no scan runs,
+      // which is exactly the quadratic-delete behaviour this throttle removes.
       const followUpEvents = 300;
       for (let index = 0; index < followUpEvents; index += 1) {
         yield* acceptEvent(deltaEvent("b", index));
@@ -942,7 +949,7 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
         PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + followUpEvents,
       );
 
-      // settling the follow-up turn releases the deferred backlog immediately
+      // Settling the follow-up turn releases the deferred backlog immediately.
       yield* acceptEvent(terminalEvent("b"));
       assert.strictEqual(yield* replayable, 0);
       assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
@@ -966,6 +973,7 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
       );
       const cursorBefore = yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
 
+      // One page: a turn that settles inside it, then an open follow-up turn.
       const settledEvents = 40;
       const openEvents = 25;
       let last = cursorBefore;
@@ -978,7 +986,7 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
       }
       const sizeBeforeAck = yield* journalSize;
 
-      // the target must be a stored row the cursor can reach contiguously
+      // The target must be a stored row the cursor can reach contiguously.
       assert.isFalse(
         yield* repository.advanceConsumerCursorThrough({
           consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -1003,17 +1011,21 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
         yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
         last,
       );
-      // settled turn released its backlog (terminal forced a scan); every open-turn event stays replayable
+      // Same outcome as row-by-row acknowledgement: the settled turn released
+      // its replay backlog (the terminal forced a scan) while every event of
+      // the still-open turn stays replayable.
       const replayable = yield* replayableTurns;
       assert.strictEqual(replayable.length, openEvents);
       assert.isTrue(replayable.every((turn) => turn === "turn-retention-d"));
-      // the bounded tail may already include open-turn rows — journal holds between tail and tail+open-turn, never fewer
+      // The scan ran once, at the end of the page: the bounded diagnostic tail
+      // may already include the open turn's rows, so the journal holds between
+      // the tail and tail-plus-open-turn rows, never fewer.
       const sizeAfterAck = yield* journalSize;
       assert.isAtLeast(sizeAfterAck, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
       assert.isAtMost(sizeAfterAck, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + openEvents);
       assert.isBelow(sizeAfterAck, sizeBeforeAck);
 
-      // idempotent once the cursor is already there
+      // Idempotent once the cursor is already there.
       assert.isTrue(
         yield* repository.advanceConsumerCursorThrough({
           consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,

@@ -1,4 +1,8 @@
-// the "Create branch" footer row uses a raw <button> intentionally — a menu-item affordance inside ComboboxPopup, not a generic action
+// Purpose: Branch/worktree picker for the chat toolbar.
+// Coordinates branch checkout/create actions and decorates rows with git metadata.
+// Depends on: git React Query helpers, native API mutations, and toolbar selection rules.
+// Note: the "Create branch" footer row uses raw <button> because it is a
+// menu-item-style affordance inside a ComboboxPopup, not a generic action.
 import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -181,7 +185,9 @@ function handleCheckoutError(
     onRequestDiscardStash: (input: { cwd: string }) => void;
   },
 ): void {
-  // recovery always acts on input.cwd, which can differ from the selector's own checkout (e.g. "Stash & Switch" back to the project root), so every retry passes it as the awaited refresh scope
+  // Recovery always acts on input.cwd, which can differ from the selector's own checkout
+  // (e.g. "Stash & Switch" from a dedicated worktree back to the project root), so every
+  // retry passes it as the awaited refresh scope instead of relying on the default.
   const retryRefreshOptions = { refreshCwds: [input.cwd] } as const;
   const retryStashAndCheckout = async (): Promise<void> => {
     await input.api.git.stashAndCheckout({ cwd: input.cwd, branch: input.branch });
@@ -481,7 +487,9 @@ export function BranchToolbarBranchSelector({
   ) => {
     startBranchActionTransition(async () => {
       await action().catch(() => undefined);
-      // only the acted-on checkout gates re-enabling; remaining cached repos refresh in the background so a slow unrelated worktree can't hold the selector disabled
+      // Only the acted-on checkout gates re-enabling the selector; the remaining cached
+      // repos (checked-out markers in sibling worktrees) refresh in the background so a
+      // slow unrelated worktree cannot hold the selector disabled.
       const awaitedCwds = options?.refreshCwds ?? (branchCwd ? [branchCwd] : []);
       await refreshGitQueriesScoped(queryClient, awaitedCwds).catch(() => undefined);
     });
@@ -546,6 +554,7 @@ export function BranchToolbarBranchSelector({
     const api = readNativeApi();
     if (!api || !branchCwd || isBranchActionPending) return;
 
+    // In new-worktree mode, selecting a branch sets the base branch.
     if (isSelectingWorktreeBase) {
       onSetThreadWorkspace({ branch: branch.name, worktreePath: null });
       setIsBranchMenuOpen(false);
@@ -559,6 +568,7 @@ export function BranchToolbarBranchSelector({
       branch,
     });
 
+    // If the branch already lives in a worktree, point the thread there.
     if (selectionTarget.reuseExistingWorktree) {
       onSetThreadWorkspace({
         branch: branch.name,

@@ -1,3 +1,6 @@
+// FILE: 091_AutomationFailureTolerance.ts
+// Purpose: Adds consecutive-failure policy and durable automation disable metadata.
+
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

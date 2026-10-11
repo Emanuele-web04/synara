@@ -322,7 +322,9 @@ export function PullRequestDetailPanel({
     ? mergeMethod
     : (allowedMethods[0] ?? "merge");
   const actionPending = actionMutation.isPending;
-  // optimistic transitions flip the UI instantly via the cache patch, so only the pessimistic merge needs a visible progress state
+  // Which action is in flight — drives the in-flight labels. Optimistic transitions
+  // (draft/ready/close/reopen) flip the UI instantly via the mutation's cache patch, so
+  // only the pessimistic merge needs a visible progress state.
   const pendingAction = actionMutation.isPending
     ? (actionMutation.variables?.action ?? null)
     : null;

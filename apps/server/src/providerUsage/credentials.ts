@@ -1,3 +1,10 @@
+// FILE: providerUsage/credentials.ts
+// Purpose: Credential resolution helpers for the usage fetchers — JSON files (read + atomic
+// write-back for rotated tokens), macOS Keychain reads (via the `security` CLI), OAuth refresh,
+// JWT expiry decoding, and hex/JSON keychain payload decoding. Read helpers are defensive and
+// resolve to null/false on failure; the write helper throws so callers can react to a stranded
+// rotation (a rotated refresh token that wasn't persisted invalidates the CLI's login).
+
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -11,7 +18,7 @@ const execFileAsync = promisify(execFile);
 const KEYCHAIN_TIMEOUT_MS = 5_000;
 const DEFAULT_OAUTH_REFRESH_TIMEOUT_MS = 15_000;
 
-/** non-secret identity for cache partitioning without retaining credentials */
+/** Build a short, non-secret identity for cache partitioning without retaining credentials. */
 export function credentialFingerprint(secret: string): string {
   return createHash("sha256").update(secret).digest("base64url").slice(0, 18);
 }
@@ -26,9 +33,9 @@ export type OAuthRefreshResult =
     }
   | {
       readonly ok: false;
-      /** undefined on a transport failure */
+      /** HTTP status of the token-endpoint response; undefined on a transport failure. */
       readonly status?: number;
-      /** OAuth error code from a 4xx body, when identifiable */
+      /** OAuth error code from a 4xx body (e.g. "refresh_token_reused"), when identifiable. */
       readonly errorCode?: string;
     };
 
@@ -40,7 +47,11 @@ export async function readJsonFile(path: string): Promise<unknown | null> {
   }
 }
 
-/** atomic temp-file + rename with owner-only permissions — a crash can't leave a truncated auth file; throws on failure */
+/**
+ * Persist a credential JSON file atomically (temp file + rename in the same directory) with
+ * owner-only permissions, so a crash mid-write can never leave a truncated auth file and a
+ * concurrent reader always sees either the old or the new credential. Throws on failure.
+ */
 export async function writeJsonFileAtomic(path: string, value: unknown): Promise<void> {
   const directory = nodePath.dirname(path);
   const tempPath = nodePath.join(
@@ -57,7 +68,8 @@ export async function writeJsonFileAtomic(path: string, value: unknown): Promise
   }
 }
 
-/** tolerates {error:{code}}, {error:{error}}, {error:"code"}, {code} */
+/** Extract the OAuth error code from a token-endpoint 4xx body, tolerating the common shapes:
+ * `{error: {code}}`, `{error: {error}}`, `{error: "code"}`, `{code}`. */
 function oauthErrorCode(json: unknown): string | undefined {
   if (!json || typeof json !== "object") {
     return undefined;
@@ -77,17 +89,22 @@ function oauthErrorCode(json: unknown): string | undefined {
   return typeof record.code === "string" && record.code.length > 0 ? record.code : undefined;
 }
 
-/** never logs secrets; discriminates a dead refresh token (re-read the CLI's rotated credential) from a transient failure (retry later) */
+/**
+ * Redeem a refresh token with the provider's token endpoint. Never logs secrets. Returns a
+ * discriminated result so callers can tell a bad refresh token (`errorCode`, e.g.
+ * `refresh_token_reused`) from a transient endpoint failure — the two demand opposite reactions
+ * (re-read the CLI's rotated credential vs. retry later).
+ */
 export async function refreshOAuthAccessToken(input: {
   service: string;
   refreshUrl: string;
   allowedOrigins: ReadonlyArray<string>;
   refreshToken: string;
   clientId: string;
-  /** Google-style endpoints require the confidential-client secret next to `client_id` */
+  /** Google-style token endpoints require the confidential-client secret next to `client_id`. */
   clientSecret?: string;
   scope?: string;
-  /** OAuth token endpoints commonly require form encoding; JSON for the rest */
+  /** OAuth token endpoints commonly require form encoding; JSON stays for the ones that don't. */
   bodyFormat?: "json" | "form";
   timeoutMs?: number;
 }): Promise<OAuthRefreshResult> {
@@ -159,7 +176,11 @@ export async function refreshOAuthAccessToken(input: {
   };
 }
 
-/** read-only — never calls add-generic-password; null off darwin or on failure */
+/**
+ * Read a generic-password secret from the macOS Keychain. Returns the raw secret string (the
+ * caller decodes hex/JSON as needed), or null on any platform other than darwin / on failure.
+ * Read-only: we never call `add-generic-password`.
+ */
 export async function readKeychainPassword(input: {
   service: string;
   account?: string;
@@ -181,6 +202,10 @@ export async function readKeychainPassword(input: {
   }
 }
 
+/**
+ * Some CLIs store the JSON credential in the keychain hex-encoded (Claude Code on macOS),
+ * others store raw JSON. Try direct JSON first, then hex-decode then parse.
+ */
 export function decodeKeychainJson(value: string): unknown | null {
   const trimmed = value.trim();
   const tryParse = (candidate: string): unknown | null => {
@@ -207,7 +232,7 @@ export function decodeKeychainJson(value: string): unknown | null {
   return null;
 }
 
-/** JWT `exp` → epoch ms, or null when unparseable */
+/** Decode a JWT's `exp` claim into epoch milliseconds, or null when not parseable. */
 export function decodeJwtExpMs(jwt: string | undefined): number | null {
   if (!jwt) {
     return null;

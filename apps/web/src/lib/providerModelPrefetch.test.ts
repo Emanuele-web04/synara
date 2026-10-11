@@ -1,5 +1,16 @@
+// FILE: providerModelPrefetch.test.ts
+// Purpose: Verifies new-thread model prefetch resolves providers/cwds, hits the
+//          same React Query keys ChatView uses, warms every visible provider,
+//          and gates Droid to explicit intent.
+// Layer: Web lib tests
+
 import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
-import type { ProviderInstanceId, ProviderKind, ServerProviderStatus } from "@synara/contracts";
+import type {
+  NativeApi,
+  ProviderInstanceId,
+  ProviderKind,
+  ServerProviderStatus,
+} from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +23,7 @@ import {
   type ProviderModelPrefetchSettings,
 } from "./providerModelPrefetch";
 import { providerDiscoveryQueryKeys as rawProviderDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
+import * as nativeApi from "../nativeApi";
 
 const providerDiscoveryQueryKeys = {
   ...rawProviderDiscoveryQueryKeys,
@@ -283,6 +295,7 @@ describe("prefetchModelsForNewThread", () => {
     expect(modelKeys[0]).toEqual(
       providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/project"),
     );
+    // Warm results stay fresh for 30 minutes, so repeated hovers do not re-probe.
     expect(prefetchQuery.mock.calls[0]?.[0].staleTime).toBe(30 * 60_000);
     expect(modelKeys).toHaveLength(9);
     expect(modelKeys).not.toContainEqual(
@@ -393,7 +406,8 @@ describe("prefetchModelsForNewThread", () => {
 
 describe("prefetchModelsForNewThread — new-thread options key parity", () => {
   it("warms the prepared worktree cwd for the PR-handoff shape (worktreePath + fresh + local)", async () => {
-    // PullRequestDetailPanel passes { worktreePath, envMode, fresh: true }; the prepared worktree must win over the stored draft and envMode "local" clearing.
+    // PullRequestDetailPanel passes { worktreePath, envMode, fresh: true }; the
+    // prepared worktree must win over the stored draft and envMode "local" clearing.
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
@@ -459,6 +473,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       providerDiscoveryQueryKeys.models("codex", null, null, null, null),
     );
 
+    // Disabled beats selected (useProviderModelCatalog short-circuit parity).
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
@@ -479,6 +494,7 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       providerDiscoveryQueryKeys.models("cursor", null, null, null, null),
     );
 
+    // Selected but unavailable → still warmed (ChatView discovers it on mount).
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
@@ -493,6 +509,28 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
 });
 
 describe("prefetchModelsForNewThread — warm-option invariants", () => {
+  it("warms every startup catalog once after exhausted transport admission", async () => {
+    const capacity = Object.assign(new Error("Capacity exhausted"), {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 250,
+    });
+    const listModels = vi.fn().mockRejectedValue(capacity);
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: {
+        listModels,
+        listAgents: vi.fn().mockResolvedValue({ agents: [], source: "unsupported", cached: false }),
+        getComposerCapabilities: vi.fn().mockResolvedValue({}),
+      },
+    } as unknown as NativeApi);
+    const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+    prefetchModelsForNewThread(client, { settings: makeSettings(), projectCwd: "/tmp/project" });
+    await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(listModels).toHaveBeenCalledTimes(9);
+    expect(new Set(listModels.mock.calls.map(([input]) => input.provider)).size).toBe(9);
+    client.clear();
+  });
+
   it("preserves model retry policies while keeping ancillary warming fail-fast", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
@@ -509,7 +547,6 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
       expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS);
     }
     const modelCalls = calls.filter((options) => options.queryKey[1] === "models");
-    expect(modelCalls.find((options) => options.queryKey[2] === "cursor")?.retry).toBe(0);
     expect(modelCalls.find((options) => options.queryKey[2] === "codex")?.retry).toBe(0);
     expect(modelCalls.find((options) => options.queryKey[2] === "claudeAgent")?.retry).toBe(0);
     for (const options of modelCalls.filter(
@@ -518,7 +555,14 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
         options.queryKey[2] !== "codex" &&
         options.queryKey[2] !== "claudeAgent",
     )) {
-      expect(options.retry).toBe(3);
+      expect(typeof options.retry).toBe("function");
+      const retry = options.retry as (count: number, error: Error) => boolean;
+      const error = new Error("Discovery unavailable");
+      expect(retry(0, error)).toBe(options.queryKey[2] !== "cursor");
+      expect(retry(3, error)).toBe(false);
+      expect(retry(0, Object.assign(error, { code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED" }))).toBe(
+        false,
+      );
     }
     for (const options of calls.filter((options) => options.queryKey[1] !== "models")) {
       expect(options.retry).toBe(0);
@@ -547,10 +591,10 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     expect(droidKeys).toContainEqual(
       providerDiscoveryQueryKeys.composerCapabilities("droid", null),
     );
-    expect(
-      droidCalls.find(
-        (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",
-      )?.retry,
-    ).toBe(2);
+    const droidRetry = droidCalls.find(
+      (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",
+    )?.retry as (count: number, error: Error) => boolean;
+    expect(droidRetry(0, new Error("Discovery unavailable"))).toBe(true);
+    expect(droidRetry(2, new Error("Discovery unavailable"))).toBe(false);
   });
 });

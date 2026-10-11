@@ -1,3 +1,7 @@
+// FILE: providerUsageSnapshot.ts
+// Purpose: Normalize provider usage snapshots returned by the server into the
+// same shapes consumed by the shared usage/rate-limit UI in the web app.
+
 import type { ServerGetProviderUsageSnapshotResult } from "@synara/contracts";
 
 import type { OpenUsageUsageLine } from "./openUsageRateLimits";

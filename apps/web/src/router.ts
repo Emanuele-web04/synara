@@ -13,7 +13,9 @@ export function getRouter(history: RouterHistory) {
   return createRouter({
     routeTree,
     history,
-    // routes are auto-code-split with no loaders — intent preloading fetches the chunk on hover so first navigation skips the download/parse wait
+    // Routes are auto-code-split and have no loaders, so intent preloading only
+    // fetches the route chunk on link hover/touch — first navigation skips the
+    // chunk download/parse wait.
     defaultPreload: "intent",
     context: {
       queryClient,

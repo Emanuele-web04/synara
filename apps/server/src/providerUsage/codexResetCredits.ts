@@ -1,4 +1,5 @@
-// uses the installed Codex app-server protocol; the CLI owns its auth lifecycle — no provider turn is started by this probe
+// Reads and explicitly confirmed redemptions use the installed Codex app-server protocol.
+// The CLI owns its authentication lifecycle; no provider turn is started by this probe.
 import type {
   CodexResetCreditOutcome,
   ServerCodexResetCredit,
@@ -32,10 +33,11 @@ function epochToIso(value: unknown): string | undefined {
     }
     return undefined;
   }
-  // ms epochs passed 1e11 in 1973; second epochs stay below 1e10 until 2286
+  // Millisecond epochs passed 1e11 in 1973; second epochs stay below 1e10 until 2286.
   return value > 100_000_000_000 ? isoFromUnixMillis(value) : isoFromUnixSeconds(value);
 }
 
+/** Pure parse of the `rateLimitResetCredits` payload from `account/rateLimits/read`. */
 export function parseCodexResetCredits(json: unknown): ServerCodexResetCredits | undefined {
   const root = asRecord(json);
   const raw =
@@ -84,7 +86,7 @@ export function parseCodexResetCredits(json: unknown): ServerCodexResetCredits |
   return { availableCount: count, credits };
 }
 
-/** only the ordinary Codex bucket can make a reset worthwhile — other model quotas cannot */
+/** Only the ordinary Codex bucket can make a reset worthwhile; other model quotas cannot. */
 export function canUseCodexResetCredit(json: unknown): boolean | undefined {
   const root = asRecord(json);
   const buckets = asRecord(root?.rateLimitsByLimitId);
@@ -142,7 +144,7 @@ async function withAppServer<T>(
         const message = asRecord(JSON.parse(line));
         if (!message) continue;
         if (typeof message.method === "string" && message.id !== undefined) {
-          // account probes can't approve tools or service interactive auth requests
+          // Account probes cannot approve tools or service interactive authentication requests.
           void writer
             .write({
               id: message.id,
@@ -191,13 +193,17 @@ async function withAppServer<T>(
     framer.close();
     try {
       signalOwnedChildProcess(child, "SIGTERM");
-    } catch {}
-    // a CLI/shim ignoring SIGTERM must not linger after a short-lived probe
+    } catch {
+      /* Already exited. */
+    }
+    // A CLI/shim ignoring SIGTERM must not linger after a short-lived probe.
     const killTimer = setTimeout(() => {
       if (child.exitCode === null && child.signalCode === null) {
         try {
           signalOwnedChildProcess(child, "SIGKILL");
-        } catch {}
+        } catch {
+          /* Already exited. */
+        }
       }
     }, 1_000);
     killTimer.unref();
@@ -205,7 +211,7 @@ async function withAppServer<T>(
   }
 }
 
-/** optional enrichment — a missing CLI or account mismatch must not break ordinary usage */
+/** Optional enrichment: a missing CLI or account mismatch must not break ordinary usage. */
 export async function fetchCodexResetCredits(
   input: CodexResetCreditProbeInput & { readonly expectedAccountId?: string | undefined },
 ): Promise<ServerCodexResetCredits | undefined> {
@@ -237,7 +243,7 @@ const RESET_OUTCOMES: ReadonlySet<string> = new Set([
 
 const activeResets = new Map<string, { key: string; promise: Promise<CodexResetCreditOutcome> }>();
 
-/** one key per confirmed attempt, including transport failures/reconnects */
+/** The client persists one key per confirmed attempt, including transport failures/reconnects. */
 export async function consumeCodexResetCredit(
   input: CodexResetCreditProbeInput & ServerConsumeCodexResetCreditInput,
 ): Promise<CodexResetCreditOutcome> {

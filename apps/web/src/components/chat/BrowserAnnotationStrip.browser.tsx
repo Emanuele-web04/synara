@@ -1,3 +1,6 @@
+// FILE: BrowserAnnotationStrip.browser.tsx
+// Purpose: Verifies that compact annotation overflow stays inspectable and removable.
+
 import "../../index.css";
 
 import { page } from "vitest/browser";

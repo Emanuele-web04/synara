@@ -15,7 +15,9 @@ const DEFAULT_WINDOW_STATE: DesktopWindowState = {
   isFullscreen: false,
 };
 
-// native Windows caption glyphs — these code points resolve in "Segoe Fluent Icons" (Win11) and fall back to "Segoe MDL2 Assets" (Win10): minimize, maximize, restore, close
+// Native Windows caption glyphs. These code points resolve in "Segoe Fluent Icons"
+// (Windows 11) and fall back to "Segoe MDL2 Assets" (Windows 10): minimize, maximize,
+// restore (overlapping squares), and close.
 const GLYPH_MINIMIZE = "\uE921";
 const GLYPH_MAXIMIZE = "\uE922";
 const GLYPH_RESTORE = "\uE923";
@@ -30,6 +32,7 @@ const GLYPH_CLOSE = "\uE8BB";
 const CAPTION_BUTTON_CLASS =
   "flex h-full w-[46px] shrink-0 items-center justify-center text-foreground/90 outline-none transition-colors duration-75 select-none hover:bg-foreground/[0.09] active:bg-foreground/[0.05] [-webkit-app-region:no-drag]";
 
+// Windows close-button accent: red fill on hover with a white glyph.
 const CLOSE_BUTTON_CLASS = "hover:bg-[#c42b1c] hover:text-white active:bg-[#b9281b]";
 
 function reportWindowControlError(title: string, error: unknown): void {

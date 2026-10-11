@@ -509,7 +509,8 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 
 describe("resolveSettingsBackTarget", () => {
   it("keeps fresh draft chats available as settings back targets", () => {
-    // Mirrors the sidebar's settings-back wiring: persisted thread summaries plus the segment's draft thread ids form the restorable set.
+    // Mirrors the sidebar's settings-back wiring: persisted thread summaries plus the
+    // segment's draft thread ids form the restorable set.
     const availableThreadIds = new Set(["thread-latest", "thread-draft"]);
 
     expect(
@@ -855,7 +856,9 @@ describe("pin helpers", () => {
       makeThread("thread-2"),
     ];
 
-    // Pinning the parent must not hide child-1 entirely (buildProjectThreadTree hides children with missing parents); the parent stays in the tree, children render under it.
+    // Pinning the parent must not hide child-1 entirely (buildProjectThreadTree
+    // hides children with missing parents); the parent stays in the tree,
+    // children render under it.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual(threads);
     // Childless pinned threads are still hidden from project lists.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId])).toEqual([
@@ -1262,6 +1265,49 @@ describe("resolveProjectStatusIndicator", () => {
 });
 
 describe("buildProjectThreadTree", () => {
+  it("shows the open parent's children under the subagent that launched them", () => {
+    const parent = ThreadId.makeUnsafe("parent");
+    const outer = ThreadId.makeUnsafe("outer");
+    const inner = ThreadId.makeUnsafe("inner");
+    const threads = [
+      makeThread({ id: parent }),
+      makeThread({ id: outer, parentThreadId: parent }),
+      makeThread({ id: inner, parentThreadId: parent, sourceThreadId: outer }),
+    ];
+    for (const active of [parent, inner]) {
+      expect(
+        buildProjectThreadTree({ threads, forceVisibleThreadId: active }).map((row) => [
+          row.thread.id,
+          row.depth,
+        ]),
+      ).toEqual([
+        [parent, 0],
+        [outer, 1],
+        [inner, 2],
+      ]);
+    }
+  });
+
+  it("keeps a child reachable under its root when its launching subagent is missing", () => {
+    const parent = ThreadId.makeUnsafe("parent");
+    const child = ThreadId.makeUnsafe("child");
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({ id: parent }),
+        makeThread({
+          id: child,
+          parentThreadId: parent,
+          sourceThreadId: ThreadId.makeUnsafe("missing"),
+        }),
+      ],
+      forceVisibleThreadId: parent,
+    });
+    expect(rows.map((row) => [row.thread.id, row.depth])).toEqual([
+      [parent, 0],
+      [child, 1],
+    ]);
+  });
+
   it("keeps inactive child threads out of the sidebar", () => {
     const rows = buildProjectThreadTree({
       threads: [
@@ -1286,7 +1332,9 @@ describe("buildProjectThreadTree", () => {
   });
 
   it("hides subagent subtrees whose parent is not in the list", () => {
-    // Regression: archiving (or deleting) a parent removes it from the sidebar list; its subagent children must stay hidden instead of surfacing as top-level rows (#488).
+    // Regression: archiving (or deleting) a parent removes it from the sidebar
+    // list; its subagent children must stay hidden instead of surfacing as
+    // top-level rows (#488).
     const rows = buildProjectThreadTree({
       threads: [
         makeThread({

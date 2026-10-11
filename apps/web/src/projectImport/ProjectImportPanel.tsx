@@ -148,12 +148,12 @@ export function ProjectImportPanel(props: {
           }));
         }
       }
-      // refresh once per batch — import events still update the live store while it runs
+      // Refresh once per batch. Import events also update the live store while the batch runs.
       try {
         const snapshot = await api.orchestration.getShellSnapshot();
         if (mountedRef.current) syncSnapshot(snapshot);
       } catch {
-        // a reconnect will hydrate the store; successful durable imports remain successful
+        // A reconnect will hydrate the store; successful durable imports remain successful.
       }
     } catch (caught) {
       if (mountedRef.current)

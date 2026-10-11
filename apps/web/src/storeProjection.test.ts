@@ -1,3 +1,6 @@
+// FILE: storeProjection.test.ts
+// Purpose: Exercises snapshot normalization and normalized projection ownership.
+
 import {
   EventId,
   MessageId,
@@ -681,7 +684,9 @@ describe("store projection", () => {
   });
 
   it("preserves thread annotations through the normalized read-model projection", () => {
-    // a shell upsert must update shell-owned goals while preserving detail-only values (pinned messages, notes)
+    // Regression: normalized shells used to omit detail annotations. `threadsOf(next)[0]` reads
+    // back through getThreadsFromState, so this asserts detail annotations and shell-owned goals
+    // all survive the round trip.
     const messageId = MessageId.makeUnsafe("assistant-pin-1");
     const pinnedMessages = [
       { messageId, label: null, done: false, pinnedAt: "2026-02-27T00:01:00.000Z" },
@@ -703,7 +708,8 @@ describe("store projection", () => {
   });
 
   it("applies shell goals without clobbering detail annotations", () => {
-    // Shell snapshots carry goals but not pinned messages or notes. A shell upsert must update the former while preserving detail-only values.
+    // Shell snapshots carry goals but not pinned messages or notes. A shell upsert must update the
+    // former while preserving detail-only values.
     const threadId = ThreadId.makeUnsafe("thread-1");
     const messageId = MessageId.makeUnsafe("assistant-pin-3");
     const pinnedMessages = [
@@ -801,7 +807,9 @@ describe("store projection", () => {
     const after = next.sidebarThreadSummaryById[threadId];
 
     expect(after?.creationSource).toBe("automation_run");
-    // creationSource is significant — a snapshot changing only this field (the 091 backfill replaying into a live client) must produce a fresh summary
+    // The equality function must treat creationSource as significant: a snapshot changing
+    // only this field (the 091 backfill replaying into a live client) must produce a fresh
+    // summary object instead of reusing the stale one.
     expect(after).not.toBe(before);
   });
 
@@ -1105,6 +1113,89 @@ describe("store projection", () => {
     expect(nextThread?.latestTurn?.completedAt).toBeNull();
     expect(nextThread?.session?.orchestrationStatus).toBe("running");
     expect(nextThread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("does not pair retained live message text with a snapshot's shorter text segments", () => {
+    const threadId = ThreadId.makeUnsafe("thread-live-segments");
+    const assistantId = MessageId.makeUnsafe("assistant-live-segments");
+    const turnId = TurnId.makeUnsafe("turn-live-segments");
+    const finalText = "Reading files. Found it. Fixed.";
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        latestTurn: {
+          turnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: "2026-02-27T00:00:09.000Z",
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: finalText,
+            turnId,
+            createdAt: "2026-02-27T00:00:01.000Z",
+            updatedAt: "2026-02-27T00:00:09.000Z",
+            completedAt: "2026-02-27T00:00:09.000Z",
+            streaming: false,
+            source: "native",
+          },
+        ],
+      }),
+    );
+
+    // A lagging snapshot still has the message mid-stream with two segments.
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "Reading files. Found it.",
+            textSegments: [
+              {
+                sequence: 10,
+                startedAt: "2026-02-27T00:00:01.000Z",
+                endedAt: "2026-02-27T00:00:02.000Z",
+                text: "Reading files.",
+              },
+              {
+                sequence: 20,
+                startedAt: "2026-02-27T00:00:03.000Z",
+                endedAt: "2026-02-27T00:00:04.000Z",
+                text: " Found it.",
+              },
+            ],
+            turnId,
+            streaming: true,
+            source: "native",
+            createdAt: "2026-02-27T00:00:01.000Z",
+            updatedAt: "2026-02-27T00:00:04.000Z",
+          },
+        ],
+      }),
+    );
+
+    const message = threadsOf(next)
+      .find((thread) => thread.id === threadId)
+      ?.messages.find((entry) => entry.id === assistantId);
+    expect(message?.text).toBe(finalText);
+    expect(message?.streaming).toBe(false);
+    // Segments that cover only part of the retained text would hide its tail.
+    expect(message?.textSegments).toBeUndefined();
   });
 
   it("applies incoming dispatch origin corrections while retaining live message text", () => {
@@ -1927,13 +2018,14 @@ describe("deletion tombstone retirement", () => {
 
   it("does not let a snapshot older than the newest integrated one retire anything", () => {
     const deletedState = makeDeletedThreadState(1);
-    // a newer snapshot still listing the thread lets the tombstone survive; a late-arriving older snapshot must not be trusted to retire it
+    // Integrate a newer snapshot that still lists the thread, so the tombstone survives...
     const afterNewSnapshot = syncServerShellSnapshot(
       deletedState,
       makeShellSnapshotListingDeletedThread(20, "Still listed"),
     );
     expect(afterNewSnapshot.deletedThreadIdsById?.[deletedThreadId]).toBe(1);
 
+    // ...and a late-arriving older snapshot must not be trusted to retire it either.
     const next = syncServerShellSnapshot(afterNewSnapshot, makeEmptyShellSnapshot(10));
 
     expect(next.deletedThreadIdsById?.[deletedThreadId]).toBe(1);
@@ -1947,7 +2039,8 @@ describe("deletion tombstone retirement", () => {
     expect(retired.deletedThreadIdsById?.[deletedThreadId]).toBeUndefined();
     expect(retired.shellSnapshotSequence).toBe(9);
 
-    // a snapshot generated before the delete has nothing filtering it — merging would resurrect the thread, so the whole stale payload is rejected
+    // A snapshot generated before the delete now has nothing filtering it. Merging it would bring
+    // the thread back, so the whole stale payload has to be rejected.
     const next = syncServerShellSnapshot(
       retired,
       makeShellSnapshotListingDeletedThread(4, "Late stale snapshot"),
@@ -1990,7 +2083,8 @@ describe("deletion tombstone retirement", () => {
       makeReadModel(makeReadModelThread({ id: deletedThreadId, projectId })),
     );
 
-    // Identity, not just equality: consumers memoize on this array, and the "nothing changed" fast path in syncServerReadModel is gated on this exact reference surviving.
+    // Identity, not just equality: consumers memoize on this array, and the "nothing changed"
+    // fast path in syncServerReadModel is gated on this exact reference surviving.
     expect(resynced.threadIds).toBe(hydrated.threadIds);
     expect(resynced).toBe(hydrated);
   });
@@ -2095,7 +2189,10 @@ describe("deletion tombstone retirement", () => {
   });
 
   it("drops the session key on a shell event too, instead of leaving an explicit null", () => {
-    // the two write paths must agree on record shape, not just content — absent key vs explicit null compare unequal and would replace a record consumers memoize on
+    // The two write paths have to agree on the record's *shape*, not just on what it says:
+    // `threadDerivation` reads an absent key and an explicit null back the same way, but two
+    // records that differ in that detail compare unequal, so a snapshot arriving after an event
+    // would replace a record consumers memoize on for no reason at all.
     const threadId = ThreadId.makeUnsafe("thread-1");
     const initialState = makeState(
       makeThread({
@@ -2148,6 +2245,7 @@ describe("deletion tombstone retirement", () => {
     });
 
     expect(Object.keys(next.threadSessionById ?? {})).toEqual([]);
+    // And the thread still reads back as sessionless, exactly as it did with the explicit null.
     expect(getThreadFromState(next, threadId)?.session).toBeNull();
   });
 
@@ -2164,7 +2262,8 @@ describe("deletion tombstone retirement", () => {
 
     expect(next.shellSnapshotSequence).toBe(30);
 
-    // The sequence is the lower bound for tombstones created afterwards, so a snapshot that predates the deletion must not retire it.
+    // The sequence is the lower bound for tombstones created afterwards, so a snapshot that
+    // predates the deletion must not retire it.
     const deleted = removeDeletedThreadFromClientState(next, deletedThreadId, undefined);
     expect(deleted.deletedThreadIdsById?.[deletedThreadId]).toBe(31);
     expect(
@@ -2226,7 +2325,8 @@ describe("resume cursor lifecycle in projection transitions", () => {
   });
 
   it("clears the cursor when a read-model repair prunes the thread", () => {
-    // Repair local state feeds a full read model through this path — a pruned thread's cursor must fall with its wiped detail
+    // The "Repair local state" action feeds a full read model through this
+    // path; a pruned thread's cursor must fall with its wiped detail.
     const state = makeStateWithCursor();
     syncServerReadModel(state, {
       ...makeReadModel(makeReadModelThread({ id: threadId, projectId })),
@@ -2237,7 +2337,10 @@ describe("resume cursor lifecycle in projection transitions", () => {
   });
 
   it("clears the cursor when a full read-model sync replaces retained detail", () => {
-    // a retained thread's detail is replaced wholesale — a cursor ahead of the replacement would resume past history the new detail lacks
+    // A retained thread's detail is replaced wholesale by the read model, so a
+    // cursor ahead of the replacement would resume past history the new detail
+    // does not contain. This path is route recovery and "Repair local state"
+    // only, so the cost is one snapshot on an already-degraded path.
     const state = makeStateWithCursor();
     syncServerReadModel(state, {
       ...makeReadModel(makeReadModelThread({ id: threadId, projectId })),
@@ -2258,7 +2361,8 @@ describe("resume cursor lifecycle in projection transitions", () => {
       makeReadModelThread({ id: threadId, projectId }),
     );
 
-    // The tombstone discarded the snapshot instead of applying it, so nothing may vouch for detail that was never stored.
+    // The tombstone discarded the snapshot instead of applying it, so nothing
+    // may vouch for detail that was never stored.
     expect(next.threadDetailSyncById?.[threadId]).toBeUndefined();
     expect(hasThreadDetailResumeCursor(threadId)).toBe(false);
   });

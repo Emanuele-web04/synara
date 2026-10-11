@@ -1,3 +1,8 @@
+// FILE: archivedThreadDelete.ts
+// Purpose: Coordinates archived-thread deletion with immediate local removal.
+// Layer: Web orchestration helper
+// Exports: deleteArchivedThreadsFromClient
+
 import type { NativeApi, ThreadId } from "@synara/contracts";
 
 import { reconcileDeletedThreadsFromClient } from "./deletedThreadClientReconciliation";
@@ -9,6 +14,7 @@ interface DeleteArchivedThreadsFromClientInput {
   removeDeletedThreadFromClientState: (threadId: ThreadId) => void;
 }
 
+// Deletes a group of archived threads and reconciles successful ids once at the end.
 export async function deleteArchivedThreadsFromClient(
   input: DeleteArchivedThreadsFromClientInput,
 ): Promise<void> {

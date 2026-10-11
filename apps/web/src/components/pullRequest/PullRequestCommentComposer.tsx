@@ -36,12 +36,14 @@ export function PullRequestCommentComposer({
   mutation: GitHubCommentMutation;
 }) {
   const [body, setBody] = useState("");
-  // synchronous re-entrancy lock: mutation.isPending updates on React's schedule, too late to stop a rapid double Enter posting twice
+  // Synchronous re-entrancy lock: mutation.isPending updates on React's schedule, which is
+  // too late to stop a rapid double Enter from posting the comment twice.
   const submittingRef = useRef(false);
   const trimmed = body.trim();
   const canSubmit = trimmed.length > 0 && !mutation.isPending;
 
-  // promise chain instead of async/try-finally: React Compiler doesn't support try/finally
+  // Promise chain instead of async/try-catch-finally: React Compiler does not
+  // yet support try/finally, and it would skip optimizing this whole component.
   const submit = () => {
     if (!canSubmit || submittingRef.current) return;
     submittingRef.current = true;
@@ -92,7 +94,8 @@ export function PullRequestCommentComposer({
             void submit();
           }
         }}
-        // font-system-ui overrides the global `textarea { font-family: mono }` reset — UI chrome, not code
+        // font-system-ui overrides the global `textarea { font-family: mono }` reset — this is
+        // UI chrome, not code, exactly like the chat composer's editor.
         className={cn(
           PR_BODY_TEXT_CLASS_NAME,
           "font-system-ui min-w-0 flex-1 resize-none bg-transparent py-1.5 outline-none placeholder:text-muted-foreground disabled:opacity-60",

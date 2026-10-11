@@ -1,3 +1,8 @@
+// FILE: windowsProcess.ts
+// Purpose: Prepares Windows child-process launches without Node's `shell: true`.
+// Layer: Shared Node runtime utility
+// Exports: command resolution plus safe spawn/spawnSync argument preparation.
+
 import * as Path from "node:path";
 
 import { resolveExecutable } from "./executable";
@@ -73,7 +78,9 @@ export function buildWindowsBatchCommandArgs(
   command: string,
   args: ReadonlyArray<string>,
 ): string[] {
-  // keep cmd.exe's semantic command line together so quote-bearing args encode for cmd instead of as C-runtime argv; the call prefix keeps /s from stripping the executable's outer quotes
+  // Keep cmd.exe's semantic command line together so quote-bearing arguments
+  // are encoded for cmd instead of independently escaped as C-runtime argv.
+  // The call prefix also keeps /s from stripping the executable's outer quotes.
   const commandLine = [
     "call",
     quoteWindowsBatchToken(command, "command"),
@@ -100,7 +107,13 @@ export function resolveWindowsCommandPath(
   }
 
   const env = input.env ?? process.env;
-  return resolveExecutable(command, { platform: "win32", env }) ?? command;
+  return (
+    resolveExecutable(command, {
+      platform: "win32",
+      env,
+      ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+    }) ?? command
+  );
 }
 
 export function prepareWindowsSafeProcess(

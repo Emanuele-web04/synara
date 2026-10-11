@@ -23,7 +23,8 @@ export function usePullRequestPaneStateIcon(
   });
   const detail = input ? detailQuery.data : undefined;
   if (!detail) return undefined;
-  // this glyph's color IS the state — renders at the same strength as the list's state glyphs, not a muted tab icon
+  // Chip geometry without the chrome muting: this glyph's color *is* the state, so it renders
+  // at the same strength as the state glyphs in the list rather than at a tab icon's.
   return (
     <PullRequestStateGlyph
       state={detail.state}

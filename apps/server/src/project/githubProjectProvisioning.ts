@@ -389,7 +389,9 @@ export const makeGitHubProjectProvisioner = Effect.fn(function* (
       return;
     }
 
-    // cancelling the WS request interrupts the Effect and closes the Scope, terminating the fallback `git clone` like the gh path
+    // GitCore.execute owns the spawned process in an Effect Scope. Cancelling the
+    // WebSocket request interrupts this Effect, closes that Scope, and terminates
+    // the fallback `git clone` process just like runProcess does for the gh path.
     yield* git.execute({
       operation: "clone public GitHub project",
       cwd: parent,

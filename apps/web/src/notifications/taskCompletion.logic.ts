@@ -1,3 +1,8 @@
+// FILE: taskCompletion.logic.ts
+// Purpose: Detects new thread lifecycle notifications and builds alert copy.
+// Layer: Notification logic
+// Exports: lifecycle detection helpers and notification copy helpers
+
 import {
   defaultTerminalTitleForCliKind,
   type TerminalCliKind,
@@ -83,7 +88,7 @@ export interface TerminalAttentionCandidate {
 
 type ThreadSessionStatus = ThreadSession["status"];
 
-// toasts are for off-screen work; visible threads already show the result inline
+// Thread completion toasts are for off-screen work; visible threads already show the result inline.
 export function shouldShowThreadNotificationToast(input: {
   threadId: Thread["id"];
   visibleThreadIds: ReadonlySet<Thread["id"]>;
@@ -98,7 +103,7 @@ export function shouldAttemptSystemTaskNotification(input: {
   return input.enabled && !input.isWindowForeground;
 }
 
-// only sidebar "working" states are notification-worthy
+// Treat sidebar "working" states as the only notification-worthy starting point.
 function isRunningStatus(status: ThreadSessionStatus | null | undefined): boolean {
   return status === "running" || status === "connecting";
 }
@@ -171,7 +176,8 @@ function protectMarkdownFencedBlocks(text: string, protect: (content: string) =>
     const info = openingMatch[4] ?? "";
     const fenceCharacter = fence[0];
 
-    // backticks aren't valid inside a fence info string — treat such a line as prose
+    // Backticks are not valid inside a backtick fence's info string. Treat
+    // such a line as prose so same-line multi-backtick code remains inline.
     if (fenceCharacter === "`" && info.includes("`")) {
       continue;
     }
@@ -449,7 +455,8 @@ function stripMarkdownLinks(text: string, referenceLabels: ReadonlySet<string>):
   return result;
 }
 
-// toasts and OS notifications must never expose Markdown or become mini transcripts
+// Reduce rich assistant output to readable notification context. Toasts and OS
+// notifications should never expose Markdown syntax or turn into mini transcripts.
 function summarizeAssistantText(text: string): string | null {
   const { protectedText, restore } = protectMarkdownCode(text);
   const referenceLabels = collectMarkdownReferenceLabels(protectedText);
@@ -481,7 +488,10 @@ function summarizeAssistantText(text: string): string | null {
     : `${trimmed.slice(0, NOTIFICATION_SUMMARY_MAX_LENGTH - 1).trimEnd()}…`;
 }
 
-// body from the turn's FINAL assistant message; falls back to last non-empty assistant message if assistantMessageId is missing
+// Build a short body from the turn's *final* assistant message — the end-of-turn reply
+// that lands after the work/compaction, not the opening preamble. Prefer the canonical
+// `latestTurn.assistantMessageId`; if it's missing/empty, fall back to the last non-empty
+// assistant message of that turn so we still surface the latest reply.
 function summarizeLatestAssistantMessage(thread: Thread): string | null {
   const latestTurnId = thread.latestTurn?.turnId ?? null;
   const finalAssistantMessageId = thread.latestTurn?.assistantMessageId ?? null;
@@ -501,7 +511,7 @@ function summarizeLatestAssistantMessage(thread: Thread): string | null {
     if (!message || message.role !== "assistant") {
       continue;
     }
-    // stay within the just-completed turn so an earlier preamble can't win
+    // Stay within the just-completed turn so an earlier/other-turn preamble can't win.
     if (latestTurnId && message.turnId !== latestTurnId) {
       continue;
     }
@@ -533,7 +543,8 @@ function isCompletionNotificationSettled(thread: Thread | undefined): boolean {
   return thread.session.orchestrationStatus !== "running";
 }
 
-// compare consecutive snapshots and emit fresh completions even if the snapshot skips straight to ready
+// Compare consecutive snapshots and emit fresh settled completions, even if the
+// session snapshot skips directly to ready before the toast logic observes it.
 export function collectCompletedThreadCandidates(
   previousThreads: readonly Thread[],
   nextThreads: readonly Thread[],
@@ -576,7 +587,9 @@ export function collectCompletedThreadCandidates(
     if (!latestTurn || !completedAt) {
       continue;
     }
-    // interrupted/error aren't completions — user-initiated or already surfaced via the error state
+    // Interrupted/error settlements are not completions: the stop was either
+    // user-initiated or already surfaced through the error state, and "Finished
+    // working." copy would be wrong for both.
     if (latestTurn.state !== "completed") {
       continue;
     }
@@ -636,8 +649,13 @@ export function collectCompletedThreadCandidates(
   return candidates;
 }
 
-// the snapshot diff can re-emit a completion on status wobble — callers dedupe on this key
-// completedAt excluded: later events rewrite it and a turn only ever completes once
+// Identity of one settled completion. The snapshot diff above can re-emit the
+// same completion when the session status wobbles out of and back into a settled
+// state (e.g. a follow-up turn spinning up while latestTurn still points at the
+// finished one); callers dedupe on this key so each completion notifies once.
+// completedAt is deliberately excluded: the same turn's completedAt is rewritten
+// by later events (assistant message, session settle, checkpoint diff) with
+// slightly different timestamps, and a turn only ever completes once.
 export function completedThreadNotificationKey(candidate: CompletedThreadCandidate): string {
   return `${candidate.threadId}:${candidate.turnId}`;
 }
@@ -745,7 +763,7 @@ function requestedActivityInstanceKeys(
   );
 }
 
-// emit only fresh input-needed transitions
+// Compare consecutive activity snapshots and emit only fresh input-needed transitions.
 export function collectThreadAttentionCandidates(
   previousThreads: readonly Thread[],
   nextThreads: readonly Thread[],
@@ -880,7 +898,7 @@ export function collectTerminalAttentionCandidates(
   return candidates;
 }
 
-// keep toast and OS notification copy aligned across browser and desktop
+// Keep toast and OS notification copy aligned across browser and desktop surfaces.
 export function buildTaskCompletionCopy(candidate: CompletedThreadCandidate): {
   title: string;
   body: string;
@@ -938,7 +956,8 @@ export const collectInputNeededThreadCandidates = collectThreadAttentionCandidat
 
 export const buildInputNeededCopy = buildThreadAttentionCopy;
 
-// hydration can replay old details after refresh — only post-mount timestamps count as live events
+// Hydration can replay old thread details after refresh; only timestamps after
+// this notification runtime mounted should be treated as live events.
 export function isNotificationRuntimeFreshTimestamp(
   candidateTimestamp: string,
   runtimeStartedAtMs: number,

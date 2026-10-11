@@ -31,7 +31,12 @@ function runtimeEvent(input: Record<string, unknown> & { eventId: string }): Pro
   } as ProviderRuntimeEvent;
 }
 
-/** every activity this projection emits must survive the schema of the command carrying it — server-built commands never cross the WebSocket decode boundary so nothing else enforces the schema-only refinements TypeScript can't express */
+/**
+ * The single invariant that matters: every activity this projection emits has to
+ * survive the schema of the command that carries it. Server-built commands never
+ * cross the WebSocket decode boundary, so nothing else enforces the schema-only
+ * refinements (`TrimmedNonEmptyString`, `Schema.Json`) that TypeScript cannot express.
+ */
 function decodeActivityAppendCommand(activity: OrchestrationThreadActivity): unknown {
   return Schema.decodeUnknownSync(OrchestrationCommand)({
     type: "thread.activity.append",
@@ -96,6 +101,34 @@ it("persists terminal error identity and announced retry state in chat activitie
   for (const activity of [error, completion, warning]) {
     expect(() => decodeActivityAppendCommand(activity)).not.toThrow();
   }
+});
+
+it("records the model a turn started on and nothing when the provider names none", () => {
+  const event = runtimeEvent({
+    provider: "claudeAgent",
+    type: "turn.started",
+    eventId: "turn-started",
+    turnId: TURN_ID,
+    payload: { model: "claude-haiku-5-5" },
+  });
+  expect(projectProviderRuntimeActivities(event, 7)).toEqual([
+    {
+      id: EventId.makeUnsafe("turn-started"),
+      createdAt: CREATED_AT,
+      tone: "info",
+      kind: "turn.started",
+      summary: "Turn started",
+      payload: { model: "claude-haiku-5-5", provider: "claudeAgent" },
+      turnId: TURN_ID,
+      sequence: 7,
+    },
+  ]);
+  expectSchemaValidActivities(event);
+  expect(
+    projectProviderRuntimeActivities(
+      runtimeEvent({ type: "turn.started", eventId: "bare", turnId: TURN_ID, payload: {} }),
+    ),
+  ).toEqual([]);
 });
 
 it("projects tool summaries with stable group identity and no empty rows", () => {
@@ -174,6 +207,36 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
     kind: "runtime.warning",
     summary: type === "info" ? "Pi extension" : "Runtime warning",
     payload: { message: "Extension notification", detail: "Extension notification" },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
+it("projects Claude Monitor events as labeled notices", () => {
+  const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "claudeAgent",
+      type: "runtime.warning",
+      eventId: "claude-monitor-event",
+      turnId: TURN_ID,
+      payload: {
+        message,
+        detail: { type: "system", subtype: "monitor_event", task_id: "bu336ro2k" },
+      },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    tone: "info",
+    kind: "runtime.warning",
+    summary: "Monitor event",
+    turnId: TURN_ID,
+    payload: {
+      message,
+      detail: message,
+      nativeEventType: "monitor_event",
+      data: { task_id: "bu336ro2k" },
+    },
   });
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
@@ -396,7 +459,7 @@ describe("projected activities satisfy the orchestration command schema", () => 
     );
     expect(Object.keys(opened?.payload as Record<string, unknown>)).not.toContain("requestId");
 
-    // makeUnsafe rejects untrimmed input instead of trimming
+    // `ApprovalRequestId.makeUnsafe` rejects untrimmed input instead of trimming it.
     const [padded] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "request.opened",
@@ -438,7 +501,9 @@ describe("projected activities satisfy the orchestration command schema", () => 
     );
   });
 
-  // makeUnsafe validates rather than normalizing — an unnormalized turn id throws inside the projection before reaching the command schema
+  // `TurnId.makeUnsafe` validates: it rejects "" *and* untrimmed input rather than
+  // normalizing it, so an unnormalized runtime turn id throws inside the projection
+  // itself before it can even reach the command schema.
   it("normalizes a blank or untrimmed runtime turn id instead of throwing", () => {
     expectSchemaValidActivities(
       runtimeEvent({
@@ -542,6 +607,43 @@ describe("projected activities satisfy the orchestration command schema", () => 
 });
 
 describe("provider runtime activity projection", () => {
+  it("attributes Claude task progress to its subagent instead of reasoning", () => {
+    const subagentProgress = runtimeEvent({
+      type: "task.progress",
+      provider: "claudeAgent",
+      eventId: "claude-subagent-progress",
+      turnId: TURN_ID,
+      payload: {
+        taskId: "task-outer",
+        description: "Running Sleep briefly then echo bg",
+        toolUseId: "toolu_outer",
+        subagentTitle: "Outer worker",
+      },
+    });
+    const taskProgress = runtimeEvent({
+      type: "task.progress",
+      provider: "claudeAgent",
+      eventId: "claude-task-progress",
+      turnId: TURN_ID,
+      payload: { taskId: "task-bash", description: "Monitoring the build" },
+    });
+    const codexReasoning = runtimeEvent({
+      type: "task.progress",
+      eventId: "codex-agent-reasoning",
+      turnId: TURN_ID,
+      payload: { taskId: "codex-task", description: "Planning the change" },
+    });
+    expectSchemaValidActivities(subagentProgress);
+    const [subagentActivity] = projectProviderRuntimeActivities(subagentProgress);
+    expect(subagentActivity?.summary).toBe("Subagent progress");
+    expect(subagentActivity?.payload).toMatchObject({
+      toolUseId: "toolu_outer",
+      subagentTitle: "Outer worker",
+    });
+    expect(projectProviderRuntimeActivities(taskProgress)[0]?.summary).toBe("Reasoning update");
+    expect(projectProviderRuntimeActivities(codexReasoning)[0]?.summary).toBe("Reasoning update");
+  });
+
   it("keeps assistant text and assistant lifecycle events out of work activity", () => {
     const events = [
       runtimeEvent({
@@ -570,7 +672,7 @@ describe("provider runtime activity projection", () => {
     expect(events.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
   });
 
-  it("projects only readable completed Codex-family reasoning summaries", () => {
+  it("projects only readable completed Codex, Antigravity, and OpenCode reasoning", () => {
     const absent = [
       runtimeEvent({
         type: "content.delta",
@@ -601,7 +703,7 @@ describe("provider runtime activity projection", () => {
     ];
     expect(absent.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
 
-    for (const provider of ["codex", "antigravity"] as const) {
+    for (const provider of ["codex", "antigravity", "opencode"] as const) {
       const [activity] = projectProviderRuntimeActivities(
         runtimeEvent({
           type: "item.completed",
@@ -1078,6 +1180,31 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    for (const [provider, usageSessionId] of [
+      ["cursor", "native-session"],
+      ["codex", "native-session"],
+      ["antigravity", "native-session:generation-after-restart"],
+    ] as const) {
+      const [resumedUsage] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "thread.token-usage.updated",
+          eventId: `${provider}-resumed-usage`,
+          provider,
+          lifecycleGeneration: "generation-after-restart",
+          providerRefs: { providerThreadId: "native-session" },
+          payload: { usage: { usedTokens: 0, totalProcessedTokens: 4_200 } },
+        }),
+      );
+      expect(resumedUsage).toMatchObject({
+        kind: "context-window.updated",
+        payload: {
+          provider,
+          totalProcessedTokens: 4_200,
+          usageSessionId,
+        },
+      });
+    }
+
     const [configured] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "session.configured",
@@ -1116,6 +1243,46 @@ describe("provider runtime activity projection", () => {
       kind: "context-window.configured",
       payload: { cleared: true },
     });
+
+    const [blockedFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-blocked",
+        provider: "claudeAgent",
+        payload: {
+          config: { fast_mode_state: "off", fast_mode_disabled_reason: "extra_usage_disabled" },
+        },
+      }),
+    );
+    expect(blockedFastMode).toMatchObject({
+      id: "fast-mode-blocked",
+      kind: "fast-mode.state",
+      payload: { state: "off", disabledReason: "extra_usage_disabled" },
+    });
+
+    const [activeFastMode] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "session.configured",
+        eventId: "fast-mode-on",
+        provider: "claudeAgent",
+        payload: { config: { fast_mode_state: "on" } },
+      }),
+    );
+    expect(activeFastMode).toMatchObject({ kind: "fast-mode.state", payload: { state: "on" } });
+
+    expect(
+      projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "session.configured",
+          eventId: "fast-mode-with-context",
+          provider: "claudeAgent",
+          payload: { config: { autoCompactWindow: "1m", fast_mode_state: "cooldown" } },
+        }),
+      ).map((activity) => [activity.id, activity.kind]),
+    ).toEqual([
+      ["fast-mode-with-context", "context-window.configured"],
+      ["fast-mode-with-context:fast-mode", "fast-mode.state"],
+    ]);
 
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({
@@ -1183,6 +1350,7 @@ describe("provider runtime activity projection", () => {
     expect(activity).toMatchObject({
       tone: "info",
       kind: "provider.event.unmapped",
+      // Raw native type/label is the row title.
       summary: "item/agentMessage/completed",
       turnId: TURN_ID,
       payload: {
@@ -1195,10 +1363,10 @@ describe("provider runtime activity projection", () => {
     expect(serializedPayload.length).toBeLessThan(17_000);
     expect(serializedPayload).not.toContain("must-not-reach-the-activity-snapshot");
     expect(serializedPayload).not.toContain("another-secret");
-    // the activity must survive the schema of the command carrying it
+    // The activity must survive the schema of the command that carries it.
     expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 
-    // a passthrough event without a native type is the one case still dropped
+    // A passthrough event without a native type is the one case still dropped.
     expect(
       projectProviderRuntimeActivities(
         runtimeEvent({

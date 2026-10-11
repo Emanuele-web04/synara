@@ -1,3 +1,7 @@
+// FILE: openUsageRateLimits.ts
+// Purpose: Normalizes OpenUsage local HTTP snapshots into the shared rate-limit
+// model consumed by the local toolbar popover.
+
 import type { ProviderKind } from "@synara/contracts";
 
 import type { ProviderRateLimit, RateLimitWindow } from "~/lib/rateLimits";

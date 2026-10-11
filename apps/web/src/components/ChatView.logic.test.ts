@@ -17,6 +17,7 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildBlockedComposerSendToastCopy,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
@@ -49,9 +50,11 @@ import {
   type TurnDispatchSettings,
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
+  hasServerReceivedSentMessage,
   isVoiceAuthExpiredMessage,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveActiveThreadTitle,
+  resolveBlockedComposerSendReason,
   resolveDraftFallbackModelSelection,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
@@ -330,7 +333,8 @@ describe("transcript tail key", () => {
     };
     const before = buildTranscriptTailKey(settledTail);
 
-    // Projection repair can rewrite a settled message in place; the follow effect must re-stick because maintainScrollAtEnd is off once settled.
+    // Projection repair can rewrite a settled message in place; the follow
+    // effect must re-stick because maintainScrollAtEnd is off once settled.
     expect(buildTranscriptTailKey({ ...settledTail, text: "hello, repaired" })).not.toBe(before);
   });
 });
@@ -743,7 +747,10 @@ describe("prompt history navigation", () => {
   });
 
   it("does not navigate from lower lines even when the first line is long", () => {
-    // cursor offsets are expanded (raw string indices) — a collapsed cursor (an inline chip counts as one unit) would sit below the first line's raw end and wrongly hijack ArrowUp from the second line
+    // Cursor offsets are expanded (raw string indices). A collapsed cursor —
+    // where an inline chip like "@apps/web/src/components/ChatView.tsx" counts
+    // as one unit — would sit below the first line's raw end and wrongly hijack
+    // ArrowUp from the second line; expanded offsets must be used instead.
     const prompt = "@apps/web/src/components/ChatView.tsx fix this\nplease keep the draft";
     const secondLineCursor = prompt.indexOf("please") + "plea".length;
 
@@ -1369,6 +1376,7 @@ describe("resolveActiveTurnLiveDiffState", () => {
         latestTurnId: activeTurnId,
         turnDiffSummaries: [],
         workLogEntries: [
+          // Other turn / non-edit work is ignored.
           { turnId: TurnId.makeUnsafe("turn-previous"), itemType: "file_change" },
           { turnId: activeTurnId, requestKind: "command" },
           {
@@ -3131,5 +3139,77 @@ describe("turn dispatch settings", () => {
     expect(resolved.runtimeMode).toBe("approval-required");
     expect(resolved.enableComputerControl).toBe(false);
     expect(resolved.computerControlMode).toBe("off");
+  });
+});
+
+describe("blocked composer sends", () => {
+  it("reports a send refused while another send owns the thread", () => {
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: true,
+        sessionStarting: true,
+        hasComposerContent: true,
+      }),
+    ).toBe("send-in-flight");
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: false,
+        sessionStarting: true,
+        hasComposerContent: true,
+      }),
+    ).toBe("session-starting");
+  });
+
+  it("stays silent when nothing blocks the send or there is nothing to send", () => {
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: false,
+        sessionStarting: false,
+        hasComposerContent: true,
+      }),
+    ).toBeNull();
+    expect(
+      resolveBlockedComposerSendReason({
+        sendInFlight: true,
+        sessionStarting: false,
+        hasComposerContent: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("explains every blocked send instead of doing nothing", () => {
+    for (const reason of ["send-in-flight", "session-starting", "no-project"] as const) {
+      const copy = buildBlockedComposerSendToastCopy(reason);
+      expect(copy.title.length).toBeGreaterThan(0);
+      expect(copy.description.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("hasServerReceivedSentMessage", () => {
+  const messageId = MessageId.makeUnsafe("sent-message");
+
+  it("detects a user message the server already recorded", () => {
+    expect(
+      hasServerReceivedSentMessage(
+        {
+          messages: [
+            {
+              id: messageId,
+              role: "user",
+              text: "Reply with ok",
+              createdAt: "2026-10-09T20:00:00.000Z",
+              streaming: false,
+            },
+          ],
+        },
+        messageId,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats a missing thread or message as not received", () => {
+    expect(hasServerReceivedSentMessage(undefined, messageId)).toBe(false);
+    expect(hasServerReceivedSentMessage({ messages: [] }, messageId)).toBe(false);
   });
 });

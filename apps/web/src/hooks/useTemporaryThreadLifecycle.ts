@@ -1,3 +1,8 @@
+// FILE: useTemporaryThreadLifecycle.ts
+// Purpose: Deletes temporary threads when focus leaves them.
+// Layer: Web route lifecycle hook
+// Exports: useTemporaryThreadLifecycle
+
 import type { ThreadId } from "@synara/contracts";
 import { useEffect, useRef } from "react";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -72,7 +77,9 @@ export function useTemporaryThreadLifecycle(activeThreadId: ThreadId | null): vo
   ]);
 }
 
-// module-level so the try/finally stays outside the compiled hook body — React Compiler does not support try/finally and would skip the whole hook
+// Module-level so the try/finally stays outside the compiled hook body —
+// React Compiler does not yet support try/finally and would otherwise skip
+// optimizing the whole hook.
 async function disposeTemporaryThread(input: {
   temporaryThreadId: ThreadId;
   disposingThreadIds: Set<ThreadId>;

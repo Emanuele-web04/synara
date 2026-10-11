@@ -21,7 +21,7 @@ export interface ServerLifecycleMaintenancePayload {
   readonly task: "thread-retention";
   readonly state: "started" | "progress" | "completed" | "failed";
   readonly at: string;
-  /** legacy wire name retained so maintenance events stay backward-compatible */
+  /** Legacy wire name retained so maintenance events remain backward-compatible. */
   readonly deletedCount?: number;
   readonly totalCount?: number;
   readonly error?: string;

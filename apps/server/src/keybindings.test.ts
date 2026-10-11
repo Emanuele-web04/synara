@@ -762,7 +762,8 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
   it.effect("preserves new-chat Cmd/Option/N while relaxing its terminal guard", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig;
-      // existing configs persisted the old shipped keys — startup only relaxes the creation guard; it must not move new-chat off Cmd/Option/N
+      // Existing configs already persisted the old shipped keys. Startup should only
+      // relax the creation guard; it must not move new-chat away from Cmd/Option/N.
       yield* writeKeybindingsConfig(keybindingsConfigPath, [
         { key: "mod+shift+o", command: "sidebar.addProject", when: "!terminalFocus" },
         { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus" },
@@ -804,7 +805,8 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
   it.effect("relaxes creation-command terminal guards so macOS can create from the terminal", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig;
-      // a config still carrying the old bare `!terminalFocus` on creation commands, incl. one the user rebound
+      // A config still carrying the old bare `!terminalFocus` guard on creation commands,
+      // including one the user rebound to a custom key, plus a non-creation command.
       yield* writeKeybindingsConfig(keybindingsConfigPath, [
         { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
         { key: "mod+shift+k", command: "chat.newTerminal", when: "!terminalFocus" },
@@ -817,7 +819,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       });
 
       const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
-      // creation commands gain the `|| isMac` escape hatch even on a rebound key
+      // Creation commands gain the `|| isMac` escape hatch, even on a rebound key.
       assert.isTrue(
         persisted.some(
           (entry) =>
@@ -834,6 +836,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
             entry.when === "!terminalFocus || isMac",
         ),
       );
+      // Non-creation commands keep their original guard untouched.
       assert.isTrue(
         persisted.some(
           (entry) => entry.command === "settings.usage" && entry.when === "!terminalFocus",

@@ -17,17 +17,22 @@ export interface ExecutableLookupOptions {
    * Defaults to `process.cwd()`.
    */
   readonly cwd?: string;
-  /** off by default — Windows native process creation won't execute an extensionless npm-style shim; discovery and launch must agree */
+  /**
+   * win32 only: also yield the command with no extension appended.
+   *
+   * Off by default because Windows native process creation will not execute an
+   * extensionless npm-style shim. Discovery and launch must agree about that.
+   */
   readonly allowExtensionlessOnWindows?: boolean;
 }
 
 export interface ExecutableCandidate {
-  /** the PATH entry it came from, or the command's own directory when qualified */
+  /** The PATH entry this candidate came from, or the command's own directory when qualified. */
   readonly directory: string;
   readonly path: string;
 }
 
-/** Windows' default PATHEXT prefix in native precedence order */
+/** Windows' default PATHEXT prefix in native precedence order. */
 const DEFAULT_WINDOWS_PATH_EXTENSIONS: readonly string[] = [".COM", ".EXE", ".BAT", ".CMD"];
 const DEFAULT_POSIX_PATH_ENTRIES: readonly string[] = ["/usr/bin", "/bin"];
 const WINDOWS_DIRECT_LAUNCH_EXTENSIONS = new Set(DEFAULT_WINDOWS_PATH_EXTENSIONS);
@@ -47,7 +52,7 @@ export function envPathKeyFor(
   return "PATH";
 }
 
-/** true when the command already names a location — PATH is not consulted */
+/** True when the command already names a location, in which case PATH is not consulted. */
 export function hasPathSeparator(command: string): boolean {
   return command.includes("/") || command.includes("\\");
 }
@@ -64,6 +69,7 @@ export function windowsPathExtensions(env: NodeJS.ProcessEnv): readonly string[]
   return parsed.length > 0 ? [...new Set(parsed)] : DEFAULT_WINDOWS_PATH_EXTENSIONS;
 }
 
+/** PATH split into directories, in search order. */
 export function pathEntries(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
   const pathValue = env.PATH ?? env.Path ?? env.path;
   if (pathValue === undefined) {
@@ -76,6 +82,7 @@ export function pathEntries(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): 
     .filter((entry) => entry.length > 0);
 }
 
+/** File names to try for `command`, in platform-native order. */
 export function executableNameCandidates(
   command: string,
   platform: NodeJS.Platform,
@@ -110,6 +117,7 @@ export function executableNameCandidates(
   return [...new Set(candidates)];
 }
 
+/** Directory part of a path, honoring both separators regardless of the test host. */
 function directoryOf(commandPath: string): string {
   const lastIndex = Math.max(commandPath.lastIndexOf("/"), commandPath.lastIndexOf("\\"));
   if (lastIndex < 0) return ".";
@@ -135,7 +143,12 @@ function resolveLookupContext(options: ExecutableLookupOptions): ExecutableLooku
   };
 }
 
-/** candidates keep their launch-facing form (relative stays relative so the child resolves it), but existence checks against the launch cwd */
+/**
+ * The filesystem location a candidate is checked at. Candidates keep their
+ * launch-facing form (a relative `./bin/tool` stays relative so the child
+ * resolves it itself), but existence is checked against the launch cwd, not
+ * wherever the server happens to be running.
+ */
 function candidateStatPath(filePath: string, context: ExecutableLookupContext): string {
   const pathModule = context.platform === "win32" ? win32 : posix;
   if (pathModule.isAbsolute(filePath)) return filePath;
@@ -168,7 +181,7 @@ function* candidatesIn(
   }
 }
 
-/** every path a launch may resolve to, in native search order */
+/** Every path a launch of `command` may resolve to, in native search order. */
 export function executableCandidates(
   command: string,
   options: ExecutableLookupOptions = {},
@@ -203,6 +216,7 @@ export function isExecutableFile(filePath: string, options: ExecutableLookupOpti
   return isExecutableFileIn(filePath, resolveLookupContext(options));
 }
 
+/** The executable a launch of `command` should run, or null when no candidate matches. */
 export function resolveExecutable(
   command: string,
   options: ExecutableLookupOptions = {},

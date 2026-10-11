@@ -1,3 +1,8 @@
+// FILE: appSnapIconStore.ts
+// Purpose: Deduplicates native AppSnap icons outside localStorage.
+// Layer: Browser storage adapter
+// Depends on: IndexedDB structured-clone support.
+
 import { awaitIdbRequest, openIndexedDbDatabase, waitForIdbTransaction } from "./indexedDb";
 
 const DATABASE_NAME = "synara-appsnap-icons";

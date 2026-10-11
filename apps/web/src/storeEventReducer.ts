@@ -1,9 +1,14 @@
+// FILE: storeEventReducer.ts
+// Purpose: Reduces ordered orchestration domain events into normalized client state.
+// Exports: Normal and hot-path event batch reducers.
+
 import {
   type OrchestrationEvent,
   type OrchestrationPendingInteraction,
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   clearRemovedAsyncUserInputResponses,
@@ -21,6 +26,9 @@ import {
   isPendingInteractionResponseClaimable,
 } from "@synara/shared/pendingInteractions";
 
+import { advanceMessageTextSegments } from "./messageTextSegments";
+import { getThreadFromState } from "./threadDerivation";
+import { updateThreadHistoryLiveCount } from "./threadHistoryOwnership";
 import { isSessionRunningTurn } from "./session-logic";
 import {
   MAX_THREAD_MESSAGES,
@@ -37,6 +45,7 @@ import {
   normalizeTurnDiffFiles,
   providerReferenceArraysEqual,
   resolveCreateBranchFlowCompletedMerge,
+  textSegmentArraysEqual,
   withOrchestrationEventSequence,
 } from "./storeNormalization";
 import {
@@ -133,6 +142,8 @@ function markInteractionResponding(
   return changed ? next : thread.pendingInteractions;
 }
 
+/** Pure reconciliation over the pending-interaction list alone: batch callers thread the
+ *  accumulated list through directly instead of cloning the whole `Thread` per event. */
 function reconcilePendingInteractionsFromActivity(
   threadId: ThreadId,
   pendingInteractions: Thread["pendingInteractions"],
@@ -246,6 +257,7 @@ function normalizeSingleTurnDiffSummary(
   if (
     previous &&
     previous.turnId === incoming.turnId &&
+    previous.startedAt === (incoming.startedAt ?? previous.startedAt) &&
     previous.completedAt === incoming.completedAt &&
     previous.status === incoming.status &&
     previous.assistantMessageId === incoming.assistantMessageId &&
@@ -255,8 +267,10 @@ function normalizeSingleTurnDiffSummary(
   ) {
     return previous;
   }
+  const startedAt = incoming.startedAt ?? previous?.startedAt;
   return {
     ...incoming,
+    ...(startedAt ? { startedAt } : {}),
     files,
   };
 }
@@ -314,6 +328,54 @@ function buildLatestTurn(params: {
   };
 }
 
+// Mirror of the server turn projection: the latest turn start request names the
+// user message that a newly started turn answers. A queued message is written
+// when it is sent, long before its turn starts, so the transcript can only
+// group that turn under it once the message carries the turn id.
+function bindPendingTurnStartMessage(
+  thread: Thread,
+  session: NonNullable<ReadModelThread["session"]>,
+): Thread | null {
+  if (!isSessionRunningTurn(session)) {
+    return null;
+  }
+  const pendingMessageId = thread.pendingTurnStartMessageId;
+  if (
+    pendingMessageId === null ||
+    pendingMessageId === undefined ||
+    thread.claudeCacheReview?.status === "compacting" ||
+    thread.claudeCacheReview?.compactionTurnId === session.activeTurnId
+  ) {
+    return null;
+  }
+  // A cancelled prompt can remain unanswered after a cold reload. Only an
+  // observed request owns a new turn; late-attached clients get accepted links
+  // from the authoritative detail snapshot's projection_turns mapping.
+  const messageIndex = thread.messages.findLastIndex((message) => message.id === pendingMessageId);
+  const rest = { ...thread, pendingTurnStartMessageId: null };
+  const message = messageIndex >= 0 ? thread.messages[messageIndex] : undefined;
+  const turnId = session.activeTurnId;
+  if (
+    !message ||
+    !isUnboundTurnRequest(message) ||
+    // Only a turn that has produced nothing yet is the one just started for the
+    // request; the shell stream may already have advanced latestTurn to it.
+    thread.messages.some((candidate) => candidate.turnId === turnId) ||
+    thread.activities.some((activity) => activity.turnId === turnId)
+  ) {
+    return rest;
+  }
+  return { ...rest, messages: thread.messages.with(messageIndex, { ...message, turnId }) };
+}
+
+function isUnboundTurnRequest(message: Thread["messages"][number]): boolean {
+  return (
+    message.role === "user" &&
+    message.startsNewTurn !== false &&
+    (message.turnId === undefined || message.turnId === null)
+  );
+}
+
 function reconcileLatestTurnFromSession(
   thread: Thread,
   session: NonNullable<ReadModelThread["session"]>,
@@ -341,7 +403,12 @@ function reconcileLatestTurnFromSession(
     });
   }
 
-  // mirrors the server projector: once the session leaves "running" no later event is guaranteed to close the turn, so a still-running latestTurn settles here — a retained activeTurnId blocks settlement (except on error): stop-requested emits "interrupted" while the turn stays active until the provider's terminal event
+  // Mirror of the server projector's settlement rule: once the session leaves
+  // "running", no later event is guaranteed to close the turn (checkpoint diff
+  // events only enrich it), so a still-running latestTurn settles here. A retained
+  // activeTurnId blocks settlement (except on error): stop-requested flows emit
+  // "interrupted" while keeping the turn active until the provider's terminal
+  // event decides the real outcome.
   const settledState =
     session.status === "error"
       ? ("error" as const)
@@ -350,7 +417,11 @@ function reconcileLatestTurnFromSession(
         : session.status === "ready"
           ? ("completed" as const)
           : null;
-  // a non-error snapshot predating the running turn's start is pre-turn state — settling would close a just-started turn with a bogus completedAt and fire a phantom notification; errors still settle regardless
+  // A non-error session snapshot whose updatedAt predates the running turn's
+  // start reflects the state from before that turn existed; settling on it
+  // would close a just-started turn with a bogus fresh completedAt (and fire a
+  // phantom completion notification). Errors still settle regardless: an error
+  // snapshot is terminal whatever its ordering.
   if (
     settledState !== null &&
     thread.latestTurn?.state === "running" &&
@@ -485,13 +556,21 @@ function retainThreadProposedPlansAfterRevert(
 function rollbackThreadMessagesFromMessage(
   messages: ReadonlyArray<ChatMessage>,
   messageId: string,
+  clearUnknownWindow = false,
 ): {
   readonly messages: ChatMessage[];
   readonly removedTurnIds: ReadonlySet<string>;
 } {
   const targetIndex = messages.findIndex((message) => message.id === messageId);
   if (targetIndex < 0) {
-    return { messages: [...messages], removedTurnIds: new Set() };
+    return clearUnknownWindow
+      ? {
+          messages: [],
+          removedTurnIds: new Set(
+            messages.flatMap((message) => (message.turnId ? [message.turnId] : [])),
+          ),
+        }
+      : { messages: [...messages], removedTurnIds: new Set() };
   }
 
   const removedMessages = messages.slice(targetIndex);
@@ -522,7 +601,10 @@ function applyTurnDiffSummaryToThread(
       )
     : sortTurnDiffSummaries([...thread.turnDiffSummaries, nextSummary]);
 
-  // a provider-diff placeholder carries live diff totals only — it must never close a running turn or flip a settled one
+  // Mirror of the server projector's placeholder guard: a provider-diff
+  // placeholder only carries live diff totals and must never change the turn
+  // lifecycle — neither close a running turn nor flip an already-settled one
+  // to "interrupted" when it loses the race against session settlement.
   const isSameTurnPlaceholder =
     isProviderDiffPlaceholderRef(nextSummary.checkpointRef) &&
     nextSummary.status === "missing" &&
@@ -534,11 +616,20 @@ function applyTurnDiffSummaryToThread(
         : buildLatestTurn({
             previous: thread.latestTurn,
             turnId: nextSummary.turnId,
-            state: checkpointStatusToLatestTurnState(nextSummary.status),
+            // Mirror of the server projection: the session already settled an
+            // interrupted or failed turn; its checkpoint does not complete it.
+            state:
+              thread.latestTurn?.turnId === nextSummary.turnId &&
+              (thread.latestTurn.state === "interrupted" || thread.latestTurn.state === "error")
+                ? thread.latestTurn.state
+                : checkpointStatusToLatestTurnState(nextSummary.status),
             requestedAt: thread.latestTurn?.requestedAt ?? nextSummary.completedAt,
             startedAt: thread.latestTurn?.startedAt ?? nextSummary.completedAt,
             completedAt: nextSummary.completedAt,
-            // turn-diff events may arrive before finalize with a null id — prefer the incoming assistantMessageId but never let null erase a real id already recorded
+            // Prefer the incoming assistantMessageId when present; otherwise keep
+            // the previous one from the same turn. Turn-diff events may arrive
+            // before the message has been finalized and carry a null id — they
+            // must not erase a real id already recorded by thread.message-sent.
             assistantMessageId:
               nextSummary.assistantMessageId ??
               (thread.latestTurn?.turnId === nextSummary.turnId
@@ -590,6 +681,10 @@ function describeStreamText(text: string): {
 function mergeStreamingMessage(
   existingMessage: ChatMessage,
   incomingMessage: ChatMessage,
+  segmentBoundary: {
+    readonly segmentStartedAt: string | undefined;
+    readonly segmentSequence: number;
+  },
 ): ChatMessage | null {
   let nextText: string;
   if (
@@ -601,7 +696,9 @@ function mergeStreamingMessage(
   } else if (incomingMessage.streaming || incomingMessage.text.length === 0) {
     nextText = `${existingMessage.text}${incomingMessage.text}`;
   } else {
-    // non-streaming completions carry the server's authoritative accumulated text — always prefer them so a divergent local stream can't survive settlement
+    // Non-streaming completions carry the server's authoritative accumulated
+    // text. Always prefer them so a duplicated or divergent local stream cannot
+    // survive after the turn settles.
     if (
       import.meta.env.DEV &&
       incomingMessage.text !== existingMessage.text &&
@@ -648,9 +745,26 @@ function mergeStreamingMessage(
       ? incomingMessage.startsNewTurn
       : existingMessage.startsNewTurn;
   const nextSource = incomingMessage.source ?? existingMessage.source;
+  // Segments from a mid-stream snapshot must follow the deltas that land after
+  // it, or a settled reply renders only the text the snapshot had.
+  const advancedTextSegments = advanceMessageTextSegments(existingMessage.textSegments, {
+    streaming: incomingMessage.streaming,
+    deltaText: incomingMessage.text,
+    nextText,
+    segmentStartedAt: segmentBoundary.segmentStartedAt,
+    segmentSequence: segmentBoundary.segmentSequence,
+    updatedAt: nextUpdatedAt,
+  });
+  const nextTextSegments = textSegmentArraysEqual(
+    existingMessage.textSegments,
+    advancedTextSegments,
+  )
+    ? existingMessage.textSegments
+    : advancedTextSegments;
 
   if (
     existingMessage.text === nextText &&
+    existingMessage.textSegments === nextTextSegments &&
     existingMessage.asyncUserInput === nextAsyncUserInput &&
     existingMessage.streaming === incomingMessage.streaming &&
     existingMessage.attachments === nextAttachments &&
@@ -667,9 +781,12 @@ function mergeStreamingMessage(
     return null;
   }
 
+  const { textSegments: _previousTextSegments, ...existingMessageWithoutSegments } =
+    existingMessage;
   return {
-    ...existingMessage,
+    ...existingMessageWithoutSegments,
     text: nextText,
+    ...(nextTextSegments !== undefined ? { textSegments: nextTextSegments } : {}),
     updatedAt: nextUpdatedAt,
     ...(nextAsyncUserInput ? { asyncUserInput: nextAsyncUserInput } : {}),
     streaming: incomingMessage.streaming,
@@ -685,9 +802,15 @@ function mergeStreamingMessage(
   };
 }
 
-function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
+function applyThreadMessageSentEvent(
+  thread: Thread,
+  event: ThreadMessageSentEvent,
+  preserveHistory = false,
+): Thread {
   const payload = event.payload;
-  // deltas target the newest message — a backward scan finds it in O(1) instead of walking the full list per delta; ids are unique so direction can't change the match
+  // Single backward scan: streaming deltas target the newest message, so walking from the tail
+  // finds it in O(1) instead of scanning the (up to MAX_THREAD_MESSAGES) list front-to-back on
+  // every delta. Message ids are unique per thread, so scan direction cannot change the match.
   let existingIndex = -1;
   for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
     if (thread.messages[index]!.id === payload.messageId) {
@@ -719,13 +842,17 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
   let messages = thread.messages;
 
   if (existingMessage) {
-    const mergedMessage = mergeStreamingMessage(existingMessage, incomingMessage);
+    const mergedMessage = mergeStreamingMessage(existingMessage, incomingMessage, {
+      segmentStartedAt: payload.segmentStartedAt,
+      segmentSequence: payload.segmentSequence ?? event.sequence,
+    });
     if (mergedMessage !== null) {
       // Only the affected slot is replaced; every other message stays reference-identical.
       messages = thread.messages.with(existingIndex, mergedMessage);
     }
   } else {
-    messages = [...thread.messages, incomingMessage].slice(-MAX_THREAD_MESSAGES);
+    messages = [...thread.messages, incomingMessage];
+    if (!preserveHistory) messages = messages.slice(-MAX_THREAD_MESSAGES);
   }
 
   const turnDiffSummaries =
@@ -744,10 +871,15 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
     (thread.latestTurn === null || thread.latestTurn.turnId === payload.turnId)
   ) {
     const previousTurn = thread.latestTurn;
+    // A settled message is not the end of its turn while the session still runs
+    // it: more tools and messages can follow, and the session settles the turn.
+    const turnStillRunning =
+      payload.streaming ||
+      (isSessionRunningTurn(thread.session) && thread.session.activeTurnId === payload.turnId);
     latestTurn = buildLatestTurn({
       previous: previousTurn,
       turnId: payload.turnId,
-      state: payload.streaming
+      state: turnStillRunning
         ? "running"
         : previousTurn?.state === "interrupted"
           ? "interrupted"
@@ -756,7 +888,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
             : "completed",
       requestedAt: previousTurn?.requestedAt ?? payload.createdAt,
       startedAt: previousTurn?.startedAt ?? payload.createdAt,
-      completedAt: payload.streaming ? (previousTurn?.completedAt ?? null) : payload.updatedAt,
+      completedAt: turnStillRunning ? (previousTurn?.completedAt ?? null) : payload.updatedAt,
       assistantMessageId: payload.messageId,
       sourceProposedPlan: thread.pendingSourceProposedPlan,
     });
@@ -879,6 +1011,7 @@ function applyOrchestrationEvent(
     }
 
     case "thread.deleted":
+      // Deletion is terminal for both active sidebar rows and archived settings rows.
       return removeDeletedThreadFromClientState(state, event.payload.threadId, event.sequence);
 
     case "thread.meta-updated":
@@ -1176,7 +1309,12 @@ function applyOrchestrationEvent(
       return applyThreadUpdate(
         state,
         event.payload.threadId,
-        (thread) => applyThreadMessageSentEvent(thread, event),
+        (thread) =>
+          applyThreadMessageSentEvent(
+            thread,
+            event,
+            state.threadHistoryById?.[event.payload.threadId] !== undefined,
+          ),
         {
           ...options,
           recomputeSummarySignals: threadMessageUpdatesSummary(event),
@@ -1203,8 +1341,26 @@ function applyOrchestrationEvent(
               ? (thread.claudeCacheReview ?? null)
               : event.payload.review,
             claudeCacheReviewSequence: event.sequence,
+            ...(event.payload.review?.status === "compacting"
+              ? { pendingTurnStartMessageId: null }
+              : {}),
             updatedAt,
           };
+        },
+        options,
+      );
+
+    case "thread.claude-cache-response-requested":
+      if (event.payload.decision === "compact") return state;
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const pendingTurnStartMessageId =
+            event.payload.decision === "continue" ? event.payload.review.messageId : null;
+          return thread.pendingTurnStartMessageId === pendingTurnStartMessageId
+            ? thread
+            : { ...thread, pendingTurnStartMessageId };
         },
         options,
       );
@@ -1217,7 +1373,9 @@ function applyOrchestrationEvent(
           const session = normalizeThreadSession(event.payload.session, thread.session);
           const error = normalizeThreadErrorMessage(event.payload.session.lastError);
           const latestTurn = reconcileLatestTurnFromSession(thread, event.payload.session, error);
+          const boundThread = bindPendingTurnStartMessage(thread, event.payload.session);
           if (
+            boundThread === null &&
             session === thread.session &&
             error === thread.error &&
             latestTurn === thread.latestTurn &&
@@ -1228,7 +1386,7 @@ function applyOrchestrationEvent(
             return thread;
           }
           return {
-            ...thread,
+            ...(boundThread ?? thread),
             session,
             error,
             latestTurn,
@@ -1290,8 +1448,22 @@ function applyOrchestrationEvent(
       );
 
     case "thread.turn-interrupt-requested": {
-      // interrupt requests are best-effort and can fail or time out — keep the latest-turn clock live until the provider confirms terminal
-      return state;
+      // Record intent for attribution, keeping the turn live until confirmed.
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+          if (!activity) return thread;
+          const activities = normalizeActivities(
+            [...thread.activities, activity],
+            thread.activities,
+            state.threadHistoryById?.[thread.id] !== undefined,
+          );
+          return activities === thread.activities ? thread : { ...thread, activities };
+        },
+        options,
+      );
     }
 
     case "thread.session-stop-requested":
@@ -1300,7 +1472,9 @@ function applyOrchestrationEvent(
         event.payload.threadId,
         (thread) => {
           if (thread.session === null) {
-            return thread;
+            return thread.pendingTurnStartMessageId === null
+              ? thread
+              : { ...thread, pendingTurnStartMessageId: null };
           }
           const latestTurn =
             thread.latestTurn !== null &&
@@ -1318,6 +1492,7 @@ function applyOrchestrationEvent(
               : thread.latestTurn;
           return {
             ...thread,
+            pendingTurnStartMessageId: null,
             session: {
               ...thread.session,
               status: "closed",
@@ -1347,7 +1522,9 @@ function applyOrchestrationEvent(
             event.payload.modelSelection !== undefined
               ? normalizeModelSelection(event.payload.modelSelection, thread.modelSelection)
               : thread.modelSelection;
-          // automation-dispatched turns must not repaint the thread's persisted modes — the automation's modes govern its own turn only
+          // Automation-dispatched turns must not repaint the thread's persisted
+          // modes (mirrors the server projection): the automation's modes govern
+          // its own turn only, while the user's composer selection stays put.
           const adoptTurnModes = event.payload.dispatchOrigin !== "automation";
           const runtimeMode = adoptTurnModes ? event.payload.runtimeMode : thread.runtimeMode;
           const interactionMode = adoptTurnModes
@@ -1358,6 +1535,7 @@ function applyOrchestrationEvent(
             thread.runtimeMode === runtimeMode &&
             thread.interactionMode === interactionMode &&
             thread.pendingSourceProposedPlan === event.payload.sourceProposedPlan &&
+            thread.pendingTurnStartMessageId === event.payload.messageId &&
             (!isSidechatThread(thread) ||
               thread.sidechatLastActivityAt === event.payload.createdAt) &&
             (thread.updatedAt ?? thread.createdAt) >= event.payload.createdAt
@@ -1370,6 +1548,7 @@ function applyOrchestrationEvent(
             runtimeMode,
             interactionMode,
             pendingSourceProposedPlan: event.payload.sourceProposedPlan,
+            pendingTurnStartMessageId: event.payload.messageId,
             ...(isSidechatThread(thread)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
@@ -1439,6 +1618,7 @@ function applyOrchestrationEvent(
           const nextActivities = normalizeActivities(
             [...thread.activities, sequencedActivity],
             thread.activities,
+            state.threadHistoryById?.[thread.id] !== undefined,
           );
           const pendingInteractions = reconcilePendingInteractionsFromActivity(
             thread.id,
@@ -1515,6 +1695,11 @@ function applyOrchestrationEvent(
         (thread) =>
           applyTurnDiffSummaryToThread(thread, {
             turnId: event.payload.turnId,
+            // The live event carries no start; the turn it completes is the
+            // latest one, whose start the session already reported.
+            ...(thread.latestTurn?.turnId === event.payload.turnId && thread.latestTurn.startedAt
+              ? { startedAt: thread.latestTurn.startedAt }
+              : {}),
             completedAt: event.payload.completedAt,
             status: event.payload.status,
             files: event.payload.files.map((file) => ({
@@ -1559,7 +1744,7 @@ function applyOrchestrationEvent(
             retainedMessages,
             new Set(retainedMessages.map((message) => message.id)),
             event.sequence,
-          ).slice(-MAX_THREAD_MESSAGES);
+          ).slice(state.threadHistoryById?.[thread.id] ? 0 : -MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,
             retainedTurnIds,
@@ -1610,11 +1795,15 @@ function applyOrchestrationEvent(
           const rollback = rollbackThreadMessagesFromMessage(
             thread.messages,
             event.payload.messageId,
+            state.threadHistoryById?.[thread.id] !== undefined,
           );
           const removedTurnIds = new Set([
             ...rollback.removedTurnIds,
             ...(event.payload.removedTurnIds ?? []),
           ]);
+          const messages = rollback.messages.filter(
+            (message) => !message.turnId || !removedTurnIds.has(message.turnId),
+          );
           if (rollback.messages.length === thread.messages.length && removedTurnIds.size === 0) {
             return thread;
           }
@@ -1638,16 +1827,16 @@ function applyOrchestrationEvent(
             ...thread,
             turnDiffSummaries,
             messages: clearRemovedAsyncUserInputResponses(
-              rollback.messages,
-              new Set(rollback.messages.map((message) => message.id)),
+              messages,
+              new Set(messages.map((message) => message.id)),
               event.sequence,
-            ).slice(-MAX_THREAD_MESSAGES),
+            ).slice(state.threadHistoryById?.[thread.id] ? 0 : -MAX_THREAD_MESSAGES),
             proposedPlans,
             activities,
             pendingSourceProposedPlan: undefined,
             latestHumanMessageAt: deriveThreadSummaryMetadata({
               ...thread,
-              messages: rollback.messages,
+              messages,
             }).latestHumanMessageAt,
             latestTurn:
               latestCheckpoint === null
@@ -1679,6 +1868,7 @@ function applyOrchestrationEvent(
         (thread) => ({
           ...thread,
           archivedAt: event.payload.archivedAt ?? event.occurredAt,
+          pendingTurnStartMessageId: null,
           snoozedUntil: null,
           snoozeReminderAt: null,
           snoozeSequence: event.sequence,
@@ -1724,8 +1914,12 @@ function applyThreadActivityEventBatch(
     state,
     firstEvent.payload.threadId,
     (thread) => {
-      // one accumulator for the whole batch — was O(batch×activities), now O(batch) amortised
-      const activityAccumulator = createThreadActivityAccumulator(thread.activities);
+      // One accumulator for the whole batch: appending N activities used to re-normalize the
+      // full activity list N times (O(batch x activities)); it is now O(batch) amortised.
+      const activityAccumulator = createThreadActivityAccumulator(
+        thread.activities,
+        state.threadHistoryById?.[thread.id] !== undefined,
+      );
       let nextPendingInteractions = thread.pendingInteractions;
       let updatedAt = thread.updatedAt ?? thread.createdAt;
       for (const event of events) {
@@ -1808,5 +2002,51 @@ export function applyOrchestrationEventsHotPath(
     }
     nextState = applyOrchestrationEvent(nextState, event, normalizedOptions);
   }
-  return nextState;
+  const seenNewMessages = new Set<string>();
+  for (const event of events) {
+    if (event.aggregateKind !== "thread") continue;
+    const id = event.aggregateId as ThreadId;
+    const history = nextState.threadHistoryById?.[id];
+    if (!history) continue;
+    if (event.type === "thread.reverted" || event.type === "thread.conversation-rolled-back") {
+      nextState = {
+        ...nextState,
+        threadHistoryById: {
+          ...nextState.threadHistoryById,
+          [id]: { ...history, revisionSequence: event.sequence },
+        },
+      };
+    } else if (event.type === "thread.message-sent") {
+      const key = JSON.stringify([id, event.payload.messageId]);
+      if (
+        !state.messageByThreadId?.[id]?.[event.payload.messageId] &&
+        !seenNewMessages.has(key) &&
+        event.payload.createdAt >= (getThreadFromState(state, id)?.messages.at(-1)?.createdAt ?? "")
+      ) {
+        seenNewMessages.add(key);
+        nextState = {
+          ...nextState,
+          threadHistoryById: {
+            ...nextState.threadHistoryById,
+            [id]: updateThreadHistoryLiveCount(history, history.totalMessageCount + 1),
+          },
+        };
+      }
+    }
+  }
+  let applied = nextState.threadDetailAppliedSequenceById;
+  for (const event of events) {
+    if (event.aggregateKind !== "thread") continue;
+    const id = event.aggregateId as ThreadId;
+    if (
+      nextState.threadDetailSyncById?.[id] &&
+      nextState.messageByThreadId?.[id] &&
+      applied?.[id] !== undefined
+    ) {
+      if (event.sequence > applied[id]!) applied = { ...applied, [id]: event.sequence };
+    }
+  }
+  return applied === nextState.threadDetailAppliedSequenceById
+    ? nextState
+    : { ...nextState, threadDetailAppliedSequenceById: applied! };
 }

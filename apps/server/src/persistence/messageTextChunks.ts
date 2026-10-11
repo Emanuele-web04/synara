@@ -5,7 +5,7 @@ import { toPersistenceSqlError } from "./Errors.ts";
 
 type MessageEvent = Extract<OrchestrationEvent, { readonly type: "thread.message-sent" }>;
 
-/** JSON keeps lone UTF-16 surrogates intact until adjacent chunks join in JS */
+/** JSON keeps lone UTF-16 surrogates intact until adjacent chunks are joined in JS. */
 export const selectMessageTextChunks = (
   sql: SqlClient.SqlClient,
   table: string,
@@ -32,14 +32,15 @@ export const joinMessageTextChunks = (row: {
   readonly textChunks?: ReadonlyArray<string> | undefined;
 }) => (row.encodedText ?? row.text) + (row.textChunks?.join("") ?? "");
 
-// SQLite TEXT is UTF-8 and Node 24's binding truncates TEXT reads at NUL — JSON preserves embedded NULs and unmatched surrogates
+// SQLite TEXT is UTF-8, and Node 24's SQLite binding truncates TEXT reads at NUL.
+// JSON preserves both embedded NULs and unmatched UTF-16 code units.
 export const encodeMessageTextFallback = (text: string): string | null =>
   text.includes("\u0000") ||
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)
     ? JSON.stringify(text)
     : null;
 
-/** all mutations join the caller's projection/event transaction */
+/** All mutations participate in the caller's projection/event transaction. */
 export function makeMessageTextChunks(sql: SqlClient.SqlClient) {
   const hasApplied = (event: MessageEvent) =>
     sql`
@@ -51,7 +52,15 @@ export function makeMessageTextChunks(sql: SqlClient.SqlClient) {
       Effect.mapError(toPersistenceSqlError("MessageTextChunks.hasApplied")),
     );
 
-  // every SET column forces SQLite to rewrite its indexes even when unchanged — the streaming hot path only touches columns that actually changed; a legacy row without a sequence gets this event's once (first writer wins) so a resumed message keeps causal position
+  // One read per delta replaces the previous unconditional upsert. Every column
+  // listed in an UPDATE's SET clause forces SQLite to rewrite the indexes that
+  // contain it, even when the value is unchanged, so the streaming hot path
+  // only touches the columns that actually changed for this delta. None of the
+  // always-written columns (updated_at, is_streaming, text_event_sequence,
+  // text/text_json) are indexed. A legacy/imported row without an ordering
+  // sequence receives this event's sequence once (first writer wins, as the
+  // previous upsert did), so a resumed message keeps its causal position in the
+  // capped message windows.
   const readMessageState = (event: MessageEvent) =>
     sql<{
       readonly textEventSequence: number;
@@ -90,7 +99,9 @@ export function makeMessageTextChunks(sql: SqlClient.SqlClient) {
       `;
       } else {
         if (state.hasBody === 1) {
-          // a resumed/imported body must leave the frequently updated metadata row — its prefix belongs to the full message, not a new segment
+          // A resumed/imported body must leave the frequently updated metadata
+          // row. Its prefix belongs to the full message, not to a newly opened
+          // segment.
           yield* sql`
           INSERT INTO message_text_chunks (thread_id, message_id, event_sequence, segment_sequence, text_json, updated_at)
           SELECT thread_id, message_id, -1, NULL, COALESCE(text_json, json_quote(text)), updated_at
@@ -125,7 +136,8 @@ export function makeMessageTextChunks(sql: SqlClient.SqlClient) {
           ? (p.segmentSequence ?? event.sequence)
           : current[0].sequence;
       if (p.segmentStartedAt || current[0]?.sequence == null) {
-        // a repeated boundary replaces that segment's displayed text while its previous chunks still contribute to the body
+        // A repeated boundary replaces that segment's displayed text, while its
+        // previous chunks still contribute to the complete message body.
         yield* sql`UPDATE message_text_chunks SET segment_sequence = NULL WHERE thread_id = ${p.threadId} AND message_id = ${p.messageId} AND segment_sequence = ${sequence}`;
         yield* sql`
         INSERT INTO message_text_segments (thread_id, message_id, sequence, started_at, ended_at, text)

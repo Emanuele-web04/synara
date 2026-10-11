@@ -48,7 +48,7 @@ export type FixtureProviderRuntimeEvent = {
   readonly [key: string]: unknown;
 };
 
-// temporary alias while fixtures migrate to the new name
+// Temporary alias while fixtures migrate to the new name.
 export type LegacyProviderRuntimeEvent = FixtureProviderRuntimeEvent;
 
 interface SessionState {

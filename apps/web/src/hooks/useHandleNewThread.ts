@@ -54,6 +54,11 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
 export interface NewThreadNavigationOptions {
+  /**
+   * Search params applied when the hook navigates to the created thread.
+   * Lets callers keep view-level state (e.g. the editor workspace view)
+   * across the route change; default navigation clears all search params.
+   */
   search?: (previous: Record<string, unknown>) => Record<string, unknown>;
 }
 
@@ -88,7 +93,8 @@ export function useHandleNewThread() {
     options?: NewThreadOptions,
     navigation?: NewThreadNavigationOptions,
   ): Promise<ThreadId | null> => {
-    // Project/thread targets are not authoritative until hydration completes. Read the store at call time so a stale UI callback cannot mint a draft during hydration.
+    // Project/thread targets are not authoritative until hydration completes. Read the
+    // store at call time so a stale UI callback cannot mint a draft during hydration.
     if (!useStore.getState().threadsHydrated) {
       return Promise.resolve(null);
     }
@@ -142,6 +148,9 @@ export function useHandleNewThread() {
         model: defaultModel,
       });
     };
+    // Puts back a composer draft that a draft-mapping change or the route swap removed. A
+    // draft still present is newer than the snapshot (typed, sent, or re-selected while the
+    // navigation settled) and must win, or the composer is rewritten mid-typing.
     const restoreComposerDraft = (
       threadId: ThreadId,
       draftState: ComposerThreadDraftState | null,
@@ -150,7 +159,7 @@ export function useHandleNewThread() {
         return;
       }
       useComposerDraftStore.setState((state) => {
-        if (state.draftsByThreadId[threadId] === draftState) {
+        if (state.draftsByThreadId[threadId] !== undefined) {
           return state;
         }
         return {
@@ -205,6 +214,7 @@ export function useHandleNewThread() {
       projectId,
       routeThreadId: focusedThreadId,
     });
+    // Read from the store at call time so post-sync sidebar flows can use the latest project defaults.
     const projectDefaultModelSelection =
       useStore.getState().projects.find((project) => project.id === projectId)
         ?.defaultModelSelection ?? null;
@@ -273,7 +283,8 @@ export function useHandleNewThread() {
         projectId,
         resolveProviderForInstanceId,
       });
-    // Terminal-first threads need a real orchestration thread immediately so the sidebar can render them as durable rows instead of draft-only routes.
+    // Terminal-first threads need a real orchestration thread immediately so
+    // the sidebar can render them as durable rows instead of draft-only routes.
     const createTerminalThread = async (
       threadId: ThreadId,
       creationState: ReturnType<typeof resolveCreationState>,
@@ -384,7 +395,7 @@ export function useHandleNewThread() {
       })();
     }
 
-    return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async () => {
+    return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async (signal) => {
       const threadId = newThreadId();
       if (wantsTemporaryThread) {
         markTemporaryThread(threadId);
@@ -401,10 +412,14 @@ export function useHandleNewThread() {
         entryPoint,
       });
       const committed = await stageDraftNavigation({
-        // Keep the previous routed draft alive while the destination loads. Replacing the project's primary slot earlier makes the route guard redirect the old URL to Home.
+        signal,
+        // Keep the previous routed draft alive while the destination loads. Replacing the
+        // project's primary slot earlier makes the route guard redirect the old URL to Home.
         stage: () => {
           registerDraftThread(threadId, { projectId, ...draftSeed });
           activateThreadEntryPoint(threadId);
+          // Seed the draft from the sticky (last-used) selection so a new chat
+          // reopens with the model and options used most recently.
           applyUsableStickyState(threadId);
           if (containerDefaults) {
             applyGroupWorkerRoutingDefaults({
@@ -415,7 +430,9 @@ export function useHandleNewThread() {
           }
           applyProviderOverride(threadId);
         },
-        // mark the draft-landing navigation as a transition so the route subtree renders interruptibly and the mount loader paints instead of freezing on the sync commit
+        // Mark the draft-landing navigation as a transition so the new route
+        // subtree renders interruptibly and the browser can paint the chat
+        // mount loader immediately instead of freezing on the synchronous commit.
         navigate: () =>
           new Promise<void>((resolve, reject) => {
             startTransition(() => {
@@ -426,7 +443,8 @@ export function useHandleNewThread() {
               }).then(resolve, reject);
             });
           }),
-        // TanStack resolves an older navigate() when a newer one supersedes it — verify the committed route before deleting the previous project draft
+        // TanStack resolves an older navigate() promise when a newer navigation supersedes it.
+        // Verify the committed route before deleting the previous project draft.
         isDestinationActive: () => router.state.location.pathname === `/${threadId}`,
         finalize: () => setProjectDraftThreadId(projectId, threadId, draftSeed),
         rollback: () => {

@@ -1,3 +1,7 @@
+// FILE: filesystemPlatform.ts
+// Purpose: Centralizes filesystem operations whose durability or identity semantics differ by OS.
+// Layer: Shared platform runtime
+
 import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -8,7 +12,7 @@ export function supportsPosixPermissions(platform: NodeJS.Platform = process.pla
   return platform !== "win32";
 }
 
-/** flushes directory-entry changes where the platform exposes durable directory fsync */
+/** Flushes directory-entry changes where the platform exposes durable directory fsync. */
 export async function syncDirectoryEntry(
   directoryPath: string,
   platform: NodeJS.Platform = process.platform,
@@ -29,7 +33,10 @@ export async function syncDirectoryEntry(
   }
 }
 
-/** Windows FlushFileBuffers requires write access; POSIX retains no-follow protection */
+/**
+ * Flushes a regular file created by Synara. Windows FlushFileBuffers requires
+ * write access; POSIX additionally retains no-follow protection.
+ */
 export async function syncRegularFile(
   filePath: string,
   platform: NodeJS.Platform = process.platform,
@@ -45,7 +52,7 @@ export async function syncRegularFile(
   }
 }
 
-/** POSIX inode identity is stable; Windows callers rely on guarded path checks */
+/** POSIX inode identity is stable; Windows callers rely on guarded path checks. */
 export function sameFileIdentity(
   left: Pick<Stats, "dev" | "ino">,
   right: Pick<Stats, "dev" | "ino">,

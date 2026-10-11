@@ -1,3 +1,8 @@
+// FILE: decider.goalTiming.test.ts
+// Purpose: Covers goal pursuit timing: the decider stamps goalStartedAt when a
+//          goal first becomes active, freezes/rebases it across pause/resume,
+//          and clears both timestamps when the goal is cleared.
+
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -117,6 +122,27 @@ async function applyEvent(
 }
 
 describe("decider thread goal timing", () => {
+  it("preserves explicit user provenance at the interrupt command/event seam", async () => {
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.interrupt",
+          commandId: CommandId.makeUnsafe("user-stop"),
+          threadId: THREAD_ID,
+          requestedBy: "user",
+          createdAt,
+        },
+        readModel: await createThreadReadModel(createdAt),
+      }),
+    );
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event).toMatchObject({
+      type: "thread.turn-interrupt-requested",
+      payload: { requestedBy: "user" },
+    });
+  });
+
   it("stamps goalStartedAt when a goal first becomes active and keeps it on edits", async () => {
     const now = new Date().toISOString();
     let readModel = await createThreadReadModel(now);
@@ -195,7 +221,8 @@ describe("decider thread goal timing", () => {
     const rebasedStartedAt = resumeEvent.payload.goalStartedAt;
     expect(typeof rebasedStartedAt).toBe("string");
     if (typeof rebasedStartedAt !== "string") return;
-    // elapsed-at-pause must equal elapsed-at-resume — resume shifts start forward by exactly the paused span
+    // Elapsed-at-pause must equal elapsed-at-resume: resume shifts the start
+    // forward by exactly the paused span.
     const elapsedAtPause = Date.parse(pauseEvent.occurredAt) - Date.parse(setEvent.occurredAt);
     const elapsedAtResume = Date.parse(resumeEvent.occurredAt) - Date.parse(rebasedStartedAt);
     expect(elapsedAtResume).toBe(elapsedAtPause);
@@ -220,7 +247,7 @@ describe("decider thread goal timing", () => {
   it("resumes with a valid clock even when a legacy goal has no recorded start", async () => {
     const now = new Date().toISOString();
     let readModel = await createThreadReadModel(now);
-    // legacy shape — goal set before timing existed: paused with no start stamp
+    // Legacy shape: goal set before timing existed — paused but with no start stamp.
     readModel = await applyEvent(
       readModel,
       {

@@ -1,3 +1,7 @@
+// FILE: storeSelectors.ts
+// Purpose: Stable Zustand selectors for entity lookups and lightweight sidebar projections.
+// Exports: Selector factories used by routes and sidebar-heavy components.
+
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 import { isAutomationRunThread } from "@synara/shared/automationMode";
 import { isSidechatThread, sidechatContextMatchesGitHubItem } from "@synara/shared/sidechatThread";
@@ -165,6 +169,8 @@ export function createAccountRateLimitThreadsSelector(): (
       }
     }
 
+    // Rate-limit activities are rare, so nearly every activity append lands here with an
+    // element-wise identical result; keep the previous reference to spare subscribers.
     const unchanged =
       nextResult.length === previousResult.length &&
       nextResult.every((entry, entryIndex) => {
@@ -532,6 +538,7 @@ export function createComposerThreadMentionSourcesSelector(): (
 }
 
 export interface SidebarThreadVisibilityOptions {
+  /** Drop the per-run threads standalone automations create (pinned ones stay). */
   readonly hideAutomationRunThreads?: boolean;
   /** Explicit access for Snoozed sections and user-initiated search. */
   readonly includeSnoozed?: boolean;
@@ -598,6 +605,37 @@ function createSortedSidechatSummariesSelector(
   };
 }
 
+const EMPTY_SUBAGENT_SIBLINGS: readonly SidebarThreadSummary[] = [];
+
+/**
+ * Child threads of one parent, so an unnamed subagent can read "Subagent N"
+ * instead of a provider id. A null parent selects nothing (named rows skip it).
+ */
+export function createSubagentSiblingSummariesSelector(
+  parentThreadId: ThreadId | null,
+): (state: AppState) => readonly SidebarThreadSummary[] {
+  if (parentThreadId === null) {
+    return () => EMPTY_SUBAGENT_SIBLINGS;
+  }
+  const selectSidebarSummaries = createSidebarThreadSummariesSelector();
+  let previousSummaries: readonly SidebarThreadSummary[] | undefined;
+  let previousSiblings: readonly SidebarThreadSummary[] = EMPTY_SUBAGENT_SIBLINGS;
+  return (state) => {
+    const summaries = selectSidebarSummaries(state);
+    if (summaries === previousSummaries) return previousSiblings;
+    previousSummaries = summaries;
+    const nextSiblings = summaries.filter((thread) => thread.parentThreadId === parentThreadId);
+    if (
+      nextSiblings.length === previousSiblings.length &&
+      nextSiblings.every((thread, index) => thread === previousSiblings[index])
+    ) {
+      return previousSiblings;
+    }
+    previousSiblings = nextSiblings;
+    return previousSiblings;
+  };
+}
+
 export function createSidechatSummariesForSourceSelector(
   sourceThreadId: ThreadId,
 ): (state: AppState) => readonly SidebarThreadSummary[] {
@@ -643,7 +681,10 @@ export function createSidebarDisplayThreadsSelector(
   };
 }
 
-// unlike the flat display selector, this keeps child (subagent) threads so the tree can nest them under the parent row; flat consumers keep using the display selector
+// Sidebar tree source: unlike the flat display selector above, this keeps
+// child (subagent) threads so buildProjectThreadTree can nest them under
+// their parent row behind the "N subagents" expand toggle. Flat consumers
+// (pinned rows, search palette) should keep using the display selector.
 export function createSidebarTreeThreadsSelector(
   options?: SidebarThreadVisibilityOptions,
 ): (state: AppState) => readonly SidebarThreadSummary[] {

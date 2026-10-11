@@ -1,3 +1,7 @@
+// FILE: _chat.$threadId.tsx
+// Purpose: Resolve the active thread route into either a single chat surface or a persisted split view.
+// Layer: Route container
+
 import { type ProjectId, ThreadId } from "@synara/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -62,7 +66,10 @@ function ChatThreadRouteContent() {
     useState<EmptyRouteRestoreRecoveryState>("idle");
   const mountedRef = useRef(true);
   const missingThreadRecoveryRunRef = useRef(0);
-  // re-entry guard: the "pending" mark is deferred async setState, so this ref blocks a second start; cleared synchronously when the episode is invalidated
+  // Synchronous re-entry guard: the "pending" transition below is deferred (async
+  // setState), so this ref keeps the recovery from starting twice in the interim.
+  // It is cleared synchronously whenever an episode is invalidated (new thread
+  // route, or the thread appearing).
   const recoveryStartedRef = useRef(false);
 
   useEffect(() => {
@@ -72,7 +79,9 @@ function ChatThreadRouteContent() {
   }, []);
 
   useEffect(() => {
-    // Invalidate any in-flight recovery and start a fresh episode for the new thread route. The run bump + guard reset are synchronous (so a stale async completion cannot stamp "done"); the state reset is deferred async setState.
+    // Invalidate any in-flight recovery and start a fresh episode for the new
+    // thread route. The run bump + guard reset are synchronous (so a stale async
+    // completion cannot stamp "done"); the state reset is deferred async setState.
     missingThreadRecoveryRunRef.current += 1;
     recoveryStartedRef.current = false;
     const timer = window.setTimeout(() => setMissingThreadRecoveryState("idle"), 0);
@@ -105,6 +114,9 @@ function ChatThreadRouteContent() {
       ) {
         recoveryStartedRef.current = true;
         const recoveryRun = (missingThreadRecoveryRunRef.current += 1);
+        // Defer the "pending" mark (async setState); the ref guard above prevents a
+        // second start before it lands, and the run check skips it if the episode
+        // was invalidated in the meantime.
         const pendingTimer = window.setTimeout(() => {
           if (missingThreadRecoveryRunRef.current === recoveryRun) {
             setMissingThreadRecoveryState("pending");

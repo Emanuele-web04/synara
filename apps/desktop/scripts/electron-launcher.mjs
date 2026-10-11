@@ -1,3 +1,5 @@
+// This file mostly exists because we want dev mode to say "Synara (Dev)" instead of "electron"
+
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -20,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
 
 const desktopFlavor = resolveSynaraDesktopFlavor({
+  // Packaged apps launch their bundled main directly; this launcher is source-only.
   isDevelopment: true,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
 });
@@ -82,6 +85,8 @@ function setPlistString(plistPath, key, value, runCommand) {
   throw new Error(`Failed to update plist key "${key}" at ${plistPath}: ${details}`.trim());
 }
 
+// Same path as LSREGISTER_PATH in src/macIconCacheRefresh.ts; this launcher is
+// a standalone module and cannot import from the bundled sources.
 const LSREGISTER_PATH =
   "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister";
 

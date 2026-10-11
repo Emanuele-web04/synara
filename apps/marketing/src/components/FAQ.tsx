@@ -1,3 +1,7 @@
+// FILE: FAQ.tsx
+// Purpose: Renders homepage FAQs from the shared answer contract.
+// Layer: Marketing UI section
+
 "use client";
 
 import { useState } from "react";
@@ -64,7 +68,12 @@ export default function FAQ() {
                   />
                 </button>
 
-                {/* animating to `auto` height isn't interpolatable — a single-row grid animates the track 0fr→1fr; the inner min-h-0 wrapper lets the row collapse and padding lives inside it so it collapses too */}
+                {/*
+                  Animating to `auto` height is not interpolatable, so the panel
+                  is a single-row grid whose track animates 0fr -> 1fr. The inner
+                  `min-h-0` wrapper lets the row actually collapse, and padding
+                  lives inside it so it collapses along with the text.
+                */}
                 <div
                   id={panelId}
                   role="region"

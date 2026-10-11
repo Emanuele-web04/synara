@@ -1,3 +1,10 @@
+// FILE: trustedOrigins.ts
+// Purpose: Shared origin checks for browser-facing HTTP/WS routes that expose
+//          local machine data only to Synara's own app surfaces.
+// Layer: Server HTTP/security utility
+// Exports: normalizeCorsOrigin, isTrustedAppOrigin,
+//          shouldRejectUntrustedRequestOrigin
+
 import {
   SYNARA_BETA_DESKTOP_ORIGIN,
   SYNARA_CANARY_DESKTOP_ORIGIN,
@@ -40,7 +47,8 @@ function normalizeHostForComparison(host: string): string {
   return (host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host).toLowerCase();
 }
 
-// same-origin is trusted for loopback, configured hosts, and wildcard binds where remote-reachable auth/session policy is the real gate
+// Same-origin is trusted for local loopback, explicitly configured hosts, and
+// wildcard binds where remote-reachable auth/session policy is the real gate.
 function isTrustedRequestOriginHost(requestOrigin: string, config: ServerConfigShape): boolean {
   if (config.publicUrl && !isLoopbackHost(config.host)) {
     return false;
@@ -58,7 +66,8 @@ function isTrustedRequestOriginHost(requestOrigin: string, config: ServerConfigS
     return false;
   }
   if (isWildcardHost(config.host)) {
-    // wildcard binds are explicit remote-reachable mode — same-origin requests pass this CSRF gate and auth decides
+    // Wildcard binds are explicit remote-reachable mode; same-origin browser
+    // requests should pass this CSRF gate and let auth/session policy decide.
     return true;
   }
   return normalizeHostForComparison(requestHost) === normalizeHostForComparison(config.host);
@@ -79,7 +88,9 @@ export function isTrustedAppOrigin(input: {
   );
 }
 
-// reject present-but-invalid, opaque (Origin: null), or unrelated origins; requests with no Origin header are CLI-style and stay allowed for local tooling
+// WebSocket handshakes must reject browser origins that are present but invalid,
+// opaque (`Origin: null`), or unrelated. Requests without an Origin header are
+// CLI/non-browser style and remain allowed for local tooling.
 export function shouldRejectUntrustedRequestOrigin(input: {
   readonly rawOrigin: string | ReadonlyArray<string> | undefined;
   readonly requestOrigin: string;
@@ -111,7 +122,7 @@ export function shouldRejectAuthMutationOrigin(input: {
   return shouldRejectUntrustedRequestOrigin(input);
 }
 
-/** remote-reachable sockets always require a real authenticated session */
+/** Remote-reachable sockets always require a real authenticated session. */
 export function requiresWebSocketAuthentication(
   config: Pick<ServerConfigShape, "authToken" | "host" | "publicUrl">,
 ): boolean {

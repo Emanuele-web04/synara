@@ -1,3 +1,7 @@
+// FILE: processTreeKiller.test.ts
+// Purpose: Verifies PTY process-tree capture and safe descendant signaling.
+// Layer: Terminal infrastructure tests
+// Depends on: Vitest and injectable processTreeKiller dependencies.
 import { describe, expect, it } from "vitest";
 
 import {

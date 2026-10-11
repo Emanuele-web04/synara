@@ -53,7 +53,8 @@ const CAPTURE_WINDOW_TIMEOUT_MS = 20_000;
 const PERMISSION_COMMAND_TIMEOUT_MS = 10_000;
 const GUIDE_GRANT_WATCH_MAX_MS = 10 * 60 * 1000;
 const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
-// late helper answers to timed-out/interrupted picker requests are dropped, never consumed as unsolicited hotkey captures
+// Late helper answers to timed-out or interrupted picker requests are dropped
+// instead of being consumed as unsolicited hotkey captures.
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<Writable | null, Readable, Readable>;
@@ -697,7 +698,11 @@ export class DesktopAppSnapManager {
     }
   }
 
-  // adopt any well-formed shortcut even if the probe rejects it — a persisted chord another app grabbed must surface as a reconciliation error, not silently keep the old chord
+  /**
+   * Adopts any well-formed shortcut, even one the availability probe rejects:
+   * a persisted chord that another app grabbed since last launch must surface
+   * as an error state from reconciliation, not silently keep the old chord.
+   */
   async setShortcut(shortcut: unknown): Promise<DesktopAppSnapShortcutUpdateResult> {
     const availability = this.checkShortcut(shortcut);
     if (
@@ -820,7 +825,9 @@ export class DesktopAppSnapManager {
       throw new Error("captureWindow requires a valid macOS window id.");
     }
     const child = this.#requireWatchProcess();
-    // the prefix distinguishes a request-driven helper file from an unsolicited capture after a crash — orphaned picker requests must not auto-attach elsewhere
+    // The prefix keeps a request-driven helper file distinguishable from an
+    // unsolicited hotkey capture after a crash. Picker requests have already
+    // lost their caller after restart and must not be auto-attached elsewhere.
     const requestId = `picker-${Crypto.randomUUID()}`;
     return await new Promise<DesktopAppSnapCapture>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -1181,7 +1188,9 @@ export class DesktopAppSnapManager {
     }
     return true;
   }
-  // timed-out request ids are tombstoned for the manager's lifetime — a late capture for them must always be dropped, never consumed as a hotkey capture
+  // Timed-out request ids are tombstoned for the lifetime of the manager: a
+  // late capture for them must always be dropped, never consumed as a hotkey
+  // capture. The set stays tiny (timeouts are rare) and is cleared on dispose.
   #tombstoneCaptureRequest(requestId: string): void {
     this.#timedOutCaptureRequestIds.add(requestId);
   }
@@ -1386,7 +1395,9 @@ export class DesktopAppSnapManager {
         .catch(() => undefined);
     }
 
-    // a picker capture belongs to its renderer request — after a crash there is no safe thread to recover it into
+    // A picker capture belongs to the renderer request that initiated it. If
+    // the desktop process crashed before consuming the helper output, there is
+    // no safe target thread to recover it into on the next launch.
     for (const entry of entries) {
       if (!ORPHANED_PICKER_IMAGE_PATTERN.test(entry)) continue;
       await FS.promises
@@ -1435,7 +1446,8 @@ export class DesktopAppSnapManager {
       }
     }
 
-    // the helper writes its PNG before Electron can durably create the pending pair — recover the original after a crash in that gap
+    // The helper writes its PNG before Electron can durably create the
+    // pending pair. Recover that original after a crash in the narrow gap.
     for (const entry of entries) {
       const captureId = HELPER_CAPTURE_IMAGE_PATTERN.exec(entry)?.[1];
       if (!captureId) continue;
@@ -1647,7 +1659,8 @@ export class DesktopAppSnapManager {
   #startWatchProcess(): void {
     this.#intentionalWatchStop = false;
     this.#setState("starting", null);
-    // chords are detected by Electron's reserved accelerator — the helper only captures on demand via stdin "trigger" lines
+    // Key chords are detected by Electron's reserved accelerator; the helper
+    // only captures on demand, driven by "trigger" lines on its stdin.
     const shortcutArguments = this.#shortcut.kind === "key-chord" ? ["--external-trigger"] : [];
     const child = this.#options.spawn(
       this.#options.helperPath,
@@ -2001,7 +2014,8 @@ export class DesktopAppSnapManager {
   #handleWatchMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {
     if (this.#disposed || this.#watchProcess !== child) return;
     if (message.type === "ready") {
-      // `ready` proves only the event tap (Input Monitoring) — Screen Recording state is owned by permission checks and capture errors
+      // `ready` only proves the event tap installed, i.e. Input Monitoring.
+      // Screen Recording state is owned by permission checks and capture errors.
       this.#inputMonitoringPermission = "granted";
       this.#setState("ready", null);
       return;
@@ -2038,7 +2052,8 @@ export class DesktopAppSnapManager {
         return;
       }
       if (this.#timedOutCaptureRequestIds.has(message.id)) {
-        // the request already failed with a timeout so the caller was told — drop the late file instead of consuming it as a capture
+        // The request already failed with a timeout, so the caller was told.
+        // Drop the late file instead of consuming it as a hotkey capture.
         this.#captureReadQueue = this.#captureReadQueue
           .then(() => this.#dropLateRequestCapture(message))
           .catch(() => undefined);
@@ -2070,7 +2085,8 @@ export class DesktopAppSnapManager {
       message.id !== undefined &&
       this.#timedOutCaptureRequestIds.has(message.id)
     ) {
-      // the request already timed out — a late error must not surface a second spurious failure toast
+      // The request already failed with a timeout; a late error must not
+      // surface a second, spurious failure toast.
       return;
     }
 
@@ -2113,7 +2129,8 @@ export class DesktopAppSnapManager {
         }),
       );
     }
-    // benign overlap errors toast without yanking Synara to the foreground while the user works in the captured app
+    // Benign overlap errors surface as a toast without yanking Synara to the
+    // foreground while the user is still working in the captured app.
     this.#emitCaptureError(
       message.code,
       message.message,
@@ -2155,7 +2172,9 @@ export class DesktopAppSnapManager {
     const { capture, capturePath } = await this.#readCaptureFromHelperMessage(message);
     await this.#ensurePendingCapturesLoaded();
     const pendingRecord = await this.#persistPendingCapture(capture);
-    // delete the helper's temp file only once the pending copy durably owns it — earlier deletion destroys the only on-disk copy on a transient persistence failure
+    // Only delete the helper's temporary file once the pending copy durably
+    // owns the capture; deleting it earlier would destroy the only on-disk
+    // copy when persistence fails transiently.
     await FS.promises.unlink(capturePath).catch(() => undefined);
     await this.#recordPendingCapture(pendingRecord);
     this.#options.onCaptured(capture);
@@ -2179,7 +2198,10 @@ export class DesktopAppSnapManager {
       return;
     }
 
-    // register the durable recovery copy synchronously before resolving — no timeout can interleave, so a capture can't go pending after its caller was told it failed
+    // Register the durable recovery copy synchronously before resolving the
+    // renderer promise. No timeout callback can interleave between this call
+    // and settlement, so a capture cannot become pending after its caller was
+    // already told that the request failed.
     const recordPromise = this.#recordPendingCapture(pendingRecord);
     await FS.promises.unlink(capturePath).catch(() => undefined);
     const settled = this.#settleCaptureRequest(capture.id, capture);

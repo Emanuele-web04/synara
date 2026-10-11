@@ -1,3 +1,7 @@
+// FILE: expensiveReadRetry.test.ts
+// Purpose: Locks down capacity-retry delay and error-only self-heal intervals.
+// Layer: Web data-fetching unit tests
+
 import { describe, expect, it } from "vitest";
 
 import {

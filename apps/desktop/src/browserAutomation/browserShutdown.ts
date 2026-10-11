@@ -1,3 +1,4 @@
+/** Revoke tool access, then close pages so pending CDP calls cannot hold quit open. */
 export async function shutdownBrowserServices(services: {
   revokeHost(): Promise<void>;
   closePages(): void;

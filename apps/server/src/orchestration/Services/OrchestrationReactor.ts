@@ -1,14 +1,33 @@
+/**
+ * OrchestrationReactor - Composite orchestration reactor service interface.
+ *
+ * Coordinates startup of orchestration runtime reactors that translate domain
+ * events into downstream side effects.
+ *
+ * @module OrchestrationReactor
+ */
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
+/**
+ * OrchestrationReactorShape - Service API for orchestration reactor lifecycle.
+ */
 export interface OrchestrationReactorShape {
-  /** must run in a scope so worker fibers finalize on shutdown */
+  /**
+   * Start orchestration-side reactors for provider/runtime/checkpoint flows.
+   *
+   * The returned effect must be run in a scope so all worker fibers can be
+   * finalized on shutdown.
+   */
   readonly start: Effect.Effect<void, never, Scope.Scope>;
 
-  /** reconciles durable provider replay state after restart turn recovery */
+  /** Reconciles durable provider replay state after restart turn recovery. */
   readonly reconcileSettledOpenTurns: Effect.Effect<void>;
 }
 
+/**
+ * OrchestrationReactor - Service tag for orchestration reactor coordination.
+ */
 export class OrchestrationReactor extends ServiceMap.Service<
   OrchestrationReactor,
   OrchestrationReactorShape

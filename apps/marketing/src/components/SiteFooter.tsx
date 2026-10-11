@@ -1,3 +1,8 @@
+// FILE: SiteFooter.tsx
+// Purpose: Shared page footer (credits + attribution + privacy link) used across routes.
+// Layer: Presentational component
+// Depends on: next/link, design tokens in globals.css
+
 import Link from "next/link";
 
 export default function SiteFooter() {

@@ -1,11 +1,24 @@
+// FILE: orchestrationEventCoalescing.ts
+// Purpose: Collapse a flush window of orchestration domain events before they reach the
+//          store reducer, so N streamed text deltas for one message cost one reducer pass.
+// Layer: Web client event pipeline (pure)
+// Exports: coalesceOrchestrationUiEvents
+// Why: Coalesce text across interleaved threads without moving a thread's state
+//      transitions ahead of its other events.
+
 import type { OrchestrationEvent } from "@synara/contracts";
 
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
+/**
+ * Concatenate incremental text while retaining the message's original timeline
+ * position. A merged run keeps the text-segment boundary its first delta opened.
+ */
 function mergeThreadMessageSentEvents(
   previous: ThreadMessageSentEvent,
   event: ThreadMessageSentEvent,
 ): ThreadMessageSentEvent {
+  const { segmentStartedAt, segmentSequence } = previous.payload;
   return {
     ...event,
     payload: {
@@ -13,13 +26,19 @@ function mergeThreadMessageSentEvents(
       attachments: event.payload.attachments ?? previous.payload.attachments,
       skills: event.payload.skills ?? previous.payload.skills,
       mentions: event.payload.mentions ?? previous.payload.mentions,
+      ...(segmentStartedAt !== undefined ? { segmentStartedAt } : {}),
+      ...(segmentSequence !== undefined ? { segmentSequence } : {}),
       createdAt: previous.payload.createdAt,
       text: previous.payload.text + event.payload.text,
     },
   };
 }
 
-// only unrelated threads may intervene between merged deltas — every other event in the same thread is an ordering barrier
+/**
+ * Only unrelated threads may intervene between merged deltas. Even a streaming
+ * message updates turn state and diff bindings, so every other event in its own
+ * thread is an ordering barrier. Project/space events can affect multiple threads.
+ */
 export function coalesceOrchestrationUiEvents(
   events: ReadonlyArray<OrchestrationEvent>,
 ): OrchestrationEvent[] {
@@ -39,7 +58,10 @@ export function coalesceOrchestrationUiEvents(
         previous.payload.turnId === event.payload.turnId &&
         previous.payload.role === event.payload.role &&
         previous.payload.streaming &&
-        event.payload.streaming
+        event.payload.streaming &&
+        // A delta that opens a new text segment must stay its own event, or its
+        // text would be filed under the previous segment.
+        event.payload.segmentStartedAt === undefined
       ) {
         coalesced[slot!] = mergeThreadMessageSentEvents(previous, event);
         continue;

@@ -1,3 +1,7 @@
+// FILE: AppIconPicker.tsx
+// Purpose: Render the visual desktop app-icon choices used by Appearance settings.
+// Layer: Settings UI component
+
 import { useState } from "react";
 
 import type { DesktopAppIcon } from "@synara/contracts";
@@ -66,7 +70,8 @@ export function AppIconPicker({
             aria-pressed={selected}
             disabled={busy}
             className={cn(
-              // the artwork is the whole control — just a stroke when selected, no filled tile
+              // Same selection language as ThemeModePicker: the artwork is the whole
+              // control, so no filled tile — just a stroke that appears when selected.
               "relative grid place-items-center rounded-[14px] border-2 p-[3px] transition-colors motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               "disabled:pointer-events-none",
@@ -81,7 +86,8 @@ export function AppIconPicker({
                 try {
                   await onValueChange(icon);
                 } catch {
-                  // native preference synchronization owns rollback; the picker only owns its transient loading state
+                  // Native preference synchronization owns rollback. The picker
+                  // only owns its transient loading state.
                 } finally {
                   setPendingIcon((current) => (current === icon ? null : current));
                 }

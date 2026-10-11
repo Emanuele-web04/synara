@@ -1,3 +1,12 @@
+/**
+ * Devin ACP support - builds the Devin CLI stdio command and resolves auth.
+ *
+ * Devin speaks the Agent Client Protocol over stdio via `devin acp`, launched
+ * by an ACP-aware host as a subprocess. Credentials come from WINDSURF_API_KEY
+ * when set, otherwise from the API key stored by `devin auth login`.
+ *
+ * @module DevinAcpSupport
+ */
 import { readFile } from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -51,7 +60,8 @@ const DEVIN_INTERACTIVE_AUTH_METHOD_IDS = new Set([
   "devin.com",
   "oauth",
 ]);
-// accept canonical uppercase keys plus the lowercase windsurf_api_key some credential injectors provide
+// Accept the canonical uppercase keys plus the lowercase `windsurf_api_key`
+// that some secret/credential injectors provide.
 const DEVIN_API_KEY_ENV_KEYS = ["WINDSURF_API_KEY", "DEVIN_API_KEY", "windsurf_api_key"] as const;
 const DEVIN_API_SERVER_URL_ENV_KEYS = ["WINDSURF_API_SERVER_URL", "DEVIN_API_SERVER_URL"] as const;
 const DEVIN_COMPACT_COMMAND_NAME = "compact";
@@ -94,6 +104,7 @@ export interface DevinAcpAuthInput {
   readonly apiKey?: string;
 }
 
+/** Host auth metadata sent in the ACP authenticate request for Devin. */
 export type DevinAcpAuthenticateMeta = {
   headless: boolean;
   api_key?: string;
@@ -170,6 +181,7 @@ function parseDevinTomlString(rawValue: string): string | undefined {
   return parsed || undefined;
 }
 
+/** Parse only the stable credential fields Devin writes to its TOML store. */
 export function parseDevinCredentialsToml(raw: string): DevinAcpCredentials | undefined {
   let apiKey: string | undefined;
   let apiServerUrl: string | undefined;
@@ -227,7 +239,12 @@ export type DevinApiServerUrlValidation =
   | { readonly kind: "url"; readonly url: string }
   | { readonly kind: "rejected"; readonly reason: DevinApiServerUrlRejection };
 
-// HTTPS only, except explicit HTTP on loopback — malformed/credentialed/unsafe-scheme/non-loopback-HTTP URLs rejected before credentials attach
+/**
+ * Validate a configured/stored Devin API server URL before any credential is
+ * attached to auth metadata. Only HTTPS is allowed, except explicit HTTP on the
+ * local loopback; URLs that are malformed, embed credentials, use an unsafe
+ * scheme, or point insecure HTTP at a non-loopback host are rejected.
+ */
 export function validateDevinApiServerUrl(raw: string | undefined): DevinApiServerUrlValidation {
   const candidate = raw?.trim();
   if (!candidate) {
@@ -237,6 +254,8 @@ export function validateDevinApiServerUrl(raw: string | undefined): DevinApiServ
   try {
     parsed = new URL(candidate);
   } catch (error) {
+    // A malformed URL is a typed rejection, not a swallowed failure: it surfaces
+    // as a sanitized auth error so credentials are never attached to a bad endpoint.
     if (error instanceof TypeError) {
       return { kind: "rejected", reason: "malformed" };
     }
@@ -293,7 +312,9 @@ export function runDevinAcpCompactionCommand(
       (command) => command.name.trim().toLowerCase() === DEVIN_COMPACT_COMMAND_NAME,
     );
 
-    // reject a definitive non-support signal but keep the direct prompt path when the list is empty — older builds keep working
+    // Devin advertises its slash commands over ACP. Reject a definitive
+    // non-support signal, but keep the direct prompt path when the list is
+    // empty so older builds keep working.
     if (commands.length > 0 && !compactAvailable) {
       return yield* new AcpErrors.AcpRequestError({
         code: -32601,
@@ -315,6 +336,8 @@ export function buildDevinAcpSpawnInput(
   runtimeMode: RuntimeMode,
   childEnvironment?: NodeJS.ProcessEnv,
 ): AcpSpawnInput {
+  // Devin's permission prompts surface through ACP request_permission events;
+  // the session itself needs no permission-mode flag to keep that flow intact.
   void runtimeMode;
   const args = ["acp"];
   const model = devinSettings?.model?.trim();
@@ -322,6 +345,8 @@ export function buildDevinAcpSpawnInput(
     args.push("--model", model);
   }
 
+  // The Devin ACP server expects `WINDSURF_API_KEY`. If only the lowercase
+  // variant is present, normalize it to the canonical key for the child.
   const baseEnv = childEnvironment ?? process.env;
   const apiKey = getDevinApiKeyEnv(baseEnv);
   const overrides: NodeJS.ProcessEnv = apiKey ? { WINDSURF_API_KEY: apiKey } : {};
@@ -360,7 +385,9 @@ export const resolveDevinAcpAuthMethodId = (
       if (apiKeyMethod) {
         return apiKeyMethod;
       }
-      // Devin 3000.3.x advertises only devin-browser even with a valid key, but still accepts windsurf-api-key via _meta.api_key — keep auth headless
+      // Devin 3000.3.x advertises only `devin-browser` even when the ACP host
+      // supplies a valid API key. The CLI still accepts the canonical
+      // `windsurf-api-key` method with `_meta.api_key`, so keep auth headless.
       if (authMethodIds.has("devin-browser")) {
         return DEVIN_PRIMARY_API_KEY_AUTH_METHOD_ID;
       }
@@ -368,6 +395,8 @@ export const resolveDevinAcpAuthMethodId = (
     if (authMethodIds.has(DEVIN_CACHED_TOKEN_AUTH_METHOD_ID)) {
       return DEVIN_CACHED_TOKEN_AUTH_METHOD_ID;
     }
+    // Devin also accepts `devin auth login` stored credentials. Prefer any
+    // advertised non-interactive method before giving up.
     const nonInteractive = [...authMethodIds].find(
       (methodId) => !DEVIN_INTERACTIVE_AUTH_METHOD_IDS.has(methodId),
     );

@@ -1,3 +1,9 @@
+/**
+ * Agent Mentions - @alias(task) syntax for subagent delegation.
+ *
+ * Provides provider-aware alias metadata used by the composer UI and provider runtimes.
+ */
+
 import type { ProviderKind } from "./orchestration";
 import type { ModelSlug } from "./model";
 
@@ -217,7 +223,7 @@ export const AGENT_MENTION_ALIASES_BY_PROVIDER: Record<
   omp: {},
 } as const satisfies Record<ProviderKind, Record<string, AgentAliasDefinition>>;
 
-// back-compat for legacy call sites expecting a flat alias table
+// Backward compatibility for legacy call sites that still expect a flat alias table.
 export const AGENT_MENTION_ALIASES: Record<string, AgentAliasDefinition> = Object.assign(
   {},
   ...Object.values(AGENT_MENTION_ALIASES_BY_PROVIDER),
@@ -242,6 +248,10 @@ function mapAgentEntries(input: Record<string, AgentAliasDefinition>): ResolvedA
     .toSorted((a, b) => a.alias.localeCompare(b.alias));
 }
 
+/**
+ * Get all available agent aliases for a provider. When no provider is passed,
+ * returns the global union for parsing and validation helpers.
+ */
 export function getAgentMentionAliases(provider?: ProviderKind): ResolvedAgentAlias[] {
   if (provider) {
     return mapAgentEntries(AGENT_MENTION_ALIASES_BY_PROVIDER[provider]);
@@ -252,6 +262,9 @@ export function getAgentMentionAliases(provider?: ProviderKind): ResolvedAgentAl
   );
 }
 
+/**
+ * Get the preferred aliases shown in autocomplete for a provider.
+ */
 export function getAgentMentionAutocompleteAliases(provider: ProviderKind): ResolvedAgentAlias[] {
   return AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER[provider].map((alias) => {
     const definition = AGENT_MENTION_ALIASES_BY_PROVIDER[provider][alias];
@@ -263,6 +276,9 @@ export function getAgentMentionAutocompleteAliases(provider: ProviderKind): Reso
   });
 }
 
+/**
+ * Resolve an agent alias. When a provider is passed, only provider-specific aliases are considered.
+ */
 export function resolveAgentAlias(
   alias: string,
   provider?: ProviderKind,

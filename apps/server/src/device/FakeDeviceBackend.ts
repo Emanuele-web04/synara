@@ -1,4 +1,12 @@
-/** deterministic in-memory backend: every effect recorded, every clock injectable — manager lifecycle, tool, and transport tests run on any platform without Xcode */
+/**
+ * FakeDeviceBackend - deterministic in-memory DeviceBackend for tests.
+ *
+ * Every observable effect is recorded and every clock is injectable, so manager
+ * lifecycle tests, tool tests, and frame-transport tests can run identically on
+ * any platform without Xcode, a simulator, or the native helper.
+ *
+ * @module device/FakeDeviceBackend
+ */
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -56,7 +64,7 @@ export interface FakeDeviceBackendOptions {
   readonly now?: () => number;
 }
 
-/** iPhone 17 Pro geometry — the shape that exposed the pixel-vs-point bug */
+/** iPhone 17 Pro geometry: the shape that exposed the pixel-vs-point bug. */
 export const DEFAULT_FAKE_GEOMETRY: DeviceGeometry = {
   pointWidth: 402,
   pointHeight: 874,
@@ -70,29 +78,30 @@ const DEFAULT_DEVICES: readonly FakeDeviceSeed[] = [
   { udid: "FAKE-0004", name: "iPhone Air", runtime: "iOS 26.0", state: "shutdown" },
 ];
 
-// a 1x1 transparent PNG — valid enough that decoding it in a test gets a real image
+// A 1x1 transparent PNG; small enough to inline and valid enough that anything
+// decoding the bytes in a test gets a real image.
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-/** far enough below the 852pt screen to need several swipes */
+/** Far enough below the 852pt screen to need several swipes to reach. */
 const FAKE_DEEP_ROW_START_Y = 2_400;
 
-/** the list's end — past this the deep row stops moving */
+/** The list's end: past this the deep row stops moving, however hard you swipe. */
 const FAKE_MAX_SCROLL_OFFSET = 2_000;
 
-/** rows further down are not rendered yet, as UIKit virtualizes them */
+/** Rows further down than this are not rendered yet, as UIKit virtualizes them. */
 const FAKE_VIRTUALIZATION_HORIZON = 1_600;
 
 export class FakeDeviceBackend implements DeviceBackend {
   readonly platform = "ios-simulator" as const;
 
   readonly calls: FakeDeviceCall[] = [];
-  /** set by tests to make the next call of a kind reject */
+  /** Set by tests to make the next call of a given kind reject. */
   readonly failures = new Map<FakeDeviceCall["kind"], DeviceBackendError>();
   disposed = false;
 
   private availabilityValue: DeviceAvailability;
-  /** how far the fake list has scrolled, in device points */
+  /** How far the fake list has been scrolled, in device points. */
   private scrollOffset = 0;
   private readonly now: () => number;
   private readonly devices = new Map<string, DeviceDescriptor>();
@@ -122,6 +131,8 @@ export class FakeDeviceBackend implements DeviceBackend {
     }
   }
 
+  // ── Test controls ──────────────────────────────────────────────────
+
   setAvailability(availability: DeviceAvailability): void {
     this.availabilityValue = availability;
   }
@@ -130,13 +141,17 @@ export class FakeDeviceBackend implements DeviceBackend {
     this.failures.set(kind, error);
   }
 
-  /** mark a device booted without going through Synara, as Simulator.app would */
+  /** Mark a device booted without going through Synara, as Simulator.app would. */
   bootExternally(udid: string): void {
     const device = this.requireDevice(udid);
     this.devices.set(udid, { ...device, state: "booted", bootSource: "user" });
   }
 
-  /** stop a device behind Synara's back — the manager gets no notification, exactly the case that left a phantom holding a slot */
+  /**
+   * Stop a device behind Synara's back, as `simctl shutdown` from a shell or a
+   * crashed runtime would. The manager gets no notification, which is exactly
+   * the case that used to leave a phantom holding a slot in the boot cap.
+   */
   shutdownExternally(udid: string): void {
     const device = this.requireDevice(udid);
     this.devices.set(udid, { ...device, state: "shutdown", bootSource: "user" });
@@ -147,7 +162,7 @@ export class FakeDeviceBackend implements DeviceBackend {
     return this.listeners.has(udid);
   }
 
-  /** push one frame to whoever is attached; no-op when nobody listens */
+  /** Push one frame to whoever is attached; no-op when nobody is listening. */
   emitFrame(
     udid: string,
     frame: Partial<Omit<DeviceStreamFrame, "data">> & { readonly data?: Uint8Array } = {},
@@ -174,6 +189,8 @@ export class FakeDeviceBackend implements DeviceBackend {
       (call): call is Extract<FakeDeviceCall, { kind: K }> => call.kind === kind,
     );
   }
+
+  // ── DeviceBackend ──────────────────────────────────────────────────
 
   availability(): Promise<DeviceAvailability> {
     return Promise.resolve(this.availabilityValue);
@@ -237,12 +254,14 @@ export class FakeDeviceBackend implements DeviceBackend {
   async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
     this.record({ kind: "swipe", udid, gesture });
     this.requireBooted(udid);
-    // content follows the finger — an upward swipe pulls lower rows up; clamped at the list's end
+    // Content follows the finger, so an upward swipe pulls lower rows up.
+    // Clamped at the list's end, which is what makes an unreachable target
+    // stop moving instead of scrolling forever.
     const delta = gesture.toY - gesture.fromY;
     this.scrollOffset = Math.max(0, Math.min(FAKE_MAX_SCROLL_OFFSET, this.scrollOffset - delta));
   }
 
-  /** where the deep row sits given how far the list scrolled */
+  /** Where the deep row currently sits, given how far the list has scrolled. */
   private deepRowY(): number {
     return FAKE_DEEP_ROW_START_Y - this.scrollOffset;
   }
@@ -269,7 +288,8 @@ export class FakeDeviceBackend implements DeviceBackend {
     this.record({ kind: "screenshot", udid });
     const device = this.requireBooted(udid);
     return {
-      // mirrors the real backend — a saved shot lands beside the recordings
+      // Mirrors the real backend: a saved shot reports where it landed, and it
+      // lands beside the recordings rather than anywhere else.
       ...(options.save === true ? { path: path.join(tmpdir(), `simulator-${udid}.png`) } : {}),
       udid,
       name: `${device.name}.png`,
@@ -341,7 +361,8 @@ export class FakeDeviceBackend implements DeviceBackend {
             activationPoint: { x: 196, y: 725 },
             children: [],
           },
-          // a switch row's frame centre is dead space — only the activation point toggles it; mirrors real UIKit rows
+          // A switch row: its frame centre is dead space, so only the
+          // activation point toggles it. Mirrors real UIKit settings rows.
           {
             role: "CheckBox",
             subrole: "Switch",
@@ -351,7 +372,9 @@ export class FakeDeviceBackend implements DeviceBackend {
             activationPoint: { x: 340, y: 222 },
             children: [],
           },
-          // virtualized like a real UIKit list — absent from the tree until scrolling brings it near
+          // Virtualized, like a real UIKit list: absent from the tree until
+          // scrolling brings it near, then rising with each further swipe.
+          // This is the shape that broke the first scroll implementation.
           ...(this.deepRowY() <= FAKE_VIRTUALIZATION_HORIZON
             ? [
                 {
@@ -371,16 +394,23 @@ export class FakeDeviceBackend implements DeviceBackend {
   }
 
   geometry(udid: string): DeviceGeometry | null {
-    // mirrors the real backend — geometry only exists once something attached
+    // Mirrors the real backend: geometry only exists once something attached.
     return this.attachedGeometry.has(udid) ? DEFAULT_FAKE_GEOMETRY : null;
   }
 
-  /** models the early-boot window where a device reports booted before publishing a display */
+  /**
+   * Fail exactly the next attach. Models the real early-boot window where a
+   * device reports booted before it publishes a display, and the retry that
+   * follows it succeeds.
+   */
   failNextStream(message: string): void {
     this.nextStreamFailure = message;
   }
 
-  /** models a device that boots but never publishes a display — what the attach deadline exists for */
+  /**
+   * Fail every attach until cleared. Models a device that boots but never
+   * publishes a display, which is what the attach deadline exists for.
+   */
   failEveryStream(message: string): void {
     this.persistentStreamFailure = message;
   }
@@ -418,6 +448,8 @@ export class FakeDeviceBackend implements DeviceBackend {
     this.disposed = true;
     this.listeners.clear();
   }
+
+  // ── Internals ──────────────────────────────────────────────────────
 
   private record(call: FakeDeviceCall): void {
     const failure = this.failures.get(call.kind);

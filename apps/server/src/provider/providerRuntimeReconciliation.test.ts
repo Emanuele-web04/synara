@@ -463,7 +463,14 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
-  // plan commands are built in code and never decoded — nothing but this check enforces the schema refinements, and a rejected command breaks the stuck-thread recovery path itself
+  /**
+   * A plan is only ever consumed by building `thread.session.set` and
+   * `thread.activity.append` from it (ProviderRuntimeReconciler.applyPlan). Those
+   * commands are built in code and never decoded, so nothing but this check
+   * enforces the schema-only refinements on what the plan carries - and this is
+   * the stuck-thread recovery path, so a rejected command breaks exactly the
+   * mechanism meant to un-stick the thread.
+   */
   const commandsFromPlan = (
     plan: ProviderRuntimeReconciliationPlan,
     thread: OrchestrationThreadShell,
@@ -578,6 +585,7 @@ describe("planProviderRuntimeReconciliation", () => {
         staleAfterMs: 10_000,
       });
       expectSchemaValidPlans(plans, thread);
+      // Absent, so it falls through to the latest running turn like a missing id.
       expect(plans[0]?.projectedTurnId).toBe(OLD_TURN_ID);
     });
 
@@ -612,13 +620,17 @@ describe("planProviderRuntimeReconciliation", () => {
         nowMs: NOW,
         staleAfterMs: 10_000,
       });
-      // a live session claiming to run with no turn named is evidence of nothing — aligning onto '' writes a session command the schema rejects
+      // A live session that claims to be running but names no turn is evidence of
+      // nothing. Aligning onto '' would write a session command the schema rejects.
       expect(plans).toEqual([]);
     });
   });
 
   it("does not settle while the provider's runtime-event pump is unhealthy", () => {
-    // quiet projection + settled-looking live session is exactly what a stalled event stream produces for a progressing turn — the abandoned clock is the only escape
+    // A quiet projection plus a missing/settled-looking live session is exactly
+    // what a stalled event stream produces for a turn that is in fact
+    // progressing. Settling on evidence the process cannot observe kills live
+    // turns; the abandoned clock is the only escape hatch.
     const plans = planProviderRuntimeReconciliation({
       threads: [threadShell()],
       bindings: [binding(null)],
@@ -639,7 +651,9 @@ describe("planProviderRuntimeReconciliation", () => {
   });
 
   it("does not settle while the runtime journal has uningested rows", () => {
-    // persisted-but-uningested rows manufacture projection staleness — a completed turn's terminal events may be sitting in the queue, so settling here "recovers" a finished turn
+    // Persisted-but-uningested rows starve the projection: its staleness is
+    // manufactured, and a completed turn's terminal events may be sitting in
+    // the queue. Settling here "recovers" a turn that finished normally.
     const plans = planProviderRuntimeReconciliation({
       threads: [threadShell()],
       bindings: [binding(null)],
@@ -721,7 +735,9 @@ describe("planProviderRuntimeReconciliation", () => {
   });
 
   it("does not treat an actively streaming turn as stale when only the session row is quiet", () => {
-    // thread.updatedAt advances on every appended message — a streaming turn must never become a settle candidate just because the session row hasn't moved
+    // thread.updatedAt advances on every appended message. A turn that is
+    // streaming output must never become a settle candidate just because the
+    // session lifecycle row has not moved since the turn started.
     const plans = planProviderRuntimeReconciliation({
       threads: [threadShell({ updatedAt: "2026-07-23T20:00:28.000Z" })],
       bindings: [binding(null)],

@@ -1,3 +1,8 @@
+// FILE: useCodeSelectionAction.ts
+// Purpose: Generic highlight -> floating "Add to chat" flow for read-only code
+//          surfaces (file preview, diff view), mirroring the transcript behavior.
+// Layer: Chat selection interaction controller
+
 import { useEffect, useState, type MouseEventHandler } from "react";
 
 import {
@@ -12,7 +17,10 @@ export interface PendingCodeSelectionAction<T> {
   placement: "top" | "bottom";
 }
 
-// caller attaches onContainerMouseUp and renders TranscriptSelectionAction while pendingAction is set; readSelection inspects the live selection scoped to the container
+// Caller attaches `onContainerMouseUp` to the selectable surface and renders
+// `TranscriptSelectionAction` while `pendingAction` is set. `readSelection`
+// inspects the live window selection scoped to the container and returns the
+// commit payload (or null when the selection is not actionable).
 export function useCodeSelectionAction<T>(options: {
   enabled: boolean;
   readSelection: (container: HTMLElement) => T | null;
@@ -26,7 +34,8 @@ export function useCodeSelectionAction<T>(options: {
   const [pendingActionState, setPendingAction] = useState<PendingCodeSelectionAction<T> | null>(
     null,
   );
-  // derived: disabling clears the visible action in the same render with no state-resetting effect
+  // Derived: disabling clears the visible action in the same render, with no
+  // state-resetting effect (the stale state simply stops being surfaced).
   const pendingAction = enabled ? pendingActionState : null;
 
   const onContainerMouseUp: MouseEventHandler<HTMLElement> = (event) => {

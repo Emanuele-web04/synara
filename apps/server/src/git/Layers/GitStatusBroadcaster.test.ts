@@ -201,7 +201,8 @@ describe("GitStatusBroadcasterLive", () => {
         expect(first.pr).toBeNull();
         expect(second.pr?.number).toBe(42);
         expect(state.statusCalls).toBe(2);
-        // expired remote metadata can never be reused — skip the details probe instead of fetching and discarding it
+        // Expired remote metadata can never be reused, so the details probe is
+        // skipped instead of being fetched and thrown away by the full reload.
         expect(state.detailsCalls).toBe(0);
       }),
     );
@@ -303,7 +304,9 @@ describe("GitStatusBroadcasterLive", () => {
       Effect.gen(function* () {
         const broadcaster = yield* GitStatusBroadcaster;
 
-        // the sidebar polls 60s against a 30s TTL — every miss must cost one status read, not a discarded probe plus a reload
+        // The sidebar polls on a 60s timer against a 30s remote TTL, so every poll
+        // after the first misses the cache. Each miss must cost exactly one status
+        // read, not a discarded details probe plus a full reload.
         yield* broadcaster.getStatus({ cwd: "/repo" });
         vi.setSystemTime(60_000);
         yield* broadcaster.getStatus({ cwd: "/repo" });
@@ -329,20 +332,21 @@ describe("GitStatusBroadcasterLive", () => {
       Effect.gen(function* () {
         const broadcaster = yield* GitStatusBroadcaster;
 
-        // every thread worktree is a distinct cwd — an unbounded cache would pin details for every directory ever seen
+        // Every thread worktree is a distinct cwd, so an unbounded cache would pin
+        // status details for every directory the server ever saw.
         for (let index = 0; index <= GIT_STATUS_CACHE_MAX_ENTRIES; index += 1) {
           yield* broadcaster.getStatus({ cwd: `/worktrees/repo-${index}` });
         }
         expect(state.statusCalls).toBe(GIT_STATUS_CACHE_MAX_ENTRIES + 1);
 
-        // most recent directories still cached
+        // The most recent directories are still cached (details reuse, no reload).
         yield* broadcaster.getStatus({
           cwd: `/worktrees/repo-${GIT_STATUS_CACHE_MAX_ENTRIES}`,
         });
         expect(state.statusCalls).toBe(GIT_STATUS_CACHE_MAX_ENTRIES + 1);
         expect(state.detailsCalls).toBe(1);
 
-        // coldest evicted → reloads from git
+        // The coldest one was evicted, so it reloads from git.
         yield* broadcaster.getStatus({ cwd: "/worktrees/repo-0" });
         expect(state.statusCalls).toBe(GIT_STATUS_CACHE_MAX_ENTRIES + 2);
       }),

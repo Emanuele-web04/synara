@@ -1,3 +1,8 @@
+// FILE: ComposerPendingApprovalPanel.browser.tsx
+// Purpose: Browser regression coverage for the detached approval decision card.
+// Layer: Chat composer UI browser test
+// Depends on: ComposerPendingApprovalPanel and vitest-browser-react.
+
 import {
   ApprovalRequestId,
   type ProviderApprovalDecision,

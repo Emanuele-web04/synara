@@ -162,7 +162,8 @@ function MenuItem({
     <MenuPrimitive.Item
       className={cn(
         COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
-        // text-destructive (not -foreground): items sit on the popup surface so they need the red accent itself
+        // text-destructive (not -foreground): these items sit on the popup surface, so they
+        // need the red accent itself — the foreground token is for text on a destructive fill.
         "data-inset:ps-8 data-[variant=destructive]:text-destructive",
         className,
       )}
@@ -346,7 +347,9 @@ function MenuGroupLabel({
 }) {
   return (
     <MenuPrimitive.GroupLabel
-      // shared section label style matching the composer picker headers; picker menus may override padding via `--picker-section-py`
+      // Shared section/group label style: matches the composer picker section
+      // headers (e.g. "Effort"). Picker menus may still override padding-block
+      // via the `--picker-section-py` token on `[data-slot="menu-label"]`.
       className={cn(
         "px-2 py-1.5 font-normal text-ui leading-snug text-muted-foreground/45 data-inset:ps-9 sm:data-inset:ps-8",
         className,
@@ -410,7 +413,8 @@ function FocusStableMenuSub({
     nextOpen,
     eventDetails,
   ) => {
-    // Base UI can report focus-out while the pointer is inside the portalled submenu — let the parent menu own real dismissal
+    // Base UI can report focus-out while the pointer is already inside the submenu's
+    // portalled popup. Let the parent menu's outside/sibling handling own real dismissal.
     if (!nextOpen && eventDetails.reason === "focus-out") return;
     if (controlledOpen === undefined) setUncontrolledOpen(nextOpen);
     onOpenChange?.(nextOpen, eventDetails);

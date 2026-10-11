@@ -180,7 +180,8 @@ describe("resync requests", () => {
   });
 
   it("debounces repeat requests inside the cooldown", () => {
-    // resync rebuilds the VideoToolbox session — a gate firing on every dropped frame must not thrash the encoder
+    // Resync rebuilds the VideoToolbox session; a gate firing on every dropped
+    // frame must not thrash the encoder.
     const { socket, send, source, advance } = subscribeWithClock(0);
     socket.emit("open", {});
 
@@ -196,7 +197,8 @@ describe("resync requests", () => {
   });
 
   it("defers a request made before the socket opens instead of dropping it", () => {
-    // a gap on the first frames of a fresh connection: dropping the request would strand the canvas until the next natural IDR
+    // A gap can be detected on the first frames of a fresh connection; dropping
+    // the request would strand the canvas until the next natural IDR.
     const { socket, send, source } = subscribeWithClock(0);
 
     expect(source.requestResync()).toBe(false);

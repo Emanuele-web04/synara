@@ -15,7 +15,11 @@ export interface DocumentationCatalogEntry {
 
 const FALLBACK_DOCUMENTATION_DESCRIPTION = "Synara product documentation.";
 
-// derived from Fumadocs so a second hand-maintained route list can't drift as guides are added
+/**
+ * Canonical, generated documentation inventory shared by sitemaps and
+ * AI-readable discovery routes. Keeping this derived from Fumadocs prevents a
+ * second hand-maintained route list from drifting as guides are added.
+ */
 export function getDocumentationCatalog(): DocumentationCatalogEntry[] {
   return docsSource
     .getPages()

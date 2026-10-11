@@ -1,4 +1,13 @@
-/** kept out of wsRpc.ts because the device engine is optional and platform-gated — answers all twenty methods whether or not a backend exists so off-macOS clients get one clear refusal */
+/**
+ * WebSocket handlers for the device RPC group.
+ *
+ * Kept out of `wsRpc.ts` because the device engine is optional and
+ * platform-gated: this module answers all twenty methods whether or not a
+ * backend exists, so the RPC group stays exhaustively handled everywhere and
+ * off-macOS clients get one clear refusal instead of a transport error.
+ *
+ * @module device/wsDeviceHandlers
+ */
 import {
   DEVICE_WS_METHODS,
   ThreadId,
@@ -38,7 +47,7 @@ import { Effect } from "effect";
 import type { DeviceServiceShape } from "./Services/DeviceService.ts";
 import { readTapRequest } from "./uiTreeTargeting.ts";
 
-/** shared by the pane (always a point) and agents (usually a label) */
+/** Shared by the pane (always a point) and agents (usually a label). */
 async function tapFromInput(
   manager: DeviceServiceShape["manager"],
   input: DeviceTapInput,
@@ -127,7 +136,11 @@ export interface WsDeviceHandlers {
   ) => Effect.Effect<DeviceDescribeUiResult, WsRpcError>;
 }
 
-/** the twentieth method (`subscribeEvents`) is a stream wired in wsRpc.ts where the admission guard lives */
+/**
+ * Build the nineteen request handlers. The twentieth method
+ * (`subscribeEvents`) is a stream and is wired in `wsRpc.ts` where the stream
+ * admission guard lives.
+ */
 export function makeWsDeviceHandlers(
   deviceService: DeviceServiceShape | undefined,
 ): WsDeviceHandlers {
@@ -138,7 +151,9 @@ export function makeWsDeviceHandlers(
       [DEVICE_WS_METHODS.shutdown]: () => unsupported(),
       [DEVICE_WS_METHODS.attach]: () => unsupported(),
       [DEVICE_WS_METHODS.detach]: () => unsupported(),
-      // the pane calls this on open to decide what to render — answer with a real snapshot naming the unsupported platform rather than an error to translate
+      // The pane calls this on open to decide what to render, so it answers
+      // with a real snapshot naming the unsupported platform rather than an
+      // error the pane would have to translate.
       [DEVICE_WS_METHODS.getThreadState]: (input) =>
         Effect.succeed({
           threadId: input.threadId,

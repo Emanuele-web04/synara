@@ -27,7 +27,10 @@ function redactSensitiveEnvironmentRemainder(args: string): string {
       continue;
     }
 
-    // process-table APIs flatten argv and may discard quotes around spaced values — once a secret assignment starts its true boundary is unknowable; fail closed rather than expose a suffix of the credential
+    // Process-table APIs flatten argv into one string and may discard the
+    // quotes around a value containing spaces. Once a secret assignment
+    // starts, its true boundary is therefore unknowable; fail closed instead
+    // of exposing a suffix of the credential in diagnostics.
     return `${args.slice(0, valueStart)}[redacted]`;
   }
   return args;
@@ -154,7 +157,9 @@ function boundedShellAssignmentValueEnd(
         continue;
       }
       if (activeCommandExpansion() && args.startsWith("<<", index)) {
-        // correctly skipping a heredoc requires parsing its quoted delimiter and body — diagnostics must fail closed rather than treat heredoc data as command-substitution syntax
+        // Correctly skipping a heredoc requires parsing its quoted delimiter
+        // and later body. Diagnostics must fail closed instead of treating
+        // shell-looking heredoc data as real command-substitution syntax.
         return args.length;
       }
       const activeCase = expansion.kind === "command" ? expansion.cases.at(-1) : undefined;
@@ -312,7 +317,8 @@ function boundedShellAssignmentValueEnd(
       continue;
     }
     if (args.startsWith("<(", index) || args.startsWith(">(", index)) {
-      // parsing process-substitution bodies needs another grammar branch — preserve no suffix when the boundary is ambiguous
+      // Parsing process-substitution bodies would require yet another shell
+      // grammar branch. Preserve no suffix when their boundary is ambiguous.
       return args.length;
     }
     if (character === "(") return args.length;

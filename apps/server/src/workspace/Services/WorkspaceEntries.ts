@@ -29,7 +29,7 @@ export interface WorkspaceEntriesShape {
   readonly searchContent: (
     input: ProjectSearchContentInput,
   ) => Effect.Effect<ProjectSearchContentResult, WorkspaceEntriesError>;
-  // fire-and-forget index warm-up; resolves before the build completes
+  // Fire-and-forget index warm-up; resolves before the build completes.
   readonly prewarmSearchIndex: (
     input: ProjectPrewarmSearchIndexInput,
   ) => Effect.Effect<ProjectPrewarmSearchIndexResult, WorkspaceEntriesError>;
@@ -42,7 +42,8 @@ export interface WorkspaceEntriesShape {
   readonly searchLocal: (
     input: ProjectSearchLocalEntriesInput,
   ) => Effect.Effect<ProjectSearchLocalEntriesResult, WorkspaceEntriesError>;
-  // resolve a bare/partial ref to a unique tracked file, null on zero/multiple matches
+  // Resolve a bare/partial workspace-relative reference (basename or tail path)
+  // to a unique tracked file's path, or null when zero/multiple files match.
   readonly resolveFileBySuffix: (input: {
     readonly cwd: string;
     readonly relativePath: string;

@@ -1,3 +1,9 @@
+// FILE: voiceRecorder.ts
+// Purpose: Captures microphone audio in the browser and normalizes it to Remodex-style WAV clips.
+// Layer: Client utility hook
+// Exports: useVoiceRecorder, formatVoiceRecordingDuration, isVoiceRecordingCancelledError
+// Depends on: browser media devices, Web Audio API, the streaming WAV encoder, and FileReader.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { encodeVoiceRecordingWav } from "./voiceRecorderEncoding";
@@ -26,7 +32,7 @@ interface RecorderRuntime {
   sampleRateHz: number;
 }
 
-const MAX_WAVEFORM_SAMPLES = 160;
+export const MAX_WAVEFORM_SAMPLES = 160;
 
 class VoiceRecordingCancelledError extends Error {
   override readonly name = "VoiceRecordingCancelledError";
@@ -216,7 +222,8 @@ export function useVoiceRecorder() {
       processorNode.connect(silentGainNode);
       silentGainNode.connect(audioContext.destination);
 
-      // Publish the runtime only while this startup still owns the current generation. This keeps future async setup additions cancellation-safe.
+      // Publish the runtime only while this startup still owns the current
+      // generation. This keeps future async setup additions cancellation-safe.
       assertStartIsCurrent();
       runtimeRef.current = runtime;
       isStartingRef.current = false;

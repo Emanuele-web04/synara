@@ -1,3 +1,8 @@
+// FILE: projectCreation.ts
+// Purpose: Shared project-create flow for UI entrypoints that need duplicate recovery.
+// Layer: Web orchestration helper
+// Exports: createOrRecoverProjectFromPath
+
 import {
   type NativeApi,
   type OrchestrationShellSnapshot,
@@ -29,13 +34,15 @@ function buildProjectTitleFromWorkspaceRoot(workspaceRoot: string): string {
   return workspaceRoot.split(/[/\\]/).findLast((segment) => segment.length > 0) ?? workspaceRoot;
 }
 
-// Creates a project row for a folder, recovering the existing server project when the create command races an already-linked workspace root.
+// Creates a project row for a folder, recovering the existing server project when
+// the create command races an already-linked workspace root.
 export async function createOrRecoverProjectFromPath(input: {
   api: NativeApi;
   workspaceRoot: string;
   /** Extra source folders of a multi-folder project; `workspaceRoot` is the primary one. */
   additionalFolders?: ReadonlyArray<string>;
   createIfMissing?: boolean;
+  /** Overrides the active-space default; `null` files the project in Void. */
   spaceId?: SpaceId | null;
   /** Persisted default provider (settings.defaultProvider) that seeds the new
    * project's default model selection. Defaults to codex when omitted, and pi
@@ -82,7 +89,9 @@ export async function createOrRecoverProjectFromPath(input: {
         provider: seedProvider,
         model: getDefaultModel(seedProvider),
       },
-      // a project created while a space is active belongs to it — filing afterwards would bounce the sidebar to Void to follow the new project; explicit-destination callers override it
+      // A project created while a space is active belongs to that space — filing it
+      // afterwards would bounce the sidebar back to Void to follow the new project.
+      // Callers with an explicit destination (the Create Project dialog) override it.
       spaceId: input.spaceId !== undefined ? input.spaceId : readActiveSpaceId(),
       createdAt,
     });

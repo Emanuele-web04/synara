@@ -125,7 +125,7 @@ layer("OrchestrationEventStore", (it) => {
         throughSequenceInclusive: 1_000,
         limit: 500,
       };
-      // one request per replayFilter branch
+      // One request per replayFilter branch in buildReadEventRowsFromSequenceQuery.
       const requests = [
         {
           ...baseRequest,
@@ -148,7 +148,7 @@ layer("OrchestrationEventStore", (it) => {
           eventTypes: ["thread.activity-appended"],
           activityKinds: ["approval.requested"],
         },
-        // empty eventTypes yields the constant-0 predicate (checkpoints projector)
+        // Empty eventTypes yields the constant-0 predicate (checkpoints projector).
         {
           ...baseRequest,
           filterEnabled: true,
@@ -172,7 +172,15 @@ layer("OrchestrationEventStore", (it) => {
           params,
         );
         const details = plan.map((row) => row.detail).join("\n");
-        // the boundary OR must never demote the cursor to a MULTI-INDEX OR plan — it rescans the whole event_type index per page and makes bootstrap minutes of startup; EXPLAIN text isn't stable across SQLite so assert plan fragments
+        // The boundary OR must never demote the sequence cursor to a
+        // MULTI-INDEX OR plan: with a large event log that plan rescans the
+        // whole event_type index per page and turns projection bootstrap
+        // into minutes of startup time.
+        //
+        // EXPLAIN QUERY PLAN text is not a stable format across SQLite
+        // releases, so assert independent fragments of the required plan
+        // (table search, integer PK usage, both rowid range bounds) instead
+        // of one exact phrase.
         for (const fragment of [
           /SEARCH orchestration_events/,
           /USING INTEGER PRIMARY KEY/,

@@ -1,3 +1,8 @@
+// FILE: profileStats.test.ts
+// Purpose: Focused coverage for Profile stats SQL aggregation against the migrated SQLite schema.
+// Layer: Server stats tests
+// Exports: Vitest coverage for ProfileStatsQuery.
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -40,7 +45,8 @@ describe("heatmapIntensity", () => {
   });
 
   it("spreads skewed token counts across all levels instead of collapsing to level 1", () => {
-    // one spike day plus many small days — percent-of-max bucketing would put every other day at level 1
+    // One spike day plus many small days: percent-of-max bucketing would put every
+    // day except the spike at level 1.
     const counts = [1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000, 4_000_000];
     const levels = counts.map((count) => heatmapIntensity(count, sorted(counts)));
     expect(levels).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
@@ -58,18 +64,22 @@ describe("ProfileStatsQuery", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const stats = yield* ProfileStatsQuery;
-        for (const [threadId, parentThreadId, creationSource] of [
-          ["root", null, null],
-          ["mirrored-child", "root", "provider_native"],
-          ["independent-child", "root", "synara_mcp"],
+        for (const [threadId, parentThreadId, creationSource, sourceTurnId] of [
+          ["root", null, null, null],
+          ["mirrored-child", "root", "provider_native", "first"],
+          ["independent-child", "root", "synara_mcp", null],
+          ["uncovered-parent", null, null, null],
+          ["uncovered-child", "uncovered-parent", "provider_native", "uncovered-parent-turn"],
+          ["unknown-source-child", "uncovered-parent", "provider_native", null],
+          ["scalar-parent-child", "root", "provider_native", "fallback"],
         ] as const) {
           yield* sql`
           INSERT INTO projection_threads
             (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
-             env_mode, created_at, updated_at, parent_thread_id, creation_source)
+             env_mode, created_at, updated_at, parent_thread_id, creation_source, source_turn_id)
           VALUES (${threadId}, 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
             'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
-            ${parentThreadId}, ${creationSource})
+            ${parentThreadId}, ${creationSource}, ${sourceTurnId})
         `;
         }
         const addActivity = (id: string, threadId: string, turnId: string, payload: object) => sql`
@@ -108,7 +118,8 @@ describe("ProfileStatsQuery", () => {
         yield* addActivity("3", "mirrored-child", "mirrored", versioned);
         yield* addActivity("4", "root", "legacy", { modelUsage: versioned.modelUsage });
         yield* addActivity("5", "root", "unrecoverable", { modelUsage: versioned.modelUsage });
-        // an earlier private build emitted a compact shape whose input already included cache tokens — its explicit total stays authoritative
+        // An earlier private build emitted a compact shape whose input already
+        // included cache tokens. Its explicit total remains authoritative.
         yield* addActivity("6", "root", "compact", {
           tokenAccountingVersion: 1,
           mainLoopTokens: 1_000,
@@ -122,13 +133,99 @@ describe("ProfileStatsQuery", () => {
             },
           },
         });
-        // a malformed nonempty breakdown must not suppress the verified main-loop fallback or make SQLite JSON functions fail
+        // A malformed nonempty breakdown must not suppress the verified
+        // main-loop fallback or make SQLite JSON functions fail.
         yield* addActivity("7", "root", "fallback", {
           tokenAccountingVersion: 1,
           mainLoopTokens: 250,
           modelUsage: { "claude-fable-5": "unusable" },
         });
         yield* addActivity("8", "independent-child", "independent", versioned);
+        // A previous parent turn with a complete breakdown must not suppress a
+        // later provider-native child whose own parent turn was interrupted.
+        yield* addActivity("9-parent", "uncovered-parent", "previous-parent-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 2_000,
+              outputTokens: 1_000,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        });
+        // Malformed historical payloads are ignored by the fallback probe
+        // instead of making the entire Profile query fail.
+        yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (
+            '9-invalid-parent', 'uncovered-parent', 'uncovered-parent-turn',
+            'error', 'turn.completed', 'interrupted', '{not-json', 10, '2026-09-10T12:00:00Z'
+          )
+        `;
+        // If a provider-native child is the only row with a usable breakdown,
+        // retain its verified usage even though the parent has no result row.
+        yield* addActivity("9", "uncovered-child", "uncovered", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 1_000,
+              outputTokens: 500,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        });
+        // Missing source-turn provenance is not evidence that an older parent
+        // result includes this child's work. Background events can omit turnId.
+        yield* addActivity("9-unknown-source", "unknown-source-child", "unknown-source-turn", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 700,
+        });
+        // A scalar model entry in the matching parent is unusable, and must not
+        // fail the SQLite query or suppress this child's valid fallback.
+        yield* addActivity("9-scalar-parent-child", "scalar-parent-child", "scalar-child-turn", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 400,
+        });
+        // A malformed numeric field must not make a parent look usable and
+        // suppress the child's valid usage.
+        yield* sql`
+          INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+             env_mode, created_at, updated_at, parent_thread_id, creation_source, source_turn_id)
+          VALUES (
+            'malformed-parent', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            NULL, NULL, NULL
+          ),
+          (
+            'malformed-child', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            'malformed-parent', 'provider_native', 'malformed-parent-turn'
+          )
+        `;
+        yield* addActivity("10-parent", "malformed-parent", "malformed-parent-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: "not-a-number",
+              outputTokens: "also-not-a-number",
+            },
+          },
+        });
+        yield* addActivity("10-child", "malformed-child", "malformed-child-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 300,
+              outputTokens: 200,
+            },
+          },
+        });
+        // Successful main-loop usage survives even though old compact model totals
+        // cannot be classified as per-turn or cumulative without process evidence.
         yield* sql`
         INSERT INTO provider_runtime_events
           (event_id, thread_id, turn_id, event_type, event_json, persisted_at)
@@ -159,12 +256,12 @@ describe("ProfileStatsQuery", () => {
         yield* recoverClaudeUsage;
         yield* recoverClaudeUsage;
         expect(yield* sql`SELECT * FROM provider_runtime_events`).toEqual(journalBefore);
-        // the verified fallback must outlive ordinary runtime-event retention
+        // The verified fallback must outlive ordinary runtime-event retention.
         yield* sql`DELETE FROM provider_runtime_events`;
         const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
-        expect(result.lifetimeTotalTokens).toBe(85_228);
+        expect(result.lifetimeTotalTokens).toBe(91_328);
         expect(result.models.map(({ model, tokens }) => ({ model, tokens }))).toEqual([
-          { model: "claude-fable-5", tokens: 83_228 },
+          { model: "claude-fable-5", tokens: 89_328 },
           { model: "claude-opus-4-8", tokens: 2_000 },
         ]);
       }),
@@ -649,7 +746,8 @@ describe("ProfileStatsQuery", () => {
         expect(missingTelemetry.unavailableProviders).toEqual(["grok"]);
         expect(missingTelemetry.lifetimeTotalTokens).toBe(1000);
 
-        // an observed zero is not a positive token total — the coverage notice must describe missing positive totals without claiming telemetry is absent
+        // An observed zero is not a positive token total. The coverage notice must
+        // describe the missing positive totals, without claiming telemetry is absent.
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
@@ -790,7 +888,8 @@ describe("ProfileStatsQuery", () => {
             )
         `;
 
-        // Codex has more turns but Claude processed far more tokens — core stats stay turn-ranked while token stats report Claude on top
+        // Codex has more turns (2 vs 1) but Claude processed far more tokens,
+        // so core stats stay turn-ranked while token stats report Claude on top.
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id,
@@ -836,6 +935,7 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.topProvider).toBe("claudeAgent");
         expect(tokenStats.topProviderPercent).toBeCloseTo(83.3);
         expect(tokenStats.providers).toEqual(["claudeAgent", "codex"]);
+        // Token-based model mix mirrors the token ranking, not the turn counts.
         expect(tokenStats.models).toEqual([
           {
             provider: "claudeAgent",
@@ -852,6 +952,7 @@ describe("ProfileStatsQuery", () => {
             percent: 16.7,
           },
         ]);
+        // Turn-based provider/model mix is unchanged by the token ranking.
         expect(stats.providerModels[0]).toMatchObject({ provider: "codex", turnCount: 2 });
       }),
     );
@@ -863,7 +964,10 @@ describe("ProfileStatsQuery", () => {
         const sql = yield* SqlClient.SqlClient;
         const statsQuery = yield* ProfileStatsQuery;
 
-        // thread-switch is on Opus now but turn 1 ran on Fable — attributing by the latest selection hands every token to Opus; thread-mixed reports both counters and only cumulative rows may drive its series or the dip recovery double-counts
+        // thread-switch is currently on Opus, but the first turn ran on Fable.
+        // Attributing by the thread's latest selection would hand every token to
+        // Opus. thread-mixed reports BOTH counters: only the cumulative rows may
+        // drive its series, or the dip recovery would double-count.
         yield* sql`
           INSERT INTO projection_threads (
             thread_id,
@@ -969,7 +1073,9 @@ describe("ProfileStatsQuery", () => {
             )
         `;
 
-        // Claude completes with per-turn totals; provisional context rows are ignored
+        // Claude completes with per-turn totals; provisional context rows are ignored.
+        // thread-mixed dips to context scale mid-thread and recovers: only the
+        // cumulative rows count (6000 total, not 6000 + the dip recovery).
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id,
@@ -1200,7 +1306,9 @@ describe("ProfileStatsQuery", () => {
             )
         `;
 
-        // Codex has cumulative totals so its usedTokens-only dip is ignored
+        // Codex has cumulative totals, so its usedTokens-only dip is ignored.
+        // A large legacy Claude counter sits between the two Codex turns, but
+        // Claude final usage is counted independently and cannot reset that delta.
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id,
@@ -1678,7 +1786,8 @@ describe("ProfileStatsQuery", () => {
 
         const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
 
-        // retention-hidden and manually deleted threads both keep contributing — stats are lifetime totals and deletion is only a soft hide
+        // Retention-hidden and manually deleted threads both keep contributing:
+        // profile stats are lifetime totals and deletion is only a soft hide.
         expect(stats.insights.skillsExplored).toBe(5);
         expect(stats.insights.totalSkillsUsed).toBe(8);
         expect(stats.activity.totalPromptsSent).toBe(4);
@@ -1898,8 +2007,11 @@ describe("ProfileStatsQuery", () => {
 
         const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
 
+        // Lifetime totals: deleted threads/projects keep their contribution.
         expect(stats.activity.totalPromptsSent).toBe(7);
         expect(stats.activity.totalThreads).toBe(4);
+        // Alpha and Beta tie on prompts (3) and active days (2); the deleted
+        // Alpha thread's later prompt breaks the tie via lastWorkedAt.
         expect(stats.mostWorkedProject).toEqual({
           projectId: "project-alpha",
           title: "Alpha",
@@ -2193,6 +2305,63 @@ describe("ProfileStatsQuery", () => {
             model: "sonnet",
             tokens: 5_000,
             percent: 4.3,
+          },
+        ]);
+      }),
+    );
+  });
+
+  it("starts a fresh cumulative baseline for each native usage session", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-native-session', 'project-profile', 'Native session thread',
+            '{"provider":"antigravity","model":"Gemini 3.5 Flash"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T12:00:00.000Z', '2026-06-13T12:00:00.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('native-session-1', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-a:one","totalProcessedTokens":1000}',
+              1, '2026-06-13T12:00:00.000Z'),
+            ('native-session-2', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-a:one","totalProcessedTokens":1500}',
+              2, '2026-06-13T12:01:00.000Z'),
+            ('native-session-3', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-b:two","totalProcessedTokens":1500}',
+              3, '2026-06-13T12:02:00.000Z'),
+            ('native-session-4', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-b:two","totalProcessedTokens":2000}',
+              4, '2026-06-13T12:03:00.000Z')
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.lifetimeTotalTokens).toBe(3_500);
+        expect(tokenStats.models).toEqual([
+          {
+            provider: "antigravity",
+            instanceId: "antigravity",
+            model: "Gemini 3.5 Flash",
+            tokens: 3_500,
+            percent: 100,
           },
         ]);
       }),

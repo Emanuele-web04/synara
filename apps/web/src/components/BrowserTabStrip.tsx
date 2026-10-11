@@ -1,3 +1,9 @@
+// FILE: BrowserTabStrip.tsx
+// Purpose: Horizontal tab strip for the in-app browser panel (tab pills, new-tab button,
+// chrome status chip). Owns only presentation + keeping the active tab scrolled into view.
+// Layer: Web UI component
+// Depends on: BrowserPanel.logic chrome styles/status, contracts BrowserTabState
+
 import { useLayoutEffect, useRef } from "react";
 import type { BrowserTabState } from "@synara/contracts";
 import { isBlankBrowserTabUrl } from "@synara/shared/browserSession";
@@ -19,7 +25,8 @@ export interface BrowserTabStripProps {
   tabs: readonly BrowserTabState[];
   activeTabId: string | null;
   status: BrowserChromeStatus | null;
-  // extend the frameless-window drag region across the strip's empty space so the panel is easy to grab; interactive children stay no-drag via global CSS
+  // Extend the frameless window drag region across the strip's empty space so the panel
+  // is easy to grab; interactive children stay no-drag via global CSS (`.drag-region button`).
   dragRegion: boolean;
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
@@ -31,7 +38,8 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
   const stripRef = useRef<HTMLDivElement>(null);
   useHorizontalWheelScroll(stripRef);
 
-  // a tab created/selected past the visible edge ("New tab" appends at the end) must come into view or the action looks like it did nothing
+  // A tab created/selected past the visible edge ("New tab" appends at the end) must come
+  // into view or the action looks like it did nothing.
   useLayoutEffect(() => {
     const strip = stripRef.current;
     if (!strip || activeTabId === null) {

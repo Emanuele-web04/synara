@@ -38,6 +38,8 @@ import providerInstanceSessionSchema from "./118_ProjectionThreadSessionProvider
 import sidechatContextSchema from "./126_ProjectionThreadsSidechatContext.ts";
 import threadSnoozeSchema from "./129_ProjectionThreadsSnooze.ts";
 import projectSourceFoldersSchema from "./131_ProjectSourceFolders.ts";
+import projectionTurnsWorkspaceInitializationSchema from "./133_ProjectionTurnsWorkspaceInitialization.ts";
+import forkSourceMessageSchema from "./134_ProjectionThreadsForkSourceMessage.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),
@@ -67,7 +69,9 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         const eventStore = yield* OrchestrationEventStore;
         const projectionPipeline = yield* OrchestrationProjectionPipeline;
 
-        // run all migrations before this one, simulating an install that already has 98 and a cursor at the journal head
+        // Run all migrations before this one, simulating an installation that
+        // already has migration 98 applied and a projection.threads cursor at
+        // the journal head.
         yield* runMigrations({ toMigrationInclusive: 98 });
         // Current projector readers require later additive schemas.
         // Install them without changing the migration-99 tracker state under test.
@@ -81,6 +85,8 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         yield* sidechatContextSchema;
         yield* threadSnoozeSchema;
         yield* projectSourceFoldersSchema;
+        yield* projectionTurnsWorkspaceInitializationSchema;
+        yield* forkSourceMessageSchema;
 
         const threadId = ThreadId.makeUnsafe("thread-099");
         const projectId = ProjectId.makeUnsafe("project-099");
@@ -228,7 +234,8 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
           },
         });
 
-        // regress updated_at to turn-start to simulate a db upgraded from the buggy version
+        // The current projector sets updated_at to completion; regress it to the
+        // turn-start time to simulate a database upgraded from the buggy version.
         const [before] = yield* sql<{ readonly updatedAt: string }>`
           SELECT updated_at AS "updatedAt"
           FROM projection_threads
@@ -249,7 +256,8 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         `;
         assert.strictEqual(cursorBefore!.lastAppliedSequence, 5);
 
-        // must delete the projection.threads cursor so bootstrap replays with the updated filter
+        // Apply migration 99. This must delete the projection.threads cursor so
+        // the next bootstrap will replay with the updated event filter.
         yield* runMigrations({ toMigrationInclusive: 99 });
 
         const [cursorAfter] = yield* sql<{ readonly count: number }>`
@@ -259,7 +267,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         `;
         assert.strictEqual(cursorAfter!.count, 0);
 
-        // rerunning with the cursor already absent must stay safe
+        // Rerunning the migration with the cursor already absent must stay safe.
         yield* runMigrations({ toMigrationInclusive: 99 });
 
         const [cursorRerun] = yield* sql<{ readonly count: number }>`
@@ -269,7 +277,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         `;
         assert.strictEqual(cursorRerun!.count, 0);
 
-        // first startup after upgrade — the bootstrap replay heals the stale row
+        // First startup after upgrade: the bootstrap replay heals the stale row.
         yield* projectionPipeline.bootstrap;
 
         const [after] = yield* sql<{ readonly updatedAt: string }>`

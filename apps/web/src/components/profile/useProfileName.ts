@@ -1,3 +1,8 @@
+// FILE: useProfileName.ts
+// Purpose: Editable, locally-persisted display name for the Profile. Falls back to the
+// server-derived default (home-dir basename) until the user overrides it. Local-only.
+// Layer: web profile feature.
+
 import { Schema } from "effect";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 

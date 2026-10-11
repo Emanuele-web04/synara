@@ -1,3 +1,9 @@
+// FILE: SettingsPanelPrimitives.tsx
+// Purpose: Shared settings section card and row primitives (Codex-style bordered groups).
+// Layer: Settings UI components
+// Exports: SettingsCard, SettingsSectionShell, SettingsSection, SettingsEmptyState,
+//          SettingsListRow, SettingsRow, SettingsSelectPopup
+
 import { type ComponentProps, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import { settingRowAnchorId } from "~/settingsNavigation";
@@ -210,7 +216,8 @@ export function SettingsRow({
   children?: ReactNode;
   onClick?: () => void;
 }) {
-  // string-titled rows expose a stable anchor for sidebar search deep-links via `?target=…`; scroll-margin keeps the row clear of the sticky header
+  // String-titled rows expose a stable anchor so the sidebar search can deep-link to them
+  // via `?target=…`; scroll-margin keeps the row clear of the sticky settings header.
   const anchorId = typeof title === "string" ? settingRowAnchorId(title) : undefined;
   return (
     <div

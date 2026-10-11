@@ -1,3 +1,11 @@
+/**
+ * ProjectionThreadSessionRepository - Repository interface for thread sessions.
+ *
+ * Owns persistence operations for projected provider-session linkage and
+ * runtime status for each thread.
+ *
+ * @module ProjectionThreadSessionRepository
+ */
 import {
   RuntimeMode,
   IsoDateTime,
@@ -90,13 +98,23 @@ export type ToolInFlight = typeof ToolInFlight.Type;
  * ProjectionThreadSessionRepositoryShape - Service API for projected thread sessions.
  */
 export interface ProjectionThreadSessionRepositoryShape {
-  /** upserts by threadId */
+  /**
+   * Insert or replace a projected thread-session row.
+   *
+   * Upserts by `threadId`.
+   */
   readonly upsert: (row: ProjectionThreadSession) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  /**
+   * Read projected thread-session state by thread id.
+   */
   readonly getByThreadId: (
     input: GetProjectionThreadSessionInput,
   ) => Effect.Effect<Option.Option<ProjectionThreadSession>, ProjectionRepositoryError>;
 
+  /**
+   * Delete projected thread-session state by thread id.
+   */
   readonly deleteByThreadId: (
     input: DeleteProjectionThreadSessionInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
@@ -140,6 +158,9 @@ export interface ProjectionThreadSessionRepositoryShape {
   ) => Effect.Effect<ReadonlyArray<ToolInFlight>, ProjectionRepositoryError>;
 }
 
+/**
+ * ProjectionThreadSessionRepository - Service tag for thread-session persistence.
+ */
 export class ProjectionThreadSessionRepository extends ServiceMap.Service<
   ProjectionThreadSessionRepository,
   ProjectionThreadSessionRepositoryShape

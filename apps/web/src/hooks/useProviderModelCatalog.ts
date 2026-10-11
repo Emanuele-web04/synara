@@ -31,7 +31,11 @@ import {
   providerDiscoveryQueryKeys,
   providerModelsQueryOptions,
 } from "../lib/providerDiscoveryReactQuery";
-import { mergeDynamicModelOptions, type ProviderModelOption } from "../providerModelOptions";
+import {
+  getOmpModelSelectionIssue,
+  mergeDynamicModelOptions,
+  type ProviderModelOption,
+} from "../providerModelOptions";
 import type { ProviderModelOptionsByProviderInstance } from "../components/chat/ProviderModelPicker";
 
 export interface ProviderModelCatalog {
@@ -48,7 +52,12 @@ export interface ProviderModelCatalog {
   modelOptionsByProviderInstance: ProviderModelOptionsByProviderInstance;
   /** Providers whose runtime model discovery is still pending (no usable list yet). */
   loadingModelProviders: Partial<Record<ProviderKind, boolean>>;
-  // trait controls (effort, fast mode, thinking, context window) come from runtime descriptors for cursor/codex/etc — effort-picker surfaces must feed them through
+  /**
+   * Runtime-discovered model descriptors per provider. Composer-style trait
+   * controls (effort, fast mode, thinking, context window) are sourced from
+   * these for cursor/codex/etc., so any surface that wants the effort picker
+   * must feed them through (see {@link selectedRuntimeModel}).
+   */
   runtimeModelsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
   /** Account-local runtime descriptors; known accounts are empty until discovery resolves. */
   runtimeModelsByProviderInstance: Partial<
@@ -56,9 +65,13 @@ export interface ProviderModelCatalog {
   >;
   /** The runtime descriptor matching `selectedProvider` + its selected-model hint. */
   selectedRuntimeModel: ProviderModelDescriptor | undefined;
+  /** Runtime-discovered agents/modes for the selected provider (opencode/claude/codex). */
   selectedRuntimeAgents: ReadonlyArray<ProviderAgentDescriptor>;
+  /** Loading state used by the selected provider's bootstrap skeleton. */
   selectedProviderModelsLoading: boolean;
+  /** Whether the selected provider requires and is still waiting on runtime models. */
   selectedProviderRuntimeModelDiscoveryPending: boolean;
+  /** Discovery failure detail per provider (268 passthrough). */
   discoveryErrorsByProvider: Partial<Record<ProviderKind, string | undefined>>;
 }
 
@@ -71,15 +84,12 @@ function selectQueryData<Data>(
   return results.map((result) => result.data);
 }
 
-// OMP's catalog is global, but its `modelRoles` merge a project layer, so the
-// composer keeps cwd in the key for roles to reflect the active project.
 const CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS: ReadonlySet<ProviderKind> = new Set([
   "antigravity",
   "droid",
   "opencode",
   "pi",
   "devin",
-  "omp",
 ]);
 
 function readProviderOptionString(options: unknown, key: string): string | null {
@@ -138,7 +148,9 @@ export function useProviderModelCatalog(input: {
    * are warm by the time the user browses them.
    */
   discoveryEnabled: boolean;
+  /** Effective cwd for providers whose model catalog can be extended by project resources. */
   cwd?: string | null;
+  /** Per-provider selected-model hints so an unknown selection still lists itself. */
   modelHintByProvider?: Partial<Record<ProviderKind, string | null>>;
   /**
    * Restrict background discovery to the providers used by a non-picker surface.
@@ -244,7 +256,12 @@ export function useProviderModelCatalog(input: {
     provider: ProviderKind,
     prefetchRequested = discoveryEnabled,
   ): boolean => {
-    // the enabled flag is a short-circuit, not a precondition: serverSettings stays undefined on failure and never refetches — treating that as disabled would silence all discovery ("my model disappeared"); mirrors the server-side fallback
+    // The enabled flag is a short-circuit, not a precondition. `serverSettings` is
+    // undefined while the settings query is in flight and stays undefined if it
+    // fails — and it never refetches on its own (`staleTime: Infinity`). Treating
+    // that as "disabled" would silence discovery for every provider, including the
+    // selected one, which is precisely the "my model disappeared" symptom. Mirrors
+    // the server-side fallback in ProviderDiscoveryService.listModels.
     if (serverSettings?.providers[provider]?.enabled === false) {
       return false;
     }
@@ -262,6 +279,7 @@ export function useProviderModelCatalog(input: {
   const cursorModelDiscoveryEnabled = shouldDiscoverProvider("cursor");
   const antigravityModelDiscoveryEnabled = shouldDiscoverProvider("antigravity");
   const grokModelDiscoveryEnabled = shouldDiscoverProvider("grok");
+  // ponytail: explicit prefetch only; picker surfaces stay cold (see droid query comment below).
   const droidPrefetchRequested = discoveryEnabled && (prefetchProviderSet?.has("droid") ?? false);
   const droidModelDiscoveryEnabled = shouldDiscoverProvider("droid", droidPrefetchRequested);
   const openCodeModelDiscoveryEnabled = shouldDiscoverProvider("opencode");
@@ -355,12 +373,14 @@ export function useProviderModelCatalog(input: {
 
   const selectedProviderModelsEnabled = modelQueryOptionsByProvider[selectedProvider].enabled;
 
-  // keep foreground ownership out of queryFn options — retries can outlive the selection that started them
+  // Keep foreground ownership out of queryFn options: retries can outlive
+  // the selection that started them. The effect owns the current priority.
   useEffect(() => {
     if (!selectedProviderModelsEnabled) return;
     return prioritizeProviderModelDiscovery(selectedProviderModelsQueryKey);
   }, [selectedProviderModelsQueryKey, selectedProviderModelsEnabled]);
 
+  // Agent/mode discovery (opencode "Agent" picker, claude/codex subagents).
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "claudeAgent",
@@ -426,7 +446,9 @@ export function useProviderModelCatalog(input: {
     isInitialModelDiscoveryPending(piDynamicModelsQuery);
   const hasResolvedDevinModelDiscovery =
     (devinDynamicModelsQuery.data?.source === "devin-cli" ||
-      // static fallback descriptors are a valid resolved catalog — the adapter serves its built-in matrix when CLI discovery is unavailable, so render them instead of spinning forever
+      // Static fallback descriptors are a valid resolved catalog: the adapter
+      // serves its built-in matrix when CLI discovery is unavailable, so the
+      // picker must render them instead of spinning (or banner-ing) forever.
       devinDynamicModelsQuery.data?.source === "devin.static") &&
     (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
   const devinModelDiscoveryPending =
@@ -487,7 +509,13 @@ export function useProviderModelCatalog(input: {
       ),
       pi: getAppModelOptions("pi", customModelsByProvider.pi, modelHintByProvider?.pi),
       devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
-      omp: getAppModelOptions("omp", customModelsByProvider.omp, modelHintByProvider?.omp),
+      // Old role picker slugs are internal routing, not custom models. Never
+      // promote a persisted role selection back into a selectable placeholder.
+      omp: getAppModelOptions(
+        "omp",
+        customModelsByProvider.omp,
+        modelHintByProvider?.omp?.trim().startsWith("role:") ? null : modelHintByProvider?.omp,
+      ),
     };
     const result: Record<
       ProviderKind,
@@ -534,15 +562,15 @@ export function useProviderModelCatalog(input: {
         });
       }
     }
-    // OMP modelRoles describe internal sub-agent routing. They remain part of
-    // discovery for the ACP/runtime path, but are not user-selectable models
-    // and must never become `role:*` entries in the composer catalog.
     // Terminal OMP discovery failure: drop the hint placeholder but keep
     // user-configured custom models — the picker still renders the
     // discovery error line above whatever options remain.
     if (ompDiscoveryFailed) {
       result.omp = staticOptions.omp.filter((option) => option.isCustom === true);
     }
+    // Stored custom entries cannot make picker-only role keys into real models.
+    // Keep opaque selectors, including exact discovery-proven role: ids.
+    result.omp = result.omp.filter((option) => !getOmpModelSelectionIssue(option.slug, result.omp));
     return result;
   }, [
     antigravityModelsQuery.data,
@@ -571,7 +599,13 @@ export function useProviderModelCatalog(input: {
         instance.provider === selectedProvider && instance.instanceId === selectedInstanceId
           ? modelHintByProvider?.[instance.provider]
           : null;
-      const staticOptions = getAppModelOptions(instance.provider, customModels, selectedModelHint);
+      const staticOptions = getAppModelOptions(
+        instance.provider,
+        customModels,
+        instance.provider === "omp" && selectedModelHint?.trim().startsWith("role:")
+          ? null
+          : selectedModelHint,
+      );
       const discovery = dynamicModelsByProviderInstance[instance.instanceId];
       const dynamicModels = discovery?.models;
       const hasCodexCatalog =
@@ -586,6 +620,12 @@ export function useProviderModelCatalog(input: {
               dynamicModels,
             })
           : staticOptions;
+      if (instance.provider === "omp") {
+        const options = byInstance[instance.instanceId]!;
+        byInstance[instance.instanceId] = options.filter(
+          (option) => !getOmpModelSelectionIssue(option.slug, options),
+        );
+      }
     }
     return byInstance;
   }, [
@@ -685,6 +725,8 @@ export function useProviderModelCatalog(input: {
     [selectedDynamicAgents],
   );
 
+  // Discovery failures per provider, surfaced as a subtle inline note by the
+  // model pickers.
   const discoveryErrorsByProvider = useMemo(
     () => ({
       claudeAgent: claudeDynamicModelsQuery.data?.error,

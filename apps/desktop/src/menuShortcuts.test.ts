@@ -1,3 +1,6 @@
+// FILE: menuShortcuts.test.ts
+// Purpose: Verifies desktop menu accelerator choices that affect native keyboard behavior.
+
 import { describe, expect, it, vi } from "vitest";
 
 import {

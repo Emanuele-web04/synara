@@ -28,7 +28,6 @@ import {
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
   providerDiscoveryQueryKeys,
-  providerModelDiscoveryRetry,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 
@@ -141,15 +140,22 @@ export function resolveNewThreadModelPrefetchProvider(input: {
 }
 
 export function resolveNewThreadModelPrefetchCwd(input: {
+  /** options.worktreePath from the new-thread call (only meaningful with hasExplicitWorktreePath). */
   worktreePath?: string | null | undefined;
+  /** True when the caller passed options.worktreePath (even as null) — explicit intent always wins. */
   hasExplicitWorktreePath?: boolean;
+  /** options.fresh — a forced-fresh thread never inherits the stored draft's worktree. */
   fresh?: boolean;
+  /** options.envMode — "local" clears the draft worktree unless one is passed explicitly. */
   envMode?: DraftThreadEnvMode | null;
   draftWorktreePath?: string | null | undefined;
   projectCwd?: string | null | undefined;
   serverCwd?: string | null | undefined;
 }): string | null {
-  // mirrors the new thread's real worktree resolution: explicit worktreePath wins, envMode local without an explicit worktree clears it, fresh seeds ignore the stored draft
+  // Mirrors the new thread's real worktree resolution:
+  // - buildDraftThreadContextPatch (threadBootstrap): explicit worktreePath wins,
+  //   envMode "local" without an explicit worktree clears it.
+  // - createFreshDraftThreadSeed: fresh seeds ignore the stored draft entirely.
   let worktreePath: string | null;
   if (input.hasExplicitWorktreePath === true) {
     worktreePath = input.worktreePath ?? null;
@@ -329,10 +335,7 @@ export function prefetchProviderModelsForNewThread(
     });
     void queryClient.prefetchQuery({
       ...modelsOptions,
-      retry:
-        provider === "codex" || provider === "claudeAgent"
-          ? 0
-          : providerModelDiscoveryRetry(provider),
+      ...(provider === "codex" || provider === "claudeAgent" ? { retry: 0 } : {}),
       staleTime:
         provider === "devin"
           ? (query) => (query.state.data?.error ? 0 : NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS)
@@ -356,8 +359,10 @@ export function prefetchProviderModelsForNewThread(
       });
     }
 
-    // capabilities query has staleTime Infinity — one IPC per provider per session
-    // retry:0 keeps a failing probe from multiplying per hover — ChatView's mount query still retries by its defaults
+    // Composer capabilities gate composer affordances on ChatView mount; the query
+    // has staleTime Infinity, so this costs one IPC per provider per session.
+    // retry: 0 keeps a failing capabilities probe from multiplying per hover —
+    // ChatView's own mount query still retries by its defaults if it refetches.
     void queryClient.prefetchQuery({
       ...providerComposerCapabilitiesQueryOptions(provider, instanceId),
       retry: 0,
@@ -411,7 +416,9 @@ export function prefetchModelsForNewThread(
     settings: ProviderModelPrefetchSettings;
     serverSettings?: ServerSettings | null;
     hiddenProviders?: ReadonlyArray<ProviderKind>;
+    /** Normalized provider health (custom binary paths applied), see useProviderStatusesForLocalConfig. */
     providerStatuses?: readonly ServerProviderStatus[] | null;
+    /** True once the server config's provider statuses have been reconciled (#652). */
     statusesReconciled?: boolean;
     providerOrder?: readonly ProviderKind[];
     providerOverride?: ProviderKind | null;
@@ -481,18 +488,25 @@ export function prefetchModelsForNewThread(
   const statusesReconciled = input.statusesReconciled === true;
   const providerStatuses = input.providerStatuses ?? EMPTY_PROVIDER_STATUSES;
   const isProviderWarmable = (provider: ProviderKind): boolean => {
-    // mirrors shouldDiscoverProvider: enabled short-circuits even the selected provider, then selected wins, then hidden skipped
+    // Mirrors useProviderModelCatalog.shouldDiscoverProvider exactly:
+    // the enabled flag short-circuits even the selected provider, then the
+    // selected provider always wins, then hidden providers are skipped.
     if (input.serverSettings?.providers[provider]?.enabled === false) {
       return false;
     }
-    // ChatView always discovers the selected provider (even hidden/unavailable — the picker preserves it as protected) so the warm must too or mount re-runs the loading state this exists to remove
+    // ChatView's useProviderModelCatalog always discovers the selected provider
+    // (even hidden/unavailable — the picker preserves it as protected), so the
+    // warm must too, or mount re-runs discovery with the loading state this
+    // prefetch exists to remove.
     if (provider === selectedProvider) {
       return true;
     }
     if (hiddenProviderSet.has(provider)) {
       return false;
     }
-    // the picker lists only installed providers once reconciled — a confirmed-unavailable provider only produces a failing spawn; unresolved statuses stay warmable
+    // The picker only lists installed providers once statuses are reconciled.
+    // A confirmed-unavailable provider would only produce a failing spawn, so
+    // skip it; unresolved statuses stay warmable (safe default).
     if (statusesReconciled) {
       const status = findProviderStatus(
         providerStatuses,
@@ -538,7 +552,10 @@ export function prefetchModelsForNewThread(
     prioritizeProviderModelDiscovery(selectedModelQueryKey, "prefetch");
   }
 
-  // hovering another project supersedes only inactive prefetches; include fetching+offline-paused queries so stale hover work can't revive on reconnect and consume admission
+  // Hovering another project supersedes only inactive model prefetches. Active
+  // composer queries and exact-key prefetches keep running. Include both
+  // fetching and offline-paused queries so stale hover work cannot revive on
+  // reconnect and consume native admission.
   void queryClient.cancelQueries({
     queryKey: providerDiscoveryQueryKeys.modelsAll,
     type: "inactive",

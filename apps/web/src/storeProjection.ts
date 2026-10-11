@@ -1,5 +1,13 @@
+// FILE: storeProjection.ts
+// Purpose: Owns normalized slice writes, sidebar projections, and snapshot integration.
+// Exports: Pure projection transitions used by the facade and orchestration reducer.
+
 import {
   type MessageId,
+  type OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadHistory,
+  type OrchestrationThreadHistoryCursor,
+  type OrchestrationThreadActivityHistoryCursor,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
@@ -15,6 +23,7 @@ import {
   retainThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
+import { inheritThreadHistoryOwner } from "./threadHistoryOwnership";
 import {
   arraysShallowEqual,
   capThreadActivities,
@@ -147,6 +156,9 @@ function toThreadTurnState(thread: Thread): ThreadTurnState {
     ...(thread.pendingSourceProposedPlan
       ? { pendingSourceProposedPlan: thread.pendingSourceProposedPlan }
       : {}),
+    ...(thread.pendingTurnStartMessageId !== undefined
+      ? { pendingTurnStartMessageId: thread.pendingTurnStartMessageId }
+      : {}),
   };
 }
 
@@ -182,7 +194,8 @@ function buildNormalizedSlice<TId extends string, TValue>(
     previousItems.length === items.length &&
     previousIds.length === items.length
   ) {
-    // object identity proves a slot untouched with a pointer compare — a same-contents new array costs a scan, not a rebuild
+    // Object identity proves a slot is untouched with a pointer compare, so a no-op rewrite of the
+    // array (same contents, new reference) costs a scan instead of a rebuild.
     let firstChangedIndex = -1;
     for (let index = 0; index < items.length; index += 1) {
       if (previousItems[index] !== items[index]) {
@@ -354,6 +367,7 @@ function sidebarThreadSummariesEqual(
     left.lastVisitedAt === right.lastVisitedAt &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     (left.creationSource ?? null) === (right.creationSource ?? null) &&
+    (left.sourceThreadId ?? null) === (right.sourceThreadId ?? null) &&
     (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
@@ -405,6 +419,7 @@ function buildSidebarThreadSummary(
     lastVisitedAt: thread.lastVisitedAt,
     parentThreadId: thread.parentThreadId ?? null,
     creationSource: thread.creationSource ?? null,
+    sourceThreadId: thread.sourceThreadId ?? null,
     subagentAgentId: thread.subagentAgentId ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
@@ -671,23 +686,39 @@ function writeThreadDetailSyncState(
 }
 
 function clearThreadDetailSyncState(state: AppState, threadId: ThreadId): AppState {
-  // every detail-wipe transition funnels through here to enforce the resume-cursor invariant — wiped detail must never leave a cursor that would gap-replay on missing history; bulk sync paths cover theirs separately
+  // Single-thread detail-wipe choke point: every transition that removes or
+  // invalidates a thread's cached detail (removeThreadState, eviction, sync
+  // failure reset) funnels through here, so this is where the resume-cursor
+  // invariant is enforced — wiped detail must never leave a cursor that would
+  // let a resubscribe gap-replay on top of missing history. The full-sync
+  // paths cover their bulk invalidations separately: the shell snapshot prunes
+  // with `retainThreadDetailResumeCursors`, the read-model resync resets all.
   clearThreadDetailResumeCursor(threadId);
   if (
-    state.threadDetailSyncById === undefined ||
-    !Object.hasOwn(state.threadDetailSyncById, threadId)
+    !Object.hasOwn(state.threadDetailSyncById ?? {}, threadId) &&
+    !state.threadHistoryById?.[threadId] &&
+    state.threadDetailAppliedSequenceById?.[threadId] === undefined
   ) {
     return state;
   }
-  const { [threadId]: _removed, ...threadDetailSyncById } = state.threadDetailSyncById;
-  return { ...state, threadDetailSyncById };
+  const { [threadId]: _removed, ...threadDetailSyncById } = state.threadDetailSyncById ?? {};
+  const { [threadId]: _history, ...threadHistoryById } = state.threadHistoryById ?? {};
+  const { [threadId]: _sequence, ...threadDetailAppliedSequenceById } =
+    state.threadDetailAppliedSequenceById ?? {};
+  return { ...state, threadDetailSyncById, threadHistoryById, threadDetailAppliedSequenceById };
 }
 
 export function markThreadDetailSyncFailedInClientState(
   state: AppState,
   threadId: ThreadId,
 ): AppState {
-  // a terminally dead stream downgrades "synced" so frozen cached detail can't read as live — populated timelines still render, so the downgrade only surfaces the failure
+  // A failed verification cannot make persisted controls authoritative.
+  if (state.threadDetailSyncById?.[threadId] === "cached") return state;
+  // A "synced" thread downgrades too: the caller reports a terminally dead
+  // stream, and keeping "synced" would let the client treat frozen cached
+  // detail as live. Cached timeline entries keep rendering regardless
+  // (resolveThreadDetailHydration treats a populated timeline as ready), so
+  // the downgrade only surfaces the failure, it never blanks applied detail.
   return writeThreadDetailSyncState(state, threadId, "failed");
 }
 
@@ -772,13 +803,14 @@ function writeThreadState(state: AppState, nextThread: Thread, previousThread?: 
   if (previousThread?.activities !== nextThread.activities) {
     const previousIds = nextState.activityIdsByThreadId?.[nextThread.id];
     const previousById = nextState.activityByThreadId?.[nextThread.id];
-    const activities = capThreadActivities(
-      dedupeActivitiesByIdAfterAppend(
-        nextThread.activities,
-        previousThread?.activities,
-        previousById,
-      ),
+    const dedupedActivities = dedupeActivitiesByIdAfterAppend(
+      nextThread.activities,
+      previousThread?.activities,
+      previousById,
     );
+    const activities = state.threadHistoryById?.[nextThread.id]
+      ? dedupedActivities
+      : capThreadActivities(dedupedActivities);
     const slice = buildNormalizedSlice(
       activities,
       activityId,
@@ -1033,7 +1065,12 @@ function isStaleSnapshot(state: AppState, snapshotSequence: number): boolean {
   return snapshotSequence < (state.shellSnapshotSequence ?? 0);
 }
 
-// the sequence guard keeps retirement honest; `isStaleSnapshot` is what actually stops a stale snapshot from resurrecting a row
+/**
+ * Drops thread/project tombstones that `snapshot` has authoritatively confirmed absent.
+ *
+ * The sequence guard here only keeps retirement honest; it is not what stops a stale snapshot from
+ * resurrecting a row. That is `isStaleSnapshot`, applied before any merge happens.
+ */
 function retireConfirmedDeletionTombstones(
   state: AppState,
   snapshotSequence: number,
@@ -1161,6 +1198,8 @@ function commitThreadProjection(
 ): AppState {
   const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
   const previousSummary = state.sidebarThreadSummaryById[threadId];
+  // Skip deriving the thread entirely when the summary is pinned to its previous value —
+  // this runs on the streaming hot path where most flushes change no summary input.
   if (!shouldUpdateSidebarSummary && previousSummary !== undefined) {
     return state;
   }
@@ -1283,6 +1322,8 @@ export function syncServerShellSnapshot(
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] === undefined,
   );
+  // The snapshot is the authoritative project set; drop remembered UI state that
+  // cannot match it before the new projects are normalized and remembered.
   resetStaleRememberedProjectState(
     new Set(snapshotProjects.map((project) => projectCwdKey(project.workspaceRoot))),
   );
@@ -1290,7 +1331,8 @@ export function syncServerShellSnapshot(
   const projects = mapProjects(snapshotProjects, state.projects);
   rememberProjectState(projects);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
-  // The retains below prune detail slices down to the snapshot's threads; any resume cursor for a pruned thread must fall with its detail.
+  // The retains below prune detail slices down to the snapshot's threads; any
+  // resume cursor for a pruned thread must fall with its detail.
   retainThreadDetailResumeCursors(nextThreadIds);
 
   const normalizedState: AppState = {
@@ -1312,6 +1354,11 @@ export function syncServerShellSnapshot(
       nextThreadIds,
     ),
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
+    threadHistoryById: retainThreadScopedRecord(state.threadHistoryById, nextThreadIds),
+    threadDetailAppliedSequenceById: retainThreadScopedRecord(
+      state.threadDetailAppliedSequenceById,
+      nextThreadIds,
+    ),
   };
 
   const threads = getThreadsFromState(normalizedState);
@@ -1349,18 +1396,27 @@ function syncServerThreadDetailWithOptions(
   options?: {
     updateSidebarSummary?: boolean;
     snapshotSequence?: number;
+    preserveLoadedHistory?: boolean;
+    replaceHistoricalRevision?: boolean;
   },
 ): AppState {
   const previousThread = getThreadFromState(state, thread.id);
-  const nextThreadDetail = options
-    ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread, options.snapshotSequence)
-    : thread;
+  const nextThreadDetail =
+    options && !options.replaceHistoricalRevision
+      ? mergeReadModelThreadDetailWithLiveHotPath(
+          thread,
+          previousThread,
+          options.snapshotSequence,
+          options.preserveLoadedHistory,
+        )
+      : thread;
   return writeThreadDetailSyncState(
     commitThreadProjection(
       writeThreadState(
         state,
         normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence, {
           restoringSession: !state.threadsHydrated,
+          preserveMessageHistory: state.threadHistoryById?.[thread.id] !== undefined,
         }),
         previousThread,
       ),
@@ -1388,6 +1444,7 @@ export function syncServerThreadDetailHotPath(
   state: AppState,
   thread: ReadModelThread,
   snapshotSequence?: number,
+  history?: OrchestrationThreadHistory,
 ): AppState {
   if (
     state.deletedProjectIdsById?.[thread.projectId] !== undefined ||
@@ -1395,10 +1452,30 @@ export function syncServerThreadDetailHotPath(
   ) {
     return removeThreadState(state, thread.id);
   }
-  return syncServerThreadDetailWithOptions(state, thread, {
+  const withHistory = history ? applyThreadHistoryMetadata(state, thread.id, history) : state;
+  const next = syncServerThreadDetailWithOptions(withHistory, thread, {
     updateSidebarSummary: false,
+    replaceHistoricalRevision:
+      history !== undefined &&
+      state.threadHistoryById?.[thread.id] !== undefined &&
+      (history.revisionSequence !== state.threadHistoryById[thread.id]!.revisionSequence ||
+        history.totalMessageCount < state.threadHistoryById[thread.id]!.totalMessageCount),
+    preserveLoadedHistory:
+      state.threadHistoryById?.[thread.id] !== undefined &&
+      (!history ||
+        (history.revisionSequence === state.threadHistoryById[thread.id]!.revisionSequence &&
+          history.totalMessageCount >= state.threadHistoryById[thread.id]!.totalMessageCount)),
     ...(snapshotSequence !== undefined ? { snapshotSequence } : {}),
   });
+  return snapshotSequence === undefined
+    ? next
+    : {
+        ...next,
+        threadDetailAppliedSequenceById: {
+          ...next.threadDetailAppliedSequenceById,
+          [thread.id]: snapshotSequence,
+        },
+      };
 }
 
 export function applyShellEvent(state: AppState, event: OrchestrationShellStreamEvent): AppState {
@@ -1444,6 +1521,8 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   rememberProjectState(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
+  // Ids the server still reports as live at this snapshot sequence; anything else is either
+  // absent or server-side soft-deleted, which is what lets a tombstone retire safely.
   const livePresentThreadIds = new Set<string>(
     readModel.threads.filter((thread) => thread.deletedAt === null).map((thread) => thread.id),
   );
@@ -1457,6 +1536,8 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   const liveProjects = readModel.projects.filter(
     (project) => project.deletedAt === null && deletedProjectIdsById[project.id] === undefined,
   );
+  // The read model is the authoritative project set; drop remembered UI state that
+  // cannot match it before the new projects are normalized and remembered.
   resetStaleRememberedProjectState(
     new Set(liveProjects.map((project) => projectCwdKey(project.workspaceRoot))),
   );
@@ -1485,7 +1566,11 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       );
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
-  // a full resync replaces every thread's detail wholesale — no cursor survives, since it would vouch for history the replacement doesn't contain
+  // This full resync (including the "Repair local state" action) replaces
+  // every thread's detail wholesale: pruned threads lose their detail, and a
+  // surviving thread's cursor would vouch for history the replacement does not
+  // contain. No cursor survives — the next subscribe takes a snapshot and
+  // re-establishes one that matches what is actually cached.
   resetThreadDetailResumeCursors();
   let normalizedState: AppState = {
     ...state,
@@ -1508,8 +1593,16 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       nextThreadIds,
     ),
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
+    threadHistoryById: retainThreadScopedRecord(state.threadHistoryById, nextThreadIds),
+    threadDetailAppliedSequenceById: retainThreadScopedRecord(
+      state.threadDetailAppliedSequenceById,
+      nextThreadIds,
+    ),
   };
   for (const thread of nextThreads) {
+    // Read-model threads carry full detail (messages, activities), so they are synced by definition.
+    // The previous thread is a cache hit here (it was already materialized above) and lets the
+    // slice writer reuse untouched ids/records instead of rebuilding them.
     normalizedState = writeThreadDetailSyncState(
       writeThreadState(normalizedState, thread, getThreadFromState(state, thread.id)),
       thread.id,
@@ -1548,7 +1641,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     normalizedState.threadDetailSyncById === state.threadDetailSyncById &&
     state.threadsHydrated
   ) {
-    // record the snapshot sequence even with nothing to merge — it keeps shellSnapshotSequence honest, which later optimistic deletes derive their tombstone lower bound from
+    // Nothing to merge, but the snapshot is still authoritative at its own sequence. Recording it
+    // keeps `shellSnapshotSequence` honest, which is what later optimistic deletes derive their
+    // tombstone lower bound from — otherwise a tombstone created after this point could be retired
+    // by a snapshot that predates the deletion.
     const advanced =
       readModel.snapshotSequence > (state.shellSnapshotSequence ?? 0)
         ? { ...state, shellSnapshotSequence: readModel.snapshotSequence }
@@ -1573,4 +1669,150 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     livePresentThreadIds,
     livePresentProjectIds,
   );
+}
+
+/** Restored display remains unverified until the stream confirms the whole gap. */
+export function restoreCachedThreadDetail(
+  state: AppState,
+  snapshot: OrchestrationThreadDetailSnapshot,
+): AppState {
+  const id = snapshot.thread.id;
+  if (
+    !state.threadShellById?.[id] ||
+    state.deletedThreadIdsById?.[id] !== undefined ||
+    state.deletedProjectIdsById?.[snapshot.thread.projectId] !== undefined ||
+    state.threadDetailSyncById?.[id] !== undefined
+  )
+    return state;
+  const restored = syncServerThreadDetailHotPath(
+    state,
+    snapshot.thread,
+    snapshot.snapshotSequence,
+    snapshot.history,
+  );
+  return {
+    ...restored,
+    threadDetailSyncById: { ...restored.threadDetailSyncById, [id]: "cached" },
+    ...(snapshot.history
+      ? { threadHistoryById: { ...restored.threadHistoryById, [id]: snapshot.history } }
+      : {}),
+  };
+}
+
+export function confirmThreadDetailReplay(state: AppState, id: ThreadId): AppState {
+  return state.threadDetailSyncById?.[id] === "cached"
+    ? writeThreadDetailSyncState(state, id, "synced")
+    : state;
+}
+
+export function applyThreadHistoryMetadata(
+  state: AppState,
+  id: ThreadId,
+  history: OrchestrationThreadHistory | undefined,
+): AppState {
+  if (!history) return state;
+  const previous = state.threadHistoryById?.[id];
+  // A latest-tail reconciliation must not discard pages the reader has loaded.
+  const keepOlder =
+    previous &&
+    history.revisionSequence === previous.revisionSequence &&
+    history.totalMessageCount >= previous.totalMessageCount &&
+    (previous.olderCursor === null ||
+      (previous.olderCursor &&
+        history.olderCursor &&
+        previous.olderCursor.messageId !== history.olderCursor.messageId &&
+        state.messageByThreadId?.[id]?.[previous.olderCursor.messageId]));
+  const keepActivityCursor =
+    previous &&
+    history.revisionSequence === previous.revisionSequence &&
+    (previous.olderActivityCursor === null ||
+      (previous.olderActivityCursor &&
+        history.olderActivityCursor &&
+        previous.olderActivityCursor.activityId !== history.olderActivityCursor.activityId &&
+        state.activityByThreadId?.[id]?.[previous.olderActivityCursor.activityId]));
+  const next = {
+    ...history,
+    ...(keepOlder ? { olderCursor: previous.olderCursor } : {}),
+    ...(keepActivityCursor ? { olderActivityCursor: previous.olderActivityCursor } : {}),
+  };
+  return { ...state, threadHistoryById: { ...state.threadHistoryById, [id]: next } };
+}
+
+/** A historical page supplies missing text only; live metadata and rows win. */
+export function mergeThreadHistoryPage(
+  state: AppState,
+  page: OrchestrationThreadDetailSnapshot,
+  expectedCursor: OrchestrationThreadHistoryCursor | null,
+  expectedActivityCursor?: OrchestrationThreadActivityHistoryCursor | null,
+): AppState {
+  const id = page.thread.id;
+  const history = state.threadHistoryById?.[id];
+  const thread = getThreadFromState(state, id);
+  if (
+    !thread ||
+    !page.history ||
+    state.deletedThreadIdsById?.[id] !== undefined ||
+    !history ||
+    (!history.olderCursor && !history.olderActivityCursor) ||
+    !deepEqualJson(history.olderCursor, expectedCursor) ||
+    (expectedActivityCursor !== undefined &&
+      !deepEqualJson(history.olderActivityCursor, expectedActivityCursor)) ||
+    history.revisionSequence !== page.history.revisionSequence
+  )
+    return state;
+  const byId = new Set(thread.messages.map((message) => message.id));
+  const older = expectedCursor
+    ? page.thread.messages.filter((message) => !byId.has(message.id))
+    : [];
+  const activityIds = new Set(thread.activities.map((activity) => activity.id));
+  const olderActivities = expectedActivityCursor
+    ? page.thread.activities.filter((activity) => !activityIds.has(activity.id))
+    : [];
+  const normalized = normalizeThreadFromReadModel(
+    { ...page.thread, messages: older, activities: olderActivities },
+    undefined,
+    undefined,
+    { preserveMessageHistory: true },
+  );
+  const next = writeThreadState(
+    state,
+    {
+      ...thread,
+      messages: [...normalized.messages, ...thread.messages],
+      activities: [...normalized.activities, ...thread.activities],
+    },
+    thread,
+  );
+  return {
+    ...next,
+    threadHistoryById: {
+      ...next.threadHistoryById,
+      [id]: inheritThreadHistoryOwner(
+        {
+          ...page.history,
+          // A dimension absent from the request returns its latest tail, not its
+          // older page. Keep its exhausted cursor and ignore that repeated tail.
+          olderCursor: expectedCursor ? page.history.olderCursor : history.olderCursor,
+          olderActivityCursor: expectedActivityCursor
+            ? page.history.olderActivityCursor
+            : history.olderActivityCursor,
+          totalMessageCount: Math.max(
+            history.totalMessageCount,
+            page.history.totalMessageCount,
+            next.messageIdsByThreadId?.[id]?.length ?? 0,
+          ),
+          ...(page.history.totalActivityCount !== undefined
+            ? {
+                totalActivityCount: Math.max(
+                  history.totalActivityCount ?? 0,
+                  page.history.totalActivityCount,
+                  next.activityIdsByThreadId?.[id]?.length ?? 0,
+                ),
+              }
+            : {}),
+        },
+        history,
+      ),
+    },
+  };
 }

@@ -1,3 +1,6 @@
+// FILE: providerUsage/http.ts
+// Purpose: Bounded JSON helper for provider usage, backed by the pinned outbound authority.
+
 import { decodeOutboundJson, outboundHttp } from "@synara/shared/outboundHttp";
 
 export interface FetchJsonResult {
@@ -16,7 +19,7 @@ export async function fetchJson(input: {
   method?: "GET" | "POST";
   headers?: Record<string, string>;
   body?: unknown;
-  /** JSON default, or form-encoded for OAuth endpoints */
+  /** How to encode `body`: JSON (default) or application/x-www-form-urlencoded (OAuth endpoints). */
   bodyFormat?: "json" | "form";
   timeoutMs?: number;
   allowLoopbackHttp?: boolean;
@@ -64,17 +67,21 @@ export async function fetchJson(input: {
   };
 }
 
-/** stale access token → needs re-auth */
+/** Provider backends reject the access token once it is stale; treat that as "needs re-auth". */
 export function isAuthFailureStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
-/** throttled — callers should back off rather than blank the panel */
+/** The backend is throttling requests; callers should back off rather than blank the usage panel. */
 export function isRateLimitStatus(status: number): boolean {
   return status === 429;
 }
 
-/** delta-seconds and HTTP-date forms; undefined when absent, malformed, or past */
+/**
+ * Parse an HTTP `Retry-After` header into a positive delay in ms, honoring both the delta-seconds
+ * (`"120"`) and HTTP-date (`"Wed, 21 Oct 2026 07:28:00 GMT"`) forms. Returns undefined when the
+ * header is absent, malformed, or already in the past so callers can fall back to a default backoff.
+ */
 export function parseRetryAfterMs(headers: Headers, nowMs: number): number | undefined {
   const raw = headers.get("retry-after");
   if (!raw) {
@@ -85,7 +92,8 @@ export function parseRetryAfterMs(headers: Headers, nowMs: number): number | und
     const milliseconds = Number(trimmed) * 1000;
     return milliseconds > 0 && Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
   }
-  // HTTP-dates begin with a weekday name — reject number spellings before Date.parse reinterprets `1.5` or `+10`
+  // HTTP-date values begin with a weekday name. Reject alternate JavaScript number spellings
+  // before Date.parse can reinterpret values such as `1.5` or `+10` as implementation-defined dates.
   if (/^[+\-.\d]/u.test(trimmed)) {
     return undefined;
   }

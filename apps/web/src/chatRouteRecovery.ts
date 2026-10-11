@@ -1,3 +1,8 @@
+// FILE: chatRouteRecovery.ts
+// Purpose: Gives route restore flows one authoritative backend refresh before falling back.
+// Layer: Routing support
+// Exports: empty-startup snapshot recovery helper shared by chat index and thread routes.
+
 import type { NativeApi } from "@synara/contracts";
 
 import { EMPTY_ROUTE_RESTORE_FALLBACK_DELAY_MS } from "./chatRouteRestore";
@@ -9,7 +14,8 @@ export function waitForEmptyRouteRestoreFallbackDelay(): Promise<void> {
   });
 }
 
-// EventRouter owns the live shell sequence fence — route restore requests its recovery path instead of applying snapshots directly
+// EventRouter owns the live shell sequence fence. Route restore must request its
+// recovery path instead of applying backend snapshots directly to the store.
 export async function refreshEmptyRouteRestoreSnapshot(
   api: NativeApi | undefined,
 ): Promise<boolean> {

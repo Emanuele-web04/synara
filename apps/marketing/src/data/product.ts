@@ -1,3 +1,8 @@
+// FILE: data/product.ts
+// Purpose: Canonical public product language shared by marketing, metadata,
+//          structured data, FAQs, and AI-readable discovery surfaces.
+// Layer: static content (server/client importable).
+
 export const PRODUCT_NAME = "Synara";
 
 export const PRODUCT_CATEGORY = "The local-first workspace and control plane for coding agents.";

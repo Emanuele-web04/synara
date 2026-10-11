@@ -1,4 +1,4 @@
-/** retire transcript markers while preserving event identities and replay cursors */
+/** Retire transcript markers while preserving event identities and replay cursors. */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -7,7 +7,9 @@ import { columnExists } from "./schemaHelpers.ts";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // keep sequence/stream-version continuity for reconnects and rebuilds; a metadata event carrying only updatedAt preserves the timestamp effect without marker payloads or legacy handlers
+  // Keep sequence/stream-version continuity for reconnects and projection rebuilds.
+  // A metadata event containing only updatedAt preserves the original timestamp
+  // effect without retaining marker payloads or requiring legacy runtime handlers.
   yield* sql`
     UPDATE orchestration_events
     SET event_type = 'thread.meta-updated',

@@ -62,6 +62,8 @@ import {
   type EnvironmentSidechatPanelItem,
 } from "./EnvironmentSidechatsSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
+import { EnvironmentSubagentsSection } from "./EnvironmentSubagentsSection";
+import type { EnvironmentSubagentRoster } from "./EnvironmentSubagentsSection.logic";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
@@ -75,7 +77,10 @@ import {
   EnvironmentSectionDivider,
 } from "./EnvironmentRow";
 
-// px the docked card reserves on the chat area's right edge — w-72 plus p-3 gutters so the transcript scrollbar stays pinned to the viewport edge
+// Horizontal space (px) the docked card reserves on the right edge of the chat area.
+// Mirrors the card footprint — w-72 (288px) plus the p-3 wrapper gutters — so insetting
+// the chat content by this amount clears the overlay while leaving the transcript's
+// scrollbar pinned to the viewport's far right.
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
 export interface EnvironmentPanelProps {
@@ -99,6 +104,7 @@ export interface EnvironmentPanelProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   activeThreadId: ThreadId | null;
+  /** Active provider for the usage row (same chip the header shows). */
   activeProvider: ProviderKind;
   /**
    * Whether the active thread is a group chat. Group chats show the Output section:
@@ -109,10 +115,17 @@ export interface EnvironmentPanelProps {
   groupFolderPath?: string | null;
   /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
+  /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
   diffOpen: boolean;
+  /** Heartbeat automations whose target is the active thread. */
   threadAutomations: readonly EnvironmentAutomationPanelItem[];
   /** Child side chats for a host thread. Null suppresses the section in embedded side chats. */
   sidechats: readonly EnvironmentSidechatPanelItem[] | null;
+  /**
+   * Every subagent the thread (or, from a subagent thread, its parent) spawned. The panel
+   * shows a compact summary that opens the full list in the right dock. Null hides it.
+   */
+  subagentRoster?: EnvironmentSubagentRoster | null;
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
@@ -133,23 +146,39 @@ export interface EnvironmentPanelProps {
   railBottom?: ReactNode;
   /** Per-thread pinned-message checklist (server-synced). */
   pinnedMessages: readonly PinnedMessage[];
+  /** Live text of pinned messages still present in the transcript (for labels/availability). */
   pinnedMessageTextById: ReadonlyMap<MessageId, string>;
+  /** Per-thread freeform scratchpad notes (server-synced). */
   notes: string;
+  /** Active project whose local instructions should be edited. */
   activeProjectId: ProjectId | null;
+  /** Per-project freeform instructions, persisted locally and optionally copied into notes. */
   projectInstructions: string;
+  /** Whether the current thread is server-backed enough to accept notepad updates. */
   canCopyProjectInstructionsToNotes: boolean;
+  /** Persist local project instruction edits. */
   onProjectInstructionsChange: (projectId: ProjectId, instructions: string) => void;
+  /** Copy/append current project instructions into the active thread's notepad. */
   onCopyProjectInstructionsToNotes: () => void;
+  /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
+  /** Open the shared automation editor for a thread-bound automation row. */
   onOpenAutomation: (definition: AutomationDefinition) => void;
+  /** Open the repository URL in the in-app browser panel. */
   onOpenGithubRepository?: (url: string) => void;
+  /** Scroll the transcript to a pinned message. */
   onJumpToPinnedMessage: (messageId: MessageId) => void;
+  /** Toggle a pinned message's done state (strikethrough; stays pinned). */
   onTogglePinnedMessageDone: (messageId: MessageId) => void;
+  /** Remove a message from the pinned checklist. */
   onUnpinMessage: (messageId: MessageId) => void;
+  /** Set (`null` clears to auto) a pinned message's label. */
   onRenamePinnedMessage: (messageId: MessageId, label: string | null) => void;
   /** Persist updated notes for the given thread (bound per section instance, not the active thread). */
   onNotesChange: (threadId: ThreadId, notes: string) => Promise<void>;
+  /** Open the in-app editor workspace view (the Editor section's default first row). */
   onOpenEditorView?: (() => void) | null;
+  /** Dismiss the panel overlay — invoked after actions that open the dock. */
   onClose: () => void;
   /** Registers the panel's "Commit and Push" row as the target for the global shortcut. */
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
@@ -203,6 +232,7 @@ export function EnvironmentPanel({
   diffOpen,
   threadAutomations,
   sidechats,
+  subagentRoster: subagentRosterProp,
   diffDisabledReason: diffDisabledReasonProp,
   diffTotals,
   branchToolbar,
@@ -233,6 +263,7 @@ export function EnvironmentPanel({
   const groupFolderPath = groupFolderPathProp ?? null;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
   const recap = recapProp ?? null;
+  const subagentRoster = subagentRosterProp ?? null;
   const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -241,7 +272,8 @@ export function EnvironmentPanel({
   const openRightDockPane = useRightDockStore((store) => store.openPane);
   const { additions, deletions, hasChanges } = diffTotals;
 
-  // disable Changes only when the diff can't open AND isn't already open — an open diff must stay toggleable closed
+  // Disable the Changes row only when the diff cannot be opened *and* is not already open
+  // (so an open diff stays toggleable closed even when there are no pending changes).
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
   const showRecap = Boolean(recap?.text) || recap?.status === "pending";
   const markdownCwd = openInTarget ?? gitCwd ?? undefined;
@@ -407,6 +439,16 @@ export function EnvironmentPanel({
         />
       ) : null}
 
+      {settings.showEnvironmentSubagents && subagentRoster && activeThreadId ? (
+        <EnvironmentSubagentsSection
+          roster={subagentRoster}
+          onOpenList={() => {
+            openRightDockPane(activeThreadId, { kind: "subagents" });
+            onClose();
+          }}
+        />
+      ) : null}
+
       {/*
         Optional sections below the git block. Each renders its own leading divider only when it
         actually shows, so toggling any section via the header gear menu never leaves a doubled or
@@ -511,7 +553,9 @@ export function EnvironmentPanel({
     </div>
   );
 
-  // top-right overlay pinned to the chat column; docked mode also insets transcript content, floating overlays only
+  // Top-right overlay pinned to the chat column with p-3 edge gutters (same footprint in
+  // split panes and when the right dock is open). Docked mode additionally insets transcript
+  // content; floating overlays only without stealing flex width from the narrow chat pane.
   return (
     <SidePanelOverlay
       open={open}

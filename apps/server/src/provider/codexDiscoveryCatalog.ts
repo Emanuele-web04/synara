@@ -1,3 +1,8 @@
+// FILE: codexDiscoveryCatalog.ts
+// Purpose: Normalize Codex app-server discovery responses into provider contracts.
+// Layer: Server provider domain
+// Exports: Pure skills, plugin, and model discovery response parsers.
+
 import type {
   ProviderListModelsResult,
   ProviderListPluginsResult,

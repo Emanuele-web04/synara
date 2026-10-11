@@ -55,7 +55,12 @@ export function deriveTurnStartSession(input: {
   readonly providerInstanceId?: ProviderInstanceId;
   readonly requestedRuntimeMode: RuntimeMode;
   readonly requestedAt: string;
-  /** whether the session's provider binding is established — a pre-turn optimistic placeholder can carry a stale provider, so when false its providerName is ignored in favor of input.providerName */
+  /**
+   * Whether the projected session's provider binding is established (running,
+   * ready, or has already produced a turn). A pre-turn optimistic placeholder
+   * row can carry a stale provider; when this is false the session's own
+   * providerName is ignored in favor of input.providerName.
+   */
   readonly sessionProviderEstablished?: boolean;
 }): OrchestrationSession | null {
   if (input.currentSession?.status === "starting" || input.currentSession?.status === "running") {

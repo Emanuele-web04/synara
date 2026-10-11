@@ -1,3 +1,15 @@
+// FILE: sponsor/page.tsx
+// Purpose: Sponsorship page — the GitHub Sponsors tiers, what the money funds,
+//          and the current sponsor roll. Linked from the navbar and footer.
+// Layer: App Router page (static)
+// Depends on: Navbar, SiteFooter, SectionEyebrow, data/sponsorTiers, react-icons/lu
+// Note: Tier copy lives in data/sponsorTiers.ts and mirrors the live GitHub
+//       tiers. Every CTA deep-links into GitHub Sponsors — checkout is entirely
+//       GitHub's, this page never handles payment.
+//       Layout deliberately tracks /sponsors: same container, left-aligned
+//       header, mono section eyebrows, and a single rule above the closing CTA.
+//       The two pages link to each other constantly, so they have to read as one.
+
 import Link from "next/link";
 import { LuCheck, LuHeart, LuArrowUpRight, LuArrowDownToLine } from "react-icons/lu";
 import Navbar from "@/components/Navbar";
@@ -90,7 +102,11 @@ export default function SponsorPage() {
             </p>
           </div>
 
-          {/* hairline grid: gap-px over a divide-colored background draws the rules so the cell count can change per breakpoint with no nth-child border math; six cells divide evenly into 1/2/3 columns */}
+          {/* Hairline grid, the same treatment Features and PrivacySection use
+              on the landing page. `gap-px` over a divide-coloured background
+              draws the rules, so the cell count can change at every breakpoint
+              without any nth-child border math. Six cells divide evenly into
+              1/2/3 columns, so no row is ever left with a gap. */}
           <div className="mt-4 grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-[var(--divide)] bg-[var(--divide)] sm:grid-cols-2 lg:grid-cols-3">
             {SPONSOR_TIERS.map((tier) => (
               <TierCard key={tier.id} tier={tier} />
@@ -101,6 +117,9 @@ export default function SponsorPage() {
 
         <section className="mt-12">
           <SectionEyebrow>Where the money goes</SectionEyebrow>
+          {/* Plain columns, not cards. The tier grid above is the only thing on
+              this page that earns card chrome — three short paragraphs read
+              better unboxed, the same way the sponsor rows do. */}
           <div className="mt-4 grid gap-6 sm:grid-cols-3 sm:gap-8">
             {SPONSOR_FUNDING_USES.map((use) => (
               <div key={use.title}>
@@ -197,7 +216,12 @@ export default function SponsorPage() {
   );
 }
 
-// the whole cell is the link so six tiers don't stack six competing pills — the loud CTA stays the one in the header
+/**
+ * One cell of the tier grid. The whole cell is the link rather than holding a
+ * button, so six tiers don't stack six competing pills down the page — the loud
+ * CTA stays the one in the header. Hover tints the cell, matching the landing
+ * page's feature grid.
+ */
 function TierCell({
   href,
   label,

@@ -29,6 +29,7 @@ function getJsonSchema<T, E>(schema: Schema.Codec<T, E>): Schema.Codec<T, string
     jsonSchema = Schema.fromJsonString(schema);
     jsonSchemasByCodec.set(schema, jsonSchema);
   }
+  // The schema identity ties the cached decoded type to the caller's T.
   return jsonSchema as Schema.Codec<T, string>;
 }
 
@@ -112,6 +113,7 @@ function readLocalStorageItemOrFallback<T, E>(
   }
 }
 
+/** Persists one write, mirroring `useState`'s updater-or-value contract. Module scope: see above. */
 function persistLocalStorageValue<T, E>(
   key: string,
   previous: T,
@@ -134,6 +136,7 @@ function persistLocalStorageValue<T, E>(
       }
       isomorphicLocalStorage.setItem(key, raw);
     }
+    // Dispatch event after state update completes to avoid nested state updates
     queueMicrotask(() => dispatchLocalStorageChange(key));
   } catch (error) {
     console.error("[LOCALSTORAGE] Error:", error);
@@ -146,10 +149,12 @@ export function useLocalStorage<T, E>(
   initialValue: T,
   schema: Schema.Codec<T, E>,
 ): [T, (value: T | ((val: T) => T)) => void] {
+  // Get the initial value from localStorage or use the provided initialValue
   const [storedValue, setStoredValue] = useState<T>(() =>
     readLocalStorageItemOrFallback(key, initialValue, schema),
   );
 
+  // Return a wrapped version of useState's setter function that persists the new value to localStorage
   const setValue = useCallback(
     (value: T | ((val: T) => T)) => {
       setStoredValue((prev) => persistLocalStorageValue(key, prev, value, schema));
@@ -159,7 +164,9 @@ export function useLocalStorage<T, E>(
 
   const prevKeyRef = useRef(key);
 
-  // Re-sync from localStorage when key changes. Timeout-0 keeps the state write asynchronous (compiler-eligible); key changes are rare and the fresh value lands within a frame.
+  // Re-sync from localStorage when key changes. Timeout-0 keeps the state
+  // write asynchronous (compiler-eligible); key changes are rare and the
+  // fresh value lands within a frame.
   useEffect(() => {
     if (prevKeyRef.current === key) {
       return;
@@ -173,6 +180,7 @@ export function useLocalStorage<T, E>(
     };
   }, [key, initialValue, schema]);
 
+  // Listen for storage events from other tabs AND custom events from the same tab
   useEffect(() => {
     const syncFromStorage = () => {
       setStoredValue(readLocalStorageItemOrFallback(key, initialValue, schema));

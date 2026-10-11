@@ -1,3 +1,8 @@
+// FILE: PluginLibrary.tsx
+// Purpose: Hosts the plugin and skill browser surfaced from provider discovery APIs.
+// Layer: Route-level screen
+// Exports: PluginLibrary
+
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
@@ -62,6 +67,8 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { Skeleton } from "./ui/skeleton";
 
+// ── Types ──────────────────────────────────────────────────────────────────
+
 type DiscoveryTab = "plugins" | "skills";
 type ProviderCapabilities = { plugins: boolean; skills: boolean };
 type PluginEntry = {
@@ -74,6 +81,8 @@ type PluginBrandArtwork = {
   color: string;
   icon: IconType;
 };
+
+// ── Constants ──────────────────────────────────────────────────────────────
 
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
   ...PROVIDER_ICON_COMPONENT_BY_PROVIDER,
@@ -93,6 +102,8 @@ const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
   stripe: { icon: SiStripe, color: "#635BFF" },
   vercel: { icon: SiVercel, color: "#111111" },
 };
+
+// ── Utilities ──────────────────────────────────────────────────────────────
 
 function pluginEntryKey(entry: Pick<PluginEntry, "marketplacePath" | "plugin">): string {
   return `${entry.marketplacePath}::${entry.plugin.name}`;
@@ -142,6 +153,8 @@ function nameToHue(name: string): number {
   }
   return Math.abs(h) % 360;
 }
+
+// ── Icon glyphs ────────────────────────────────────────────────────────────
 
 function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
   const accent = resolvePluginAccent(plugin);
@@ -213,6 +226,8 @@ function SkillGlyph({ skill }: { skill: ProviderSkillDescriptor }) {
     </span>
   );
 }
+
+// ── UI controls ────────────────────────────────────────────────────────────
 
 function TabButton({
   label,
@@ -302,6 +317,8 @@ function InstalledStatus({ installed }: { installed: boolean }) {
     </span>
   );
 }
+
+// ── Grid items ─────────────────────────────────────────────────────────────
 
 function PluginGridItem({ entry }: { entry: PluginEntry }) {
   const description =
@@ -433,7 +450,10 @@ export function PluginLibrary(props?: {
     },
   };
 
-  // auto-fallback: when the tab/provider combo is unsupported, render the first capable provider — derived (not synced to state) so switching tabs never renders an unsupported frame and the user's own pick resurfaces when its provider becomes capable
+  // Auto-fallback: when the current tab/provider combo is unsupported, render
+  // the first capable provider. Derived (not synced into state) so switching
+  // tabs never renders an unsupported frame, and the user's own selection
+  // resurfaces if its provider becomes capable again.
   const supportsSelectedTab =
     !settings.disabledProviders.includes(selectedProvider) &&
     (selectedTab === "plugins"

@@ -1,3 +1,8 @@
+// FILE: update-installer-downloads.mjs
+// Purpose: Refreshes stored installer counts and latest direct download links.
+// Layer: Maintenance script for the Codex daily automation
+// Depends on: GitHub Releases API, src/data installer JSON snapshots
+
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +28,7 @@ function createGitHubHeaders() {
   return headers;
 }
 
+// Fetches every releases page so the stored figure remains a true all-time total.
 async function fetchAllReleases() {
   const releases = [];
 
@@ -49,6 +55,8 @@ async function fetchAllReleases() {
   return releases;
 }
 
+// Mirrors the website resolver's `/releases/latest` source, with the releases
+// list as a rate-limit fallback so the maintenance job can still refresh.
 async function fetchLatestRelease(releases) {
   const response = await fetch(latestReleaseApiUrl, {
     headers: createGitHubHeaders(),

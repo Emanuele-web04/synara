@@ -23,7 +23,9 @@ layer("039_ReconcileLegacyPinnedThreads", (it) => {
         VALUES (36, 'LegacyProjectionThreadsPinned')
       `;
 
-      // the reconciler spots the foreign row at 36 before the migrator — our 36 replays in the same pass
+      // The lineage reconciler spots the foreign row at ID 36 before the
+      // migrator runs, so Synara's 36 is replayed in the same pass instead of
+      // being skipped by the max-ID gate.
       yield* runMigrations({ toMigrationInclusive: 38 });
 
       const afterColumns = yield* projectionThreadsColumnNames(sql);

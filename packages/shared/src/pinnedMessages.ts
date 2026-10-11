@@ -1,3 +1,7 @@
+// FILE: pinnedMessages.ts
+// Purpose: Shared pure transforms for per-thread pinned-message lists and note limits.
+// Layer: Shared runtime domain helper used by server projections and the web store.
+
 import {
   PINNED_MESSAGE_LABEL_MAX_CHARS,
   THREAD_NOTES_MAX_CHARS,
@@ -5,7 +9,7 @@ import {
   type PinnedMessage,
 } from "@synara/contracts";
 
-// preserve no-op references while keeping mutation helpers typed as mutable-array outputs
+// Preserve no-op references while keeping mutation helpers typed as mutable-array outputs.
 function keepExistingPins(pins: readonly PinnedMessage[]): PinnedMessage[] {
   return pins as PinnedMessage[];
 }
