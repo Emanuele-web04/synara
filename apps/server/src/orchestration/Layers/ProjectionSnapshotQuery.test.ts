@@ -35,6 +35,110 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("retains durable task state beyond the detail activity window", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("durable-task-state");
+      const now = "2026-10-11T10:00:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('durable-task-project', 'Tasks', '/tmp/durable-task-project', '[]', ${now}, ${now})`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+        VALUES (${threadId}, 'durable-task-project', 'Tasks', '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+      const activities = [
+        ["task-start", "task.started", { taskId: "task-1", taskType: "subagent" }],
+        ["task-background", "task.updated", { taskId: "task-1", isBackgrounded: true }],
+        ["task-patch", "task.updated", { taskId: "task-1", status: "running" }],
+        ["workflow-start", "task.started", { taskId: "workflow-1", taskType: "local_workflow" }],
+        [
+          "workflow-launch",
+          "task.updated",
+          { taskId: "workflow-1", workflowRunId: "run-1", workflowScriptPath: "/tmp/workflow.ts" },
+        ],
+        ["workflow-end", "task.completed", { taskId: "workflow-1", status: "completed" }],
+        [
+          "task-list",
+          "turn.tasks.updated",
+          { tasks: [{ task: "Unfinished", status: "inProgress" }] },
+        ],
+        [
+          "background-notice",
+          "runtime.warning",
+          { nativeEventType: "background_tasks_changed", data: { tasks: [{ task_id: "task-1" }] } },
+        ],
+        [
+          "z-sequence-background",
+          "task.updated",
+          { taskId: "sequence-task", isBackgrounded: true },
+        ],
+        ["a-sequence-completed", "task.completed", { taskId: "sequence-task" }],
+        [
+          "z-lifecycle-background",
+          "task.updated",
+          { taskId: "lifecycle-task", isBackgrounded: true },
+        ],
+        ["a-lifecycle-completed", "task.completed", { taskId: "lifecycle-task" }],
+      ] as const;
+      for (const [index, [id, kind, payload]] of activities.entries()) {
+        // Provider rows can share a timestamp, and imported rows can share a
+        // sequence too. Neither random event IDs nor arrival order determines
+        // whether a task is still running.
+        const sequence = id === "a-lifecycle-completed" ? index : index + 1;
+        const createdAt = new Date(Date.parse(now) + Math.min(index, 8) * 1000).toISOString();
+        yield* sql`INSERT INTO projection_thread_activities
+          (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (${id}, ${threadId}, 'info', ${kind}, 'Task state', ${JSON.stringify(payload)}, ${sequence}, ${createdAt})`;
+      }
+      yield* sql`WITH RECURSIVE filler(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM filler WHERE n < 2001
+      ) INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        SELECT 'task-filler-' || n, ${threadId}, 'tool', 'tool.completed', 'Work', '{}', n + 20, '2026-10-11T11:00:00.000Z' FROM filler`;
+      const detail = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(threadId));
+      assert.deepEqual(
+        Object.fromEntries(
+          detail.thread.activities
+            .filter((activity) => !activity.id.startsWith("task-filler-"))
+            .map((activity) => [activity.id, activity.payload]),
+        ),
+        Object.fromEntries(activities.map(([id, , payload]) => [id, payload])),
+      );
+      assert.equal(
+        detail.thread.activities.filter((activity) => activity.kind === "tool.completed").length,
+        2000,
+      );
+
+      // New state replaces the old list/notice and ownership patch even when
+      // both are older than the history window; unrelated work is still capped.
+      yield* sql`INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        VALUES
+          ('task-settled', ${threadId}, 'info', 'task.updated', 'Settled', '{"taskId":"task-1","isBackgrounded":false,"status":"completed"}', 9, '2026-10-11T10:01:00.000Z'),
+          ('empty-task-list', ${threadId}, 'info', 'turn.tasks.updated', 'No tasks', '{"tasks":[]}', 10, '2026-10-11T10:01:00.000Z'),
+          ('empty-background-notice', ${threadId}, 'info', 'runtime.warning', 'No background tasks', '{"nativeEventType":"background_tasks_changed","data":{"tasks":[]}}', 11, '2026-10-11T10:01:00.000Z')`;
+      const settled = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(threadId));
+      assert.isFalse(
+        settled.thread.activities.some((activity) =>
+          ["task-background", "task-patch", "task-list", "background-notice"].includes(activity.id),
+        ),
+      );
+      assert.deepEqual(
+        settled.thread.activities
+          .filter((activity) =>
+            ["task-settled", "empty-task-list", "empty-background-notice"].includes(activity.id),
+          )
+          .map((activity) => activity.payload),
+        [
+          { taskId: "task-1", isBackgrounded: false, status: "completed" },
+          { tasks: [] },
+          { nativeEventType: "background_tasks_changed", data: { tasks: [] } },
+        ],
+      );
+    }),
+  );
+
   it.effect("recovers the stored fork cutoff from persisted rows on every continuation read", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
