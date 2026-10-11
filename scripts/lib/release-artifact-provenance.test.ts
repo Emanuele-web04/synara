@@ -5,7 +5,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { writeReleaseArtifactProvenance } from "./release-artifact-provenance.ts";
+import {
+  linuxPackageArtifacts,
+  writeReleaseArtifactProvenance,
+} from "./release-artifact-provenance.ts";
 
 const temporaryRoots: string[] = [];
 
@@ -65,6 +68,64 @@ describe("release artifact provenance", () => {
       )?.sha256,
     ).toBe(createHash("sha256").update("app-image-bytes").digest("hex"));
     expect(JSON.parse(readFileSync(result.path, "utf8"))).toEqual(result.manifest);
+  });
+
+  it("proves every Linux package format the release leg claims to build", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-linux-packages-provenance-test-"));
+    temporaryRoots.push(root);
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.AppImage"), "app-image-bytes");
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.deb"), "deb-bytes");
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.rpm"), "rpm-bytes");
+    writeFileSync(join(root, "latest-linux.yml"), "version: 1.2.3\n");
+
+    const result = await writeReleaseArtifactProvenance({
+      assetsDirectory: root,
+      platform: "linux",
+      arch: "x64",
+      target: "AppImage,deb,rpm",
+      version: "1.2.3",
+      sourceCommit: "a".repeat(40),
+      sourceTag: null,
+      lockfileSha256: "b".repeat(64),
+      publication: false,
+      signed: false,
+    });
+
+    expect(result.manifest.signing.checks).toEqual([
+      "AppImage payload present",
+      "deb payload present",
+      "rpm payload present",
+    ]);
+  });
+
+  it("fails a combined Linux leg that shipped no rpm", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-linux-missing-rpm-test-"));
+    temporaryRoots.push(root);
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.AppImage"), "app-image-bytes");
+    writeFileSync(join(root, "Synara-1.2.3-x86_64.deb"), "deb-bytes");
+    writeFileSync(join(root, "latest-linux.yml"), "version: 1.2.3\n");
+
+    await expect(
+      writeReleaseArtifactProvenance({
+        assetsDirectory: root,
+        platform: "linux",
+        arch: "x64",
+        target: "AppImage,deb,rpm",
+        version: "1.2.3",
+        sourceCommit: "a".repeat(40),
+        sourceTag: null,
+        lockfileSha256: "b".repeat(64),
+        publication: false,
+        signed: false,
+      }),
+    ).rejects.toThrow("Expected exactly one .rpm artifact, found 0.");
+  });
+
+  it("rejects an unknown Linux package target instead of skipping it", () => {
+    expect(() => linuxPackageArtifacts("AppImage,snap")).toThrow(
+      "Unsupported Linux package target: snap.",
+    );
+    expect(linuxPackageArtifacts("AppImage, deb ,rpm")).toEqual([".AppImage", ".deb", ".rpm"]);
   });
 
   it("rejects publication without an exact source tag", async () => {

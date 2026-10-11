@@ -23,8 +23,11 @@ export type ReleaseDownloads = {
   releasesUrl: string;
   mac: { arm64: string; x64: string };
   windows: string;
-  linux: string;
+  linux: { appImage: string; deb: string; rpm: string };
 };
+
+/** Linux package formats Synara ships. AppImage owns in-app updates. */
+export type LinuxPackageFormat = keyof ReleaseDownloads["linux"];
 
 type GitHubReleaseAsset = {
   name?: string;
@@ -50,7 +53,7 @@ const FALLBACK: ReleaseDownloads = {
   releasesUrl: RELEASES_URL,
   mac: { arm64: RELEASES_URL, x64: RELEASES_URL },
   windows: RELEASES_URL,
-  linux: RELEASES_URL,
+  linux: { appImage: RELEASES_URL, deb: RELEASES_URL, rpm: RELEASES_URL },
 };
 
 // Uses the checked-in snapshot before the generic releases page so installer
@@ -60,7 +63,9 @@ function getFallbackDownloads(): ReleaseDownloads {
     STORED_FALLBACK.mac?.arm64 &&
     STORED_FALLBACK.mac?.x64 &&
     STORED_FALLBACK.windows &&
-    STORED_FALLBACK.linux
+    STORED_FALLBACK.linux?.appImage &&
+    STORED_FALLBACK.linux?.deb &&
+    STORED_FALLBACK.linux?.rpm
     ? {
         version: STORED_FALLBACK.version,
         releasesUrl: STORED_FALLBACK.releasesUrl,
@@ -108,7 +113,11 @@ export async function getReleaseDownloads(): Promise<ReleaseDownloads> {
         x64: urlFor(/x64\.dmg$/i),
       },
       windows: urlFor(/\.exe$/i),
-      linux: urlFor(/\.AppImage$/i),
+      linux: {
+        appImage: urlFor(/\.AppImage$/i),
+        deb: urlFor(/\.deb$/i),
+        rpm: urlFor(/\.rpm$/i),
+      },
     };
   } catch {
     return getFallbackDownloads();

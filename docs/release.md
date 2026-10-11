@@ -16,7 +16,7 @@ This document covers build-only native validation and publishing desktop release
 - Builds four artifacts in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG
-  - Linux `x64` AppImage
+  - Linux `x64` AppImage, `.deb`, and `.rpm` (one electron-builder pass)
   - Windows `x64` NSIS installer
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
@@ -49,6 +49,11 @@ This document covers build-only native validation and publishing desktop release
   - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
   - every stable release includes both `synara-mac.yml`, `synara.yml`, `synara-linux.yml` and `latest-mac.yml`, `latest.yml`, `latest-linux.yml`
   - `*.blockmap` files, except the macOS update `.zip.blockmap` removed after zip repack
+- Linux package formats:
+  - the AppImage is the only Linux updater payload; `latest-linux.yml` and `synara-linux.yml` describe it
+  - `.deb` and `.rpm` are package-manager installs and are never mirrored to the pinned updater feed
+  - `linuxPackageArtifacts()` in `scripts/lib/release-artifact-provenance.ts` proves each format the
+    Linux leg claims to build, so a leg cannot silently publish an AppImage-only release
 - Enforced upgrade path:
   - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
   - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a clean-lane release.
@@ -249,6 +254,46 @@ The release job installs the Cua driver's OpenSSL, X11, XCB, xkbcommon and
 Wayland development libraries before provisioning. This matches the build
 prerequisites in `cua-linux-check.yml`; it does not qualify Linux Computer Use
 as a supported 0.9.0 feature.
+
+### Linux package build dependencies
+
+The `linux-x64` leg additionally builds `.deb` and `.rpm` through electron-builder's
+fpm target. It needs `rpmbuild` (the `rpm` package) for the RPM, and `libcrypt.so.1`
+for the bundled fpm Ruby. The workflow installs `rpm` and `libcrypt1` explicitly so
+the build does not depend on what the runner image happens to carry. On a local Arch
+or Fedora host the equivalents are `rpm` and `libxcrypt-compat`.
+
+Two package-metadata rules are enforced by the builder itself, not by this repository:
+a `.deb`/`.rpm` build fails without a project `homepage` and a maintainer email, which
+is why `DESKTOP_PACKAGE_AUTHOR_EMAIL` and `DESKTOP_PACKAGE_HOMEPAGE` exist in
+`scripts/build-desktop-artifact.ts`. That email is written into the `.deb` control
+file and the RPM maintainer field, so it must stay a real contactable address.
+
+Note that electron-builder treats `deb`/`rpm` as auto-update-capable targets and bakes
+`app-update.yml` plus a `package-type` file into those packages. Synara's own gate in
+`getAutoUpdateDisabledReason` requires `process.env.APPIMAGE` on Linux, so a package
+install still has automatic updates disabled and defers to the package manager.
+
+### Arch / Omarchy release checklist
+
+The AppImage is the supported Arch install. There is no Arch CI, and no attempt is made to emulate
+Arch on the Ubuntu runner: these checks are manual, run by the person cutting the release on an
+Omarchy/Arch host with the new `Synara-<version>-x86_64.AppImage`.
+
+1. Mount check: `./Synara-<version>-x86_64.AppImage --appimage-mount` prints a `/tmp/.mount_Synara*`
+   path. FUSE 2 (`fuse2` package) is the supported setup on Arch/Omarchy.
+2. Fallback check when FUSE is unavailable:
+   `./Synara-<version>-x86_64.AppImage --appimage-extract-and-run` starts the app.
+3. Windowed launch: open the app, create a project, and run one basic flow. A headless Wayland
+   session is not a substitute for this step — if no graphical session is available, record the
+   release as unverified rather than as passing.
+4. Desktop integration: confirm the app appears in the launcher and reports a sane window title under
+   the compositor in use (Hyprland on Omarchy).
+5. Update path: the AppImage updates itself in-app; do not expect the package managers to own a
+   `.deb`/`.rpm` install on Arch.
+
+If a step fails, capture the app log and the `~/.config/Synara` state before reporting it, and see
+the user-facing FUSE fallback in `apps/marketing/content/docs/troubleshooting/desktop-and-updates.mdx`.
 
 ### Local DMG appearance validation
 
