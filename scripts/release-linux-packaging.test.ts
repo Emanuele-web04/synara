@@ -6,19 +6,27 @@ import { describe, expect, it } from "vitest";
 import { resolveReleaseBuildScope } from "./lib/release-build-scope.ts";
 
 const workflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
-const build = workflow.slice(workflow.indexOf("  build:\n"), workflow.indexOf("  publish_cli:\n"));
+const platformWorkflow = readFileSync(
+  new URL("../.github/workflows/release-platform.yml", import.meta.url),
+  "utf8",
+);
+const build = platformWorkflow.slice(
+  platformWorkflow.indexOf("  build:\n"),
+  platformWorkflow.indexOf("  qualify_intel:\n"),
+);
 
 describe("Linux release packaging wiring", () => {
   it("uses one Linux runner/native preparation with the same declared targets in all gates", () => {
     const scope = resolveReleaseBuildScope("all", "artifact", true);
     expect(scope.matrix.include.filter((entry) => entry.platform === "linux")).toHaveLength(1);
     expect(scope.cua_matrix.include.filter((entry) => entry.platform === "linux")).toHaveLength(1);
-    expect(build).toContain(
-      "ARTIFACT_TARGET: ${{ matrix.platform == 'linux' && 'AppImage,deb' || matrix.target }}",
+    expect(workflow).toContain(
+      "target: ${{ matrix.platform == 'linux' && 'AppImage,deb' || matrix.target }}",
     );
-    expect(build.match(/--target "\$ARTIFACT_TARGET"/g)).toHaveLength(3);
+    expect(build.match(/--target "\$\{\{ inputs.target \}\}"/g)).toHaveLength(5);
+    expect(platformWorkflow.match(/--target "\$\{\{ inputs.target \}\}"/g)).toHaveLength(6);
     expect(build).toContain("libcrypt1 dpkg-dev xz-utils xvfb xauth");
-    expect(build).toContain("name: desktop-${{ matrix.platform }}-${{ matrix.arch }}");
+    expect(build).toContain("name: desktop-${{ inputs.platform }}-${{ inputs.arch }}");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -43,8 +51,8 @@ describe("Linux release packaging wiring", () => {
         const script = step
           .slice(step.indexOf("        run: |\n") + "        run: |\n".length)
           .replace(/^          /gm, "")
-          .replaceAll("${{ matrix.platform }}", "linux")
-          .replaceAll("${{ matrix.arch }}", "x64");
+          .replaceAll("${{ inputs.platform }}", "linux")
+          .replaceAll("${{ inputs.arch }}", "x64");
         const result = spawnSync("bash", ["-c", script], { cwd: root, encoding: "utf8" });
         expect(result.status, result.stderr).toBe(0);
         expect(readdirSync(join(root, "release-publish")).toSorted()).toEqual([

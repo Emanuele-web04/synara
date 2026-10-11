@@ -1,4 +1,3 @@
-import { ensureThreadHistoryLoaded, useThreadHistory } from "../threadHistory";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -232,7 +231,6 @@ import {
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
-import { isThreadDetailAwaitingVerification } from "../threadDetailAuthority";
 import { retryThreadDetailSync } from "../threadDetailSyncRetry";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import {
@@ -861,15 +859,6 @@ export default function ChatView({
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
   const [threadFindOpen, setThreadFindOpen] = useState(false);
-  const threadHistory = useThreadHistory(threadId);
-  useEffect(() => {
-    if (!threadFindOpen) return;
-    let cancelled = false;
-    void ensureThreadHistoryLoaded(threadId, undefined, () => cancelled);
-    return () => {
-      cancelled = true;
-    };
-  }, [threadFindOpen, threadId, threadDetailSyncState, threadHistory.owner]);
   const [threadFindFocusNonce, setThreadFindFocusNonce] = useState(0);
   const [threadFindHighlightStore] = useState(() => createThreadFindHighlightStore());
   const handleThreadFindJump = (match: ThreadFindMatch) => {
@@ -1507,7 +1496,7 @@ export default function ChatView({
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
 
   const phase = derivePhase(activeThread?.session ?? null);
-  const isConnecting = phase === "connecting" || threadDetailSyncState === "cached";
+  const isConnecting = phase === "connecting";
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   const {
@@ -1821,8 +1810,7 @@ export default function ChatView({
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
-  const activeTurnLayoutLive =
-    threadDetailSyncState === "cached" ? !latestTurnSettled : isWorking || !latestTurnSettled;
+  const activeTurnLayoutLive = isWorking || !latestTurnSettled;
   const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
   const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
   const previousActiveTurnLayoutKeyRef = useRef<string | null>(null);
@@ -1848,14 +1836,6 @@ export default function ChatView({
   });
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
   useLayoutEffect(() => {
-    if (threadDetailSyncState === "cached") {
-      // A last-known running turn is hydration, not observed live work. Its
-      // eventual confirmation must not start the live settlement grace period.
-      previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
-      previousActiveTurnLayoutLiveRef.current = false;
-      setKeepSettledActiveTurnLayout(false);
-      return;
-    }
     if (previousActiveTurnLayoutKeyRef.current !== activeTurnLayoutKey) {
       previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
       previousActiveTurnLayoutLiveRef.current = activeTurnLayoutLive;
@@ -1893,7 +1873,6 @@ export default function ChatView({
     activeLatestTurn?.startedAt,
     activeTurnLayoutKey,
     activeTurnLayoutLive,
-    threadDetailSyncState,
   ]);
 
   const { timelineMessages, optimisticUserMessages, setOptimisticUserMessages } =
@@ -2138,23 +2117,11 @@ export default function ChatView({
         // `handleNotesChange` already surfaces the save failure through the shared notes toast.
       });
   }, [activeThreadId, handleNotesChange, projectInstructions, threadNotes]);
-  const historyJumpThreadRef = useRef<ThreadId | null>(threadId);
-  useLayoutEffect(() => {
-    historyJumpThreadRef.current = threadId;
-    return () => {
-      historyJumpThreadRef.current = null;
-    };
-  }, [threadId]);
   const handleJumpToPinnedMessage = useCallback(
     (messageId: MessageId) => {
-      const cancelled = () => historyJumpThreadRef.current !== threadId;
-      void ensureThreadHistoryLoaded(threadId, messageId, cancelled).then(() => {
-        requestAnimationFrame(() => {
-          if (!cancelled()) timelineControllerRef.current?.scrollToMessage(messageId);
-        });
-      });
+      timelineControllerRef.current?.scrollToMessage(messageId);
     },
-    [threadId, timelineControllerRef],
+    [timelineControllerRef],
   );
 
   // Before treating an empty timeline as a genuinely new thread, wait for the
@@ -2379,19 +2346,19 @@ export default function ChatView({
   const onRespondToClaudeCacheReview = useCallback(
     async (review: PendingClaudeCacheReview, decision: ClaudeCacheReviewDecision) => {
       const api = readNativeApi();
-      if (!api || isThreadDetailAwaitingVerification(threadId))
-        throw new Error("Reconnect before choosing how to resume.");
+      if (!api) throw new Error("Reconnect before choosing how to resume.");
       await api.orchestration.dispatchCommand({
         type: "thread.claude-cache.respond",
         commandId: newCommandId(),
         threadId,
         messageId: review.messageId,
         reviewId: review.reviewId,
-        decision,
+        decision: decision === "never" ? "continue" : decision,
         createdAt: new Date().toISOString(),
       });
+      if (decision === "never") updateSettings({ claudeConfirmColdCacheResume: false });
     },
-    [threadId],
+    [threadId, updateSettings],
   );
   const activeRootBranch = useMemo(
     () =>
@@ -3323,7 +3290,6 @@ export default function ChatView({
       !api ||
       !isServerThread ||
       !activeThread ||
-      isThreadDetailAwaitingVerification(activeThread.id) ||
       activeThread.session === null ||
       activeThread.session.status === "closed"
     ) {
@@ -3417,20 +3383,6 @@ export default function ChatView({
     composerTranscriptInsetPx,
     isInactiveSplitPane,
   });
-  useEffect(() => {
-    const messageId = rawSearch.messageId;
-    if (!messageId || threadDetailSyncState !== "synced") return;
-    let cancelled = false;
-    onTranscriptNavigate();
-    void ensureThreadHistoryLoaded(threadId, messageId, () => cancelled).then(() => {
-      requestAnimationFrame(() => {
-        if (!cancelled) timelineControllerRef.current?.scrollToMessage(messageId);
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [rawSearch.messageId, threadId, threadDetailSyncState, onTranscriptNavigate]);
   useLayoutEffect(() => {
     if (settings.anchorSentMessagesToTop) return;
     tailAnchorScrollInFlightRef.current = false;
@@ -3775,7 +3727,7 @@ export default function ChatView({
 
   const onInterrupt = useCallback(async () => {
     const api = readNativeApi();
-    if (!api || !activeThread || isThreadDetailAwaitingVerification(activeThread.id)) return;
+    if (!api || !activeThread) return;
     // A user Stop pauses the waiting queue instead of sending it after the turn.
     const releaseQueueHold = holdQueuedComposerTurnsForStop(activeThread.id);
     await api.orchestration
@@ -3812,7 +3764,7 @@ export default function ChatView({
   const onStopBackgroundTask = useCallback(
     (taskId: string) => {
       const api = readNativeApi();
-      if (!api || !activeThread || isThreadDetailAwaitingVerification(activeThread.id)) return;
+      if (!api || !activeThread) return;
       void api.orchestration
         .dispatchCommand({
           type: "thread.task.stop",
@@ -3834,13 +3786,7 @@ export default function ChatView({
 
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
-    if (
-      !api ||
-      !activeThread ||
-      !workflowRunState ||
-      isThreadDetailAwaitingVerification(activeThread.id)
-    )
-      return;
+    if (!api || !activeThread || !workflowRunState) return;
     await api.orchestration.dispatchCommand({
       type: "thread.task.stop",
       commandId: newCommandId(),
@@ -3865,16 +3811,14 @@ export default function ChatView({
   // read as paused (with a resume affordance) instead of plain stopped, across
   // reloads too.
   const onPauseWorkflowRun = useCallback(async () => {
-    if (!workflowRunState || !activeThreadId || isThreadDetailAwaitingVerification(activeThreadId))
-      return;
+    if (!workflowRunState || !activeThreadId) return;
     const { workflowTaskId } = workflowRunState;
     markWorkflowRunPaused(activeThreadId, workflowTaskId);
     await onStopWorkflowRun();
   }, [activeThreadId, markWorkflowRunPaused, onStopWorkflowRun, workflowRunState]);
 
   const onDismissWorkflowRun = useCallback(() => {
-    if (!workflowRunState || !activeThreadId || isThreadDetailAwaitingVerification(activeThreadId))
-      return;
+    if (!workflowRunState || !activeThreadId) return;
     const { workflowTaskId } = workflowRunState;
     markWorkflowRunDismissed(activeThreadId, workflowTaskId);
   }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
@@ -5539,9 +5483,10 @@ export default function ChatView({
     );
   }
 
-  // Open-thread tabs belong to the single chat on desktop; split panes, the editor rail, and
-  // phone-width headers keep the plain thread title.
-  const showOpenThreadTabs = !isMobileViewport && surfaceMode === "single" && !isEditorRail;
+  // Open-thread tabs belong to the single chat on desktop; split panes, the editor rail,
+  // phone-width headers, and users who turned tabs off keep the plain thread title.
+  const showOpenThreadTabs =
+    settings.showOpenThreadTabs && !isMobileViewport && surfaceMode === "single" && !isEditorRail;
 
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
     title: isCoordinatorConversation
@@ -6633,8 +6578,6 @@ export default function ChatView({
       {shouldRenderChatPaneContent ? (
         <ChatThreadFindHost
           open={threadFindOpen}
-          historyIncomplete={threadHistory.nextCursor !== null}
-          historyError={threadHistory.error}
           focusNonce={threadFindFocusNonce}
           timelineEntries={timelineEntries}
           threadId={threadId}
@@ -6866,14 +6809,14 @@ export default function ChatView({
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
-                    {...(threadDetailSyncState === "cached" ? {} : { onStopBackgroundTask })}
+                    onStopBackgroundTask={onStopBackgroundTask}
                     computerControlEnabled={enableComputerControl}
                     onEnableComputerControl={handleEnableComputerControlFromDenial}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
                     onEditUserMessage={onEditUserMessage}
-                    {...(threadDetailSyncState === "cached" ? {} : { onRespondToAsyncUserInput })}
+                    onRespondToAsyncUserInput={onRespondToAsyncUserInput}
                     editableUserMessageId={editableUserMessageId}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}

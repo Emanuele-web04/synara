@@ -22,9 +22,15 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SYNARA_PACKAGED_DESKTOP_FLAVORS } from "@synara/shared/desktopIdentity";
 import { createDesktopArtifactIdentity } from "./lib/desktop-artifact-identity.ts";
 import { parseLinuxPackageTargets } from "./lib/linux-package-targets.ts";
+
+import { findMacBundleArchitectureMismatches } from "./lib/mac-bundle-architecture.ts";
+
+// Restored checkpoints skip dependency installation. Load the same canonical
+// identity from source; package imports below are erased types only.
+const { SYNARA_PACKAGED_DESKTOP_FLAVORS }: typeof import("@synara/shared/desktopIdentity") =
+  await import(new URL("../packages/shared/src/desktopIdentity.ts", import.meta.url).href);
 
 export type PackagedDesktopPlatform = "linux" | "mac" | "win";
 
@@ -165,7 +171,11 @@ interface PackagedRuntime {
   readonly resourcesDirectory: string;
 }
 
-function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
+function prepareMacLaunch(
+  assetsDirectory: string,
+  extractionRoot: string,
+  arch: string,
+): LaunchCommand {
   const archive = requireSingleAsset(assetsDirectory, ".zip");
   runCommand("ditto", ["-x", "-k", archive, extractionRoot]);
   const appBundles = readdirSync(extractionRoot).filter((entry) => entry.endsWith(".app"));
@@ -173,6 +183,10 @@ function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): Laun
     throw new Error(`Expected one packaged macOS app in ${basename(archive)}.`);
   }
   const appBundle = join(extractionRoot, appBundles[0]!);
+  const mismatches = findMacBundleArchitectureMismatches(appBundle, arch);
+  if (mismatches.length > 0) {
+    throw new Error(`Packaged macOS ${arch} app has foreign binaries:\n${mismatches.join("\n")}`);
+  }
   const executables = findFiles(join(appBundle, "Contents", "MacOS"), (candidate) =>
     statSync(candidate).isFile(),
   );
@@ -421,7 +435,7 @@ function prepareLaunch(
   extractionRoot: string,
 ): LaunchCommand {
   if (options.platform === "mac") {
-    return prepareMacLaunch(options.assetsDirectory, extractionRoot);
+    return prepareMacLaunch(options.assetsDirectory, extractionRoot, options.arch);
   }
   if (options.platform === "linux") {
     if (options.target === "deb") return prepareLinuxDebLaunch(options, extractionRoot);

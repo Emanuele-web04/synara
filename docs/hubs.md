@@ -7,8 +7,8 @@ same instructions and memory, and files the threads deliver land in one shared L
 A hub does not need a repository. It works just as well for research, writing, planning, or any
 other non-code work.
 
-> **Synara Beta only.** Hubs ship in Synara Beta. Stable does not show them, and any hub folder
-> there appears as an ordinary project.
+> **Stable and Beta.** Hubs are available in Synara 1.0.2 Stable and Synara Beta.
+> Each app keeps its own Hubs, chats, settings, and data home; Beta data is not copied back to Stable.
 
 > **Compatibility:** Existing hubs keep their files and saved settings. The on-disk parent folder
 > remains `~/Documents/Synara/Groups/`; the stored feature key and API identifiers retain `groups`.
