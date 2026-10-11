@@ -456,6 +456,8 @@ import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection, type SettingsSectionId } from "../settingsNavigation";
 import {
   sidebarHoverRevealHideClassName,
+  SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME,
+  SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME,
   SIDEBAR_HEADER_ROW_CLASS_NAME,
   SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
   SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
@@ -5766,11 +5768,11 @@ export default function Sidebar() {
               aria-pressed={isProjectPinned}
               title={pinActionLabel(project.name, isProjectPinned)}
               className={cn(
-                "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                SIDEBAR_HEADER_LEADING_ACTION_CLASS_NAME,
                 SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                 isProjectPinned
                   ? "pointer-events-auto opacity-100"
-                  : "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+                  : SIDEBAR_HEADER_LEADING_ACTION_REVEAL_CLASS_NAME,
               )}
               onMouseDown={(event) => {
                 event.preventDefault();
