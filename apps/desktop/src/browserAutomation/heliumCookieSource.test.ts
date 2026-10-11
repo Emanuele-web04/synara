@@ -339,6 +339,27 @@ describe("Helium synthetic macOS profile fixtures", () => {
     );
   });
 
+  it("preserves Secure and HttpOnly when legacy columns are used", async () => {
+    const database = new DatabaseSync(
+      join(home, "Library", "Application Support", "net.imput.helium", "Default", "Cookies"),
+    );
+    try {
+      database.exec("ALTER TABLE cookies RENAME COLUMN is_secure TO secure");
+      database.exec("ALTER TABLE cookies RENAME COLUMN is_httponly TO httponly");
+    } finally {
+      database.close();
+    }
+    const snapshot = await cookieSync.extractCookieSync(heliumOptions(), neverLoadNativeReader(), {
+      keychainPassword: async () => syntheticKeychainPassword(),
+    });
+    expect(snapshot.cookies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "session", secure: true, httpOnly: true }),
+        expect.objectContaining({ name: "plain", secure: false, httpOnly: false }),
+      ]),
+    );
+  });
+
   it("decrypts Chromium v10 values that carry a v24 host-key digest", async () => {
     await createHeliumProfile("Chromium24", 24, [
       {

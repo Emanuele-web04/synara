@@ -397,8 +397,8 @@ index 0000000..d85b415
 +        const columns = new Set(
 +            queryHeliumRows(database, "PRAGMA table_info(cookies)").map((column) => String(column.name)),
 +        );
-+        const secure = columns.has("is_secure") ? "is_secure" : "secure";
-+        const httpOnly = columns.has("is_httponly") ? "is_httponly" : "httponly";
++        const secure = columns.has("is_secure") ? "is_secure" : "secure AS is_secure";
++        const httpOnly = columns.has("is_httponly") ? "is_httponly" : "httponly AS is_httponly";
 +        const topFrameSiteKey = columns.has("top_frame_site_key") ? "top_frame_site_key" : null;
 +        const hasCrossSiteAncestor = columns.has("has_cross_site_ancestor") ? "has_cross_site_ancestor" : null;
 +        const selection = [
