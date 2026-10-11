@@ -26,12 +26,14 @@ const entries = [
 
 function WorkingStatusTimeline() {
   const [fontSize, setFontSize] = useState(13);
-  const [workingLabel, setWorkingLabel] = useState<
-    "Thinking" | "Checking message delivery…"
-  >("Thinking");
+  const [workingLabel, setWorkingLabel] = useState<"Thinking" | "Checking message delivery…">(
+    "Thinking",
+  );
   return (
     <div>
-      <button type="button" onClick={() => setFontSize(18)}>Increase chat font</button>
+      <button type="button" onClick={() => setFontSize(18)}>
+        Increase chat font
+      </button>
       <button type="button" onClick={() => setWorkingLabel("Checking message delivery…")}>
         Check delivery
       </button>
@@ -93,9 +95,9 @@ it("updates the retained working label and semantic icon without a transcript ch
     await expect.poll(() => working()?.textContent).toBe("Thinking");
     expect(working()!.querySelector('[data-synara-working-loader="true"]')).not.toBeNull();
     await page.getByRole("button", { name: "Check delivery", exact: true }).click();
-    await expect.element(page.getByTestId("requested-presentation")).toHaveTextContent(
-      "Checking message delivery…",
-    );
+    await expect
+      .element(page.getByTestId("requested-presentation"))
+      .toHaveTextContent("Checking message delivery…");
     await expect.poll(() => working()?.textContent).toBe("Checking message delivery…");
     expect(working()!.querySelector('[data-synara-working-loader="true"]')).toBeNull();
     expect(working()!.querySelector('svg[data-slot="hugeicon"]')).not.toBeNull();
