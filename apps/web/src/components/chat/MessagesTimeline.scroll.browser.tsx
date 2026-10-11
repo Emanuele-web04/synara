@@ -76,9 +76,7 @@ it.each([960, 430])(
       expect(transcript.scrollLeft).toBe(0);
       await result.getByRole("button", { name: "Enable soft wrap", exact: true }).click();
       expect(fencedBlock.getAttribute("data-wrap")).toBe("true");
-      await expect
-        .poll(() => codeBlock.scrollWidth - codeBlock.clientWidth)
-        .toBeLessThanOrEqual(1);
+      await expect.poll(() => codeBlock.scrollWidth - codeBlock.clientWidth).toBeLessThanOrEqual(1);
       expect(codeBlock.textContent).toContain(code);
     } finally {
       await result.unmount();
