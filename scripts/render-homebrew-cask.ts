@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // FILE: render-homebrew-cask.ts
-// Purpose: Prints or writes the official Homebrew Cask from versioned DMG checksums.
+// Purpose: Prints or writes the proposed Homebrew Cask from versioned DMG checksums.
 // Layer: Release script
 // Depends on: scripts/lib/homebrew-cask.ts and optional GitHub Releases API.
 
@@ -11,10 +11,9 @@ import { fileURLToPath } from "node:url";
 import {
   HOMEBREW_CASK_GITHUB_REPO,
   HOMEBREW_CASK_RELATIVE_PATH,
-  homebrewCaskDmgFileName,
-  parseGitHubReleaseDigest,
+  homebrewCaskInputFromGitHubRelease,
   renderHomebrewCask,
-  type HomebrewCaskChecksums,
+  type HomebrewCaskInput,
 } from "./lib/homebrew-cask.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,8 +38,13 @@ function parseArgs(argv: readonly string[]): CliOptions {
     write: false,
   };
 
+  const seen = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (!arg || seen.has(arg)) {
+      throw new Error(`Duplicate or empty argument: ${arg}`);
+    }
+    seen.add(arg);
     const next = argv[index + 1];
     if (arg === "--from-github") {
       options.fromGitHub = true;
@@ -50,17 +54,17 @@ function parseArgs(argv: readonly string[]): CliOptions {
       options.write = true;
       continue;
     }
-    if (arg === "--version" && next) {
+    if (arg === "--version" && next && !next.startsWith("--")) {
       options.version = next;
       index += 1;
       continue;
     }
-    if (arg === "--sha256-arm64" && next) {
+    if (arg === "--sha256-arm64" && next && !next.startsWith("--")) {
       options.sha256Arm64 = next;
       index += 1;
       continue;
     }
-    if (arg === "--sha256-x64" && next) {
+    if (arg === "--sha256-x64" && next && !next.startsWith("--")) {
       options.sha256X64 = next;
       index += 1;
       continue;
@@ -68,23 +72,21 @@ function parseArgs(argv: readonly string[]): CliOptions {
     throw new Error(`Unknown or incomplete argument: ${arg}`);
   }
 
+  if (
+    options.fromGitHub &&
+    [options.version, options.sha256Arm64, options.sha256X64].some((value) => value !== undefined)
+  ) {
+    throw new Error("Do not combine --from-github with a manual version or checksum.");
+  }
+  if (!options.fromGitHub && (!options.version || !options.sha256Arm64 || !options.sha256X64)) {
+    throw new Error(
+      "Provide --version --sha256-arm64 --sha256-x64, or pass --from-github to read the latest GitHub Release.",
+    );
+  }
   return options;
 }
 
-type GitHubReleaseAsset = {
-  readonly name?: string;
-  readonly digest?: string;
-};
-
-type GitHubRelease = {
-  readonly tag_name?: string;
-  readonly assets?: GitHubReleaseAsset[];
-};
-
-async function checksumsFromGitHub(): Promise<{
-  version: string;
-  sha256: HomebrewCaskChecksums;
-}> {
+async function checksumsFromGitHub(): Promise<HomebrewCaskInput> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
@@ -95,7 +97,7 @@ async function checksumsFromGitHub(): Promise<{
 
   const response = await fetch(
     `https://api.github.com/repos/${HOMEBREW_CASK_GITHUB_REPO}/releases/latest`,
-    { headers },
+    { headers, signal: AbortSignal.timeout(30_000), redirect: "error" },
   );
   if (!response.ok) {
     throw new Error(
@@ -103,29 +105,7 @@ async function checksumsFromGitHub(): Promise<{
     );
   }
 
-  const release = (await response.json()) as GitHubRelease;
-  const version = release.tag_name;
-  if (!version) {
-    throw new Error("GitHub latest release did not include tag_name.");
-  }
-
-  const assets = release.assets ?? [];
-  const digestFor = (arch: "arm64" | "x64"): string => {
-    const fileName = homebrewCaskDmgFileName(version, arch);
-    const asset = assets.find((entry) => entry.name === fileName);
-    if (!asset) {
-      throw new Error(`Latest GitHub release is missing ${fileName}.`);
-    }
-    return parseGitHubReleaseDigest(asset.digest);
-  };
-
-  return {
-    version,
-    sha256: {
-      arm64: digestFor("arm64"),
-      x64: digestFor("x64"),
-    },
-  };
+  return homebrewCaskInputFromGitHubRelease(await response.json());
 }
 
 async function main(): Promise<void> {

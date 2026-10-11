@@ -12,8 +12,10 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BROWSER_TOOL_NAMES, type ThreadBrowserState } from "@synara/contracts";
+import { BROWSER_TOOL_NAMES, type ThreadBrowserState, type ThreadId } from "@synara/contracts";
+import type { WebContents } from "electron";
 import { _electron as electron, expect, test, type ElectronApplication } from "playwright/test";
+import type { DesktopBrowserManager } from "../../desktop/src/browserManager";
 
 import { createBrowserMcpHarness } from "./fixtures/mcpBrowserHarness";
 import { startVisibleBrowserFixtureSite } from "./fixtures/siteServer";
@@ -52,37 +54,66 @@ async function closeElectronApplication(application: ElectronApplication): Promi
   if (closeError) throw closeError;
 }
 
-test("production MCP controls one persistent Electron page across visibility changes", async () => {
+async function launchVisibleBrowserFixture() {
   const mainPath = process.env.SYNARA_E2E_ELECTRON_MAIN;
   if (!mainPath) throw new Error("Electron E2E main bundle was not prepared.");
   const site = await startVisibleBrowserFixtureSite();
   const home = mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "synara-mcp-"));
   const workspaceRoot = join(home, "workspace");
   mkdirSync(workspaceRoot);
-  writeFileSync(join(workspaceRoot, "fixture-upload.txt"), "visible-browser-upload\n", "utf8");
-  writeFileSync(join(home, "outside-workspace.txt"), "must-not-upload\n", "utf8");
-  symlinkSync(join(home, "outside-workspace.txt"), join(workspaceRoot, "outside-link.txt"));
   const pipePath = join(home, "browser-host.sock");
   const capability = `visible-browser-e2e-${crypto.randomUUID()}-${crypto.randomUUID()}`;
   const threadId = `thread-visible-browser-${crypto.randomUUID()}`;
   const shellPath = resolve(WEB_DIR, "e2e/fixtures/visibleBrowserShell.html");
   const executablePath = requireFromDesktop("electron") as string;
-  const electronApp = await electron.launch({
-    executablePath,
-    args: [mainPath],
-    cwd: DESKTOP_DIR,
-    env: {
-      ...process.env,
-      HOME: home,
-      SYNARA_HOME: home,
-      SYNARA_BROWSER_HOST_PIPE_PATH: pipePath,
-      SYNARA_BROWSER_HOST_CAPABILITY: capability,
-      SYNARA_E2E_SHELL_PATH: shellPath,
-      SYNARA_E2E_THREAD_ID: threadId,
-    },
-  });
+  const electronApp = await electron
+    .launch({
+      executablePath,
+      args: [mainPath],
+      cwd: DESKTOP_DIR,
+      env: {
+        ...process.env,
+        HOME: home,
+        SYNARA_HOME: home,
+        SYNARA_BROWSER_HOST_PIPE_PATH: pipePath,
+        SYNARA_BROWSER_HOST_CAPABILITY: capability,
+        SYNARA_E2E_SHELL_PATH: shellPath,
+        SYNARA_E2E_THREAD_ID: threadId,
+      },
+    })
+    .catch(async (error: unknown) => {
+      await site.close();
+      rmSync(home, { recursive: true, force: true });
+      throw error;
+    });
 
+  return {
+    electronApp,
+    site,
+    home,
+    workspaceRoot,
+    pipePath,
+    capability,
+    threadId,
+    async close() {
+      try {
+        await closeElectronApplication(electronApp);
+      } finally {
+        await site.close();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  };
+}
+
+test("production MCP controls one persistent Electron page across visibility changes", async () => {
+  const fixture = await launchVisibleBrowserFixture();
+  const { electronApp, site, home, workspaceRoot, pipePath, capability, threadId } = fixture;
   try {
+    writeFileSync(join(workspaceRoot, "fixture-upload.txt"), "visible-browser-upload\n", "utf8");
+    writeFileSync(join(home, "outside-workspace.txt"), "must-not-upload\n", "utf8");
+    symlinkSync(join(home, "outside-workspace.txt"), join(workspaceRoot, "outside-link.txt"));
+
     const page = await electronApp.firstWindow();
     await expect(page.locator("html")).toHaveAttribute("data-shell-ready", "true");
     const runtimeDetails = (scopedTabId: string) =>
@@ -806,11 +837,372 @@ test("production MCP controls one persistent Electron page across visibility cha
       expect((await run("return await page.url();")).structuredContent.value).toBe(site.nextUrl);
     });
   } finally {
-    try {
-      await closeElectronApplication(electronApp);
-    } finally {
-      await site.close();
-      rmSync(home, { recursive: true, force: true });
-    }
+    await fixture.close();
+  }
+});
+
+type FocusFixtureGlobals = typeof globalThis & {
+  __synaraVisibleBrowserE2E: {
+    browserManager: DesktopBrowserManager;
+    threadId: ThreadId;
+    setPreviewEnabled(enabled: boolean): void;
+    setSurface(surface: "native" | "renderer"): void;
+  };
+};
+
+test("preserves composer keyboard ownership during browser navigation", async () => {
+  const fixture = await launchVisibleBrowserFixture();
+  const { electronApp, site } = fixture;
+  try {
+    const page = await electronApp.firstWindow();
+    await expect(page.locator("html")).toHaveAttribute("data-shell-ready", "true");
+    // Playwright otherwise emulates focus, masking document.hasFocus() regressions.
+    const hostSession = await page.context().newCDPSession(page);
+    await hostSession.send("Emulation.setFocusEmulationEnabled", { enabled: false });
+    const result = await electronApp.evaluate(
+      async ({ app, BrowserWindow, webContents }, origin) => {
+        const { strict: assert } = process.getBuiltinModule("node:assert");
+        const f = (globalThis as FocusFixtureGlobals).__synaraVisibleBrowserE2E;
+        const manager = f.browserManager;
+        const host = BrowserWindow.getAllWindows()[0]!.webContents;
+        const passed: string[] = [];
+        const waitFor = async (predicate: () => boolean | Promise<boolean>, label: string) => {
+          const deadline = Date.now() + 5_000;
+          while (!(await predicate())) {
+            assert.ok(Date.now() < deadline, `Timed out: ${label}`);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+        };
+        const readComposer = () =>
+          host.executeJavaScript(`(() => {
+        const input = document.querySelector('#host-composer');
+        return { focus: document.hasFocus(), active: document.activeElement === input,
+          value: input.value, start: input.selectionStart, end: input.selectionEnd };
+      })()`);
+        const expected = { focus: true, active: true, value: "draft text", start: 3, end: 6 };
+        const focusComposer = async (label: string, native = true) => {
+          if (process.platform === "darwin") app.focus({ steal: true });
+          BrowserWindow.getAllWindows()[0]!.focus();
+          await waitFor(
+            () => BrowserWindow.getAllWindows()[0]!.isFocused(),
+            `${label}: initial window focus`,
+          );
+          host.focus();
+          await host.executeJavaScript(`(() => {
+          const input = document.querySelector('#host-composer');
+          input.value = 'draft text'; input.focus(); input.setSelectionRange(3, 6);
+        })()`);
+          await waitFor(async () => (await readComposer()).focus, `${label}: initial host focus`);
+          await waitFor(() => host.isFocused(), `${label}: initial native host focus`);
+          // Electron's global helper prefers webviews when both an embedder and
+          // its guest report focus. The host's real DOM focus distinguishes them.
+          if (native)
+            await waitFor(
+              () => webContents.getFocusedWebContents()?.id === host.id,
+              `${label}: initial native focus owner`,
+            );
+          assert.deepEqual(await readComposer(), expected);
+        };
+        const assertComposer = async (label: string, native: boolean) => {
+          const state = await readComposer();
+          assert.deepEqual(state, expected, `${label}: composer focus/draft/selection`);
+          assert.equal(host.isFocused(), true, `${label}: native host focus`);
+          if (native) assert.equal(webContents.getFocusedWebContents()?.id, host.id, label);
+        };
+        const verifyTyping = async (label: string, native: boolean) => {
+          await assertComposer(label, native);
+          // Synthetic dispatch, without focus(), click(), or locator typing. Native
+          // views route through the actual focus owner; webview reporting varies by OS,
+          // so that path requires host DOM focus before sending to its existing input.
+          const recipient = native ? webContents.getFocusedWebContents()! : host;
+          recipient.sendInputEvent({ type: "char", keyCode: "Z" });
+          await waitFor(
+            async () => (await readComposer()).value === "draZtext",
+            `${label}: typing`,
+          );
+          assert.deepEqual(await readComposer(), {
+            ...expected,
+            value: "draZtext",
+            start: 4,
+            end: 4,
+          });
+          passed.push(label);
+        };
+        const navigate = async (contents: WebContents, action: () => unknown, url: string) => {
+          let loaded = false;
+          const onLoad = () => {
+            loaded = true;
+          };
+          contents.once("did-finish-load", onLoad);
+          try {
+            await action();
+            await waitFor(() => loaded && contents.getURL() === url && !contents.isLoading(), url);
+          } finally {
+            contents.removeListener("did-finish-load", onLoad);
+          }
+        };
+        const url = (path: string) => new URL(path, origin).href;
+        await focusComposer("preview/open");
+        const state = manager.prepareAutomationTab({
+          threadId: f.threadId,
+          url: url("/focus?initial"),
+          reuse: true,
+        });
+        f.setPreviewEnabled(true);
+        let input = { threadId: f.threadId, tabId: state.activeTabId! };
+        let contents = (await manager.getAutomationRuntime(input)).webContents;
+        await waitFor(
+          () => !contents.isLoading() && contents.getURL() === url("/focus?initial"),
+          "preview initial navigation",
+        );
+        await verifyTyping("preview/open", true);
+        for (const surface of ["preview", "visible", "renderer"] as const) {
+          if (surface === "visible") f.setPreviewEnabled(false);
+          if (surface === "renderer") {
+            // Agent-owned tabs stay native. Use a separate human browser tab for
+            // the renderer path, as the existing MCP compatibility scenario does.
+            const rendererState = manager.newTab({
+              threadId: f.threadId,
+              url: url("/focus?renderer-initial"),
+            });
+            input = { threadId: f.threadId, tabId: rendererState.activeTabId! };
+            f.setSurface("renderer");
+            await waitFor(() => {
+              try {
+                return (
+                  manager.getVisibleAutomationRuntime(input).webContents.getType() === "webview"
+                );
+              } catch {
+                return false;
+              }
+            }, "renderer guest adoption");
+            contents = manager.getVisibleAutomationRuntime(input).webContents;
+            await waitFor(
+              () => !contents.isLoading() && contents.getURL() === url("/focus?renderer-initial"),
+              "renderer initial navigation",
+            );
+          }
+          const native = surface !== "renderer";
+          for (const operation of [
+            "navigate",
+            "reload",
+            "autofocus",
+            "redirect",
+            "cdp",
+            "delayed",
+          ] as const) {
+            const target = url(`/focus?case=${surface}-${operation}`);
+            const label = `${surface}/${operation}`;
+            await focusComposer(label, native);
+            await navigate(
+              contents,
+              async () => {
+                if (operation === "reload") {
+                  manager.reload(input);
+                  return;
+                }
+                if (operation === "cdp") {
+                  const attached = contents.debugger.isAttached();
+                  if (!attached) contents.debugger.attach("1.3");
+                  try {
+                    await contents.debugger.sendCommand("Page.navigate", { url: target });
+                  } finally {
+                    if (!attached) contents.debugger.detach();
+                  }
+                  return;
+                }
+                if (operation === "delayed") {
+                  // The page navigates only after the initiating call has returned.
+                  // A separate page message releases the armed navigation, without focus.
+                  await contents.executeJavaScript(
+                    `window.addEventListener('message', () => location.assign(${JSON.stringify(target)}), {once:true}); true;`,
+                  );
+                  await assertComposer(`${label}/armed`, native);
+                  await contents.executeJavaScript("window.postMessage('navigate', '*'); true;");
+                  return;
+                }
+                manager.navigate({
+                  ...input,
+                  url:
+                    operation === "redirect"
+                      ? url("/focus-redirect")
+                      : operation === "autofocus"
+                        ? url("/focus-autofocus")
+                        : target,
+                });
+              },
+              operation === "reload"
+                ? contents.getURL()
+                : operation === "redirect"
+                  ? url("/focus")
+                  : operation === "autofocus"
+                    ? url("/focus-autofocus")
+                    : target,
+            );
+            await assertComposer(label, native);
+            // A second renderer round trip samples after the completed load.
+            await host.executeJavaScript(
+              "new Promise(resolve => requestAnimationFrame(() => resolve(true)))",
+            );
+            await verifyTyping(label, native);
+            assert.equal(
+              await contents.executeJavaScript("document.querySelector('input').value"),
+              "",
+            );
+          }
+
+          if (surface === "preview") continue;
+          await focusComposer(`${surface}/intentional input`, native);
+          // Deliberately transfer both native and DOM focus into the browser.
+          // The existing MCP scenario separately exercises trusted browser clicks.
+          if (!native) await host.executeJavaScript("document.querySelector('webview').focus()");
+          contents.focus();
+          await contents.executeJavaScript(`(() => {
+            const input = document.querySelector('input');
+            input.focus();
+            input.addEventListener('input', event => {
+              input.dataset.inputTrusted = String(event.isTrusted);
+            }, { once: true });
+          })()`);
+          if (native)
+            await waitFor(
+              () => webContents.getFocusedWebContents()?.id === contents.id,
+              `${surface}/intentional native focus`,
+            );
+          assert.equal(await contents.executeJavaScript("document.hasFocus()"), true);
+          const attached = contents.debugger.isAttached();
+          if (!attached) contents.debugger.attach("1.3");
+          try {
+            // CDP text insertion exercises the existing focused input without
+            // platform-specific virtual key codes. Native ownership is asserted
+            // separately; the app smoke covers physical keyboard/IME delivery.
+            await contents.debugger.sendCommand("Input.insertText", { text: "b" });
+            await waitFor(
+              async () =>
+                (await contents.executeJavaScript("document.querySelector('input').value")) === "b",
+              `${surface}/browser typing`,
+            );
+          } finally {
+            if (!attached) contents.debugger.detach();
+          }
+          assert.deepEqual(
+            await contents.executeJavaScript(`(() => {
+              const input = document.querySelector('input');
+              return { active: document.activeElement === input,
+                value: input.value, start: input.selectionStart, end: input.selectionEnd,
+                trusted: input.dataset.inputTrusted };
+            })()`),
+            { active: true, value: "b", start: 1, end: 1, trusted: "true" },
+          );
+          await navigate(
+            contents,
+            () => manager.navigate({ ...input, url: url("/focus-autofocus") }),
+            url("/focus-autofocus"),
+          );
+          assert.equal(await contents.executeJavaScript("document.hasFocus()"), true);
+          if (native)
+            assert.equal(
+              webContents.getFocusedWebContents()?.id,
+              contents.id,
+              `${surface}/intentional focus after navigation`,
+            );
+          else
+            assert.equal(
+              await host.executeJavaScript(
+                "document.activeElement === document.querySelector('webview')",
+              ),
+              true,
+            );
+          assert.equal((await readComposer()).value, "draft text");
+          passed.push(`${surface}/intentional input`);
+
+          for (const popupKind of ["direct", "blank", "post"] as const) {
+            const label = `${surface}/popup-${popupKind}`;
+            await focusComposer(label, native);
+            const beforeIds = manager.getState({ threadId: f.threadId }).tabs.map((tab) => tab.id);
+            const popupUrl = url("/focus-popup");
+            await contents.executeJavaScript(
+              popupKind === "post"
+                ? `(() => { window.open('about:blank', 'focus-auth', 'width=480,height=640'); const form = document.createElement('form'); form.method='POST'; form.action=${JSON.stringify(popupUrl)}; form.target='focus-auth'; form.innerHTML='<input name="proof" value="retained">'; document.body.append(form); form.submit(); })(); true;`
+                : `window.open(${JSON.stringify(popupKind === "blank" ? "about:blank" : popupUrl)}, 'focus-auth', 'width=480,height=640'); true;`,
+              true,
+            );
+            await waitFor(
+              () =>
+                manager
+                  .getState({ threadId: f.threadId })
+                  .tabs.some((tab) => !beforeIds.includes(tab.id)),
+              "popup creation",
+            );
+            const childTab = manager
+              .getState({ threadId: f.threadId })
+              .tabs.find((tab) => !beforeIds.includes(tab.id))!;
+            await waitFor(
+              () => manager.getState({ threadId: f.threadId }).activeTabId === childTab.id,
+              "popup activation",
+            );
+            const child = manager.getVisibleAutomationRuntime({
+              threadId: f.threadId,
+              tabId: childTab.id,
+            }).webContents;
+            if (popupKind === "blank") {
+              await assertComposer(`${label}/created`, native);
+              await navigate(
+                child,
+                () =>
+                  child.executeJavaScript(`location.assign(${JSON.stringify(popupUrl)}); true;`),
+                popupUrl,
+              );
+            } else {
+              await waitFor(() => child.getURL() === popupUrl && !child.isLoading(), label);
+            }
+            await assertComposer(`${label}/loaded`, native);
+            assert.equal(child.session, contents.session);
+            assert.equal(await child.executeJavaScript("Boolean(window.opener)"), true);
+            if (popupKind === "post")
+              assert.equal(
+                await child.executeJavaScript("document.body.dataset.post"),
+                "proof=retained",
+              );
+            await navigate(
+              child,
+              () =>
+                child.executeJavaScript(
+                  `location.assign(${JSON.stringify(url("/focus-popup?next"))}); true;`,
+                ),
+              url("/focus-popup?next"),
+            );
+            await verifyTyping(label, native);
+            await contents.executeJavaScript(
+              `window.popupResult = null;
+              window.addEventListener('message', function onPopupResult(event) {
+                if (event.origin !== location.origin || event.data !== 'complete') return;
+                window.popupResult = event.data;
+                window.removeEventListener('message', onPopupResult);
+              }); true;`,
+            );
+            await child
+              .executeJavaScript(
+                "window.opener.postMessage('complete', location.origin); window.close(); true;",
+              )
+              .catch(() => {});
+            await waitFor(
+              () => manager.getState({ threadId: f.threadId }).activeTabId === input.tabId,
+              "popup close restores opener",
+            );
+            await waitFor(
+              async () => (await contents.executeJavaScript("window.popupResult")) === "complete",
+              `${label}/opener message`,
+            );
+            assert.equal(BrowserWindow.getAllWindows().length, 1);
+          }
+        }
+        return { platform: process.platform, electron: process.versions.electron, passed };
+      },
+      site.initialUrl,
+    );
+    console.log(JSON.stringify(result));
+  } finally {
+    await fixture.close();
   }
 });

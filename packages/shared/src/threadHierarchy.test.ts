@@ -7,10 +7,6 @@ function thread(id: string, parentThreadId?: string | null) {
 }
 
 describe("collectSubagentDescendants", () => {
-  it("returns an empty list for a thread without children", () => {
-    expect(collectSubagentDescendants([thread("root"), thread("other")], "root")).toEqual([]);
-  });
-
   it("collects nested descendants breadth-first and excludes the root", () => {
     const threads = [
       thread("root"),

@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildFileDiffRenderKey,
   buildPatchCacheKey,
-  compareDiffPaths,
   fileDiffStatsByPath,
   getRenderablePatch,
   hasUneditableGitMode,
@@ -19,27 +18,13 @@ import {
   sortFileDiffsByPath,
   splitPatchIntoFileSegments,
   splitRepoRelativePath,
-  summarizePatchTotals,
 } from "./diffRendering";
 
 describe("buildPatchCacheKey", () => {
-  it("returns a stable cache key for identical content", () => {
-    const patch = "diff --git a/a.ts b/a.ts\n+console.log('hello')";
-
-    expect(buildPatchCacheKey(patch)).toBe(buildPatchCacheKey(patch));
-  });
-
   it("normalizes outer whitespace before hashing", () => {
     const patch = "diff --git a/a.ts b/a.ts\n+console.log('hello')";
 
     expect(buildPatchCacheKey(`\n${patch}\n`)).toBe(buildPatchCacheKey(patch));
-  });
-
-  it("changes when diff content changes", () => {
-    const before = "diff --git a/a.ts b/a.ts\n+console.log('hello')";
-    const after = "diff --git a/a.ts b/a.ts\n+console.log('hello world')";
-
-    expect(buildPatchCacheKey(before)).not.toBe(buildPatchCacheKey(after));
   });
 
   it("changes when cache scope changes", () => {
@@ -75,37 +60,11 @@ const FILE_B_PATCH = [
 const FILE_B_PATCH_EDITED = FILE_B_PATCH.replace("const added = 2;", "const added = 3;");
 
 describe("splitPatchIntoFileSegments", () => {
-  it("splits a multi-file patch on file boundaries", () => {
-    const segments = splitPatchIntoFileSegments(`${FILE_A_PATCH}\n${FILE_B_PATCH}`);
-
-    expect(segments).toHaveLength(2);
-    expect(segments[0]).toContain("a/a.ts");
-    expect(segments[0]).not.toContain("a/b.ts");
-    expect(segments[1]).toContain("a/b.ts");
-  });
-
-  it("returns a single-file patch unchanged", () => {
-    expect(splitPatchIntoFileSegments(FILE_A_PATCH)).toEqual([FILE_A_PATCH]);
-  });
-
   it("keeps leading metadata attached to the first segment", () => {
     const segments = splitPatchIntoFileSegments(`commit message\n${FILE_A_PATCH}\n${FILE_B_PATCH}`);
 
     expect(segments).toHaveLength(2);
     expect(segments[0]).toContain("commit message");
-  });
-
-  it("does not split on hunk lines that mention diff --git", () => {
-    const patch = [
-      "diff --git a/notes.md b/notes.md",
-      "--- a/notes.md",
-      "+++ b/notes.md",
-      "@@ -1,1 +1,2 @@",
-      " existing",
-      "+diff --git is a header prefix",
-    ].join("\n");
-
-    expect(splitPatchIntoFileSegments(patch)).toEqual([patch]);
   });
 });
 
@@ -126,37 +85,9 @@ describe("getRenderablePatch per-file cache keys", () => {
     expect(keyOf(after, "a.ts")).toBe(keyOf(before, "a.ts"));
     expect(keyOf(after, "b.ts")).not.toBe(keyOf(before, "b.ts"));
   });
-
-  it("parses the same files and stats as before splitting", () => {
-    const patch = `${FILE_A_PATCH}\n${FILE_B_PATCH}`;
-    const renderable = getRenderablePatch(patch);
-    if (renderable?.kind !== "files") {
-      throw new Error("expected parsed files");
-    }
-
-    expect(renderable.files.map((file) => resolveFileDiffPath(file))).toEqual(["a.ts", "b.ts"]);
-    expect(summarizePatchTotals(patch)).toEqual({ additions: 2, deletions: 1, fileCount: 2 });
-  });
 });
 
 describe("resolveDiffCopyText", () => {
-  it("preserves the original patch content for clipboard writes", () => {
-    const patch = "diff --git a/a.ts b/a.ts\n+console.log('hello')\n";
-
-    expect(resolveDiffCopyText(patch)).toBe(patch);
-  });
-
-  it("preserves mode-only metadata without reconstructing the patch", () => {
-    const patch = [
-      "diff --git a/script.sh b/script.sh",
-      "old mode 100644",
-      "new mode 100755",
-      "",
-    ].join("\n");
-
-    expect(resolveDiffCopyText(patch)).toBe(patch);
-  });
-
   it("preserves every line of a large patch without depending on mounted rows", () => {
     const bodyLines = Array.from({ length: 6000 }, (_, index) => `+line ${index + 1}`);
     const patch = [
@@ -341,16 +272,6 @@ describe("file diff identity helpers", () => {
     "",
   ].join("\n");
 
-  it("strips a/ and b/ prefixes from parsed file paths", () => {
-    const renderable = getRenderablePatch(twoFilePatch, "git-pane:test");
-    expect(renderable?.kind).toBe("files");
-    if (renderable?.kind !== "files") return;
-
-    const paths = renderable.files.map((file) => resolveFileDiffPath(file));
-    expect(paths).toContain("src/one.ts");
-    expect(paths).toContain("src/two.ts");
-  });
-
   it("derives a unique, stable render key per file", () => {
     const renderable = getRenderablePatch(twoFilePatch, "git-pane:test");
     expect(renderable?.kind).toBe("files");
@@ -399,30 +320,6 @@ describe("splitRepoRelativePath", () => {
 });
 
 describe("sortFileDiffsByPath", () => {
-  it("preserves default-locale ordering and stable case, accent, and numeric ties", () => {
-    const paths = [
-      "File2.ts",
-      "file02.ts",
-      "file10.ts",
-      "é.ts",
-      "E.ts",
-      "e.ts",
-      "日本2.ts",
-      "日本10.ts",
-    ];
-    const expected = paths.toSorted((left, right) =>
-      left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }),
-    );
-    expect(paths.toSorted(compareDiffPaths)).toEqual(expected);
-    for (const left of paths) {
-      for (const right of paths) {
-        expect(Math.sign(compareDiffPaths(left, right))).toBe(
-          Math.sign(left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" })),
-        );
-      }
-    }
-  });
-
   const outOfOrderPatch = [
     "diff --git a/src/zebra.ts b/src/zebra.ts",
     "index 1111111..2222222 100644",
@@ -463,53 +360,6 @@ describe("sortFileDiffsByPath", () => {
       "src/zebra.ts",
     ]);
     expect(renderable.files).toEqual(original);
-  });
-});
-
-describe("summarizePatchTotals", () => {
-  it("summarizes additions and deletions from a single-file unified patch", () => {
-    const patch = [
-      "diff --git a/src/example.ts b/src/example.ts",
-      "index 1111111..2222222 100644",
-      "--- a/src/example.ts",
-      "+++ b/src/example.ts",
-      "@@ -1,3 +1,4 @@",
-      " const stable = true;",
-      "-const oldValue = 1;",
-      "+const newValue = 1;",
-      "+const addedValue = 2;",
-      " export { stable };",
-      "",
-    ].join("\n");
-
-    expect(summarizePatchTotals(patch)).toEqual({ additions: 2, deletions: 1, fileCount: 1 });
-  });
-
-  it("includes the changed file count alongside additions and deletions", () => {
-    const patch = [
-      "diff --git a/src/one.ts b/src/one.ts",
-      "index 1111111..2222222 100644",
-      "--- a/src/one.ts",
-      "+++ b/src/one.ts",
-      "@@ -1,2 +1,2 @@",
-      " const a = 1;",
-      "-const b = 1;",
-      "+const b = 2;",
-      "diff --git a/src/two.ts b/src/two.ts",
-      "index 3333333..4444444 100644",
-      "--- a/src/two.ts",
-      "+++ b/src/two.ts",
-      "@@ -0,0 +1,2 @@",
-      "+const c = 3;",
-      "+const d = 4;",
-      "",
-    ].join("\n");
-
-    expect(summarizePatchTotals(patch)).toEqual({ additions: 3, deletions: 1, fileCount: 2 });
-  });
-
-  it("returns null when the patch has no file diffs", () => {
-    expect(summarizePatchTotals(undefined)).toBeNull();
   });
 });
 

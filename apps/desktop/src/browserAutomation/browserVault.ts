@@ -16,6 +16,8 @@ import {
 import { Schema } from "effect";
 import { VaultKeyProtection, type VaultKeyStore } from "./vaultKeyProtection";
 
+export const BROWSER_VAULT_PROMPT_TTL_MS = 120_000;
+
 const Source = Schema.Literals(["user", "agent"]);
 const Preferences = Schema.Struct({
   settings: BrowserVaultSettings,
@@ -325,7 +327,10 @@ export class BrowserVault {
     if (this.pending.size >= 8) return "dismiss";
     const id = randomUUID();
     return new Promise((resolve) => {
-      const timer = setTimeout(() => this.respond({ id, save: false }), 120_000);
+      const timer = setTimeout(
+        () => this.respond({ id, save: false }),
+        BROWSER_VAULT_PROMPT_TTL_MS,
+      );
       this.pending.set(id, {
         prompt: { ...input, id },
         resolve: (choice) => {

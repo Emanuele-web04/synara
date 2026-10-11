@@ -1,7 +1,14 @@
+import { makeGitActionRunner } from "./git/gitActionRunner";
 import http from "node:http";
 
 import {
+  EventId,
+  ThreadId,
+  WsRpcError,
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   WS_BOOTSTRAP_METHOD,
+  WS_METHODS,
+  WsGitRunStackedActionRpc,
   WS_BOOTSTRAP_PATH,
   WS_COMPATIBILITY_QUERY,
   WS_NEGOTIATE_HTTP_PATH,
@@ -10,10 +17,11 @@ import {
   WS_PROTOCOL_MAX_REVISION,
   WS_PROTOCOL_MIN_REVISION,
   type AuthSessionId,
+  type ComputerEvent,
   type WsBootstrapNegotiateResult,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
+import { Deferred, Duration, Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { afterEach, describe, expect, it } from "vitest";
@@ -40,6 +48,9 @@ import {
   type WsConnectionSessionsShape,
 } from "./wsConnectionSessions";
 import { makeCurrentWsFeatureCompatibilitySearchParams } from "./wsCompatibility";
+import { bufferLiveUiStream } from "./wsStreamBackpressure";
+import { makeCursorSafeSnapshotLiveStream } from "./wsSnapshotLiveStream";
+import { ComputerEventInterests } from "./computer/computerEventInterests";
 
 const PingRpc = Rpc.make("test.ping", {
   payload: Schema.Struct({ label: Schema.String }),
@@ -49,7 +60,13 @@ const SlowRpc = Rpc.make("test.slow", {
   payload: Schema.Struct({}),
   success: Schema.String,
 });
-const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc);
+const BudgetStreamRpc = Rpc.make("test.budget-stream", {
+  payload: Schema.Struct({ mode: Schema.Literals(["replay", "stalled", "healthy"]) }),
+  success: Schema.Number,
+  error: WsRpcError,
+  stream: true,
+});
+const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc, WsGitRunStackedActionRpc, BudgetStreamRpc);
 
 interface RunningTestServer {
   readonly origin: string;
@@ -57,6 +74,10 @@ interface RunningTestServer {
   readonly logout: (sessionId: AuthSessionId) => Promise<boolean>;
   readonly transportFinalizers: { count: number };
   readonly observedRpc: { decoderCalls: number; handlerCalls: number };
+  readonly observedGitAction: { started: number; finalized: number };
+  readonly releaseGitAction: () => Promise<void>;
+  readonly observedBudgetStream: { finalized: number };
+  readonly releaseBudgetStream: () => Promise<void>;
   readonly observedSlowRpc: { started: number; completed: number; finalized: number };
   readonly connectionSessions: WsConnectionSessionsShape;
   readonly observedConnectionSessionKeys: string[];
@@ -248,32 +269,133 @@ async function startTestServer(): Promise<RunningTestServer> {
       };
     },
   });
+  const observedGitAction = { started: 0, finalized: 0 };
+  const gitRelease = await Effect.runPromise(Deferred.make<void>());
+  const observedBudgetStream = { finalized: 0 };
+  const budgetRelease = await Effect.runPromise(Deferred.make<void>());
   const handlerLayer = PingRpcGroup.toLayer(
-    Effect.succeed({
-      "test.ping": (_input: { readonly label: string }) =>
-        Effect.sync(() => {
-          observedRpc.handlerCalls += 1;
-          return "ok";
-        }),
-      "test.slow": () =>
+    Effect.gen(function* () {
+      const runGitAction = yield* makeGitActionRunner((input, publish) =>
         Effect.gen(function* () {
-          observedSlowRpc.started += 1;
-          yield* Effect.sleep(Duration.seconds(30));
-          observedSlowRpc.completed += 1;
-          return "ok";
+          observedGitAction.started++;
+          yield* Deferred.await(gitRelease);
+          yield* publish({
+            ...input,
+            kind: "action_finished",
+            result: {
+              action: "push",
+              branch: { status: "skipped_not_requested" },
+              commit: { status: "skipped_not_requested" },
+              push: { status: "pushed" },
+              pr: { status: "skipped_not_requested" },
+            },
+          });
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => {
-              observedSlowRpc.finalized += 1;
+              observedGitAction.finalized++;
             }),
           ),
         ),
+      );
+      return {
+        [WS_METHODS.gitRunStackedAction]: runGitAction,
+        "test.budget-stream": ({
+          mode,
+        }: {
+          readonly mode: "replay" | "stalled" | "healthy";
+        }): Stream.Stream<number, WsRpcError> => {
+          if (mode === "healthy") return Stream.make(42);
+          if (mode === "stalled")
+            return bufferLiveUiStream(
+              Stream.concat(
+                Stream.make(1),
+                Stream.fromEffect(Deferred.await(budgetRelease)).pipe(
+                  Stream.flatMap(() => Stream.make(2, 3)),
+                  Stream.concat(Stream.never),
+                ),
+              ).pipe(
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    observedBudgetStream.finalized++;
+                  }),
+                ),
+              ),
+              { capacity: 2, overflowStrategy: "fail" },
+            );
+          return makeCursorSafeSnapshotLiveStream({
+            subscribeLive: Effect.succeed(Stream.never),
+            snapshot: Effect.succeed(0),
+            snapshotSequence: (snapshot) => snapshot,
+            getHighWaterSequence: Effect.succeed(1100),
+            replay: () =>
+              Stream.range(1, 1100).pipe(
+                Stream.map((sequence) => ({
+                  sequence,
+                  eventId: EventId.makeUnsafe(`replay-${sequence}`),
+                  aggregateKind: "thread" as const,
+                  aggregateId: ThreadId.makeUnsafe("rpc-replay"),
+                  occurredAt: "2026-10-06T00:00:00.000Z",
+                  commandId: null,
+                  causationEventId: null,
+                  correlationId: null,
+                  metadata: {},
+                  type: "thread.activity-appended" as const,
+                  payload: {
+                    threadId: ThreadId.makeUnsafe("rpc-replay"),
+                    activity: {
+                      id: EventId.makeUnsafe(`activity-${sequence}`),
+                      tone: "info" as const,
+                      kind: "tool.progress",
+                      summary: "progress",
+                      payload: null,
+                      turnId: null,
+                      createdAt: "2026-10-06T00:00:00.000Z",
+                    },
+                  },
+                })),
+              ),
+          }).pipe(
+            Stream.take(1101),
+            Stream.map((item) =>
+              item.kind === "snapshot"
+                ? item.snapshot
+                : item.kind === "event"
+                  ? item.event.sequence
+                  : item.events.length,
+            ),
+          );
+        },
+        "test.ping": (_input: { readonly label: string }) =>
+          Effect.sync(() => {
+            observedRpc.handlerCalls += 1;
+            return "ok";
+          }),
+        "test.slow": () =>
+          Effect.gen(function* () {
+            observedSlowRpc.started += 1;
+            yield* Effect.sleep(Duration.seconds(30));
+            observedSlowRpc.completed += 1;
+            return "ok";
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                observedSlowRpc.finalized += 1;
+              }),
+            ),
+          ),
+      };
     }),
   );
   const connectionSessions = await Effect.runPromise(makeWsConnectionSessions);
   const observedConnectionSessionKeys: string[] = [];
-  const rpcHttpEffectSource = RpcServer.toHttpEffectWebsocket(PingRpcGroup).pipe(
-    Effect.provide(handlerLayer.pipe(Layer.provideMerge(serializationLayer))),
+  const rpcHttpEffectSource = Effect.gen(function* () {
+    const handlers = yield* Layer.buildWithScope(
+      handlerLayer.pipe(Layer.provideMerge(serializationLayer)),
+      yield* Effect.scope,
+    );
+    return yield* RpcServer.toHttpEffectWebsocket(PingRpcGroup).pipe(Effect.provide(handlers));
+  }).pipe(
     Effect.map((httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
@@ -332,6 +454,12 @@ async function startTestServer(): Promise<RunningTestServer> {
     transportFinalizers,
     observedRpc,
     observedSlowRpc,
+    observedGitAction,
+    observedBudgetStream,
+    releaseBudgetStream: () =>
+      Effect.runPromise(Deferred.succeed(budgetRelease, undefined).pipe(Effect.asVoid)),
+    releaseGitAction: () =>
+      Effect.runPromise(Deferred.succeed(gitRelease, undefined).pipe(Effect.asVoid)),
     connectionSessions,
     observedConnectionSessionKeys,
     close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
@@ -729,31 +857,6 @@ describe("websocket permessage-deflate negotiation", () => {
     }
   });
 
-  it("closes a fragmented compressed message whose decompressed aggregate crosses the ceiling", async () => {
-    const server = await startTestServer();
-    try {
-      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
-      expect(connected.socket.extensions).toContain("permessage-deflate");
-      const frame = makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "204");
-      const splitAt = Math.floor(frame.length / 2);
-      const close = waitForCloseInfo(connected.socket);
-
-      await sendFragment(connected.socket, frame.slice(0, splitAt), {
-        fin: false,
-        compress: true,
-      });
-      void sendFragment(connected.socket, frame.slice(splitAt), {
-        fin: true,
-        compress: true,
-      }).catch(() => {});
-
-      await expect(close).resolves.toMatchObject({ code: 1009 });
-      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
-    } finally {
-      await server.close();
-    }
-  });
-
   it("negotiates compression when the client offers it and serves RPC over the compressed socket", async () => {
     const server = await startTestServer();
     try {
@@ -803,6 +906,31 @@ describe("websocket permessage-deflate negotiation", () => {
       await server.close();
     }
   });
+
+  it("closes a fragmented compressed message whose decompressed aggregate crosses the ceiling", async () => {
+    const server = await startTestServer();
+    try {
+      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
+      expect(connected.socket.extensions).toContain("permessage-deflate");
+      const frame = makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "204");
+      const splitAt = Math.floor(frame.length / 2);
+      const close = waitForCloseInfo(connected.socket);
+
+      await sendFragment(connected.socket, frame.slice(0, splitAt), {
+        fin: false,
+        compress: true,
+      });
+      void sendFragment(connected.socket, frame.slice(splitAt), {
+        fin: true,
+        compress: true,
+      }).catch(() => {});
+
+      await expect(close).resolves.toMatchObject({ code: 1009 });
+      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 describe("websocketRpcRouteLayer connection lifecycle", () => {
@@ -826,13 +954,142 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
         attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
       });
 
+      // A client may read Computer state without ever subscribing to its
+      // event stream. The socket scope must still release the remembered view.
+      const interests = new ComputerEventInterests(server.connectionSessions.onClose);
+      const event = {
+        type: "computer.thread-state",
+        state: { threadId: "state-only-view" },
+      } as ComputerEvent;
+      interests.watch(sessionKey, "state-only-view");
+      expect(interests.accepts(sessionKey, event)).toBe(true);
+
       socket.close();
       await waitForClose(socket);
       await waitForObserved(() => server.connectionSessions.lookup(sessionKey) === undefined);
+      expect(interests.accepts(sessionKey, event)).toBe(false);
     } finally {
       await server.close();
     }
   }, 4_000);
+
+  it("ACKs finite replay over real RPC and isolates a no-ACK live overflow", async () => {
+    const server = await startTestServer();
+    const pendingAcks = new Set<ReturnType<typeof setTimeout>>();
+    try {
+      const { socket } = await connectSession(server);
+      const replay: number[] = [];
+      const healthy: number[] = [];
+      const exits = new Map<string, unknown>();
+      let stalledBatch = false;
+      socket.on("message", (data: RawData) => {
+        const frame = JSON.parse(data.toString());
+        const id = String(frame.requestId);
+        if (frame._tag === "Exit") exits.set(id, frame.exit);
+        if (frame._tag !== "Chunk") return;
+        if (id === "510") {
+          stalledBatch = true;
+          return; // No ACK: the first live batch must remain budgeted.
+        }
+        if (id === "511") replay.push(...frame.values);
+        if (id === "512") healthy.push(...frame.values);
+        const timer = setTimeout(() => {
+          pendingAcks.delete(timer);
+          socket.send(JSON.stringify({ _tag: "Ack", requestId: frame.requestId }));
+        }, 1);
+        pendingAcks.add(timer);
+      });
+      const request = (id: string, mode: string) =>
+        socket.send(
+          JSON.stringify({
+            _tag: "Request",
+            id,
+            tag: "test.budget-stream",
+            payload: { mode },
+            headers: [],
+          }),
+        );
+      request("510", "stalled");
+      request("511", "replay");
+      await waitForObserved(() => stalledBatch);
+      await server.releaseBudgetStream();
+      await waitForObserved(() => server.observedBudgetStream.finalized === 1);
+      // Let RpcServer pull again to observe the already-failed subscription.
+      socket.send(JSON.stringify({ _tag: "Ack", requestId: "510" }));
+      await waitForObserved(() => exits.has("510") && exits.has("511"));
+      expect(JSON.stringify(exits.get("510"))).toContain(ORCHESTRATION_STREAM_OVERFLOW_CODE);
+      expect(replay).toEqual(Array.from({ length: 1101 }, (_, sequence) => sequence));
+      request("512", "healthy");
+      await waitForObserved(() => exits.has("512"));
+      expect(healthy).toEqual([42]);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      for (const timer of pendingAcks) clearTimeout(timer);
+      await server.close();
+    }
+  }, 5_000);
+
+  it("reattaches to one Git action after the actual WebSocket closes", async () => {
+    const server = await startTestServer();
+    try {
+      const first = await connectSession(server);
+      const input = {
+        actionId: "socket-reconnect",
+        cwd: "/repo",
+        action: "push",
+        recoverable: true,
+      };
+      first.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "300",
+          tag: WS_METHODS.gitRunStackedAction,
+          payload: input,
+          headers: [],
+        }),
+      );
+      await waitForObserved(() => server.observedGitAction.started === 1);
+      const closed = waitForClose(first.socket);
+      first.socket.terminate();
+      await closed;
+      await waitForObserved(() => server.transportFinalizers.count >= 1);
+      expect(server.observedGitAction.finalized).toBe(0);
+
+      // Finish while no socket is observing, then recover the retained result.
+      await server.releaseGitAction();
+      await waitForObserved(() => server.observedGitAction.finalized === 1);
+      const second = await connectExistingSession(server, first.sessionId);
+      const events: unknown[] = [];
+      second.socket.on("message", (data: RawData) => {
+        const frame = JSON.parse(data.toString());
+        if (frame._tag === "Chunk") {
+          events.push(...frame.values);
+          second.socket.send(JSON.stringify({ _tag: "Ack", requestId: frame.requestId }));
+        }
+      });
+      const exit = waitForRpcExit(second.socket, "301");
+      second.socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "301",
+          tag: WS_METHODS.gitRunStackedAction,
+          payload: { ...input, resume: true },
+          headers: [],
+        }),
+      );
+      await exit;
+      expect(events).toEqual([
+        expect.objectContaining({
+          actionId: input.actionId,
+          kind: "action_finished",
+          result: expect.objectContaining({ push: { status: "pushed" } }),
+        }),
+      ]);
+      expect(server.observedGitAction).toEqual({ started: 1, finalized: 1 });
+    } finally {
+      await server.close();
+    }
+  });
 
   it("closes with an established socket and finalizes its RPC work", async () => {
     const server = await startTestServer();

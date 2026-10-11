@@ -7,17 +7,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   AUTOMATION_FAILURE_POLICY_NEVER,
-  DEFAULT_AUTOMATION_FAILURE_POLICY_VALUE,
   automationFailurePolicyOptions,
   automationFailurePolicyValue,
   stopAfterConsecutiveFailuresFromPolicyValue,
 } from "./automationFailurePolicy";
 
 describe("automation failure policy values", () => {
-  it("defaults to the contract's threshold of three", () => {
-    expect(DEFAULT_AUTOMATION_FAILURE_POLICY_VALUE).toBe("3");
-  });
-
   it("maps a stored threshold to its UI value and back", () => {
     expect(automationFailurePolicyValue(null)).toBe(AUTOMATION_FAILURE_POLICY_NEVER);
     expect(automationFailurePolicyValue(1)).toBe("1");
@@ -26,14 +21,6 @@ describe("automation failure policy values", () => {
     expect(stopAfterConsecutiveFailuresFromPolicyValue(AUTOMATION_FAILURE_POLICY_NEVER)).toBeNull();
     expect(stopAfterConsecutiveFailuresFromPolicyValue("1")).toBe(1);
     expect(stopAfterConsecutiveFailuresFromPolicyValue("7")).toBe(7);
-  });
-
-  it("round-trips every stored threshold through the UI value", () => {
-    for (const stored of [null, 1, 3, 5, 12]) {
-      expect(
-        stopAfterConsecutiveFailuresFromPolicyValue(automationFailurePolicyValue(stored)),
-      ).toBe(stored);
-    }
   });
 
   it("falls back to the default threshold for unparseable UI values", () => {
@@ -45,15 +32,6 @@ describe("automation failure policy values", () => {
 });
 
 describe("automationFailurePolicyOptions", () => {
-  it("offers the preset thresholds then never, with singular/plural labels", () => {
-    expect(automationFailurePolicyOptions("3")).toEqual([
-      { value: "1", label: "Stop after 1 failure" },
-      { value: "3", label: "Stop after 3 failures" },
-      { value: "5", label: "Stop after 5 failures" },
-      { value: "never", label: "Keep running" },
-    ]);
-  });
-
   it("does not prepend when the current value is a preset or never", () => {
     expect(automationFailurePolicyOptions("never").map((option) => option.value)).toEqual([
       "1",

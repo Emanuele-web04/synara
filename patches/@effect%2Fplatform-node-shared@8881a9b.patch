@@ -1,8 +1,34 @@
 diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
-index ff15212e4..e7cf12c4d 100644
+index 7e51c003213c46f43a9c3aceb15a97956d99ff19..a1e395d544f415c5fc13b30267ec304a5a005e49 100644
 --- a/dist/NodeChildProcessSpawner.js
 +++ b/dist/NodeChildProcessSpawner.js
-@@ -314,7 +314,9 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+@@ -240,9 +240,15 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+     });
+   });
+   const killProcessGroup = (command, childProcess, signal) => {
++    const pid = childProcess.pid;
++    // Never turn an invalid child handle into a broadcast/group target.
++    // A valid group can outlive its leader, so do not require a live leader.
++    if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 1 || pid > 0x7fffffff) {
++      return Effect.void;
++    }
+     if (globalThis.process.platform === "win32") {
+       return Effect.callback(resume => {
+-        NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, error => {
++        NodeChildProcess.execFile("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true }, error => {
+           if (error) {
+             resume(Effect.fail(toPlatformError("kill", toError(error), command)));
+           } else {
+@@ -253,7 +259,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+     }
+     return Effect.try({
+       try: () => {
+-        globalThis.process.kill(-childProcess.pid, signal);
++        globalThis.process.kill(-pid, signal);
+       },
+       catch: error => toPlatformError("kill", toError(error), command)
+     });
+@@ -314,7 +320,9 @@ const make = /*#__PURE__*/Effect.gen(function* () {
              env,
              stdio,
              detached: cmd.options.detached ?? process.platform !== "win32",
@@ -13,11 +39,200 @@ index ff15212e4..e7cf12c4d 100644
            }), Effect.fnUntraced(function* ([childProcess, exitSignal]) {
              const exited = yield* Deferred.isDone(exitSignal);
              const killWithTimeout = withTimeout(childProcess, cmd, cmd.options);
+diff --git a/dist/NodeSink.js b/dist/NodeSink.js
+index bd846528ef0c7145e19bffe77abb2d4a8ab11afd..cbfd204cf63dadaaad36caf0c2c09ab4f538512c 100644
+--- a/dist/NodeSink.js
++++ b/dist/NodeSink.js
+@@ -1,5 +1,6 @@
+ import * as Cause from "effect/Cause";
+ import * as Channel from "effect/Channel";
++import * as Deferred from "effect/Deferred";
+ import * as Effect from "effect/Effect";
+ import { identity } from "effect/Function";
+ import * as Pull from "effect/Pull";
+@@ -8,43 +9,121 @@ import * as Sink from "effect/Sink";
+  * @category constructors
+  * @since 1.0.0
+  */
+-export const fromWritable = options => Sink.fromChannel(Channel.mapDone(fromWritableChannel(options), _ => [_]));
++export const fromWritable = (options) => Sink.fromChannel(Channel.mapDone(fromWritableChannel(options), (_) => [_]));
+ /**
+  * @category constructors
+  * @since 1.0.0
+  */
+-export const fromWritableChannel = options => Channel.fromTransform(pull => {
++export const fromWritableChannel = (options) => Channel.fromTransform((pull) => {
+   const writable = options.evaluate();
+-  return Effect.succeed(pullIntoWritable({
+-    ...options,
+-    writable,
+-    pull
+-  }));
++  return Effect.succeed(pullIntoWritable({ ...options, writable, pull }));
+ });
+ /**
+  * @since 1.0.0
+  */
+-export const pullIntoWritable = options => options.pull.pipe(Effect.flatMap(chunk => {
+-  let i = 0;
+-  return Effect.callback(function loop(resume) {
+-    for (; i < chunk.length;) {
+-      const success = options.writable.write(chunk[i++], options.encoding);
+-      if (!success) {
+-        options.writable.once("drain", () => loop(resume));
+-        return;
++export const pullIntoWritable = (options) => Effect.suspend(() => {
++  const failure = Deferred.makeUnsafe();
++  let active = true;
++  let failed = false;
++  let pendingOperations = 0;
++  const removeListeners = () => {
++    options.writable.off("error", onError);
++    options.writable.off("close", onClose);
++  };
++  const onError = (error) => {
++    if (failed)
++      return;
++    failed = true;
++    Deferred.doneUnsafe(failure, Effect.fail(options.onError(error)));
++    if (!active)
++      removeListeners();
++  };
++  const onClose = () => {
++    if (active && !options.writable.writableFinished) {
++      onError(Object.assign(new Error("Writable stream closed before completion"), {
++        code: "ERR_STREAM_PREMATURE_CLOSE"
++      }));
++    }
++    removeListeners();
++  };
++  options.writable.on("error", onError);
++  options.writable.on("close", onClose);
++  const write = options.pull.pipe(Effect.flatMap((chunk) => {
++    let i = 0;
++    return Effect.callback((resume) => {
++      let pending = 0;
++      let writing = false;
++      let draining = false;
++      const complete = () => {
++        if (!writing && !draining && pending === 0 && !failed)
++          resume(Effect.void);
++      };
++      const onWrite = (error) => {
++        pendingOperations -= 1;
++        pending -= 1;
++        if (error) {
++          setImmediate(() => onError(error));
++        } else {
++          if (!active && pendingOperations === 0)
++            removeListeners();
++          complete();
++        }
++      };
++      function loop() {
++        draining = false;
++        writing = true;
++        for (;i < chunk.length && !failed; ) {
++          pending += 1;
++          pendingOperations += 1;
++          let success;
++          try {
++            success = options.writable.write(chunk[i++], options.encoding, onWrite);
++          } catch (error) {
++            pending -= 1;
++            pendingOperations -= 1;
++            onError(error);
++            break;
++          }
++          if (!success) {
++            draining = true;
++            options.writable.once("drain", loop);
++            break;
++          }
++        }
++        writing = false;
++        complete();
+       }
++      loop();
++      return Effect.sync(() => {
++        options.writable.off("drain", loop);
++      });
++    });
++  }), Effect.forever({ disableYield: true }), options.endOnDone !== false ? Pull.catchDone((_) => {
++    if ("closed" in options.writable && options.writable.closed) {
++      return Cause.done(_);
+     }
+-    resume(Effect.void);
+-  });
+-}), Effect.forever({
+-  disableYield: true
+-}), options.endOnDone !== false ? Pull.catchDone(_ => {
+-  if ("closed" in options.writable && options.writable.closed) {
+-    return Cause.done(_);
+-  }
+-  return Effect.callback(resume => {
+-    options.writable.once("finish", () => resume(Cause.done(_)));
+-    options.writable.end();
+-  });
+-}) : identity);
+-//# sourceMappingURL=NodeSink.js.map
+\ No newline at end of file
++    return Effect.callback((resume) => {
++      pendingOperations += 1;
++      try {
++        options.writable.end((error) => {
++          pendingOperations -= 1;
++          if (error) {
++            setImmediate(() => onError(error));
++          } else {
++            if (!active)
++              removeListeners();
++            resume(Cause.done(_));
++          }
++        });
++      } catch (error) {
++        pendingOperations -= 1;
++        onError(error);
++      }
++    });
++  }) : identity);
++  return Effect.raceFirst(write, Deferred.await(failure)).pipe(Effect.ensuring(Effect.sync(() => {
++    active = false;
++    if (pendingOperations === 0 && !options.writable.errored || failed)
++      removeListeners();
++  })));
++});
 diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
-index dc53bafb7..fe867fbfc 100644
+index dc53bafb7a2619368b63e9d18965a4426bb2e32f..e40aecbac9e136dcfb5d83876ec0e0f091421820 100644
 --- a/src/NodeChildProcessSpawner.ts
 +++ b/src/NodeChildProcessSpawner.ts
-@@ -430,7 +430,17 @@ const make = Effect.gen(function*() {
+@@ -324,9 +324,15 @@ const make = Effect.gen(function*() {
+     childProcess: NodeChildProcess.ChildProcess,
+     signal: NodeJS.Signals
+   ) => {
++    const pid = childProcess.pid
++    // Never turn an invalid child handle into a broadcast/group target.
++    // A valid group can outlive its leader, so do not require a live leader.
++    if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 1 || pid > 0x7fffffff) {
++      return Effect.void
++    }
+     if (globalThis.process.platform === "win32") {
+       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
+-        NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, (error) => {
++        NodeChildProcess.execFile("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true }, (error) => {
+           if (error) {
+             resume(Effect.fail(toPlatformError("kill", toError(error), command)))
+           } else {
+@@ -337,7 +343,7 @@ const make = Effect.gen(function*() {
+     }
+     return Effect.try({
+       try: () => {
+-        globalThis.process.kill(-childProcess.pid!, signal)
++        globalThis.process.kill(-pid, signal)
+       },
+       catch: (error) => toPlatformError("kill", toError(error), command)
+     })
+@@ -430,7 +436,17 @@ const make = Effect.gen(function*() {
              env,
              stdio,
              detached: cmd.options.detached ?? process.platform !== "win32",
@@ -36,3 +251,154 @@ index dc53bafb7..fe867fbfc 100644
            }),
            Effect.fnUntraced(function*([childProcess, exitSignal]) {
              const exited = yield* Deferred.isDone(exitSignal)
+diff --git a/src/NodeSink.ts b/src/NodeSink.ts
+index b467655804c6e36eac4f7454ef4c6f0444193219..a1fea6e09d57f50050ec093fdaa48fde849ad135 100644
+--- a/src/NodeSink.ts
++++ b/src/NodeSink.ts
+@@ -4,6 +4,7 @@
+ import type { NonEmptyReadonlyArray } from "effect/Array"
+ import * as Cause from "effect/Cause"
+ import * as Channel from "effect/Channel"
++import * as Deferred from "effect/Deferred"
+ import * as Effect from "effect/Effect"
+ import { identity, type LazyArg } from "effect/Function"
+ import * as Pull from "effect/Pull"
+@@ -51,30 +52,113 @@ export const pullIntoWritable = <A, IE, E>(options: {
+   readonly endOnDone?: boolean | undefined
+   readonly encoding?: BufferEncoding | undefined
+ }): Pull.Pull<never, IE | E, unknown> =>
+-  options.pull.pipe(
+-    Effect.flatMap((chunk) => {
+-      let i = 0
+-      return Effect.callback<void, E>(function loop(resume) {
+-        for (; i < chunk.length;) {
+-          const success = options.writable.write(chunk[i++], options.encoding as any)
+-          if (!success) {
+-            options.writable.once("drain", () => (loop as any)(resume))
+-            return
++  Effect.suspend(() => {
++    const failure = Deferred.makeUnsafe<never, E>()
++    let active = true
++    let failed = false
++    let pendingOperations = 0
++    const removeListeners = () => {
++      options.writable.off("error", onError)
++      options.writable.off("close", onClose)
++    }
++    const onError = (error: unknown) => {
++      if (failed) return
++      failed = true
++      Deferred.doneUnsafe(failure, Effect.fail(options.onError(error)))
++      if (!active) removeListeners()
++    }
++    const onClose = () => {
++      if (active && !options.writable.writableFinished) {
++        onError(Object.assign(new Error("Writable stream closed before completion"), {
++          code: "ERR_STREAM_PREMATURE_CLOSE"
++        }))
++      }
++      removeListeners()
++    }
++    options.writable.on("error", onError)
++    options.writable.on("close", onClose)
++    const write = options.pull.pipe(
++      Effect.flatMap((chunk) => {
++        let i = 0
++        return Effect.callback<void, E>((resume) => {
++          let pending = 0
++          let writing = false
++          let draining = false
++          const complete = () => {
++            if (!writing && !draining && pending === 0 && !failed) resume(Effect.void)
+           }
+-        }
+-        resume(Effect.void)
+-      })
+-    }),
+-    Effect.forever({ disableYield: true }),
+-    options.endOnDone !== false ?
+-      Pull.catchDone((_) => {
+-        if ("closed" in options.writable && options.writable.closed) {
+-          return Cause.done(_)
+-        }
+-        return Effect.callback<never, E | Cause.Done<unknown>>((resume) => {
+-          options.writable.once("finish", () => resume(Cause.done(_)))
+-          options.writable.end()
++          const onWrite = (error?: Error | null) => {
++            pendingOperations -= 1
++            pending -= 1
++            if (error) {
++              // Node emits error after invoking write callbacks. Keep the listener
++              // attached until then; already-destroyed streams may emit no new event.
++              setImmediate(() => onError(error))
++            } else {
++              if (!active && pendingOperations === 0) removeListeners()
++              complete()
++            }
++          }
++          function loop() {
++            draining = false
++            writing = true
++            for (; i < chunk.length && !failed;) {
++              pending += 1
++              pendingOperations += 1
++              let success: boolean
++              try {
++                success = options.writable.write(chunk[i++], options.encoding as any, onWrite)
++              } catch (error) {
++                pending -= 1
++                pendingOperations -= 1
++                onError(error)
++                break
++              }
++              if (!success) {
++                draining = true
++                options.writable.once("drain", loop)
++                break
++              }
++            }
++            writing = false
++            complete()
++          }
++          loop()
++          return Effect.sync(() => { options.writable.off("drain", loop) })
+         })
+-      }) :
+-      identity
+-  )
++      }),
++      Effect.forever({ disableYield: true }),
++      options.endOnDone !== false ?
++        Pull.catchDone((_) => {
++          if ("closed" in options.writable && options.writable.closed) {
++            return Cause.done(_)
++          }
++          return Effect.callback<never, E | Cause.Done<unknown>>((resume) => {
++            pendingOperations += 1
++            try {
++              options.writable.end((error?: Error | null) => {
++                pendingOperations -= 1
++                if (error) {
++                  setImmediate(() => onError(error))
++                } else {
++                  if (!active) removeListeners()
++                  resume(Cause.done(_))
++                }
++              })
++            } catch (error) {
++              pendingOperations -= 1
++              onError(error)
++            }
++          })
++        }) :
++        identity
++    )
++    return Effect.raceFirst(write, Deferred.await(failure)).pipe(
++      Effect.ensuring(Effect.sync(() => {
++        active = false
++        // Cancellation must not leave drain/finish listeners, or detach error
++        // handling while an accepted asynchronous write or end can still fail.
++        if ((pendingOperations === 0 && !options.writable.errored) || failed) removeListeners()
++      }))
++    )
++  })

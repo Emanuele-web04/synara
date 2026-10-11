@@ -21,9 +21,14 @@ import { OrchestrationEventStoreLive } from "../src/persistence/Layers/Orchestra
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
+import { OrchestrationProjectionSnapshotQueryLive as OrchestrationProjectionSnapshotQueryBase } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { ServerConfig } from "../src/config.ts";
+import { ServerSettingsService } from "../src/serverSettings.ts";
+
+const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshotQueryBase.pipe(
+  Layer.provide(ServerSettingsService.layerTest()),
+);
 
 const ENABLED = process.env.SYNARA_PERF === "1";
 const DELTAS_PER_THREAD = Number(process.env.SYNARA_PERF_DELTAS ?? 1_500);

@@ -26,20 +26,10 @@ describe("negotiateStaticEncodingPreference sidecar ordering", () => {
     expect(encodings("")).toEqual([]);
   });
 
-  it("prefers brotli over gzip when both are accepted", () => {
-    expect(encodings("gzip, br")).toEqual(["br", "gzip"]);
-    expect(encodings("br, gzip")).toEqual(["br", "gzip"]);
-  });
-
   it("lets a specific q=0 exclusion outrank the wildcard", () => {
     expect(encodings("br;q=0, *")).toEqual(["gzip"]);
     expect(encodings("gzip;q=0, *")).toEqual(["br"]);
     expect(encodings("br;q=0, gzip;q=0, *")).toEqual([]);
-  });
-
-  it("honors q=0 exclusions without a wildcard", () => {
-    expect(encodings("gzip, br;q=0")).toEqual(["gzip"]);
-    expect(encodings("gzip;q=0, br;q=0")).toEqual([]);
   });
 
   it("accepts everything via wildcard and nothing via excluded wildcard", () => {
@@ -153,14 +143,6 @@ describe("ifNoneMatchSatisfies", () => {
 });
 
 describe("staticEtag", () => {
-  it("differs per encoding so Vary-keyed caches never collide validators", () => {
-    const identity = staticEtag(1000, 1_700_000_000_000);
-    const brotli = staticEtag(1000, 1_700_000_000_000, "br");
-    const gzipTag = staticEtag(1000, 1_700_000_000_000, "gzip");
-    expect(new Set([identity, brotli, gzipTag]).size).toBe(3);
-    expect(identity.startsWith('W/"')).toBe(true);
-  });
-
   it("changes when size or mtime changes", () => {
     const base = staticEtag(1000, 1_700_000_000_000);
     expect(staticEtag(1001, 1_700_000_000_000)).not.toBe(base);

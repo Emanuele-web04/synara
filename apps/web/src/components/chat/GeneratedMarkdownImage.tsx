@@ -30,6 +30,7 @@ export interface GeneratedMarkdownImageProps {
   src: string;
   alt: string;
   cwd: string | undefined;
+  isLinked?: boolean;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }
 
@@ -142,6 +143,16 @@ function GeneratedMarkdownImageContent(props: GeneratedMarkdownImageProps) {
         }
       });
   };
+
+  // The enclosing Markdown link owns activation; keep grant recovery but avoid
+  // nesting expansion/download controls inside that link, including on errors.
+  if (props.isLinked) {
+    return (
+      <span className="chat-generated-image">
+        <img {...imgProps} alt={accessibleName} className="chat-generated-image__img" />
+      </span>
+    );
+  }
 
   if (status === "error" && !resolvingGrant) {
     return (

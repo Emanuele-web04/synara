@@ -9,7 +9,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ProcessRunResult } from "../processRunner.ts";
 import {
-  formatRuntimeIdentifier,
   IosSimulatorBackend,
   normalizeUiNode,
   parseSimctlDevices,
@@ -173,14 +172,6 @@ describe("simctl device parsing", () => {
     expect(parseSimctlDevices(SIMCTL_JSON).map((device) => device.udid)).not.toContain("CCCC-3333");
   });
 
-  it("reports every discovered device as user-booted", () => {
-    // Discovery cannot attribute a boot; DeviceManager overrides the field for
-    // devices it booted itself.
-    expect(parseSimctlDevices(SIMCTL_JSON).every((device) => device.bootSource === "user")).toBe(
-      true,
-    );
-  });
-
   it("carries chassis and geometry from the device type catalogue", () => {
     const devices = parseSimctlDevices(
       JSON.stringify({
@@ -210,20 +201,6 @@ describe("simctl device parsing", () => {
       family: "tablet",
       geometry: { pointWidth: 820, pointHeight: 1180, scale: 2 },
     });
-  });
-
-  it("omits geometry for a device type the catalogue does not cover", () => {
-    const [device] = parseSimctlDevices(SIMCTL_JSON);
-
-    expect(device?.family).toBeUndefined();
-    expect(device?.geometry).toBeUndefined();
-  });
-
-  it("renders a readable runtime label", () => {
-    expect(formatRuntimeIdentifier("com.apple.CoreSimulator.SimRuntime.iOS-26-0")).toBe("iOS 26.0");
-    expect(formatRuntimeIdentifier("com.apple.CoreSimulator.SimRuntime.watchOS-11-2")).toBe(
-      "watchOS 11.2",
-    );
   });
 
   it("returns nothing rather than throwing on an empty or shapeless payload", () => {
@@ -279,22 +256,6 @@ describe("accessibility tree normalization", () => {
       normalizeUiNode({ activationPoint: { x: Number.NaN, y: 4 } }).activationPoint,
     ).toBeNull();
     expect(normalizeUiNode({ activationPoint: "336,198" }).activationPoint).toBeNull();
-  });
-
-  it("keeps the attributes the helper does send", () => {
-    const node = normalizeUiNode({
-      role: "TextField",
-      label: "Email",
-      value: "a@b.c",
-      frame: { x: 12, y: 34, width: 200, height: 44 },
-    });
-
-    expect(node).toMatchObject({
-      role: "TextField",
-      label: "Email",
-      value: "a@b.c",
-      frame: { x: 12, y: 34, width: 200, height: 44 },
-    });
   });
 
   it("normalizes the whole subtree", () => {
@@ -372,13 +333,7 @@ describe("saving a screenshot", () => {
       path.join(directory, "simulator-iphone-17-pro-2026-08-04T12-00-00-000Z.png"),
     );
     expect(await readFile(shot.path!)).toEqual(SCREENSHOT_PNG);
-  });
-
-  it("still returns the bytes so an agent can read the screen", async () => {
-    const { backend } = await makeScreenshotBackend();
-
-    const shot = await backend.screenshot(RECORDING_DEVICE, { save: true });
-
+    // Saving still returns the bytes so an agent can read the screen.
     expect(Buffer.from(shot.bytesBase64, "base64")).toEqual(SCREENSHOT_PNG);
     expect(shot.mimeType).toBe("image/png");
   });

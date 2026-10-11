@@ -227,14 +227,14 @@ function DiffFileRow(props: {
         <div className="flex min-w-0 items-baseline gap-1.5 overflow-hidden">
           <span className="shrink-0 truncate font-medium">{name}</span>
           {dir ? (
-            <span className="min-w-0 truncate text-[11px] text-muted-foreground/55">{dir}</span>
+            <span className="min-w-0 truncate text-ui-sm text-muted-foreground/55">{dir}</span>
           ) : null}
         </div>
       </div>
       <DiffStat
         additions={stat.additions}
         deletions={stat.deletions}
-        className="shrink-0 text-[10px] tabular-nums"
+        className="shrink-0 text-ui-xs tabular-nums"
       />
     </button>
   );
@@ -281,15 +281,15 @@ function DiffFilesSidebar(props: {
   };
 
   return (
-    <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 bg-[var(--color-background-surface)] lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
+    <aside className="flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 app-content-surface lg:h-full lg:w-56 lg:border-b-0 lg:border-r">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/65 px-3">
         <DiffIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/86">
+        <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/86">
           Changed files
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {props.files.length > 0 ? (
-            <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground tabular-nums">
+            <span className="rounded-full bg-muted px-1.5 text-ui-xs font-medium text-muted-foreground tabular-nums">
               {props.files.length}
             </span>
           ) : null}
@@ -301,7 +301,7 @@ function DiffFilesSidebar(props: {
           <DiffStat
             additions={totals.additions}
             deletions={totals.deletions}
-            className="text-[11px] tabular-nums"
+            className="text-ui-sm tabular-nums"
           />
         </div>
       ) : null}
@@ -353,7 +353,7 @@ function EditorActivityBar(props: {
   const searchActive = props.sidebarVisible && props.searchActive;
   return (
     <nav
-      className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 bg-[var(--color-background-surface)]"
+      className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 app-content-surface"
       aria-label="Editor activity bar"
     >
       <ExplorerActivityBarButton
@@ -408,6 +408,15 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   // query lives here so it survives toggling between sidebar panes.
   const [searchPaneActive, setSearchPaneActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // The file preview unmounts in Diff/Edit mode. Keep explicit Markdown choices
+  // in the editor shell, scoped to the workspace and file for this session.
+  const [markdownPreviewModes, setMarkdownPreviewModes] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
+  const markdownPreviewKey = `${props.workspaceRoot ?? ""}\0${props.selectedFilePath ?? ""}`;
+  const handleMarkdownPreviewChange = (rendered: boolean) => {
+    setMarkdownPreviewModes((current) => new Map(current).set(markdownPreviewKey, rendered));
+  };
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
@@ -571,7 +580,10 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   };
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-root)] text-foreground">
+    <div
+      data-editor-workspace
+      className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface text-foreground"
+    >
       <div
         className={cn(
           "flex shrink-0 items-center gap-2 px-2 sm:px-3",
@@ -584,10 +596,10 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           className={cn("flex min-w-0 flex-1 items-center gap-1.5", trafficLightGutterClassName)}
         >
           <div className="flex min-w-0 items-baseline gap-2">
-            <span className="truncate text-[13px] font-medium text-foreground">
+            <span className="truncate text-ui-lg font-medium text-foreground">
               {props.projectName ?? "Workspace"}
             </span>
-            <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
+            <span className="hidden truncate text-ui-sm text-muted-foreground/70 sm:inline">
               {props.workspaceRoot ?? "No workspace"}
             </span>
           </div>
@@ -708,6 +720,8 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                 <WorkspaceFilePreview
                   workspaceRoot={props.workspaceRoot}
                   filePath={props.selectedFilePath}
+                  markdownPreviewEnabled={markdownPreviewModes.get(markdownPreviewKey) ?? true}
+                  onMarkdownPreviewChange={handleMarkdownPreviewChange}
                   onReferenceInChat={props.onReferenceInChat}
                   onAskWhyInChat={props.onAskWhyInChat}
                   onCommentInChat={props.onCommentInChat}
@@ -746,7 +760,7 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
               state survive toggling the pane. */}
           <aside
             className={cn(
-              "min-h-[18rem] w-full shrink-0 bg-[var(--color-background-surface)] lg:h-full lg:w-[var(--editor-chat-pane-width)]",
+              "min-h-[18rem] w-full shrink-0 app-content-surface lg:h-full lg:w-[var(--editor-chat-pane-width)]",
               chatPaneVisible ? "flex" : "hidden",
             )}
             style={

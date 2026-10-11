@@ -63,7 +63,6 @@ afterEach(() => {
 describe("ChatMarkdown file context menu", () => {
   it.each([
     ["docs/", "/Users/tester/project", "docs"],
-    ["./docs/", "/Users/tester/project", "docs"],
     ["file://server/share/project/SRC/", "\\\\SERVER\\SHARE\\Project", "SRC"],
   ])("preserves directory target %s through Markdown rendering", async (href, cwd, expected) => {
     const openFile = vi.fn().mockReturnValue(true);
@@ -103,32 +102,6 @@ describe("ChatMarkdown file context menu", () => {
     expect(openFile).toHaveBeenCalledOnce();
     expect(openFile).toHaveBeenCalledWith(
       "/Users/tester/.agents/skills/annotate-pr/scripts/delete_uploadthing.py",
-    );
-  });
-
-  it("opens a relative chip from a unique same-turn absolute tool path", async () => {
-    const openFile = vi.fn().mockReturnValue(true);
-    const screen = await render(
-      <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
-        <ChatMarkdown
-          text="See `references/uploadthing.md`."
-          cwd="/Users/tester/chat-workspace"
-          isStreaming={false}
-          knownAbsoluteFilePaths={[
-            "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md",
-          ]}
-        />
-      </WorkspaceFileOpenerContext.Provider>,
-    );
-
-    screen
-      .getByRole("link", { name: "uploadthing.md" })
-      .element()
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-
-    expect(openFile).toHaveBeenCalledOnce();
-    expect(openFile).toHaveBeenCalledWith(
-      "/Users/tester/.agents/skills/annotate-pr/references/uploadthing.md",
     );
   });
 

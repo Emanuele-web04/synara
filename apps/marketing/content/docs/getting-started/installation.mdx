@@ -9,20 +9,22 @@ Synara is a desktop workspace for coding agents. Installing Synara gives you the
 
 Download the latest stable build from the [Synara download page](/install). If the automatic download is unavailable, open [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) and select the asset for your system.
 
-On macOS, Homebrew installs that same signed `.dmg`:
+| Platform               | Download             |
+| ---------------------- | -------------------- |
+| macOS on Apple Silicon | Arm64 `.dmg`         |
+| macOS on Intel         | x64 `.dmg`           |
+| Windows                | x64 `.exe` installer |
+| Linux                  | x86_64 `.AppImage`   |
+
+### Homebrew on macOS
+
+Homebrew support is pending acceptance of the official cask. Until then, install the `.dmg` from the download page or GitHub Releases.
+
+After acceptance, when `brew info --cask synara` resolves the official cask, install the same signed Stable DMG with:
 
 ```bash
 brew install --cask synara
 ```
-
-If `brew` reports that the cask is unavailable, Homebrew has not accepted the official cask yet. Use the `.dmg` from the download page or GitHub Releases until `brew info --cask synara` resolves.
-
-| Platform               | Download                      |
-| ---------------------- | ----------------------------- |
-| macOS on Apple Silicon | Arm64 `.dmg` or Homebrew Cask |
-| macOS on Intel         | x64 `.dmg` or Homebrew Cask   |
-| Windows                | x64 `.exe` installer          |
-| Linux                  | x86_64 `.AppImage`            |
 
 <Callout type="info" title="Synara does not include a model subscription">
   Synara uses provider runtimes installed on your machine. Install and authenticate at least one
@@ -46,7 +48,7 @@ Use the [download page](/install) or an official GitHub release. Avoid third-par
 
 Open the downloaded installer and complete the normal installation flow for your operating system.
 
-On macOS with Homebrew, `brew install --cask synara` places `Synara.app` in `/Applications`. Packaged auto-updates remain enabled; `brew upgrade --cask synara` is optional.
+After the official cask becomes available, Homebrew installs `Synara.app` in `/Applications` by default. Synara's packaged updater remains enabled.
 
 On Linux, your desktop environment may require making the AppImage executable before opening it:
 
@@ -95,7 +97,9 @@ Synara normalizes the environment available to the desktop process, but provider
 
 ## Updating Synara
 
-Packaged builds use Synara's desktop updater. When an update cannot be applied automatically, download the newest installer and install it over the existing application. Homebrew installs can also run `brew update` followed by `brew upgrade --cask synara`.
+Packaged builds use Synara's desktop updater. When an update cannot be applied automatically, download the newest installer and install it over the existing application.
+
+For an installation managed by the accepted official Homebrew cask, you can also run `brew update` followed by `brew upgrade --cask --greedy-auto-updates synara`. The extra flag includes this cask even though the application has its own updater.
 
 The application bundle and local workspace data are stored separately. Even so, keep important work committed to Git before updating an early release.
 

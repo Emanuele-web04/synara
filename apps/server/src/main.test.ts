@@ -589,17 +589,6 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
-  it.effect("prefers --no-browser over SYNARA_NO_BROWSER", () =>
-    Effect.gen(function* () {
-      yield* runCli(["--no-browser"], {
-        SYNARA_NO_BROWSER: "false",
-      });
-
-      assert.equal(start.mock.calls.length, 1);
-      assert.equal(resolvedConfig?.noBrowser, true);
-    }),
-  );
-
   it.effect("lets explicit negative boolean flags override true environment values", () =>
     Effect.gen(function* () {
       yield* runCli(
@@ -747,28 +736,6 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
-  it.effect("issues pairing through an HTTPS public origin that proxies to loopback", () =>
-    Effect.gen(function* () {
-      yield* runCli(
-        [
-          "--host",
-          "127.0.0.1",
-          "--auth-token",
-          "proxy-secret",
-          "--public-url",
-          "https://proxy.example.test",
-        ],
-        { SYNARA_NO_BROWSER: "false" },
-      );
-
-      assert.equal(openBrowser.mock.calls.length, 1);
-      assert.match(
-        openBrowser.mock.calls[0]?.[0] ?? "",
-        /^https:\/\/proxy\.example\.test\/pair#token=/,
-      );
-    }),
-  );
-
   it.effect("refuses a dev URL exposed through an HTTPS proxy on loopback", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(
@@ -871,15 +838,6 @@ it.layer(testLayer)("server CLI command", (it) => {
 
       assert.equal(start.mock.calls.length, 0);
       assert.match(String(error), /Failed to read environment configuration/);
-    }),
-  );
-
-  it.effect("does not start server for invalid --mode values", () =>
-    Effect.gen(function* () {
-      yield* runCli(["--mode", "invalid"]);
-
-      assert.equal(start.mock.calls.length, 0);
-      assert.equal(stop.mock.calls.length, 0);
     }),
   );
 

@@ -22,6 +22,8 @@ interface ChatComposerFooterProps {
   voice: {
     enabled: boolean;
     recording: boolean;
+    starting: boolean;
+    waitingForAudio: boolean;
     transcribing: boolean;
     durationLabel: string;
     waveformLevels: readonly number[];
@@ -39,6 +41,7 @@ interface ChatComposerFooterProps {
     busy: boolean;
     connecting: boolean;
     expired: boolean;
+    hasPendingCacheReview?: boolean;
     preparingImages: boolean;
     preparingWorktree: boolean;
     hasContent: boolean;
@@ -89,7 +92,7 @@ export function ChatComposerFooter({
             {interactionMode !== "default" ? (
               <Button
                 variant="ghost"
-                className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
+                className="shrink-0 whitespace-nowrap px-2 text-ui-sm sm:text-ui-sm font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
                 size="sm"
                 type="button"
                 onClick={resetInteractionMode}
@@ -109,7 +112,7 @@ export function ChatComposerFooter({
             {sidebarAction ? (
               <Button
                 variant="ghost"
-                className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
+                className="shrink-0 whitespace-nowrap px-2 text-ui-sm sm:text-ui-sm font-normal sm:px-3"
                 size="sm"
                 type="button"
                 onClick={sidebarAction.onClick}
@@ -137,6 +140,7 @@ export function ChatComposerFooter({
           <ComposerVoiceRecorderBar
             disabled={submission.connecting || submission.busy || submission.expired}
             isRecording={voice.recording}
+            isWaitingForAudio={voice.waitingForAudio}
             isTranscribing={voice.transcribing}
             durationLabel={voice.durationLabel}
             waveformLevels={voice.waveformLevels}
@@ -164,18 +168,41 @@ export function ChatComposerFooter({
                 ? "Submit answers"
                 : "Next question"}
           </Button>
-        ) : submission.phase === "running" ? (
-          <Button
-            type="button"
-            variant="prominent"
-            size="icon-xs"
-            className="sm:size-[26px]"
-            onClick={submission.onInterrupt}
-            aria-label="Stop generation"
-            title="Stop the current response. On Mac, press Ctrl+C to interrupt."
-          >
-            <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
-          </Button>
+        ) : submission.phase === "running" || submission.connecting ? (
+          <>
+            {/* Dictating a follow-up is allowed mid-turn: the transcript lands in the
+                composer and sending it follows the queue/steer behavior. */}
+            {voice.enabled &&
+            !submission.connecting &&
+            !voice.recording &&
+            !voice.transcribing &&
+            !submission.hasPendingUserInputs ? (
+              <ComposerVoiceButton
+                disabled={submission.busy || submission.expired}
+                isRecording={false}
+                isStarting={voice.starting}
+                isTranscribing={false}
+                durationLabel={voice.durationLabel}
+                onClick={voice.onToggle}
+              />
+            ) : null}
+            {/* While dictating, the recorder bar owns this slot (as it does for the
+                send button); two identical stop squares side by side would be
+                ambiguous. Stop generation returns once the voice note is done. */}
+            {!voice.recording && !voice.transcribing ? (
+              <Button
+                type="button"
+                variant="prominent"
+                size="icon-xs"
+                className="sm:size-[26px]"
+                onClick={submission.onInterrupt}
+                aria-label="Stop generation"
+                title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+              >
+                <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
+              </Button>
+            ) : null}
+          </>
         ) : !submission.hasPendingUserInputs && !voice.recording && !voice.transcribing ? (
           submission.showPlanFollowUp ? (
             submission.hasPrompt ? (
@@ -183,7 +210,12 @@ export function ChatComposerFooter({
                 type="submit"
                 size="sm"
                 className="h-9 rounded-full px-4 sm:h-8"
-                disabled={submission.busy || submission.connecting || submission.expired}
+                disabled={
+                  submission.busy ||
+                  submission.connecting ||
+                  submission.expired ||
+                  submission.hasPendingCacheReview
+                }
               >
                 {submission.connecting || submission.busy ? "Sending..." : "Refine"}
               </Button>
@@ -193,7 +225,12 @@ export function ChatComposerFooter({
                   type="submit"
                   size="sm"
                   className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
-                  disabled={submission.busy || submission.connecting || submission.expired}
+                  disabled={
+                    submission.busy ||
+                    submission.connecting ||
+                    submission.expired ||
+                    submission.hasPendingCacheReview
+                  }
                 >
                   {submission.connecting || submission.busy ? "Sending..." : "Implement"}
                 </Button>
@@ -205,7 +242,12 @@ export function ChatComposerFooter({
                         variant="default"
                         className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
                         aria-label="Implementation actions"
-                        disabled={submission.busy || submission.connecting || submission.expired}
+                        disabled={
+                          submission.busy ||
+                          submission.connecting ||
+                          submission.expired ||
+                          submission.hasPendingCacheReview
+                        }
                       />
                     }
                   >
@@ -213,7 +255,12 @@ export function ChatComposerFooter({
                   </MenuTrigger>
                   <ComposerPickerMenuPopup align="end" side="top">
                     <MenuItem
-                      disabled={submission.busy || submission.connecting || submission.expired}
+                      disabled={
+                        submission.busy ||
+                        submission.connecting ||
+                        submission.expired ||
+                        submission.hasPendingCacheReview
+                      }
                       onClick={() => void submission.onImplementInNewThread()}
                     >
                       Implement in a new thread
@@ -228,6 +275,7 @@ export function ChatComposerFooter({
                 <ComposerVoiceButton
                   disabled={submission.connecting || submission.busy || submission.expired}
                   isRecording={voice.recording}
+                  isStarting={voice.starting}
                   isTranscribing={voice.transcribing}
                   durationLabel={voice.durationLabel}
                   onClick={voice.onToggle}
@@ -242,6 +290,7 @@ export function ChatComposerFooter({
                   submission.busy ||
                   submission.connecting ||
                   submission.expired ||
+                  submission.hasPendingCacheReview ||
                   voice.transcribing ||
                   submission.preparingImages ||
                   !submission.hasContent
@@ -258,6 +307,11 @@ export function ChatComposerFooter({
                           : submission.busy
                             ? "Sending"
                             : "Send message"
+                }
+                title={
+                  submission.hasPendingCacheReview
+                    ? "Choose how to resume the held message above"
+                    : undefined
                 }
               >
                 {submission.connecting || submission.busy || submission.preparingImages ? (

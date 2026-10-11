@@ -6,12 +6,13 @@
 // The popup is a fixed 800×540 frame for every step so the window never resizes as the
 // user moves through the tour; hero steps (welcome, done) center their content in it.
 
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { useEffect, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { APP_BASE_NAME } from "~/branding";
 import { SynaraLogo } from "~/components/SynaraLogo";
+import { useAnnouncementSheetSlot } from "~/components/announcementSheetSlot";
 import {
   Dialog,
   DialogDescription,
@@ -28,6 +29,7 @@ import { CODE_THEME_OPTIONS } from "~/theme/theme.logic";
 import { ONBOARDING_INSET_CLASS_NAME } from "./layout";
 import {
   classifyProviderSetup,
+  describeOnboardingAgentSummary,
   isOnboardingSetupStep,
   nextOnboardingStep,
   ONBOARDING_STEPS,
@@ -43,6 +45,7 @@ import { ProjectStep, type OnboardingProjectResult } from "./steps/ProjectStep";
 import { ProvidersStep } from "./steps/ProvidersStep";
 import { ThemeStep } from "./steps/ThemeStep";
 import { WelcomeStep } from "./steps/WelcomeStep";
+import { useProviderDetection } from "./useProviderDetection";
 
 const STEP_TITLES: Record<OnboardingStep, string> = {
   welcome: `Welcome to ${APP_BASE_NAME}`,
@@ -79,6 +82,7 @@ function OnboardingFlow(props: {
   const [projectResults, setProjectResults] = useState<ReadonlyArray<OnboardingProjectResult>>([]);
   const { settings } = useAppSettings();
   const statuses = useProviderStatusesForLocalConfig();
+  const providerDetection = useProviderDetection();
   const { activeTheme } = useTheme();
 
   const goBack = () => setStep(previousOnboardingStep(step));
@@ -91,11 +95,13 @@ function OnboardingFlow(props: {
   }, [markEngaged, step]);
 
   const providerSummary = summarizeProviderSetup(
-    PROVIDER_DESCRIPTORS.map((descriptor) => ({
+    VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => ({
       provider: descriptor.kind,
       state: classifyProviderSetup({
         status: findProviderStatus(statuses, descriptor.kind),
         disabled: settings.disabledProviders.includes(descriptor.kind),
+        detecting: providerDetection.detecting,
+        detectionFailed: providerDetection.failed,
       }),
     })),
   );
@@ -103,7 +109,7 @@ function OnboardingFlow(props: {
     CODE_THEME_OPTIONS.find((option) => option.id === activeTheme.codeThemeId)?.label ??
     activeTheme.codeThemeId;
   const doneSummary = [
-    `${plural(providerSummary.connected, "agent")} connected`,
+    describeOnboardingAgentSummary(providerSummary),
     `${themeLabel} theme`,
     projectResults.length > 0
       ? `${plural(projectResults.length, "project")} added`
@@ -151,13 +157,13 @@ function OnboardingFlow(props: {
           </span>
         ) : null}
         {hero ? null : (
-          <span className="text-[length:var(--app-font-size-ui-sm,11px)] font-medium tracking-[0.04em] text-muted-foreground/70 uppercase">
+          <span className="text-ui-sm font-medium tracking-[0.04em] text-muted-foreground/70 uppercase">
             Step {stepIndex + 1} of {ONBOARDING_STEPS.length}
           </span>
         )}
         <DialogTitle className="text-[22px] tracking-[-0.01em]">{STEP_TITLES[step]}</DialogTitle>
         {description ? (
-          <DialogDescription className="max-w-[560px] text-[length:var(--app-font-size-ui-lg,13px)] leading-normal">
+          <DialogDescription className="max-w-[560px] text-ui-lg leading-normal">
             {description}
           </DialogDescription>
         ) : null}
@@ -171,7 +177,7 @@ function OnboardingFlow(props: {
       >
         {step === "welcome" ? <WelcomeStep /> : null}
         {step === "tour" ? <FeatureTourStep /> : null}
-        {step === "providers" ? <ProvidersStep /> : null}
+        {step === "providers" ? <ProvidersStep detection={providerDetection} /> : null}
         {step === "theme" ? <ThemeStep /> : null}
         {step === "project" ? (
           <ProjectStep
@@ -206,6 +212,9 @@ export function OnboardingDialog(props: {
   onOpenChange: (open: boolean) => void;
   onComplete: () => void;
 }) {
+  // The first-run gate already decides eligibility. Replays remain available after
+  // a startup handoff, but still share the slot with any surface currently showing.
+  const { open } = useAnnouncementSheetSlot(props.open, true, false);
   // Project creation cannot be aborted: closing the tour mid-create would report a skip
   // while a project still appears afterwards, so dismissal waits for it to settle.
   const [projectBusy, setProjectBusy] = useState(false);
@@ -214,10 +223,10 @@ export function OnboardingDialog(props: {
     props.onOpenChange(open);
   };
   return (
-    <Dialog open={props.open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogPopup showCloseButton className="h-[540px] max-h-full max-w-[800px]">
         {/* Remount per open so a replay from Settings starts at the first step. */}
-        {props.open ? (
+        {open ? (
           <OnboardingFlow
             onComplete={props.onComplete}
             projectBusy={projectBusy}

@@ -27,6 +27,20 @@ export const PI_THINKING_LEVEL_OPTIONS = [
   "max",
 ] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
+// `auto` is an OMP thinking sentinel (not an effort level): it maps to the
+// `thinking` config option's Auto choice, which no model catalog emits as an
+// effort but role selectors (`model:auto`) may pin.
+export const OMP_THINKING_LEVEL_OPTIONS = [
+  "off",
+  "auto",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type OmpThinkingLevel = (typeof OMP_THINKING_LEVEL_OPTIONS)[number];
 // Union of every Grok CLI ladder. Per-model capabilities pick a subset:
 // grok-build keeps none/low/medium/high, Grok 4.5 drops none, Grok 4.6 adds xhigh.
 export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const;
@@ -128,6 +142,10 @@ export const PiModelOptions = Schema.Struct({
   thinkingLevel: Schema.optional(Schema.Literals(PI_THINKING_LEVEL_OPTIONS)),
 });
 export type PiModelOptions = typeof PiModelOptions.Type;
+export const OmpModelOptions = Schema.Struct({
+  thinkingLevel: Schema.optional(Schema.Literals(OMP_THINKING_LEVEL_OPTIONS)),
+});
+export type OmpModelOptions = typeof OmpModelOptions.Type;
 
 export const CursorModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
@@ -169,6 +187,7 @@ export const ProviderModelOptions = Schema.Struct({
   droid: Schema.optional(DroidModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
+  omp: Schema.optional(OmpModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -249,6 +268,13 @@ const CODEX_GPT_6_CAPABILITIES: ModelCapabilities = {
     { value: "max", label: "Max" },
     { value: "ultra", label: "Ultra" },
   ],
+};
+
+const CODEX_GPT_6_LUNA_CAPABILITIES: ModelCapabilities = {
+  ...CODEX_GPT_6_CAPABILITIES,
+  reasoningEffortLevels: CODEX_GPT_6_CAPABILITIES.reasoningEffortLevels.filter(
+    (level) => level.value !== "ultra",
+  ),
 };
 
 const GROK_CLI_EFFORT_DESCRIPTIONS = {
@@ -513,7 +539,7 @@ const CLAUDE_NO_FAST_XHIGH_CAPABILITIES: ModelCapabilities = {
 // ultrathink prompt mode), effort runs low..max, and there is no fast-mode lane.
 const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
 
-// Opus 5 keeps the Claude 5 ladder (thinking is adaptive, so no ultrathink prompt
+// Opus 5 and 5.5 keep the Claude 5 ladder (thinking is adaptive, so no ultrathink prompt
 // mode) but stays on the Opus fast-mode lane that Fable and Sonnet lack.
 const CLAUDE_OPUS_5_CAPABILITIES: ModelCapabilities = {
   ...CLAUDE_NO_FAST_XHIGH_CAPABILITIES,
@@ -584,6 +610,16 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: CODEX_GPT_6_CAPABILITIES,
     },
     {
+      slug: "gpt-6-sol",
+      name: "GPT-6 Sol",
+      capabilities: CODEX_GPT_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-6-luna",
+      name: "GPT-6 Luna",
+      capabilities: CODEX_GPT_6_LUNA_CAPABILITIES,
+    },
+    {
       slug: "gpt-5.5",
       name: "GPT-5.5",
       capabilities: CODEX_GPT_5_5_CAPABILITIES,
@@ -629,6 +665,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "claude-fable-5",
       name: "Claude Fable 5",
       capabilities: CLAUDE_FABLE_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      capabilities: CLAUDE_OPUS_5_CAPABILITIES,
     },
     {
       slug: "claude-opus-5",
@@ -1127,13 +1168,14 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  omp: [],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
 type BuiltInModelSlug = (typeof MODEL_OPTIONS_BY_PROVIDER)[ProviderKind][number]["slug"];
 export type ModelSlug = BuiltInModelSlug | (string & {});
 
-export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi">;
+export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi" | "omp">;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
   codex: "gpt-6-astra",
@@ -1148,18 +1190,19 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
 
 // Backward compatibility for existing Codex-only call sites.
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
-export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna" as const;
+export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
 
 /**
  * Providers with a dedicated Git text-generation backend. Keep the Settings
- * picker in sync with this list — do not add chat-only agents (Claude, Grok,
+ * picker in sync with this list — do not add chat-only agents (Grok,
  * Antigravity, Pi, Devin). Those CLIs have no one-shot git-writing path, and
  * driving them as coding agents for commit/PR text can run with write access
  * or violate provider terms.
  */
 export const GIT_TEXT_GENERATION_PROVIDERS = [
   "codex",
+  "claudeAgent",
   "cursor",
   "opencode",
   "droid",
@@ -1168,6 +1211,8 @@ export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDERS)[n
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {
+    sol: "gpt-6-sol",
+    luna: "gpt-6-luna",
     astra: "gpt-6-astra",
     "6": "gpt-6-astra",
     "gpt-6": "gpt-6-astra",
@@ -1185,7 +1230,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "claude-fable-5-1": "claude-fable-5-1",
     "fable-5": "claude-fable-5",
     "claude-fable-5": "claude-fable-5",
-    opus: "claude-opus-5",
+    opus: "claude-opus-5-5",
+    "opus-5.5": "claude-opus-5-5",
+    "claude-opus-5.5": "claude-opus-5-5",
+    "claude-opus-5-5": "claude-opus-5-5",
     "opus-5": "claude-opus-5",
     "claude-opus-5": "claude-opus-5",
     "opus-4.8": "claude-opus-4-8",
@@ -1319,6 +1367,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     sonnet: "claude-sonnet-5",
     fable: "claude-fable-5",
   },
+  omp: {},
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -1361,4 +1410,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   droid: "Droid",
   opencode: "OpenCode",
   pi: "Pi",
+  omp: "Oh My Pi",
 };
