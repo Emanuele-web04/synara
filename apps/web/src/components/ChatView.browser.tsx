@@ -2211,6 +2211,10 @@ async function mountChatView(options: {
     }),
   );
 
+  // Compile the code-split route before measuring fixture RPC/hydration below.
+  // A cold dev-server transform is not part of the geometry test's deadline.
+  await router.load();
+
   const content = options.onRender ? (
     <Profiler id="issue-550-root" onRender={options.onRender}>
       <RouterProvider router={router} />
