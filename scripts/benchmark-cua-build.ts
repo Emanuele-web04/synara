@@ -54,7 +54,13 @@ async function build(script: string, env: NodeJS.ProcessEnv, logPath: string): P
   writeFileSync(logPath, "");
   const child = spawn(
     process.execPath,
-    [script, "--destination", join(env.CARGO_TARGET_DIR!, "staged")],
+    [
+      script,
+      "--arch",
+      env.SYNARA_CUA_TARGET_ARCH || process.arch,
+      "--destination",
+      join(env.CARGO_TARGET_DIR!, "staged"),
+    ],
     {
       env,
       stdio: ["ignore", "pipe", "pipe"],
