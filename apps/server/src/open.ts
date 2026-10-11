@@ -13,6 +13,7 @@ import { dirname, extname } from "node:path";
 import pathWin32 from "node:path/win32";
 
 import { EDITORS, type EditorId } from "@synara/contracts";
+import { isMacAppBundlePath } from "@synara/shared/filesystemPlatform";
 import { resolveWindowsSystemRoot } from "@synara/shared/platformEnvironment";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
 import {
@@ -147,9 +148,11 @@ function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
   }
 }
 
+// `open` launches an app bundle like a double-click, so reveal those as well as files.
 function shouldRevealInFinder(target: string): boolean {
   try {
-    return statSync(target, { throwIfNoEntry: false })?.isDirectory() === false;
+    const stat = statSync(target, { throwIfNoEntry: false });
+    return stat !== undefined && (!stat.isDirectory() || isMacAppBundlePath(target, "darwin"));
   } catch {
     return false;
   }

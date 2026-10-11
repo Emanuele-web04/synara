@@ -28,12 +28,12 @@ export type PullRequestConfirmAction =
 export function copyPullRequestLink(url: string): void {
   void copyTextToClipboard(url)
     .then(() => {
-      toastManager.add({ type: "success", title: "Pull request link copied" });
+      toastManager.add({ type: "success", title: "Link copied" });
     })
     .catch((error: unknown) => {
       toastManager.add({
         type: "error",
-        title: "Could not copy pull request link",
+        title: "Could not copy link",
         description: error instanceof Error ? error.message : "Clipboard access failed.",
       });
     });

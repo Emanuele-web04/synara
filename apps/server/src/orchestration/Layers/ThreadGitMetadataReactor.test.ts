@@ -450,6 +450,32 @@ describe("ThreadGitMetadataReactor", () => {
     expect(harness.commands).toEqual([]);
   });
 
+  it("keeps an associated PR when a shared checkout is back on a branch without one", async () => {
+    const threadId = ThreadId.makeUnsafe("local-associated-thread");
+    const turnId = TurnId.makeUnsafe("local-associated-turn");
+    const harness = await createHarness({
+      threads: [
+        {
+          id: threadId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          envMode: "local",
+          worktreePath: null,
+          branch: "main",
+          lastKnownPr: pullRequest,
+        },
+      ],
+      branchByCwd: { "/repo": "main" },
+    });
+
+    await harness.publish(startedEvent(threadId, turnId));
+    await harness.publish(completedEvent(threadId, turnId));
+    await waitFor(() => harness.pullRequestLookups.length === 1);
+    await harness.drain();
+
+    expect(harness.pullRequestLookups).toEqual(["main"]);
+    expect(harness.commands).toEqual([]);
+  });
+
   it("refreshes worktree thread metadata mid-turn on a VCS state change", async () => {
     const threadId = ThreadId.makeUnsafe("vcs-worktree-thread");
     const cwd = "/repo/.worktrees/vcs";

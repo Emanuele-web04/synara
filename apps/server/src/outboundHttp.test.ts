@@ -86,18 +86,20 @@ describe("outbound HTTP policy", () => {
 describe("invokePinnedDnsLookup", () => {
   const pinned = { address: "1.2.3.4", family: 4 as const };
 
-  it("returns the legacy single-address form when all is not requested", () => {
-    let result: unknown;
-    invokePinnedDnsLookup(pinned, {}, (err, address, family) => {
-      result = { err, address, family };
+  it("returns the legacy single-address form when all is not requested", async () => {
+    const result = await new Promise((resolve) => {
+      invokePinnedDnsLookup(pinned, {}, (err, address, family) => {
+        resolve({ err, address, family });
+      });
     });
     expect(result).toEqual({ err: null, address: "1.2.3.4", family: 4 });
   });
 
-  it("returns the array form when Happy Eyeballs requests all addresses", () => {
-    let result: unknown;
-    invokePinnedDnsLookup(pinned, { all: true }, (err, address, family) => {
-      result = { err, address, family };
+  it("returns the array form when Happy Eyeballs requests all addresses", async () => {
+    const result = await new Promise((resolve) => {
+      invokePinnedDnsLookup(pinned, { all: true }, (err, address, family) => {
+        resolve({ err, address, family });
+      });
     });
     expect(result).toEqual({
       err: null,

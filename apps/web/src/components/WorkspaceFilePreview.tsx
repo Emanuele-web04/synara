@@ -601,19 +601,19 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const fileNeedsLocalPreviewGrant =
     filePath !== null && fileIsLocalAbsolute && !fileIsScratchBinaryPreview;
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
-  // Per-file override of the markdown-preview default. Deriving (instead of
-  // syncing state in an effect) means switching files applies the default in
-  // the same render, with no stale-value flash, and the override dies with its
-  // file automatically.
-  const [markdownPreviewOverride, setMarkdownPreviewOverride] = useState<{
-    filePath: string | null;
-    rendered: boolean;
-  } | null>(null);
+  // Per-file overrides of the markdown-preview default, keyed like the
+  // relocation request so each file remembers its own view mode for the
+  // surface's lifetime. Deriving (instead of syncing state in an effect)
+  // means switching files applies that file's choice in the same render, with
+  // no stale-value flash.
+  const [markdownPreviewOverrides, setMarkdownPreviewOverrides] = useState<
+    ReadonlyMap<string, boolean>
+  >(() => new Map());
+  const markdownPreviewKey = `${workspaceRoot ?? ""}\0${filePath ?? ""}`;
   const markdownPreviewEnabled =
     props.markdownPreviewEnabled ??
-    (markdownPreviewOverride !== null && markdownPreviewOverride.filePath === filePath
-      ? markdownPreviewOverride.rendered
-      : markdownPreviewDefault);
+    markdownPreviewOverrides.get(markdownPreviewKey) ??
+    markdownPreviewDefault;
   const localPreviewGrantQuery = useQuery(
     projectLocalPreviewGrantQueryOptions({
       path: filePath,
@@ -965,7 +965,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     void taskWriteQueueRef.current;
   };
   const handleMarkdownPreviewChange = (rendered: boolean) => {
-    setMarkdownPreviewOverride({ filePath, rendered });
+    setMarkdownPreviewOverrides((current) => new Map(current).set(markdownPreviewKey, rendered));
     props.onMarkdownPreviewChange?.(rendered);
   };
   // Toggling a task rewrites the file, so only enable it when the preview
@@ -1061,7 +1061,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     hasFileContents && fileReadError !== null && !activeEditBuffer?.error;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface">
       <WorkspaceFilePreviewHeader
         workspaceRoot={props.workspaceRoot}
         filePath={filePath}
@@ -1212,6 +1212,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
                     cwd={markdownPreviewCwd(props.workspaceRoot, filePath)}
                     wikiLinkRoot={props.workspaceRoot ?? undefined}
                     isStreaming={false}
+                    parseHtml
                     className="editor-markdown-preview__body text-sm leading-relaxed"
                     {...(canToggleTasks ? { onTaskToggle: handleTaskToggle } : {})}
                   />

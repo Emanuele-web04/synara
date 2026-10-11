@@ -80,10 +80,18 @@ bun run --cwd apps/web test:browser src/components/codeEditor/CodeEditorPane.bro
 
 The pinned `@effect/platform-node-shared` patch preserves Windows spawn options
 and rejects invalid PIDs before converting child handles into process-group
-signals. Valid groups may outlive their leader; cleanup must continue to reach
-those descendants. When updating Effect, keep these behaviors and run
+signals. Windows group cleanup must launch `taskkill` directly with
+`windowsHide: true`, so teardown does not open a console beneath the desktop app.
+Valid groups may outlive their leader; cleanup must continue to reach those descendants. When updating Effect, keep these behaviors and run
 `apps/server/src/platform/effectProcessSignals.test.ts` against the installed
 runtime, including its Windows cases.
+
+The same patch makes writable stream errors fail the owning Effect sink, waits
+for accepted writes before completing, and removes drain/finish listeners on
+cancellation. Pending writes retain an error listener until they settle so a
+late broken pipe cannot become an uncaught process exception. Keep the source
+and compiled runtime changes together and run
+`apps/server/src/platform/effectWritableSink.test.ts` after updating Effect.
 
 Process-tree teardown captures POSIX start times and Windows creation times for
 checking descendants during delayed cleanup and exit verification. Start times
@@ -92,6 +100,18 @@ second resolution and observation followed by signaling is not atomic;
 these checks are not proof of arbitrary PID ownership. Root signaling still
 requires the caller to own the live process lifecycle. Direct owned-child
 cancellation must work even when external process-table tools are unavailable.
+
+Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
+`ELECTRON_RUN_AS_NODE=1` in their launch configuration. Provider child environments
+strip that inherited flag, so relying on inheritance can launch the desktop GUI
+instead of the proxy. Keep the provider environment filtering intact.
+
+Database lifecycle locks publish their owner metadata atomically. Startup may
+recover an empty lock directory or one containing only Finder's `.DS_Store`,
+including the stale-lock recovery guard. It must preserve live owners, malformed
+owner metadata, links, and unrecognized files. An unknown owner is not proof of
+another running server; the desktop lock dialog provides **Open logs** to inspect
+the underlying error. Never remove a populated lock to work around a startup block.
 
 ## Be Realistic
 

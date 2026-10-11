@@ -19,6 +19,13 @@ const RESULT_STATUSES = new Set([
 ]);
 const STREAM_EVENTS = new Set(["init", "step_update", "result", "error"]);
 
+export function isAntigravityPostResponseTimeout(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  return (
+    trimmed === "timeout waiting for response" || trimmed === "Error: timeout waiting for response"
+  );
+}
+
 type Step = {
   state?: unknown;
   type?: unknown;
@@ -58,7 +65,21 @@ export function createAntigravityPrintResultParser() {
   let streamError: string | undefined;
   let malformedRecord = false;
   let result: Record<string, unknown> | undefined;
+  let hasConflictingResultError = false;
   const steps = new Map<number, Step>();
+
+  const acceptResult = (value: Record<string, unknown>) => {
+    result = value;
+    if (
+      (value.status !== "SUCCESS" && value.status !== "ERROR") ||
+      (Object.hasOwn(value, "error") &&
+        !isAntigravityPostResponseTimeout(
+          typeof value.error === "string" ? value.error : undefined,
+        ))
+    ) {
+      hasConflictingResultError = true;
+    }
+  };
 
   const consume = (line: string) => {
     const trimmed = line.trim();
@@ -77,7 +98,7 @@ export function createAntigravityPrintResultParser() {
     if (typeof value.event !== "string" || !STREAM_EVENTS.has(value.event)) {
       if (typeof value.status === "string" && RESULT_STATUSES.has(value.status)) {
         structured = true;
-        result = value;
+        acceptResult(value);
       }
       return;
     }
@@ -85,13 +106,16 @@ export function createAntigravityPrintResultParser() {
     streamed = true;
     if (value.event === "result") {
       const envelope = record(value.result);
-      if (envelope && typeof envelope.status === "string") result = envelope;
+      if (envelope && typeof envelope.status === "string") acceptResult(envelope);
       else malformedRecord = true;
     } else if (value.event === "error") {
-      streamError =
-        typeof value.message === "string" && value.message.trim()
-          ? value.message
-          : "Antigravity stream failed.";
+      // A subsequent timeout must not erase an earlier real stream failure.
+      if (streamError === undefined || isAntigravityPostResponseTimeout(streamError)) {
+        streamError =
+          typeof value.message === "string" && value.message.trim()
+            ? value.message
+            : "Antigravity stream failed.";
+      }
     } else if (value.event === "step_update") {
       const update = record(value.step_update);
       const index = update?.step_index;
@@ -141,30 +165,35 @@ export function createAntigravityPrintResultParser() {
           lastResponse = step;
         }
       }
-      const completedResponse =
+      const hasCompleteAssistantResponse =
         streamed &&
         !malformedRecord &&
-        (state === undefined || state === "completed") &&
         lastResponse?.state === "DONE" &&
         lastResponse.text.trim().length > 0 &&
         [...steps.entries()].every(
           ([index, step]) =>
             step.state === "DONE" && (step.type !== "error" || index < lastResponseIndex),
         );
+      const completedResponse =
+        hasCompleteAssistantResponse && (state === undefined || state === "completed");
+      const hasExplicitResultError = result !== undefined && Object.hasOwn(result, "error");
+      const terminalError = typeof result?.error === "string" ? result.error : streamError;
       return {
         state,
+        hasCompleteAssistantResponse,
+        hasExplicitResultError,
+        hasConflictingResultError,
+        resultStatus: result?.status,
+        streamError,
         completedResponse,
         response:
           typeof result?.response === "string" && result.response.trim()
             ? result.response
             : (lastResponse?.text ?? ""),
         error:
-          typeof result?.error === "string"
-            ? result.error
-            : (streamError ??
-              (state === "failed"
-                ? `Antigravity ended with status ${result?.status}.`
-                : undefined)),
+          terminalError ??
+          (state === "failed" ? `Antigravity ended with status ${result?.status}.` : undefined),
+        ...(terminalError !== undefined ? { terminalError } : {}),
         failed: state === "failed",
         ...(typeof result?.conversation_id === "string" && result.conversation_id.trim()
           ? { conversationId: result.conversation_id.trim() }

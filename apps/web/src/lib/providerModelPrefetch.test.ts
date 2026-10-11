@@ -5,7 +5,12 @@
 // Layer: Web lib tests
 
 import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
-import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
+import type {
+  NativeApi,
+  ProviderInstanceId,
+  ProviderKind,
+  ServerProviderStatus,
+} from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -17,7 +22,34 @@ import {
   resolveNewThreadModelPrefetchCwd,
   type ProviderModelPrefetchSettings,
 } from "./providerModelPrefetch";
-import { providerDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
+import { providerDiscoveryQueryKeys as rawProviderDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
+import * as nativeApi from "../nativeApi";
+
+const providerDiscoveryQueryKeys = {
+  ...rawProviderDiscoveryQueryKeys,
+  models: (
+    provider: ProviderKind,
+    binaryPath: string | null,
+    apiEndpoint: string | null,
+    agentDir: string | null,
+    cwd: string | null,
+    homePath: string | null = null,
+    shadowHomePath: string | null = null,
+    accountId: string | null = null,
+    instanceId: ProviderInstanceId = provider,
+  ) =>
+    rawProviderDiscoveryQueryKeys.models(
+      provider,
+      binaryPath,
+      apiEndpoint,
+      agentDir,
+      cwd,
+      homePath,
+      shadowHomePath,
+      accountId,
+      instanceId,
+    ),
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -47,6 +79,8 @@ function makeSettings(
 function makeStatus(provider: ProviderKind, available: boolean): ServerProviderStatus {
   return {
     provider,
+    instanceId: provider,
+    driver: provider,
     available,
     status: available ? "ready" : "error",
     authStatus: "authenticated",
@@ -191,7 +225,54 @@ describe("providerModelsPrefetchQueryOptions", () => {
     // OMP's catalog is global, so cwd is forced to null — the prefetch must land on the
     // same cwd-agnostic key the composer reads and the startup warmer (ProviderModelDiscoveryWarmer) writes.
     expect(ompOptions.queryKey).toEqual(
-      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/tmp/omp-agent", null),
+      providerDiscoveryQueryKeys.models(
+        "omp",
+        "/bin/omp",
+        null,
+        "/tmp/omp-agent",
+        null,
+        null,
+        null,
+        null,
+        "omp",
+      ),
+    );
+  });
+
+  it("uses the selected instance identity and config without inheriting default-driver paths", () => {
+    const settings = makeSettings({
+      cursorBinaryPath: "/bin/default-cursor",
+      cursorApiEndpoint: "https://default.example",
+      providerInstances: {
+        cursor_work: {
+          driver: "cursor",
+          displayName: "Cursor Work",
+          config: {
+            binaryPath: "/bin/work-cursor",
+            apiEndpoint: "https://work.example",
+          },
+        },
+      },
+    });
+
+    expect(
+      providerModelsPrefetchQueryOptions({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        settings,
+      }).queryKey,
+    ).toEqual(
+      providerDiscoveryQueryKeys.models(
+        "cursor",
+        "/bin/work-cursor",
+        "https://work.example",
+        null,
+        null,
+        null,
+        null,
+        null,
+        "cursor_work",
+      ),
     );
   });
 });
@@ -428,6 +509,28 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
 });
 
 describe("prefetchModelsForNewThread — warm-option invariants", () => {
+  it("warms every startup catalog once after exhausted transport admission", async () => {
+    const capacity = Object.assign(new Error("Capacity exhausted"), {
+      code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+      retryable: true,
+      retryAfterMs: 250,
+    });
+    const listModels = vi.fn().mockRejectedValue(capacity);
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: {
+        listModels,
+        listAgents: vi.fn().mockResolvedValue({ agents: [], source: "unsupported", cached: false }),
+        getComposerCapabilities: vi.fn().mockResolvedValue({}),
+      },
+    } as unknown as NativeApi);
+    const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+    prefetchModelsForNewThread(client, { settings: makeSettings(), projectCwd: "/tmp/project" });
+    await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(listModels).toHaveBeenCalledTimes(9);
+    expect(new Set(listModels.mock.calls.map(([input]) => input.provider)).size).toBe(9);
+    client.clear();
+  });
+
   it("preserves model retry policies while keeping ancillary warming fail-fast", async () => {
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
@@ -444,7 +547,6 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
       expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS);
     }
     const modelCalls = calls.filter((options) => options.queryKey[1] === "models");
-    expect(modelCalls.find((options) => options.queryKey[2] === "cursor")?.retry).toBe(0);
     expect(modelCalls.find((options) => options.queryKey[2] === "codex")?.retry).toBe(0);
     expect(modelCalls.find((options) => options.queryKey[2] === "claudeAgent")?.retry).toBe(0);
     for (const options of modelCalls.filter(
@@ -453,7 +555,14 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
         options.queryKey[2] !== "codex" &&
         options.queryKey[2] !== "claudeAgent",
     )) {
-      expect(options.retry).toBe(3);
+      expect(typeof options.retry).toBe("function");
+      const retry = options.retry as (count: number, error: Error) => boolean;
+      const error = new Error("Discovery unavailable");
+      expect(retry(0, error)).toBe(options.queryKey[2] !== "cursor");
+      expect(retry(3, error)).toBe(false);
+      expect(retry(0, Object.assign(error, { code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED" }))).toBe(
+        false,
+      );
     }
     for (const options of calls.filter((options) => options.queryKey[1] !== "models")) {
       expect(options.retry).toBe(0);
@@ -463,7 +572,7 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
       .filter((key) => key[1] === "composer-capabilities");
     expect(capabilityKeys).toHaveLength(NEW_THREAD_MODEL_PREFETCH_PROVIDERS.length);
     expect(capabilityKeys).not.toContainEqual(
-      providerDiscoveryQueryKeys.composerCapabilities("droid"),
+      providerDiscoveryQueryKeys.composerCapabilities("droid", null),
     );
 
     // Droid warms only on explicit intent, capabilities riding along exactly once.
@@ -479,11 +588,13 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     expect(droidKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("droid", "/bin/droid", null, null, "/tmp/project"),
     );
-    expect(droidKeys).toContainEqual(providerDiscoveryQueryKeys.composerCapabilities("droid"));
-    expect(
-      droidCalls.find(
-        (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",
-      )?.retry,
-    ).toBe(2);
+    expect(droidKeys).toContainEqual(
+      providerDiscoveryQueryKeys.composerCapabilities("droid", null),
+    );
+    const droidRetry = droidCalls.find(
+      (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",
+    )?.retry as (count: number, error: Error) => boolean;
+    expect(droidRetry(0, new Error("Discovery unavailable"))).toBe(true);
+    expect(droidRetry(2, new Error("Discovery unavailable"))).toBe(false);
   });
 });

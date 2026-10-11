@@ -31,6 +31,8 @@ import {
   filterTerminalContextsWithText,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
 } from "./terminalContext";
+import { runComposerSendOnce } from "./composerSendOwnership";
+import { waitForDraftThreadDispatchToSettle } from "./draftThreadDispatch";
 import { newCommandId, newMessageId } from "./utils";
 
 export async function dispatchQueuedComposerTurnHeadless(input: {
@@ -40,6 +42,15 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   assistantDeliveryMode: AssistantDeliveryMode;
   messageId?: MessageId;
 }): Promise<boolean> {
+  return runComposerSendOnce(input.threadId, async () => {
+    await waitForDraftThreadDispatchToSettle(input.threadId);
+    return dispatchQueuedComposerTurnOnce(input);
+  });
+}
+
+async function dispatchQueuedComposerTurnOnce(
+  input: Parameters<typeof dispatchQueuedComposerTurnHeadless>[0],
+): Promise<boolean> {
   const api = readNativeApi();
   if (!api) {
     return false;

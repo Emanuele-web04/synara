@@ -752,6 +752,50 @@ describe("store facade", () => {
     }
   }, 15000);
 
+  it("restores a project's appearance after reload and forgets it once reset to the default folder", async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("window", makeFakeWindow(storage));
+    try {
+      vi.resetModules();
+
+      const fresh = await import("./store");
+      const project1 = ProjectId.makeUnsafe("project-1");
+      const project2 = ProjectId.makeUnsafe("project-2");
+      const readModel = makeProjectsReadModel([
+        makeReadModelProject({ id: project1, title: "Project 1", workspaceRoot: "/tmp/project-1" }),
+        makeReadModelProject({ id: project2, title: "Project 2", workspaceRoot: "/tmp/project-2" }),
+      ]);
+      fresh.useStore.getState().syncServerReadModel(readModel);
+      fresh.useStore
+        .getState()
+        .setProjectAppearanceLocally(project1, { kind: "icon", icon: "rocket", color: "blue" });
+      fresh.useStore
+        .getState()
+        .setProjectAppearanceLocally(project2, { kind: "emoji", emoji: "🐱" });
+
+      vi.resetModules();
+      const reloaded = await import("./store");
+      reloaded.useStore.getState().syncServerReadModel(readModel);
+      expect(
+        reloaded.useStore.getState().projects.map(({ id, appearance }) => ({ id, appearance })),
+      ).toEqual([
+        { id: project1, appearance: { kind: "icon", icon: "rocket", color: "blue" } },
+        { id: project2, appearance: { kind: "emoji", emoji: "🐱" } },
+      ]);
+
+      reloaded.useStore
+        .getState()
+        .setProjectAppearanceLocally(project1, { kind: "icon", icon: "folder-2", color: null });
+      expect(reloaded.useStore.getState().projects[0]?.appearance).toBeNull();
+      const saved = JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}");
+      expect(saved.projectAppearanceByCwd).toEqual({
+        "/tmp/project-2": { kind: "emoji", emoji: "🐱" },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 15000);
+
   it("removes a deleted project's local alias from persisted projectNamesByCwd", async () => {
     const storage = new Map<string, string>();
     const fakeWindow = makeFakeWindow(storage);

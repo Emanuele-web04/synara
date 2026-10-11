@@ -9,15 +9,12 @@ import {
   PullRequestActionResult,
   PullRequestDetail,
   PullRequestListEntry,
-  PullRequestReviewRequestCountResult,
+  PullRequestsUnavailableError,
 } from "./pullRequests";
 
 const decodeListEntry = Schema.decodeUnknownSync(PullRequestListEntry);
 const decodeDetail = Schema.decodeUnknownSync(PullRequestDetail);
 const decodeCommentInput = Schema.decodeUnknownSync(PullRequestCommentInput);
-const decodeReviewRequestCountResult = Schema.decodeUnknownSync(
-  PullRequestReviewRequestCountResult,
-);
 const decodeActionResult = Schema.decodeUnknownSync(PullRequestActionResult);
 
 describe("PullRequestCommitAuthor", () => {
@@ -81,6 +78,13 @@ describe("PullRequestListEntry", () => {
     expect(decoded.projectContexts).toEqual([]);
     expect(decoded.mergeability).toBe("unknown");
     expect(decoded.stack).toBeNull();
+    expect(decoded.commentCount).toBe(0);
+    expect(decoded.assignees).toEqual([]);
+    expect(decoded.viewerInvolvement).toEqual({
+      authored: false,
+      assigned: false,
+      involved: false,
+    });
     expect(
       decodeListEntry({ ...listEntry(), isPinned: true, mergeability: "conflicting" }),
     ).toMatchObject({ isPinned: true, mergeability: "conflicting" });
@@ -164,13 +168,23 @@ describe("PullRequestCommentInput", () => {
   });
 });
 
-describe("PullRequestReviewRequestCountResult", () => {
-  it("requires a non-negative count and explicit completeness", () => {
-    expect(decodeReviewRequestCountResult({ count: 2, incomplete: true })).toEqual({
-      count: 2,
-      incomplete: true,
-    });
-    expect(() => decodeReviewRequestCountResult({ count: -1, incomplete: false })).toThrow();
-    expect(() => decodeReviewRequestCountResult({ count: 2 })).toThrow();
+describe("PullRequestsUnavailableError", () => {
+  it("carries a retry time only for the rate-limited reason", () => {
+    const decode = Schema.decodeUnknownSync(PullRequestsUnavailableError);
+    expect(
+      decode({
+        _tag: "PullRequestsUnavailableError",
+        reason: "rate-limited",
+        message: "GitHub rate limit reached.",
+        retryAt: "2026-07-15T01:00:00.000Z",
+      }).retryAt,
+    ).toBe("2026-07-15T01:00:00.000Z");
+    expect(
+      decode({
+        _tag: "PullRequestsUnavailableError",
+        reason: "gh-not-authenticated",
+        message: "Sign in.",
+      }).retryAt,
+    ).toBeUndefined();
   });
 });

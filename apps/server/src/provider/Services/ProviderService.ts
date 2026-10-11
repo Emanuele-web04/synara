@@ -37,11 +37,14 @@ import type {
   ProviderTurnStartResult,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
-import type { Effect, Stream } from "effect";
+import type { Deferred, Effect, Stream } from "effect";
 
 import type { ProviderServiceError } from "../Errors.ts";
 import type { PersistedProviderRuntimeEvent } from "../../persistence/Services/ProviderRuntimeEvents.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type {
+  ProviderAdapterCapabilities,
+  ProviderTurnDispatchOptions,
+} from "./ProviderAdapter.ts";
 
 export type ProviderRuntimeEventPumpStatus = "starting" | "healthy" | "recovering" | "degraded";
 
@@ -73,6 +76,13 @@ export interface ProviderSessionStartOutcomeOptions {
   readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
 }
 
+export interface PersistedProviderSessionProfile {
+  readonly provider: ProviderKind;
+  readonly modelSelection?: ModelSelection;
+  readonly runtimeMode?: RuntimeMode;
+  readonly enableComputerControl: boolean;
+}
+
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
@@ -80,7 +90,12 @@ export interface ProviderServiceShape {
   readonly startClaudeCompaction?: (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
+    readonly cancellation?: Deferred.Deferred<void>;
   }) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+  /** Signal local compaction preparation cancellation without delivering a provider command. */
+  readonly cancelClaudeCompactionDiscovery?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
   readonly getClaudeCacheObservation?: (
     threadId: ThreadId,
   ) => Effect.Effect<ClaudeCacheObservation | undefined, ProviderServiceError>;
@@ -112,6 +127,7 @@ export interface ProviderServiceShape {
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+    options?: ProviderTurnDispatchOptions,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**
@@ -119,6 +135,7 @@ export interface ProviderServiceShape {
    */
   readonly steerTurn: (
     input: ProviderSteerTurnInput,
+    options?: ProviderTurnDispatchOptions,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**
@@ -231,6 +248,11 @@ export interface ProviderServiceShape {
    * Aggregates runtime session lists from all registered adapters.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /** Read the settings that produced a persisted native resume cursor. */
+  readonly getPersistedSessionProfile: (
+    threadId: ThreadId,
+  ) => Effect.Effect<PersistedProviderSessionProfile | undefined, ProviderServiceError>;
 
   /**
    * Read static capabilities for a provider adapter.

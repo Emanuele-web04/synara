@@ -324,6 +324,26 @@ with the resolved release version before packaging; do not use a permanent broad
 opt-out. Packaging, source provenance, startup smoke, and artifact upload must
 still pass. Missing Azure credentials are expected for this unsigned path.
 
+Before startup smoke and artifact upload, the Windows job scans each final
+installer with Microsoft Defender. The guard enables protection and removes
+the hosted image's exclusions inside that disposable runner, updates security
+intelligence, verifies the actual file is not excluded, and requires an explicit
+clean scan plus unchanged installer bytes. If the configured update source returns
+definitions older than 24 hours, it retries Microsoft's direct MMPC source.
+An older local timestamp then requires the installed version to match the latest
+version fetched from Microsoft's security intelligence page; unavailable or
+ambiguous vendor data fails closed. Missing signatures or Defender's own
+out-of-date status also block the scan. Detection, remediation, stale
+intelligence, a missing file, or a scan error blocks publication. Scan evidence
+is retained as `windows-defender-x64`, including on failure. Cloud participation
+and sample-submission settings are not changed. This server scan does not replace
+Windows 11 browser-download qualification.
+
+Signing, provenance, and startup smoke alone do not establish Microsoft Defender
+acceptance. For a reported antivirus block, collect the exact artifact hash,
+engine/definition versions, and detected component before changing packaging;
+see [Windows Defender investigation and qualification](windows-defender-1376.md).
+
 Without the matching exception, published Windows installers must be signed with
 Azure Trusted Signing, and the workflow fails closed when a required signing
 value is absent. A requested signed release requires all of the following secrets:

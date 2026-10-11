@@ -3,6 +3,7 @@ import {
   type ModelSlug,
   type ProviderNativeCommandDescriptor,
   type ProviderMentionReference,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
@@ -196,6 +197,7 @@ export type ComposerCommandItem =
       id: string;
       type: "model";
       provider: ProviderKind;
+      instanceId: ProviderInstanceId;
       model: ModelSlug;
       label: string;
       description: string;

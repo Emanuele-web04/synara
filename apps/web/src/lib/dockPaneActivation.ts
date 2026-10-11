@@ -101,13 +101,16 @@ const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<Righ
 // triggers a double FitAddon pass, which the user sees as a slow open plus a
 // multi-line reflow flicker. Keeping it mounted and toggling visibility makes
 // tab switches instant and flicker-free while preserving scrollback/runtime.
-// The explorer pane keeps its browse state (selected file, expanded directories,
-// search query, sidebar visibility) in local component state, so keep it mounted
-// while another tab is active — otherwise switching tabs would tear the subtree
-// down and reset the explorer to its workspace root on return.
+// The explorer pane's browse state (selected file, expanded directories, search
+// query) is per-thread in dockExplorerBrowseStore, so a remount already restores
+// it — but keeping the pane mounted while another tab is active still avoids the
+// re-list flash and preserves the tree's DOM scroll position on tab switches.
+// File panes keep their reading scroll position in the DOM, so unmounting on a
+// tab switch resets the reader to the top when the file is selected again.
 const KEEP_MOUNTED_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "terminal",
   "explorer",
+  "file",
 ]);
 
 export function dockPaneActivationKey(input: {

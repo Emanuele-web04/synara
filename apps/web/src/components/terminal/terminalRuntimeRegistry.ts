@@ -90,7 +90,7 @@ class TerminalRuntimeRegistry {
 
   disposeOrphanedThreads(activeThreadIds: ReadonlySet<string>): void {
     for (const [runtimeKey, entry] of this.entries) {
-      if (!activeThreadIds.has(entry.threadId)) {
+      if (!entry.providerAuthInstanceId && !activeThreadIds.has(entry.threadId)) {
         this.dispose(runtimeKey);
       }
     }

@@ -1,17 +1,22 @@
 import { MessageId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TimelineEntry } from "../../session-logic";
 import {
   clampTooltipTop,
   computeFocusedIndex,
   computeGaussianWeights,
   computeTrailGeometry,
+  computeTrailWindow,
   createActiveTrailStore,
   deriveMessageTrailItems,
   resolveActiveTrailMessageId,
   resolveActiveTrailSnapshot,
   type MessageTrailAnchor,
   type TrailGeometry,
+  audioTickGain,
+  computeAudioTickWidths,
+  createAudioLevelShaper,
+  stepAudioEnvelope,
 } from "./messageTrail.logic";
 
 function messageEntry(
@@ -94,6 +99,19 @@ describe("deriveMessageTrailItems", () => {
     const entries = [messageEntry("u1", "user", "ask"), messageEntry("a1", "assistant", "reply")];
 
     expect(deriveMessageTrailItems(entries)).toBe(deriveMessageTrailItems(entries));
+  });
+
+  it("reuses the previous items for a rebuilt entries array whose trail is unchanged", () => {
+    const user = messageEntry("u1", "user", "ask");
+    const reply = messageEntry("a1", "assistant", "reply");
+    const before = deriveMessageTrailItems([user, reply]);
+
+    // A streamed token rebuilds the array; a work row does not show in the trail.
+    expect(deriveMessageTrailItems([user, reply, workEntry("w1")])).toBe(before);
+
+    const grown = deriveMessageTrailItems([user, messageEntry("a1", "assistant", "reply grew")]);
+    expect(grown).not.toBe(before);
+    expect(grown[0]?.responsePreview).toBe("reply grew");
   });
 
   it("reflects a mid-list message replacement despite the per-message preview cache", () => {
@@ -221,6 +239,27 @@ describe("computeTrailGeometry", () => {
   });
 });
 
+describe("computeTrailWindow", () => {
+  it("bounds frame work to the viewport with overscan across long histories", () => {
+    const geometry = computeTrailGeometry({ count: 1_000 })!;
+    expect(computeTrailWindow(geometry, 5_000, 480)).toEqual({ start: 494, end: 552 });
+    expect(computeTrailWindow(geometry, 0, 480)).toEqual({ start: 0, end: 52 });
+    expect(computeTrailWindow(geometry, 9_534, 480)).toEqual({ start: 948, end: 1_000 });
+  });
+
+  it("keeps short and unmeasured rails range safe", () => {
+    expect(computeTrailWindow(null, 0, 0)).toEqual({ start: 0, end: 0 });
+    expect(computeTrailWindow(computeTrailGeometry({ count: 2 }), 0, 480)).toEqual({
+      start: 0,
+      end: 2,
+    });
+    expect(computeTrailWindow(computeTrailGeometry({ count: 1_000 }), 0, 0)).toEqual({
+      start: 0,
+      end: 4,
+    });
+  });
+});
+
 describe("computeGaussianWeights", () => {
   const centerYs = [0, 10, 20, 30, 40];
 
@@ -266,5 +305,78 @@ describe("clampTooltipTop", () => {
     expect(clampTooltipTop(10, 56, 500, 4)).toBe(32);
     expect(clampTooltipTop(490, 56, 500, 4)).toBe(468);
     expect(clampTooltipTop(250, 56, 500, 4)).toBe(250);
+  });
+});
+
+describe("audio wave", () => {
+  it("rises with the sound at once and falls back gently", () => {
+    expect(stepAudioEnvelope(0.2, 0.8, 0.9)).toBe(0.8);
+    expect(stepAudioEnvelope(0.8, 0, 0.9)).toBeCloseTo(0.72);
+    expect(stepAudioEnvelope(0.8, 0.75, 0.9)).toBe(0.75);
+  });
+
+  it("ignores room noise and scales to the microphone's recent peak", () => {
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    try {
+      const shape = createAudioLevelShaper();
+      expect(shape(0)).toBe(0);
+      expect(shape(0.1)).toBe(0);
+      // Quiet speech reaches its own peak; the next quieter syllable stays lower.
+      expect(shape(0.4)).toBe(1);
+      elapsed += 33;
+      const quieterSyllable = shape(0.3);
+      expect(quieterSyllable).toBeGreaterThan(0.4);
+      expect(quieterSyllable).toBeLessThan(0.45);
+      // A louder microphone raises the reference immediately.
+      expect(shape(0.8)).toBe(1);
+      elapsed += 33;
+      expect(shape(0.4)).toBeLessThan(0.3);
+      // The helper emits silence once, then sends no levels until sound returns.
+      shape(0);
+      elapsed += 8_000;
+      expect(shape(0.4)).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("keeps per-tick gains in a narrow, stable band", () => {
+    for (let i = 0; i < 50; i += 1) {
+      const gain = audioTickGain(i);
+      expect(gain).toBeGreaterThanOrEqual(0.45);
+      expect(gain).toBeLessThanOrEqual(1);
+      expect(audioTickGain(i)).toBe(gain);
+    }
+  });
+
+  it("ripples outward from the centre tick, one step per tick", () => {
+    // Newest first: the loud frame is two frames old, so with one frame per tick
+    // it sits two ticks away from the centre on both sides.
+    const widths = computeAudioTickWidths({
+      count: 7,
+      centerIndex: 3,
+      history: [0, 0, 1, 0],
+      framesPerTick: 1,
+      baseW: 6,
+      maxW: 30,
+    });
+    expect(widths[3]).toBe(6);
+    expect(widths[1]).toBeCloseTo(6 + 24 * audioTickGain(1));
+    expect(widths[5]).toBeCloseTo(6 + 24 * audioTickGain(5));
+    expect(widths[0]).toBe(6);
+    expect(widths[6]).toBe(6);
+  });
+
+  it("rests every tick when there is no history", () => {
+    const widths = computeAudioTickWidths({
+      count: 3,
+      centerIndex: 1,
+      history: [],
+      framesPerTick: 2,
+      baseW: 6,
+      maxW: 30,
+    });
+    expect(widths).toEqual([6, 6, 6]);
   });
 });

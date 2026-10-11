@@ -22,11 +22,22 @@ import { isSplitRoute } from "../splitViewRoute";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { createThreadExistsSelector, createThreadProjectIdSelector } from "../storeSelectors";
+import { ChatPaneKeepAliveProvider } from "../components/chat/ChatPaneKeepAlive";
 import { SingleChatSurface } from "../components/chat/SingleChatSurface";
 import { SplitChatSurface } from "../components/chat/SplitChatSurface";
 import { resolveSingleProjectId } from "./-chatThreadRoute.logic";
 
+// The single and split surfaces swap below this provider, which keeps the chat they both
+// show mounted across the swap.
 function ChatThreadRouteView() {
+  return (
+    <ChatPaneKeepAliveProvider>
+      <ChatThreadRouteContent />
+    </ChatPaneKeepAliveProvider>
+  );
+}
+
+function ChatThreadRouteContent() {
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const hasKnownServerThreads = useStore((store) => (store.threadIds?.length ?? 0) > 0);
   const threadId = Route.useParams({

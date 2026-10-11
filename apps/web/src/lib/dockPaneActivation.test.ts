@@ -133,6 +133,7 @@ describe("dockPaneActivation", () => {
     const panes = [
       { id: "term", kind: "terminal" as const },
       { id: "explorer", kind: "explorer" as const },
+      { id: "file", kind: "file" as const },
       { id: "diff", kind: "diff" as const },
     ];
 
@@ -159,6 +160,15 @@ describe("dockPaneActivation", () => {
         ...reconcileKeepMountedPaneIds({
           previous: new Set(),
           panes,
+          activePaneId: "file",
+          activePaneKind: "file",
+        }),
+      ]).toEqual(["file"]);
+
+      expect([
+        ...reconcileKeepMountedPaneIds({
+          previous: new Set(),
+          panes,
           activePaneId: "diff",
           activePaneKind: "diff",
         }),
@@ -167,13 +177,14 @@ describe("dockPaneActivation", () => {
 
     it("retains previously mounted stateful panes after another tab becomes active", () => {
       const result = reconcileKeepMountedPaneIds({
-        previous: new Set(["term", "explorer"]),
+        previous: new Set(["term", "explorer", "file"]),
         panes,
         activePaneId: "diff",
         activePaneKind: "diff",
       });
       expect(result.has("term")).toBe(true);
       expect(result.has("explorer")).toBe(true);
+      expect(result.has("file")).toBe(true);
     });
 
     it("drops kept ids that no longer exist (closed pane or thread switch)", () => {

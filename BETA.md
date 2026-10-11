@@ -52,6 +52,20 @@ The rest of this file is the detailed reference.
 - Windows installer GUID: `a8e63b48-d4f3-4db5-9e12-368107afe65d` (separate Add/Remove
   Programs entry; the stable GUID is unchanged)
 
+## App icon choices
+
+**Settings → Appearance → App icon** offers Default, Icon, Dark, and Beta on
+macOS. Windows and Linux offer Default, Icon, and Beta; Dark is macOS-only.
+Default is the white Synara artwork, Dark is black, Icon is the landscape artwork,
+and Beta is the blue Beta artwork. A fresh Beta profile and Reset to defaults use
+Beta; a saved choice is preserved.
+
+On macOS 26, Beta uses the app's appearance-aware bundle icon. Earlier macOS
+versions use its PNG artwork. Explicit Default and the other bitmap choices are
+also written to the macOS app bundle so they survive quitting the app.
+Stable keeps its existing picker choices. It does not offer Beta, and a stored
+Beta preference remains inactive without being erased.
+
 ## How it differs from Canary
 
 Canary is a local source build managed by `bun run canary:*` scripts and updates only
@@ -270,8 +284,43 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi). It is available in Beta and gated
-off in Stable.
+The list currently contains `groups` (Hubs), gated off in Stable.
+Tasks, Inbox, and Auto-fix CI are available in both apps.
+Oh My Pi, the rail sidebar layout, and message trail
+sound are available in both Stable and Beta.
+
+On Stable, Hubs are inert rather than hidden data: the server refuses the hub
+APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
+leaves saved Hub check-ins and completion evaluations unchanged and unscheduled,
+uses ordinary Synara tool approvals for former coordinator chats, and refuses
+creating a hub; the web hides the Hubs tab, route, setting, and
+thread actions, and shows any existing hub folder as an ordinary project so its
+chats stay reachable. The gate lives in
+`apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
+`apps/web/src/betaFeatures.ts`.
+
+Tasks and its delegation APIs are available in Stable and Beta. Tasks takes
+Kanban's navigation slot and preserves its saved order and visibility; its
+List / Kanban switch keeps the board accessible. A client connected to an older
+server that refuses Tasks returns to Kanban.
+
+Inbox and its `stats.getRecap` RPC are available in Stable and Beta. Stable shows
+chat attention, running and finished work, review requests, and the activity recap.
+The to-do list, quick-add, delegation card, and **All tasks** link appear only where
+Tasks is available, including Stable and Beta.
+
+`pull-request-auto-fix` enables the opt-in **Auto-fix CI** action in a pull
+request's menu. The server watches checks for an enabled PR and can ask its
+linked agent chat to address failures in both Stable and Beta. It keeps the chat
+permissions and retry limits, and waits for active work, approvals, and questions.
+This does not enable automatic merging.
+
+Message trail sound is opt-in under **Settings → Chat → Message trail sound**
+on macOS desktop in both Stable and Beta. It follows system audio (macOS 14.2+),
+the microphone, or both. The desktop IPC handler refuses other platforms,
+and the web hides the selector on hosts without a supported desktop bridge.
+Only loudness levels are sent to the trail, and the reader stops when the
+visible trail no longer subscribes. First use can request macOS audio access.
 
 ## Diagnostics
 

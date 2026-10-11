@@ -3,6 +3,7 @@
  *
  * @module OmpAcpSupport
  */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
@@ -12,17 +13,16 @@ import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
 import {
   type ProviderInteractionMode,
   type ProviderModelDescriptor,
-  type OmpRoleDescriptor,
-  type OmpThinkingLevel,
   OMP_THINKING_LEVEL_OPTIONS,
 } from "@synara/contracts";
-import { Effect, Layer, Option, Schema, Scope, ServiceMap } from "effect";
-import YAML from "yaml";
+import { Effect, Layer, Scope, ServiceMap } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { expandProviderAccountHomePath } from "../../providerAccountHomePath.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -35,9 +35,90 @@ import {
   flattenConfigOptions,
 } from "./AcpConfigOptions.ts";
 
-export interface OmpAcpRuntimeSettings {
+export interface OmpAcpRuntimeSettings extends OmpAccountBoundary {
   readonly binaryPath?: string;
   readonly agentDir?: string;
+}
+
+/**
+ * The account an `omp` child runs as. A selected environment or a non-default
+ * provider instance gets a private synthetic HOME (and therefore its own
+ * `~/.omp/agent` credentials and sessions); the default instance keeps the
+ * user's ambient environment exactly.
+ */
+export interface OmpAccountBoundary {
+  readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly instanceId?: string | undefined;
+  readonly homeDir?: string | undefined;
+  readonly isolationRootDir?: string | undefined;
+}
+
+export function ompIsolatesAccount(boundary: OmpAccountBoundary): boolean {
+  const instanceId = boundary.instanceId?.trim();
+  return boundary.environment !== undefined || (instanceId !== undefined && instanceId !== "omp");
+}
+
+function ompAccountProcessEnv(boundary: OmpAccountBoundary): NodeJS.ProcessEnv {
+  return buildProviderProcessEnv({
+    driver: "omp",
+    env: process.env,
+    ...(boundary.environment !== undefined ? { environment: boundary.environment } : {}),
+    ...(boundary.instanceId !== undefined ? { instanceId: boundary.instanceId } : {}),
+    ...(boundary.homeDir !== undefined ? { homeDir: boundary.homeDir } : {}),
+    ...(boundary.isolationRootDir !== undefined
+      ? { isolationRootDir: boundary.isolationRootDir }
+      : {}),
+  });
+}
+
+function expandOmpAgentDir(agentDir: string | undefined, boundary: OmpAccountBoundary) {
+  const trimmed = agentDir?.trim();
+  return trimmed ? expandProviderAccountHomePath(trimmed, boundary.homeDir) : undefined;
+}
+
+/** Environment for every `omp` child (ACP runtime and CLI) of one account. */
+export function buildOmpProcessEnv(
+  settings: Pick<OmpAcpRuntimeSettings, "agentDir"> & OmpAccountBoundary,
+): NodeJS.ProcessEnv {
+  const agentDir = expandOmpAgentDir(settings.agentDir, settings);
+  return buildProviderChildEnvironment({
+    provider: "omp",
+    baseEnv: ompAccountProcessEnv(settings),
+    // omp is pi-lineage: PI_CODING_AGENT_DIR selects the profile directory
+    // (auth, sessions, skills, models) for every child invocation.
+    ...(agentDir ? { overrides: { PI_CODING_AGENT_DIR: agentDir } } : undefined),
+  });
+}
+
+/**
+ * Mirrors OMP's getAgentDir() for one account: the configured override, then
+ * the account environment, then `<HOME>/<PI_CONFIG_DIR|.omp>/agent`.
+ */
+export function resolveOmpAgentDir(
+  settings: Pick<OmpAcpRuntimeSettings, "agentDir"> & OmpAccountBoundary,
+): string {
+  const configured = expandOmpAgentDir(settings.agentDir, settings);
+  if (configured) return configured;
+  const env = ompAccountProcessEnv(settings);
+  const home = ompIsolatesAccount(settings)
+    ? env.HOME?.trim() || env.USERPROFILE?.trim() || nodeOs.homedir()
+    : nodeOs.homedir();
+  return (
+    env.PI_CODING_AGENT_DIR?.trim() ||
+    nodePath.join(home, env.PI_CONFIG_DIR?.trim() || ".omp", "agent")
+  );
+}
+
+/** Stable discovery-cache scope for one OMP account. */
+export function ompAccountCacheScope(boundary: OmpAccountBoundary): string {
+  if (!ompIsolatesAccount(boundary)) return "";
+  const environment = Object.entries(boundary.environment ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  // Hashed: selected environments can carry credentials and cache keys are logged.
+  return createHash("sha256")
+    .update(JSON.stringify([boundary.instanceId?.trim() ?? "omp", environment]))
+    .digest("hex");
 }
 
 export interface OmpAcpRuntimeInput extends Omit<
@@ -50,7 +131,7 @@ export interface OmpAcpRuntimeInput extends Omit<
 
 export interface OmpAcpModelSelectionErrorContext {
   readonly cause: AcpErrors.AcpError;
-  readonly method: "session/set_config_option";
+  readonly method: "session/set_config_option" | "session/get_config_options";
 }
 
 export interface OmpAcpModeSelectionErrorContext {
@@ -106,14 +187,7 @@ export function buildOmpAcpSpawnInput(
     command: resolveOmpCliBinaryPath(ompSettings?.binaryPath),
     args: ["acp"],
     cwd,
-    env: buildProviderChildEnvironment({
-      provider: "omp",
-      // omp is pi-lineage: PI_CODING_AGENT_DIR selects the profile directory
-      // (auth, sessions, skills, models) for every child invocation.
-      ...(ompSettings?.agentDir?.trim()
-        ? { overrides: { PI_CODING_AGENT_DIR: ompSettings.agentDir.trim() } }
-        : undefined),
-    }),
+    env: buildOmpProcessEnv(ompSettings ?? {}),
   };
 }
 
@@ -165,7 +239,7 @@ export const makeOmpAcpRuntime = (
  * the RPC when the current value already matches.
  */
 export function applyOmpAcpModelSelection<E>(input: {
-  readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption">;
+  readonly runtime: Pick<AcpSessionRuntimeShape, "getConfigOptions" | "setConfigOption">;
   readonly model: string;
   readonly thinkingLevel?: string | null | undefined;
   readonly mapError: (context: OmpAcpModelSelectionErrorContext) => E;
@@ -174,6 +248,33 @@ export function applyOmpAcpModelSelection<E>(input: {
     const mapError = (cause: AcpErrors.AcpError) =>
       input.mapError({ cause, method: "session/set_config_option" });
     const model = input.model.trim();
+    // `role:` was a Synara picker row key, never an OMP role selector. Refuse
+    // stale keys before either config write (and therefore before prompting).
+    // An exact advertised model remains valid even if its opaque id uses this
+    // prefix; don't infer a replacement from role names or catalog rankings.
+    if (model.startsWith("role:")) {
+      const configOptions = yield* input.runtime.getConfigOptions.pipe(
+        Effect.mapError((cause) => input.mapError({ cause, method: "session/get_config_options" })),
+      );
+      const modelConfig = findSelectConfig(configOptions, {
+        id: OMP_MODEL_CONFIG_ID,
+        category: "model",
+      });
+      if (
+        !modelConfig ||
+        !flattenConfigOptions(modelConfig.options).some((option) => option.value === model)
+      ) {
+        return yield* Effect.fail(
+          mapError(
+            new AcpErrors.AcpRequestError({
+              code: -32602,
+              errorMessage:
+                "This saved OMP role is no longer supported. Choose an OMP model before sending.",
+            }),
+          ),
+        );
+      }
+    }
     if (model) {
       yield* input.runtime
         .setConfigOption(OMP_MODEL_CONFIG_ID, model)
@@ -268,288 +369,6 @@ function readStringArrayField(record: Record<string, unknown>, key: string): Rea
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "")
     : [];
-}
-
-/** Raw `YAML.parse` output — the trust boundary for `~/.omp` config reads. */
-type OmpConfigYamlValue = ReturnType<typeof YAML.parse>;
-
-const OmpConfigRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
-const toOmpConfigRecordOption = Schema.decodeUnknownOption(OmpConfigRecordSchema);
-
-/** OMP accepts a role value as a string or an all-strings array (a comma-joined
- * fallback chain); anything else is skipped, matching `modelRoleValueFromUnknown`. */
-function ompRolePatternsFromUnknown(rawValue: unknown): ReadonlyArray<string> {
-  const entries =
-    typeof rawValue === "string"
-      ? [rawValue]
-      : Array.isArray(rawValue)
-        ? rawValue.every((entry): entry is string => typeof entry === "string")
-          ? rawValue
-          : []
-        : [];
-  return entries
-    .flatMap((entry) => entry.split(","))
-    .map((pattern) => pattern.trim())
-    .filter((pattern) => pattern.length > 0);
-}
-
-/**
- * Split a trailing `:<level>` selector off a pattern, like OMP's
- * `splitThinkingSuffix` — every known thinking level plus the guarded `:auto`
- * sentinel and `:max` tier split here; the colon must sit strictly after
- * `minColonIndex` (role-alias callers pass the alias prefix length).
- */
-function splitOmpThinkingSuffix(
-  pattern: string,
-  minColonIndex = 0,
-): { base: string; level?: OmpThinkingLevel } {
-  const lastColon = pattern.lastIndexOf(":");
-  if (lastColon <= minColonIndex) return { base: pattern };
-  const suffix = pattern.slice(lastColon + 1);
-  const level = OMP_THINKING_LEVEL_OPTIONS.find((candidate) => candidate === suffix);
-  return level === undefined ? { base: pattern } : { base: pattern.slice(0, lastColon), level };
-}
-
-function ompCatalogParts(model: ProviderModelDescriptor): { provider: string; id: string } {
-  const slash = model.slug.indexOf("/");
-  return slash === -1
-    ? { provider: "", id: model.slug }
-    : { provider: model.slug.slice(0, slash), id: model.slug.slice(slash + 1) };
-}
-
-/**
- * OMP `matchModel`'s exact phases: a `provider/id` selector, then a bare id —
- * both case-insensitive. A `provider/…` pattern stays locked to that provider
- * when it exists in the catalog (`isProviderLockedCrossMatch`), so a bare id
- * matching only another provider's model does not resolve.
- */
-function matchOmpCatalogExact(
-  pattern: string,
-  catalog: ReadonlyArray<ProviderModelDescriptor>,
-): ProviderModelDescriptor | undefined {
-  const lower = pattern.toLowerCase();
-  const ref = catalog.find((model) => model.slug.toLowerCase() === lower);
-  if (ref) return ref;
-  const slash = pattern.indexOf("/");
-  const lockedProvider =
-    slash > 0 &&
-    catalog.some(
-      (model) =>
-        ompCatalogParts(model).provider.toLowerCase() === pattern.slice(0, slash).toLowerCase(),
-    )
-      ? pattern.slice(0, slash).toLowerCase()
-      : undefined;
-  return catalog.find(
-    (model) =>
-      ompCatalogParts(model).id.toLowerCase() === lower &&
-      (lockedProvider === undefined ||
-        ompCatalogParts(model).provider.toLowerCase() === lockedProvider),
-  );
-}
-
-/**
- * OMP `matchModel`'s non-exact phases, approximated for picker display:
- * `provider/partial` substring-matches ids within that provider (a miss there
- * exhausts the pattern — the provider lock does not fall through), and anything
- * else substring-matches id or name. Catalog order decides ties where OMP
- * scores fuzzy hits and consults usage ranks.
- */
-function matchOmpCatalogModel(
-  pattern: string,
-  catalog: ReadonlyArray<ProviderModelDescriptor>,
-  exactOnly: boolean,
-): ProviderModelDescriptor | undefined {
-  const exact = matchOmpCatalogExact(pattern, catalog);
-  if (exact) return exact;
-  if (exactOnly) return undefined;
-  const slash = pattern.indexOf("/");
-  if (slash > 0) {
-    const provider = pattern.slice(0, slash).toLowerCase();
-    const providerModels = catalog.filter(
-      (model) => ompCatalogParts(model).provider.toLowerCase() === provider,
-    );
-    if (providerModels.length > 0) {
-      const idPattern = pattern.slice(slash + 1).toLowerCase();
-      return providerModels.find((model) =>
-        ompCatalogParts(model).id.toLowerCase().includes(idPattern),
-      );
-    }
-    // The prefix is not a catalog provider — the slash stays part of the id.
-  }
-  const lower = pattern.toLowerCase();
-  return catalog.find(
-    (model) =>
-      ompCatalogParts(model).id.toLowerCase().includes(lower) ||
-      model.name.toLowerCase().includes(lower),
-  );
-}
-
-interface OmpRolePatternResult {
-  readonly model: string;
-  readonly thinkingLevel?: OmpThinkingLevel | undefined;
-  /** Set when resolution went through OMP's invalid-`:suffix` fallback path. */
-  readonly warning?: string | undefined;
-}
-
-/**
- * Resolve one role pattern against the discovered catalog, mirroring OMP's
- * `parseModelPatternWithContext`: whole-pattern exact first (literal ids keep a
- * `:level`), then the guarded thinking-suffix split — whose recursion strips
- * the level when the inner match carries a warning — then the non-exact
- * catalog match, and finally the invalid-`:suffix` fallback that resolves the
- * prefix and reports a warning like OMP does.
- */
-function matchOmpRolePattern(
-  pattern: string,
-  catalog: ReadonlyArray<ProviderModelDescriptor>,
-): OmpRolePatternResult | undefined {
-  const exact = matchOmpCatalogModel(pattern, catalog, true);
-  if (exact) return { model: exact.slug };
-
-  const { base, level } = splitOmpThinkingSuffix(pattern);
-  if (level !== undefined) {
-    // A literal catalog id can itself end in `:<level>` (`router:low`) — a
-    // fuzzy hit on the full pattern whose id does wins over the split.
-    const literal = matchOmpCatalogModel(pattern, catalog, false);
-    if (literal !== undefined && ompCatalogParts(literal).id.toLowerCase().endsWith(`:${level}`)) {
-      return { model: literal.slug };
-    }
-    const inner = matchOmpRolePattern(base, catalog);
-    if (inner === undefined) return undefined;
-    return {
-      model: inner.model,
-      ...(inner.warning === undefined ? { thinkingLevel: level } : {}),
-      ...(inner.warning !== undefined ? { warning: inner.warning } : {}),
-    };
-  }
-
-  const fuzzy = matchOmpCatalogModel(pattern, catalog, false);
-  if (fuzzy) return { model: fuzzy.slug };
-
-  // Invalid `:suffix` — drop it and resolve the prefix; OMP resolves the model
-  // and warns that the configured level is ignored.
-  const lastColon = pattern.lastIndexOf(":");
-  if (lastColon > 0) {
-    const inner = matchOmpRolePattern(pattern.slice(0, lastColon), catalog);
-    if (inner !== undefined) {
-      return { model: inner.model, warning: `invalid thinking level in "${pattern}"` };
-    }
-  }
-  return undefined;
-}
-
-/** OMP's built-in role ids — an alias resolves against these or any configured `modelRoles` key. */
-const OMP_BUILTIN_ROLE_IDS: ReadonlySet<string> = new Set([
-  "advisor",
-  "commit",
-  "default",
-  "dictation",
-  "image",
-  "judge",
-  "memory",
-  "plan",
-  "slow",
-  "smol",
-  "speech",
-  "task",
-  "tiny",
-  "vision",
-  "web",
-]);
-
-/**
- * OMP `resolveConfiguredRolePattern`: `@role`, `pi/role`, and `*` (the default
- * role) expand to that role's configured chain — recursively, and dropping
- * cycles. The alias's own `:level` suffix rides onto every expanded pattern.
- * A pattern that is not a role alias stays literal, and one whose alias is
- * unresolvable (unconfigured role — OMP would consult its built-in priority
- * defaults, which live in the agent, not the catalog) contributes nothing.
- */
-function expandOmpRolePattern(
-  pattern: string,
-  modelRoles: Record<string, unknown>,
-  visited: ReadonlySet<string>,
-): ReadonlyArray<string> | undefined {
-  const prefixLength = pattern.startsWith("@")
-    ? 1
-    : pattern.startsWith("pi/")
-      ? 3
-      : pattern === "*"
-        ? 0
-        : -1;
-  if (prefixLength === -1) return [pattern];
-  const { base, level } = splitOmpThinkingSuffix(pattern, prefixLength);
-  const candidate = base === "*" ? "default" : base.slice(prefixLength);
-  if (!OMP_BUILTIN_ROLE_IDS.has(candidate) && !Object.hasOwn(modelRoles, candidate)) {
-    return [pattern];
-  }
-  if (visited.has(candidate)) return undefined;
-  const nextVisited = new Set(visited).add(candidate);
-  const configured = Object.hasOwn(modelRoles, candidate)
-    ? ompRolePatternsFromUnknown(modelRoles[candidate])
-    : [];
-  const expanded = configured.flatMap(
-    (nested) => expandOmpRolePattern(nested, modelRoles, nextVisited) ?? [],
-  );
-  return level !== undefined ? expanded.map((nested) => `${nested}:${level}`) : expanded;
-}
-
-/**
- * Parses OMP `modelRoles` entries (from `<agentDir>/config.yml` or
- * `<cwd>/.omp/config.yml`) into role descriptors. Each value is a fallback
- * chain — a comma-separated string or an all-strings array, with `@role` /
- * `pi/role` / `*` aliases expanded against the same map — whose first entry
- * resolving against `catalog` wins, carrying its `:level` thinking suffix when
- * present. Unresolvable chains surface their first entry so committing them
- * fails against the provider the way OMP's unresolved-role warning does.
- * Insertion order is preserved so the picker lists roles in config order.
- */
-export function parseOmpModelRoles(
-  modelRoles: OmpConfigYamlValue,
-  catalog: ReadonlyArray<ProviderModelDescriptor> = [],
-): ReadonlyArray<OmpRoleDescriptor> {
-  const record = Option.getOrUndefined(toOmpConfigRecordOption(modelRoles));
-  if (record === undefined) return [];
-  const roles: OmpRoleDescriptor[] = [];
-  for (const [name, rawValue] of Object.entries(record)) {
-    const patterns = ompRolePatternsFromUnknown(rawValue);
-    if (patterns.length === 0) continue;
-    const expanded = patterns.flatMap(
-      (pattern) => expandOmpRolePattern(pattern, record, new Set()) ?? [],
-    );
-    const resolved = expanded
-      .map((pattern) => matchOmpRolePattern(pattern, catalog))
-      .find((match) => match !== undefined);
-    if (resolved) {
-      roles.push({
-        name,
-        model: resolved.model,
-        ...(resolved.thinkingLevel !== undefined ? { thinkingLevel: resolved.thinkingLevel } : {}),
-      });
-      continue;
-    }
-    const { base, level } = splitOmpThinkingSuffix(patterns[0]!);
-    roles.push({ name, model: base, ...(level !== undefined ? { thinkingLevel: level } : {}) });
-  }
-  return roles;
-}
-
-const OmpAgentConfigSchema = Schema.Struct({
-  modelRoles: Schema.optional(OmpConfigRecordSchema),
-});
-const toOmpAgentConfigOption = Schema.decodeUnknownOption(OmpAgentConfigSchema);
-
-/**
- * Reads the raw `modelRoles` map out of a `config.yml`/`config.yaml` text for
- * layer merging — callers combine global and project maps (project wins per
- * role name, matching OMP's layer order) before resolving with
- * {@link parseOmpModelRoles}. An unparseable YAML document throws to the
- * caller; a document whose `modelRoles` subtree is absent or malformed yields
- * an empty map.
- */
-export function ompModelRolesMapFromConfig(configYaml: string): Record<string, unknown> {
-  const config = Option.getOrUndefined(toOmpAgentConfigOption(YAML.parse(configYaml)));
-  return Option.getOrUndefined(toOmpConfigRecordOption(config?.modelRoles)) ?? {};
 }
 
 export function parseOmpCliModelList(stdout: string): ReadonlyArray<ProviderModelDescriptor> {

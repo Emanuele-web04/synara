@@ -6,16 +6,20 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
+import type { AcpSessionRuntimeOptions, AcpSessionRuntimeShape } from "./AcpSessionRuntime.ts";
 import {
   applyDroidAcpInteractionMode,
   applyDroidAcpModelSelection,
   buildDroidAcpSpawnInput,
   discoverDroidAcpModels,
+  makeDroidAcpRuntime,
   resolveDroidAcpAuthMethodId,
   resolveDroidCliBinaryPath,
 } from "./DroidAcpSupport.ts";
@@ -69,6 +73,34 @@ describe("buildDroidAcpSpawnInput", () => {
     ]);
     expect(spawn.cwd).toBe("/tmp/project");
     expect(spawn.env).toBeDefined();
+  });
+});
+
+describe("makeDroidAcpRuntime", () => {
+  it("selects on-demand authentication so session start never re-opens the OAuth login page", async () => {
+    const fakeRuntime = {} as AcpSessionRuntimeShape;
+    let capturedOptions: AcpSessionRuntimeOptions | undefined;
+    const layerSpy = vi.spyOn(AcpSessionRuntime, "layer").mockImplementation((options) => {
+      capturedOptions = options;
+      return Layer.succeed(AcpSessionRuntime, fakeRuntime);
+    });
+
+    try {
+      const runtime = await Effect.runPromise(
+        makeDroidAcpRuntime({
+          childProcessSpawner: {} as ChildProcessSpawner.ChildProcessSpawner["Service"],
+          droidSettings: undefined,
+          cwd: "/tmp/project",
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        }).pipe(Effect.scoped),
+      );
+
+      expect(runtime).toBe(fakeRuntime);
+      expect(capturedOptions?.authPolicy).toBe("on-demand");
+      expect(capturedOptions?.authenticateMeta).toEqual({ headless: true });
+    } finally {
+      layerSpy.mockRestore();
+    }
   });
 });
 

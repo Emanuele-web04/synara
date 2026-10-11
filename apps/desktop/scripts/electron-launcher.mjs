@@ -29,7 +29,7 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 6;
+const LAUNCHER_VERSION = 7;
 // Kept in sync with BRAND_ASSET_PATHS.productionMacIconComposer and the macOS
 // icon constants in scripts/lib/desktop-platform-build-config.ts. The packaged
 // build compiles the same asset; this launcher does it for dev and Canary,
@@ -37,7 +37,9 @@ const LAUNCHER_VERSION = 6;
 const ICON_COMPOSER_ASSET_NAME = "Synara";
 const ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
 const MICROPHONE_USAGE_DESCRIPTION =
-  "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
+  "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer, and, if you turn it on, to move the chat message trail with your voice.";
+const AUDIO_CAPTURE_USAGE_DESCRIPTION =
+  "Synara reads how loud your Mac's audio is to animate the chat message trail. The audio itself is never recorded.";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const desktopDir = resolve(__dirname, "..");
@@ -186,6 +188,12 @@ function patchMainBundleInfoPlist(appBundlePath, iconPath, runCommand) {
     infoPlistPath,
     "NSMicrophoneUsageDescription",
     MICROPHONE_USAGE_DESCRIPTION,
+    runCommand,
+  );
+  setPlistString(
+    infoPlistPath,
+    "NSAudioCaptureUsageDescription",
+    AUDIO_CAPTURE_USAGE_DESCRIPTION,
     runCommand,
   );
 

@@ -11,6 +11,7 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
     threadId: THREAD_ID,
     status,
     providerName: "codex",
+    providerInstanceId: "codex",
     runtimeMode: "approval-required",
     activeTurnId: null,
     lastError: status === "error" ? "runtime exploded" : null,
@@ -29,12 +30,12 @@ function derive(currentSession: OrchestrationSession | null) {
 }
 
 describe("deriveTurnStartSession", () => {
-  it("ignores fork-import history when deciding first-turn provider adoption", () => {
+  it("ignores imported history when deciding first-turn provider adoption", () => {
     expect(
       canAdoptFirstTurnProvider({
         hasLatestTurn: false,
         hasSession: false,
-        messages: [{ source: "fork-import" }, { source: "fork-import" }, { source: "native" }],
+        messages: [{ source: "fork-import" }, { source: "handoff-import" }, { source: "native" }],
       }),
     ).toBe(true);
 

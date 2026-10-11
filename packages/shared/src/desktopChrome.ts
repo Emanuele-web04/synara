@@ -15,10 +15,11 @@
 /**
  * Height (px) of the chat-surface top chrome bar — the row shared by the chat,
  * settings, workspace, and (open) sidebar headers. The web side renders this as the
- * Tailwind class `h-[46px]` (kept literal so Tailwind can scan it; guarded against
- * drift from this number in apps/web/.../chatHeaderControls.tsx).
+ * Tailwind class `h-[44px]` (kept literal so Tailwind can scan it; guarded against
+ * drift from this number in apps/web/.../chatHeaderControls.tsx). Keep it even: the
+ * native traffic lights take whole points, so an odd height cannot center them.
  */
-export const CHAT_SURFACE_HEADER_HEIGHT_PX = 46;
+export const CHAT_SURFACE_HEADER_HEIGHT_PX = 44;
 
 /** Leading inset (px) of the macOS traffic-light cluster from the window's left edge. */
 export const MAC_TRAFFIC_LIGHT_INSET_X_PX = 16;

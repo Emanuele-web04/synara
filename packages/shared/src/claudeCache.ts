@@ -41,7 +41,10 @@ export function assessClaudeCache(
       : cacheAgeSeconds !== undefined && observation.ttlSeconds !== undefined
         ? cacheAgeSeconds >= observation.ttlSeconds
           ? "likely-expired"
-          : "likely-warm"
+          : observation.partialTtlSeconds !== undefined &&
+              cacheAgeSeconds >= observation.partialTtlSeconds
+            ? "unknown"
+            : "likely-warm"
         : nowMs === observedAt
           ? observation.state
           : "unknown";

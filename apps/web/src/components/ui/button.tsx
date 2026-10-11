@@ -118,6 +118,8 @@ const buttonVariants = cva(
         size: "icon-xs",
         variant: "chrome-outline",
       },
+      // Last, so a size's own radius (xs, icon-xs) never squares a capsule off.
+      { class: "rounded-full", shape: "capsule" },
     ],
   },
 );

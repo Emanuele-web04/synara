@@ -216,6 +216,32 @@ export function NotificationsSettingsPanel({
             </div>
           }
         />
+
+        <SettingsRow
+          title="Wait for subagents"
+          description="Alert once the agent and all of its background subagents have finished. Turn this off to be alerted each time the agent or one of its subagents stops."
+          resetAction={
+            settings.notifyAfterSubagentsFinish !== defaults.notifyAfterSubagentsFinish ? (
+              <SettingResetButton
+                label="wait for subagents"
+                onClick={() =>
+                  updateSettings({
+                    notifyAfterSubagentsFinish: defaults.notifyAfterSubagentsFinish,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.notifyAfterSubagentsFinish}
+              onCheckedChange={(checked) =>
+                updateSettings({ notifyAfterSubagentsFinish: Boolean(checked) })
+              }
+              aria-label="Wait for subagents before alerting"
+            />
+          }
+        />
       </SettingsSection>
     </div>
   );
@@ -639,9 +665,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
         <div className="min-w-0 flex-1 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            New features land here first. To help us fix things quickly, Beta shares crash reports,
-            app errors, and anonymous usage counts. Crash reports can contain fragments of app
-            memory.
+            To help us fix problems, Beta shares crash reports, app errors, and anonymous usage
+            counts. Crash reports may include private information.
           </p>
           <button
             type="button"
@@ -659,7 +684,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
                   <li>A random ID for this install, not linked to you</li>
                   <li>When Beta opens, closes, installs, or is removed</li>
-                  <li>Crashes and errors; text is redacted where possible</li>
+                  <li>Crashes and errors; error details are filtered</li>
                   <li>App version, OS version, and language</li>
                   <li>
                     Which providers you use, and how many projects, chats, and turns (just counts)
@@ -678,9 +703,9 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                Error text can still contain fragments of your work despite redaction. If Beta
-                crashes, a snapshot of app memory is sent and may contain sensitive fragments. Crash
-                dumps are deleted after 90 days; other reports are kept for a year.
+                Error details are filtered, but may still include private information. Crash dumps
+                include app memory that can't be filtered. Reports and dumps are kept with no expiry
+                date.
               </p>
             </div>
           </DisclosureRegion>
@@ -715,7 +740,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex items-center gap-2">
             <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Synara Beta</p>
-            <span className="inline-flex items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold uppercase leading-none tracking-wide text-[var(--beta-pill-ink)]">
+            <span className="inline-flex items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold leading-none text-[var(--beta-pill-ink)]">
               Beta
             </span>
             {state.installed && state.version ? (

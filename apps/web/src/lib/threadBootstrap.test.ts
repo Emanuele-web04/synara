@@ -92,6 +92,17 @@ describe("threadBootstrap", () => {
     });
   });
 
+  it("does not reopen an already promoted draft as a new thread", () => {
+    expect(
+      shouldReuseActiveDraftThread({
+        draftThread: { ...makeDraftThread(), promotedTo: THREAD_ID },
+        entryPoint: "terminal",
+        projectId: PROJECT_ID,
+        routeThreadId: THREAD_ID,
+      }),
+    ).toBe(false);
+  });
+
   it("recognizes when the active route draft can be reused", () => {
     expect(
       shouldReuseActiveDraftThread({

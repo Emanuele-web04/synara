@@ -2,8 +2,9 @@
 // Purpose: "Pull request" section of the Environment panel — one row (state glyph, title,
 //          live check status) that opens the PR action menu: view / code changes, the
 //          checks and review-comment lists, Repair (hands comments, failing checks, or
-//          conflicts to the composer as context cards), Merge, Status (draft / ready /
-//          close / reopen), and Add to chat. Copy link and Open in GitHub ride on the View PR row.
+//          conflicts to the composer as context cards), Auto-fix CI, Merge, Status
+//          (draft / ready / close / reopen), and Add to chat. Copy link and Open in GitHub
+//          ride on the View PR row.
 // Layer: Environment panel section
 // Depends on: git status/PR-snapshot React Query helpers, the pull request action mutation,
 //             and the shared Environment row skin.
@@ -15,6 +16,7 @@ import type {
   PullRequestAction,
   PullRequestDetailInput,
   PullRequestMergeMethod,
+  PullRequestAutoFixState,
   ThreadId,
 } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
@@ -23,8 +25,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "../ComposerPickerMenuPopup";
+import { MENU_ICON_CLASS_NAME } from "../composerPickerStyles";
 import {
   Menu,
+  MenuCheckboxItem,
   MenuItem,
   MenuRadioGroup,
   MenuRadioItem,
@@ -33,6 +37,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../../ui/menu";
+import { Checkbox } from "../../ui/checkbox";
 import { toastManager } from "../../ui/toast";
 import { DEFAULT_TOAST_TIMEOUT_MS } from "../../ui/toast.logic";
 import { PullRequestAvatar } from "../../pullRequest/PullRequestAvatar";
@@ -52,6 +57,7 @@ import {
   assessPullRequestStack,
   pullRequestMergeBlocker,
 } from "../../pullRequest/pullRequestStack.logic";
+import { PULL_REQUEST_AUTO_FIX_ON } from "~/betaFeatures";
 import { addChatPullRequestContext } from "~/lib/chatReferences";
 import { gitPullRequestSnapshotQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import {
@@ -72,9 +78,12 @@ import {
   PageTextIcon,
   RefreshCwIcon,
 } from "~/lib/icons";
+import { useAppSettings } from "~/appSettings";
 import {
   pullRequestActionMutationOptions,
+  pullRequestAutoFixQueryOptions,
   pullRequestDetailQueryOptions,
+  pullRequestSetAutoFixMutationOptions,
 } from "~/lib/pullRequestReactQuery";
 import { type PullRequestContextScope } from "~/lib/pullRequestContext";
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -90,7 +99,9 @@ import {
 } from "./EnvironmentRow";
 import {
   buildPullRequestContextCard,
+  describePullRequestAutoFix,
   describePullRequestComment,
+  findPullRequestAutoFixState,
   PULL_REQUEST_CHECK_STATUS_LABELS,
   PULL_REQUEST_CHECKS_TONE_TEXT_CLASS,
   summarizePullRequestChecks,
@@ -100,8 +111,68 @@ import {
   withStableCheckKeys,
   type PullRequestChecksTone,
 } from "./environmentPullRequest.logic";
+/** Shares the menu/stack action and loads its settings only when the control is shown. */
+function PullRequestAutoFixToggle(props: {
+  threadId: ThreadId;
+  url: string;
+  state: PullRequestAutoFixState | null;
+  disabled: boolean;
+  number?: number;
+}) {
+  const queryClient = useQueryClient();
+  const { updateSettings } = useAppSettings();
+  const autoFixMutation = useMutation(pullRequestSetAutoFixMutationOptions(queryClient));
+  const setAutoFix = (threadId: ThreadId, enabled: boolean, pullRequestUrl: string) =>
+    autoFixMutation.mutate(
+      { threadId, enabled, pullRequestUrl },
+      {
+        // Once someone finds the checkbox, the composer hint has done its job.
+        onSuccess: () => {
+          if (enabled) updateSettings({ dismissedPullRequestAutoFixHint: true });
+        },
+        onError: (error) => {
+          toastManager.add({
+            type: "error",
+            timeout: DEFAULT_TOAST_TIMEOUT_MS,
+            title: "Couldn't update Auto-fix CI",
+            description: error instanceof Error ? error.message : undefined,
+          });
+        },
+      },
+    );
 
-const MENU_ICON_CLASS_NAME = "size-3.5 shrink-0";
+  const display = describePullRequestAutoFix(props.state);
+  const onCheckedChange = (checked: boolean) =>
+    setAutoFix(props.threadId, checked, props.state?.pullRequestUrl ?? props.url);
+  const disabled = props.disabled || autoFixMutation.isPending;
+  return props.number === undefined ? (
+    <MenuCheckboxItem
+      variant="checkbox"
+      checked={display.checked}
+      disabled={disabled}
+      closeOnClick={false}
+      title={display.title}
+      data-testid="pr-auto-fix-ci"
+      onCheckedChange={onCheckedChange}
+    >
+      <MenuRowLabel icon={null} label="Auto-fix CI" trailing={display.trailing} />
+    </MenuCheckboxItem>
+  ) : (
+    <span className="flex shrink-0 items-center gap-2">
+      {display.trailing ? (
+        <span className="text-ui-sm text-muted-foreground">{display.trailing}</span>
+      ) : null}
+      <Checkbox
+        aria-label={`Auto-fix CI for #${props.number}`}
+        title={display.title}
+        checked={display.checked}
+        disabled={disabled}
+        onCheckedChange={onCheckedChange}
+      />
+    </span>
+  );
+}
+
 /** Icon-only action sharing the "View PR" row (copy link, open in GitHub). */
 const MENU_INLINE_ACTION_CLASS_NAME = "shrink-0 px-1.5";
 /** Right-aligned secondary value on a menu row (diff stat, count, current status).
@@ -340,20 +411,34 @@ export function EnvironmentPullRequestSection({
     displayPr && projectId && pullRequestRepository && repositoryBelongsToProject
       ? { projectId, repository: pullRequestRepository, number: displayPr.number }
       : null;
+  const autoFixAvailable =
+    PULL_REQUEST_AUTO_FIX_ON && activeThreadId !== null && displayPr?.state === "open";
   // Merge capabilities (allowed methods, stack state) and the merged/closed timestamps only
   // live on the detail query. Fetch it lazily while the menu is open so the row itself stays
-  // as cheap as before.
+  // as cheap as before. With Auto-fix CI it also loads once while the panel is open,
+  // because the stack rows and their checkboxes come from its stack entries.
   const detailQuery = useQuery({
     ...pullRequestDetailQueryOptions(actionInput, { pollingEnabled: false }),
-    enabled: actionInput !== null && menuOpen,
+    enabled: actionInput !== null && (menuOpen || (enabled && autoFixAvailable)),
   });
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
+
+  const autoFixQuery = useQuery(
+    pullRequestAutoFixQueryOptions(activeThreadId, enabled && autoFixAvailable),
+  );
 
   if (!displayPr) {
     return null;
   }
 
   const settledState = displayPr.state !== "open" ? displayPr.state : null;
+  const autoFixStates = autoFixQuery.data?.states ?? [];
+  const autoFixState = findPullRequestAutoFixState(autoFixStates, displayPr.url);
+  // The other PRs of this PR's stack, each with its own Auto-fix CI checkbox.
+  const stackRows =
+    autoFixAvailable && detailQuery.data?.stack
+      ? detailQuery.data.stack.entries.filter((entry) => entry.number !== displayPr.number)
+      : [];
   const diffStat = summarizePullRequestDiffStat(displayPr);
   const checks = snapshotQuery.data?.checks ?? [];
   const comments = snapshotQuery.data?.comments ?? [];
@@ -522,7 +607,7 @@ export function EnvironmentPullRequestSection({
         : checksSummary.label;
 
   return (
-    <EnvironmentLabeledSection label="Pull request">
+    <EnvironmentLabeledSection label={stackRows.length > 0 ? "Pull requests" : "Pull request"}>
       <Menu open={menuOpen} onOpenChange={setMenuOpen} keepOpenOnSubmenuInteraction>
         <MenuTrigger
           render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} title={rowTitle} />}
@@ -746,6 +831,17 @@ export function EnvironmentPullRequestSection({
                 </ComposerPickerMenuSubPopup>
               </MenuSub>
 
+              {/* Opt-in: the server watches this PR's checks and starts a fix turn in this
+                  chat when they fail. Stays open on toggle so the new state is visible. */}
+              {autoFixAvailable && activeThreadId ? (
+                <PullRequestAutoFixToggle
+                  threadId={activeThreadId}
+                  url={displayPr.url}
+                  state={autoFixState}
+                  disabled={autoFixQuery.isPending}
+                />
+              ) : null}
+
               {canRunActions ? (
                 <MenuSub keepOpenOnFocusOut>
                   <MenuSubTrigger
@@ -847,6 +943,44 @@ export function EnvironmentPullRequestSection({
           ) : null}
         </ComposerPickerMenuPopup>
       </Menu>
+
+      {/* The rest of the stack, like Claude Code's PR list: each open PR gets its own
+          Auto-fix CI checkbox. Fixes still run in this chat, one at a time. */}
+      {stackRows.map((entry) => {
+        const presentation = resolvePrStatePresentation(entry);
+        const EntryIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
+        const entryAutoFix = findPullRequestAutoFixState(autoFixStates, entry.url);
+        const label = `#${entry.number} ${entry.title}`;
+        return (
+          <div
+            key={entry.url}
+            className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default")}
+            title={label}
+            data-testid="pr-stack-row"
+          >
+            <EnvironmentRowBody
+              icon={
+                <EntryIcon
+                  className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, presentation.colorClass)}
+                  aria-hidden
+                />
+              }
+              label={<span className="truncate">{label}</span>}
+              trailing={
+                entry.state === "open" && activeThreadId ? (
+                  <PullRequestAutoFixToggle
+                    threadId={activeThreadId}
+                    url={entry.url}
+                    state={entryAutoFix}
+                    disabled={autoFixQuery.isPending}
+                    number={entry.number}
+                  />
+                ) : null
+              }
+            />
+          </div>
+        );
+      })}
 
       <PullRequestConfirmActionDialog
         action={confirmAction}

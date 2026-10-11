@@ -1,12 +1,22 @@
-import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
+import {
+  type ModelSlug,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerProviderStatus,
+} from "@synara/contracts";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-import { ProviderModelPicker } from "./ProviderModelPicker";
+import {
+  ProviderModelPicker,
+  type ProviderModelOptionsByProviderInstance,
+  type ProviderModelPickerInstance,
+} from "./ProviderModelPicker";
 import { mergeDynamicModelOptions, type ProviderModelOption } from "../../providerModelOptions";
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
+import { appHistory } from "../../appNavigation";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
   claudeAgent: [
@@ -129,14 +139,33 @@ const PI_BRANDED_MODELS = mergeDynamicModelOptions({
   ],
 }) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
+function providerStatus(
+  provider: ProviderKind,
+  overrides: Partial<ServerProviderStatus> = {},
+): ServerProviderStatus {
+  return {
+    provider,
+    instanceId: provider,
+    driver: provider,
+    status: "ready",
+    available: true,
+    authStatus: "authenticated",
+    checkedAt: "2026-04-10T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
+  showProviderInstanceChoices?: boolean;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   onSelectionCommitted?: () => void;
-  withRoleSelect?: boolean;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
@@ -145,19 +174,27 @@ async function mountPicker(props: {
   const host = document.createElement("div");
   document.body.append(host);
   const onProviderModelChange = vi.fn();
-  const onProviderModelRoleSelect = vi.fn();
   const screen = await render(
     <ProviderModelPicker
       provider={props.provider}
       model={props.model}
       lockedProvider={props.lockedProvider}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
+      {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
+      {...(props.selectedProviderInstanceId
+        ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
+        : {})}
+      {...(props.showProviderInstanceChoices !== undefined
+        ? { showProviderInstanceChoices: props.showProviderInstanceChoices }
+        : {})}
+      {...(props.modelOptionsByProviderInstance
+        ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
+        : {})}
       {...(props.loadingModelProviders
         ? { loadingModelProviders: props.loadingModelProviders }
         : {})}
       {...(props.providers ? { providers: props.providers } : {})}
       {...(props.onSelectionCommitted ? { onSelectionCommitted: props.onSelectionCommitted } : {})}
-      {...(props.withRoleSelect ? { onProviderModelRoleSelect } : undefined)}
       onProviderModelChange={onProviderModelChange}
     />,
     { container: host },
@@ -165,7 +202,6 @@ async function mountPicker(props: {
 
   return {
     onProviderModelChange,
-    onProviderModelRoleSelect,
     cleanup: async () => {
       await screen.unmount();
       host.remove();
@@ -184,22 +220,7 @@ describe("ProviderModelPicker", () => {
       provider: "claudeAgent",
       model: "claude-opus-4-6",
       lockedProvider: null,
-      providers: [
-        {
-          provider: "codex",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
-        {
-          provider: "claudeAgent",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
-      ],
+      providers: [providerStatus("codex"), providerStatus("claudeAgent")],
     });
 
     try {
@@ -211,6 +232,330 @@ describe("ProviderModelPicker", () => {
         expect(text).toContain("Claude");
         expect(text).not.toContain("Claude Sonnet 4.6");
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("selects an enabled provider instance when switching providers", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      providerInstances: [
+        {
+          instanceId: "opencode",
+          provider: "opencode",
+          label: "Default OpenCode",
+          enabled: false,
+          isDefault: true,
+        },
+        {
+          instanceId: "opencode_work",
+          provider: "opencode",
+          label: "Work OpenCode",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        {
+          provider: "opencode",
+          instanceId: "opencode_work",
+          driver: "opencode",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+      ],
+      modelOptionsByProviderInstance: {
+        opencode_work: [{ slug: "work/opencode-model", name: "Work OpenCode Model" }],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByText("OpenCode").click();
+      await page.getByRole("menuitemradio", { name: "Work OpenCode Model" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "opencode",
+        "work/opencode-model",
+        "opencode_work",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("lists each account of a provider as its own named entry", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      selectedProviderInstanceId: "codex_work",
+      providerInstances: [
+        { instanceId: "codex", provider: "codex", label: "Codex", enabled: true, isDefault: true },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          accentColor: "#16a34a",
+          enabled: true,
+          isDefault: false,
+        },
+        {
+          instanceId: "codex_side",
+          provider: "codex",
+          label: "Side",
+          enabled: true,
+          isDefault: false,
+        },
+        {
+          instanceId: "codex_old",
+          provider: "codex",
+          label: "Old",
+          enabled: false,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        providerStatus("codex"),
+        providerStatus("codex", { instanceId: "codex_work", displayName: "Work" }),
+        providerStatus("codex", {
+          instanceId: "codex_side",
+          displayName: "Side",
+          authStatus: "unauthenticated",
+        }),
+      ],
+      modelOptionsByProviderInstance: {
+        codex_work: [
+          { slug: "gpt-5-codex", name: "GPT-5 Codex" },
+          { slug: "gpt-5-work-codex", name: "GPT-5 Work Codex" },
+        ],
+      },
+    });
+
+    try {
+      // The trigger names the account the selection runs in.
+      const trigger = page.getByRole("button").element();
+      expect(trigger.textContent).toContain("Work · GPT-5 Codex");
+      expect(trigger.querySelector<HTMLElement>("[data-accent]")?.dataset.accent).toBe("#16a34a");
+
+      await page.getByRole("button").click();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Codex", exact: true }))
+        .toBeVisible();
+      const signedOut = page.getByRole("menuitem", { name: /Codex · Side/ });
+      await expect.element(signedOut).not.toHaveAttribute("aria-disabled", "true");
+      expect(signedOut.element().textContent).toContain("Sign in");
+      expect(document.body.textContent ?? "").not.toContain("Old");
+
+      await page.getByRole("menuitem", { name: /Codex · Work/ }).click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT-5 Codex" }))
+        .toHaveAttribute("aria-checked", "true");
+      await page.getByRole("menuitemradio", { name: "GPT-5 Work Codex" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-work-codex",
+        "codex_work",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps account choices out of the model picker", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: "codex",
+      showProviderInstanceChoices: false,
+      selectedProviderInstanceId: "codex",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        providerStatus("codex"),
+        providerStatus("codex", { instanceId: "codex_work", displayName: "Work" }),
+      ],
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").not.toContain("Work");
+        expect(document.body.textContent ?? "").toContain("GPT-5 Codex");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps embedded account choices for standalone picker callers", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: "codex",
+      selectedProviderInstanceId: "codex",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        providerStatus("codex"),
+        providerStatus("codex", { instanceId: "codex_work", displayName: "Work" }),
+      ],
+      modelOptionsByProviderInstance: {
+        codex_work: [{ slug: "gpt-5-work-codex", name: "GPT-5 Work Codex" }],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "Work" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-work-codex",
+        "codex_work",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a removed active account and commits a valid replacement account", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      selectedProviderInstanceId: "codex_removed",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+      ],
+      providers: [providerStatus("codex")],
+    });
+
+    try {
+      await expect
+        .element(page.getByRole("button", { name: /Missing account · GPT-5 Codex/ }))
+        .toBeInTheDocument();
+      await page.getByRole("button", { name: /Missing account · GPT-5 Codex/ }).click();
+      await page.getByText("Codex", { exact: true }).click();
+
+      const missingAccount = page.getByRole("menuitemradio", { name: /Missing account/ });
+      await expect.element(missingAccount).toBeDisabled();
+      await page.getByRole("menuitemradio", { name: "Personal" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith("codex", "gpt-5-codex", "codex");
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-codex",
+        "codex_removed",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("preserves the selected same-provider instance when selecting one of its models", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-work-codex",
+      lockedProvider: "codex",
+      selectedProviderInstanceId: "codex_work",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        providerStatus("codex"),
+        providerStatus("codex", { instanceId: "codex_work", displayName: "Work" }),
+      ],
+      modelOptionsByProviderInstance: {
+        codex_work: [
+          { slug: "gpt-5-work-codex", name: "GPT-5 Work Codex" },
+          { slug: "gpt-5-work-fast", name: "GPT-5 Work Fast" },
+        ],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "GPT-5 Work Fast" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-work-fast",
+        "codex_work",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides disabled provider models even when an existing thread is locked to it", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: "codex",
+      providers: [providerStatus("codex", { enabled: false, available: false })],
+    });
+    try {
+      await page.getByRole("button").click();
+      expect(
+        page.getByRole("menuitemradio", { name: "GPT-5 Codex", exact: true }).elements(),
+      ).toHaveLength(0);
+      expect(
+        page.getByRole("menuitemradio", { name: "GPT-5.3 Codex", exact: true }).elements(),
+      ).toHaveLength(0);
     } finally {
       await mounted.cleanup();
     }
@@ -251,79 +596,71 @@ describe("ProviderModelPicker", () => {
       expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
         "claudeAgent",
         "claude-sonnet-4-6",
+        "claudeAgent",
       );
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("dispatches the role model and thinking level through onProviderModelRoleSelect", async () => {
-    const mounted = await mountPicker({
-      provider: "omp",
-      model: "deepseek/deepseek-v4-flash",
-      lockedProvider: "omp",
-      withRoleSelect: true,
-      modelOptionsByProvider: {
-        ...MODEL_OPTIONS_BY_PROVIDER,
-        omp: [
+  it.each(["omp", "omp_work"] as const)(
+    "requires an explicit real-model selection for a stale role key on %s",
+    async (instanceId) => {
+      const mounted = await mountPicker({
+        provider: "omp",
+        model: " role:smol ",
+        lockedProvider: "omp",
+        selectedProviderInstanceId: instanceId,
+        providerInstances: [
           {
-            slug: "role:dreaming-proposer",
-            name: "Dreaming Proposer",
-            upstreamProviderId: "roles",
-            upstreamProviderName: "Roles",
-            role: {
-              name: "Dreaming Proposer",
-              model: "anthropic/claude-opus-4-6",
-              thinkingLevel: "high",
-            },
-          },
-          {
-            slug: "deepseek/deepseek-v4-flash",
-            name: "DeepSeek V4 Flash",
-            upstreamProviderId: "deepseek",
-            upstreamProviderName: "DeepSeek",
+            instanceId,
+            provider: "omp",
+            label: "OMP",
+            enabled: true,
+            isDefault: instanceId === "omp",
           },
         ],
-      },
-    });
-
-    try {
-      await page.getByRole("button").click();
-      await page.getByRole("menuitemradio", { name: "Dreaming Proposer" }).click();
-
-      expect(mounted.onProviderModelRoleSelect).toHaveBeenCalledWith("anthropic/claude-opus-4-6", {
-        thinkingLevel: "high",
+        modelOptionsByProvider: { ...MODEL_OPTIONS_BY_PROVIDER, omp: [] },
+        modelOptionsByProviderInstance: {
+          [instanceId]: [{ slug: "upstream/catalog-model", name: "Catalog Model" }],
+        },
       });
-      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
-    } finally {
-      await mounted.cleanup();
-    }
-  });
 
-  it("commits the role's model via onProviderModelChange when no role callback exists", async () => {
+      try {
+        await page.getByRole("button", { name: /Select OMP model/ }).click();
+        await expect
+          .element(page.getByRole("status"))
+          .toHaveTextContent(
+            "This saved OMP role is no longer supported. Choose an OMP model before sending.",
+          );
+        expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+        await expect
+          .element(page.getByRole("menuitemradio", { name: "Catalog Model" }))
+          .toHaveAttribute("aria-checked", "false");
+
+        await page.getByRole("menuitemradio", { name: "Catalog Model" }).click();
+        expect(mounted.onProviderModelChange).toHaveBeenCalledExactlyOnceWith(
+          "omp",
+          "upstream/catalog-model",
+          instanceId,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("commits an opaque OMP model selector unchanged without a role dispatch path", async () => {
     const mounted = await mountPicker({
       provider: "omp",
-      model: "deepseek/deepseek-v4-flash",
+      model: "opaque-custom-selector",
       lockedProvider: "omp",
       modelOptionsByProvider: {
         ...MODEL_OPTIONS_BY_PROVIDER,
         omp: [
           {
-            slug: "role:dreaming-proposer",
-            name: "Dreaming Proposer",
-            upstreamProviderId: "roles",
-            upstreamProviderName: "Roles",
-            role: {
-              name: "Dreaming Proposer",
-              model: "anthropic/claude-opus-4-6",
-              thinkingLevel: "high",
-            },
-          },
-          {
-            slug: "deepseek/deepseek-v4-flash",
-            name: "DeepSeek V4 Flash",
-            upstreamProviderId: "deepseek",
-            upstreamProviderName: "DeepSeek",
+            slug: "provider/router:max",
+            name: "Private Router",
           },
         ],
       },
@@ -331,16 +668,55 @@ describe("ProviderModelPicker", () => {
 
     try {
       await page.getByRole("button").click();
-      await page.getByRole("menuitemradio", { name: "Dreaming Proposer" }).click();
+      await page.getByRole("menuitemradio", { name: "Private Router" }).click();
 
-      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+      expect(mounted.onProviderModelChange).toHaveBeenCalledExactlyOnceWith(
         "omp",
-        "anthropic/claude-opus-4-6",
+        "provider/router:max",
+        "omp",
       );
     } finally {
       await mounted.cleanup();
     }
   });
+
+  it.each(["role:smol", "opaque-private-model"])(
+    "keeps OMP selector %s when explicitly changing accounts, without a model fallback",
+    async (model) => {
+      const mounted = await mountPicker({
+        provider: "omp",
+        model,
+        lockedProvider: "omp",
+        selectedProviderInstanceId: "omp",
+        providerInstances: [
+          { instanceId: "omp", provider: "omp", label: "Personal", enabled: true, isDefault: true },
+          {
+            instanceId: "omp_work",
+            provider: "omp",
+            label: "Work",
+            enabled: true,
+            isDefault: false,
+          },
+        ],
+        providers: [providerStatus("omp"), providerStatus("omp", { instanceId: "omp_work" })],
+        modelOptionsByProviderInstance: {
+          omp_work: [{ slug: "upstream/work-model", name: "Work Model" }],
+        },
+      });
+      try {
+        await page.getByRole("button").click();
+        expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+        await page.getByRole("menuitemradio", { name: "Work", exact: true }).click();
+        expect(mounted.onProviderModelChange).toHaveBeenCalledExactlyOnceWith(
+          "omp",
+          model,
+          "omp_work",
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("keeps branded Pi model labels stable after selection", async () => {
     const host = document.createElement("div");
@@ -573,20 +949,12 @@ describe("ProviderModelPicker", () => {
       model: "gpt-5-codex",
       lockedProvider: null,
       providers: [
-        {
-          provider: "codex",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
-        {
-          provider: "claudeAgent",
+        providerStatus("codex"),
+        providerStatus("claudeAgent", {
           status: "error",
           available: false,
           authStatus: "unauthenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
+        }),
       ],
     });
 
@@ -605,20 +973,43 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("hides providers before live status is known", async () => {
+  it("opens provider settings when an installed provider needs sign-in", async () => {
     const mounted = await mountPicker({
       provider: "codex",
       model: "gpt-5-codex",
       lockedProvider: null,
       providers: [
-        {
-          provider: "codex",
-          status: "ready",
+        providerStatus("codex"),
+        providerStatus("antigravity", {
+          status: "error",
           available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
+          authStatus: "unauthenticated",
+        }),
       ],
+    });
+    const pushSpy = vi.spyOn(appHistory, "push").mockImplementation(() => undefined);
+
+    try {
+      await page.getByRole("button").click();
+      const signIn = page.getByRole("menuitem", { name: /Antigravity/ });
+      await expect.element(signIn).toBeVisible();
+      await expect.element(signIn).not.toHaveAttribute("aria-disabled", "true");
+      expect(signIn.element().textContent).toContain("Sign in");
+
+      await signIn.click();
+      expect(pushSpy).toHaveBeenCalledWith("/settings?section=providers");
+    } finally {
+      pushSpy.mockRestore();
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides providers before live status is known", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      providers: [providerStatus("codex")],
     });
 
     try {
@@ -641,21 +1032,13 @@ describe("ProviderModelPicker", () => {
       model: "gpt-5-codex",
       lockedProvider: null,
       providers: [
-        {
-          provider: "codex",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
-        {
-          provider: "claudeAgent",
+        providerStatus("codex"),
+        providerStatus("claudeAgent", {
           status: "warning",
           available: true,
           authStatus: "unknown",
-          checkedAt: "2026-04-10T10:00:00.000Z",
           message: "Could not verify auth status.",
-        },
+        }),
       ],
     });
 

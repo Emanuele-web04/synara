@@ -1,9 +1,8 @@
 import type { KeyboardEvent, ReactNode } from "react";
 
-import { GitHubIcon } from "~/lib/icons";
+import { GitHubIcon, FolderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-import { FolderClosed } from "./FolderClosed";
 import { Button } from "./ui/button";
 import { dialogFieldLabelClassName } from "./ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
@@ -86,7 +85,7 @@ export function CreateGitHubProjectFields(props: {
         <div className="flex items-center gap-2">
           <InputGroup className={cn(PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME, "min-w-0 flex-1")}>
             <InputGroupAddon className="w-10 self-stretch border-e border-foreground/12 ps-0">
-              <FolderClosed className="size-4 text-muted-foreground/70" aria-hidden="true" />
+              <FolderIcon className="size-4 text-muted-foreground/70" aria-hidden="true" />
             </InputGroupAddon>
             <InputGroupInput
               id={props.destinationParentInputId}

@@ -48,8 +48,8 @@ import {
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "~/components/chat/chatHeaderControls";
 import { CHAT_BACKGROUND_CLASS_NAME } from "~/components/chat/composerPickerStyles";
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
+import { StatusDot } from "~/components/ui/status-chip";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { automationApprovalGaps, buildAutomationDraftWarnings } from "~/lib/automationDraft";
 import {
@@ -63,10 +63,8 @@ import {
   stopWhenFromCompletionPolicy,
 } from "@synara/shared/automationCompletionPolicy";
 import { automationLifecycleState, canPauseAutomation } from "~/lib/automationStatus";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
+import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import {
@@ -192,7 +190,6 @@ function AutomationDetailView() {
   const { automationId } = Route.useParams();
   const navigate = useNavigate();
   const { settings } = useAppSettings();
-  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
@@ -235,7 +232,12 @@ function AutomationDetailView() {
   const streamedMemory =
     (data.memories ?? []).find((candidate) => candidate.automationId === automationId) ?? null;
   const memory = streamedMemory ?? memoryQuery.data ?? null;
-  const providerOptionsForDispatch = getProviderStartOptions(settings);
+  const providerOptionsForDispatch = getProviderStartOptions(
+    settings,
+    definition
+      ? (definition.modelSelection.instanceId ?? definition.modelSelection.provider)
+      : undefined,
+  );
 
   if (!definition) {
     return (
@@ -246,22 +248,9 @@ function AutomationDetailView() {
             CHAT_BACKGROUND_CLASS_NAME,
           )}
         >
-          <header
-            className={cn(
-              CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-              "drag-region",
-              desktopTopBarTrafficLightGutterClassName,
-              desktopTopBarWindowControlsGutterClassName,
-            )}
-          >
-            <div
-              className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
-            >
-              <SidebarHeaderNavigationControls />
-              <h1 className="truncate font-heading text-ui-lg font-medium">Automations</h1>
-            </div>
-          </header>
+          <RouteSurfaceHeader>
+            <h1 className="truncate font-heading text-ui-lg font-medium">Automations</h1>
+          </RouteSurfaceHeader>
           <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-ui leading-snug text-muted-foreground">
             Automation not found.
             <Button
@@ -342,7 +331,10 @@ function AutomationDetailView() {
     const providerOptions = providerOptionsForAutomationModelSelection(
       definition,
       nextModelSelection,
-      providerOptionsForDispatch,
+      getProviderStartOptions(
+        settings,
+        nextModelSelection.instanceId ?? nextModelSelection.provider,
+      ),
     );
     patch({
       modelSelection: nextModelSelection,
@@ -437,36 +429,24 @@ function AutomationDetailView() {
       >
         {/* Left column: breadcrumb header + the prompt. */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <header
-            className={cn(
-              CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-              "drag-region",
-              desktopTopBarTrafficLightGutterClassName,
-            )}
-          >
-            <div
-              className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
-            >
-              <SidebarHeaderNavigationControls />
-              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-lg [-webkit-app-region:no-drag]">
-                <button
-                  type="button"
-                  onClick={() => void navigate({ to: "/automations" })}
-                  className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  Automations
-                </button>
-                <CentralIcon
-                  name="chevron-right-small"
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                <span className="truncate font-heading font-medium">{definition.name}</span>
-              </div>
+          <RouteSurfaceHeader windowControlsGutter={false}>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-lg [-webkit-app-region:no-drag]">
+              <button
+                type="button"
+                onClick={() => void navigate({ to: "/automations" })}
+                className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Automations
+              </button>
+              <CentralIcon
+                name="chevron-right-small"
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+              <span className="truncate font-heading font-medium">{definition.name}</span>
             </div>
-          </header>
+          </RouteSurfaceHeader>
 
-          <main className="min-h-0 flex-1 overflow-y-auto px-6 py-8 sm:px-8">
+          <main className="min-h-0 flex-1 overflow-y-auto px-6 pt-12 pb-8 sm:px-8">
             <div className="max-w-3xl space-y-4">
               <AutomationNameField
                 value={definition.name}
@@ -593,7 +573,7 @@ function AutomationDetailView() {
               <DetailGroup title="Status">
                 <DetailRow label="Status">
                   <StatusValue>
-                    <span className={cn("size-1.5 rounded-full", status.dotClassName)} />
+                    <StatusDot className={status.dotClassName} />
                     {status.label}
                   </StatusValue>
                 </DetailRow>

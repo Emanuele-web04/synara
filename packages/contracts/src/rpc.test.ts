@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { WsBootstrapRpcGroup, WsFeatureRpcGroup, WsComputerRpcGroup } from "./rpc";
+import {
+  WsBootstrapRpcGroup,
+  WsFeatureRpcGroup,
+  WsComputerRpcGroup,
+  WsProjectAgentRpcGroup,
+} from "./rpc";
 import { COMPUTER_WS_METHODS } from "./computer";
 import { ORCHESTRATION_WS_METHODS } from "./orchestration";
 
@@ -20,5 +25,13 @@ describe("WS RPC contracts", () => {
     for (const method of Object.values(COMPUTER_WS_METHODS)) {
       expect(WsComputerRpcGroup.requests.has(method)).toBe(true);
     }
+  });
+
+  it("exports project-agent RPCs in a satellite group", () => {
+    expect(WsProjectAgentRpcGroup.requests.has("projectAgent.linkProject")).toBe(true);
+    expect(WsProjectAgentRpcGroup.requests.has("projectAgent.unlinkProject")).toBe(true);
+    expect(WsProjectAgentRpcGroup.requests.has("projectAgent.getOverview")).toBe(true);
+    expect(WsFeatureRpcGroup.requests.has("projectAgent.linkProject")).toBe(false);
+    expect(WsFeatureRpcGroup.requests.has("projectAgent.getOverview")).toBe(false);
   });
 });
