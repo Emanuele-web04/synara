@@ -1,0 +1,18 @@
+---
+title: Provider-native subagents
+description: Follow child agents, inspect their work and control supported runs from the parent conversation.
+---
+
+In **1.0.2-beta.1**, Claude and Codex provider-native subagents receive their own child conversations. These are the provider's child agents, separate from ordinary tasks created through the [Agent Gateway](/docs/workflows/agent-gateway).
+
+## Read launches and results
+
+Adjacent launches from one turn share a compact card at their launch position. Assistant narration separates groups. Cards begin collapsed, keep their headers after the parent finishes, and show each invocation's status, elapsed time, current step and short result. A floating running chip brings an off-screen card back into view. **Stop all** remains on live headers; expand rows for individual controls.
+
+Open a child to read its brief and work, then follow its link back to the launcher. Claude resumes retained children in the same conversation. Repeated invocations and nested children keep their own history; failed or stopped work is not labelled completed. Codex multi-agent v2 encrypts spawn briefs, so those children may open without a readable brief and use their task name. The visible roster is bounded to 20 provider-native subagents per turn, with an overflow note.
+
+## Open the roster
+
+Choose **Subagents** in **Environment** to open the right-dock list. It groups active and previous runs and offers navigation plus supported **Message**, **Background** and **Stop** controls. Availability depends on the provider and run state. Nested agents retain their launcher relationship. Background children can keep working after their parent's turn finishes.
+
+See [composer controls](/docs/features/composer) for queued follow-ups and [conversation history](/docs/features/conversation-history) for reopening older runs.

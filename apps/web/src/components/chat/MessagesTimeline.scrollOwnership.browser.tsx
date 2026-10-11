@@ -1,17 +1,18 @@
 import "../../index.css";
 
-import { MessageId } from "@synara/contracts";
+import { MessageId, ThreadId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import { useImperativeHandle, useRef, useState, type MutableRefObject } from "react";
-import { flushSync } from "react-dom";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import { useChatTranscriptScroll } from "./useChatTranscriptScroll";
 import type { deriveTimelineEntries } from "../../session-logic";
 
 type TimelineEntries = ReturnType<typeof deriveTimelineEntries>;
 
+const THREAD_ID = ThreadId.makeUnsafe("scroll-ownership-thread");
 const VIEWPORT_HEIGHT_PX = 420;
 const AUTO_FOLLOW_TOLERANCE_PX = 120;
 
@@ -53,8 +54,10 @@ function seedEntries(): TimelineEntries {
 interface HarnessHandle {
   listRef: React.RefObject<LegendListRef | null>;
   startStreaming: () => void;
+  send: () => void;
+  isAnchorSliding: () => boolean;
   streamChunk: (lines: number) => void;
-  releaseUserScroll: () => void;
+  scrollToBottom: () => void;
 }
 
 function ScrollOwnershipTimeline({
@@ -65,15 +68,28 @@ function ScrollOwnershipTimeline({
   const listRef = useRef<LegendListRef | null>(null);
   const [entries, setEntries] = useState<TimelineEntries>(seedEntries);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [isUserScrollDetached, setIsUserScrollDetached] = useState(false);
-
-  const followLiveOutput = isStreaming && !isUserScrollDetached;
+  const [tailAnchorMessageId, setTailAnchorMessageId] = useState<MessageId | null>(null);
+  const scroll = useChatTranscriptScroll({
+    activeThreadId: THREAD_ID,
+    legendListRef: listRef,
+    timelineEntries: entries,
+    hasStreamingAssistantText: isStreaming,
+    composerTranscriptInsetPx: 0,
+    isInactiveSplitPane: false,
+  });
 
   useImperativeHandle(
     handleRef,
     () => ({
       listRef,
       startStreaming: () => setIsStreaming(true),
+      send: () => {
+        const messageId = MessageId.makeUnsafe("sent-user-message");
+        scroll.armTranscriptAutoFollow(THREAD_ID);
+        setIsStreaming(true);
+        setEntries((current) => [...current, messageEntry(messageId, "user", "New question")]);
+        setTailAnchorMessageId(messageId);
+      },
       streamChunk: (lines: number) => {
         setEntries((current) => {
           const lastIndex = current.findIndex(
@@ -89,11 +105,10 @@ function ScrollOwnershipTimeline({
           return current.map((entry, index) => (index === lastIndex ? grown : entry));
         });
       },
-      releaseUserScroll: () => {
-        flushSync(() => setIsUserScrollDetached(true));
-      },
+      scrollToBottom: scroll.onScrollToBottom,
+      isAnchorSliding: () => scroll.tailAnchorScrollInFlightRef.current,
     }),
-    [],
+    [scroll.armTranscriptAutoFollow, scroll.onScrollToBottom, scroll.tailAnchorScrollInFlightRef],
   );
 
   return (
@@ -104,7 +119,10 @@ function ScrollOwnershipTimeline({
         activeTurnInProgress={isStreaming}
         activeTurnStartedAt={isStreaming ? "2026-03-17T19:12:29.000Z" : null}
         listRef={listRef}
-        followLiveOutput={followLiveOutput}
+        tailAnchorMessageId={tailAnchorMessageId}
+        animateTailAnchorSlide
+        tailAnchorScrollInFlightRef={scroll.tailAnchorScrollInFlightRef}
+        followLiveOutput={!scroll.isUserScrollDetached}
         timelineEntries={entries}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
@@ -119,10 +137,10 @@ function ScrollOwnershipTimeline({
         resolvedTheme="dark"
         timestampFormat="locale"
         workspaceRoot={undefined}
-        onMessagesWheel={() => handleRef.current?.releaseUserScroll()}
-        onIsAtEndChange={(isAtEnd) => {
-          if (isAtEnd) setIsUserScrollDetached(false);
-        }}
+        onMessagesWheel={scroll.onMessagesWheelBase}
+        onMessagesPointerDown={scroll.onMessagesPointerDownBase}
+        onMessagesPointerUp={scroll.onMessagesPointerUpBase}
+        onIsAtEndChange={scroll.onIsAtEndChange}
       />
     </div>
   );
@@ -177,7 +195,6 @@ function wheelUp(handle: HarnessHandle, scrollBy: number, eventDelta: number): v
       clientY: container.clientHeight / 2,
     }),
   );
-  handle.releaseUserScroll();
   container.scrollTop = Math.max(0, before - scrollBy);
   container.dispatchEvent(new Event("scroll"));
 }
@@ -203,7 +220,8 @@ describe("MessagesTimeline scroll ownership", () => {
 
       expect(container.scrollTop).toBeLessThan(scrollTopBeforeWheel);
 
-      const samples: number[] = [container.scrollTop];
+      const readingTop = container.scrollTop;
+      const samples: number[] = [readingTop];
       for (let frame = 0; frame < 60; frame += 1) {
         handle.streamChunk(1);
         await settleFrames(1);
@@ -211,14 +229,14 @@ describe("MessagesTimeline scroll ownership", () => {
       }
 
       for (const scrollTop of samples) {
-        expect(scrollTop).toBeLessThan(scrollTopBeforeWheel);
+        expect(scrollTop).toBeCloseTo(readingTop, 0);
       }
     } finally {
       await screen.unmount();
     }
   });
 
-  it("re-attaches end-follow when the user scrolls back to the bottom", async () => {
+  it("lets a wheel gesture cancel the send-anchor slide while output continues", async () => {
     const handleRef: { current: HarnessHandle | null } = { current: null };
     const screen = await render(<ScrollOwnershipTimeline handleRef={handleRef} />);
 
@@ -226,28 +244,67 @@ describe("MessagesTimeline scroll ownership", () => {
       const handle = handleRef.current;
       if (!handle) throw new Error("harness not mounted");
       const container = getScrollContainer(handle);
-
-      await startStreamingAndFollow(handle, container);
-      wheelUp(handle, 300, 200);
       await settleFrames(3);
-
-      expect(distanceFromBottomPx(container)).toBeGreaterThan(AUTO_FOLLOW_TOLERANCE_PX);
-
       void handle.listRef.current?.scrollToEnd?.({ animated: false });
       await expect
         .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
         .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
 
-      for (let frame = 0; frame < 24; frame += 1) {
-        handle.streamChunk(1);
-        await settleFrames(1);
-      }
+      handle.send();
+      await expect.poll(() => handle.isAnchorSliding()).toBe(true);
+      wheelUp(handle, 100, 100);
+      expect(handle.isAnchorSliding()).toBe(false);
+      await settleFrames(2);
+      const readingTop = container.scrollTop;
 
-      await expect
-        .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
-        .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
+      handle.streamChunk(10);
+      for (let frame = 0; frame < 24; frame += 1) {
+        await settleFrames(1);
+        expect(container.scrollTop).toBeCloseTo(readingTop, 0);
+      }
     } finally {
       await screen.unmount();
     }
   });
+
+  it.each(["native scroll", "bottom button"] as const)(
+    "re-attaches end-follow after returning to the bottom via %s",
+    async (method) => {
+      const handleRef: { current: HarnessHandle | null } = { current: null };
+      const screen = await render(<ScrollOwnershipTimeline handleRef={handleRef} />);
+
+      try {
+        const handle = handleRef.current;
+        if (!handle) throw new Error("harness not mounted");
+        const container = getScrollContainer(handle);
+
+        await startStreamingAndFollow(handle, container);
+        wheelUp(handle, 300, 200);
+        await settleFrames(3);
+
+        expect(distanceFromBottomPx(container)).toBeGreaterThan(AUTO_FOLLOW_TOLERANCE_PX);
+
+        if (method === "bottom button") {
+          handle.scrollToBottom();
+        } else {
+          container.scrollTop = container.scrollHeight;
+          container.dispatchEvent(new Event("scroll"));
+        }
+        await expect
+          .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
+          .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
+
+        for (let frame = 0; frame < 24; frame += 1) {
+          handle.streamChunk(1);
+          await settleFrames(1);
+        }
+
+        await expect
+          .poll(() => distanceFromBottomPx(container), { timeout: 5_000 })
+          .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
+      } finally {
+        await screen.unmount();
+      }
+    },
+  );
 });

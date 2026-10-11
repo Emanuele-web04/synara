@@ -41,6 +41,12 @@ const emptyTokens = (): TokenUsageInfo => ({
 });
 const errorMessage = (error: SessionStructuredError) => error.message;
 const partId = (messageID: string, ordinal: number) => `${messageID}:part:${ordinal}`;
+// V2 numbers text and reasoning blocks separately (both start at 0), while its
+// stored content interleaves them with tools. Keying by kind and ordinal keeps
+// live events and recovered snapshots on the same part ID.
+const blockPartId = (messageID: string, type: "text" | "reasoning", ordinal: number) =>
+  `${messageID}:${type}:${ordinal}`;
+type AssistantBlock = SessionMessageAssistant["content"][number];
 
 function assistantInfo(
   sessionID: string,
@@ -155,6 +161,7 @@ export function openCodeV2Message(
   sessionID: string,
   message: SessionMessageInfo,
   directory: string,
+  blockOrdinal: (block: AssistantBlock) => number | undefined = () => undefined,
 ): OpenCodeMessage | undefined {
   if (message.type === "user")
     return {
@@ -189,13 +196,16 @@ export function openCodeV2Message(
       ],
     };
   if (message.type !== "assistant") return undefined;
+  const nextOrdinal = { text: 0, reasoning: 0 };
   return {
     info: assistantInfo(sessionID, message, directory),
-    parts: message.content.flatMap((part, ordinal): Part[] => {
+    parts: message.content.flatMap((part): Part[] => {
       if (part.type === "tool") return [toolPart(sessionID, message.id, part)];
+      const ordinal = blockOrdinal(part) ?? nextOrdinal[part.type];
+      nextOrdinal[part.type] = ordinal + 1;
       return [
         {
-          id: partId(message.id, ordinal),
+          id: blockPartId(message.id, part.type, ordinal),
           sessionID,
           messageID: message.id,
           type: part.type,
@@ -216,6 +226,9 @@ export function createOpenCodeV2EventMapper(
   resolveForm: (id: string) => FormInfo | undefined = () => undefined,
 ) {
   const messages = new Map<string, SessionMessageAssistant>();
+  // A mapper created after a reconnect may first see a message's later blocks,
+  // so keep each block's native ordinal instead of inferring it from position.
+  const blockOrdinals = new WeakMap<AssistantBlock, number>();
   const outcomes = new Map<string, OpenCodeExecutionEvent>();
   function rememberOutcome(event: OpenCodeExecutionEvent) {
     outcomes.set(event.properties.sessionID, event);
@@ -242,7 +255,9 @@ export function createOpenCodeV2EventMapper(
   }
   function changed(sessionID: string, message: SessionMessageAssistant): NormalizedOpenCodeEvent[] {
     remember(message);
-    const snapshot = openCodeV2Message(sessionID, message, directory)!;
+    const snapshot = openCodeV2Message(sessionID, message, directory, (block) =>
+      blockOrdinals.get(block),
+    )!;
     return [
       { id: message.id, type: "message.updated", properties: { sessionID, info: snapshot.info } },
       ...snapshot.parts.map(
@@ -427,13 +442,21 @@ export function createOpenCodeV2EventMapper(
           remember(message);
         }
         const type = event.type.startsWith("session.reasoning.") ? "reasoning" : "text";
-        const existing = message.content[ordinal];
+        // Like the V2 server, append a block when it starts so it keeps its
+        // place between tools; later events update that same block.
+        const index = message.content.findIndex(
+          (block) => block.type === type && blockOrdinals.get(block) === ordinal,
+        );
+        const existing = message.content[index];
         const text =
           "text" in event.data
             ? event.data.text
             : (existing && "text" in existing ? existing.text : "") +
               ("delta" in event.data ? event.data.delta : "");
-        message.content[ordinal] = { type, text };
+        const block: AssistantBlock = { type, text };
+        blockOrdinals.set(block, ordinal);
+        if (index === -1) message.content.push(block);
+        else message.content[index] = block;
         // Emit only the changed part; replaying every earlier tool on each token
         // turns long responses into quadratic work.
         return [
@@ -449,7 +472,7 @@ export function createOpenCodeV2EventMapper(
               sessionID,
               time: event.created,
               part: {
-                id: partId(assistantMessageID, ordinal),
+                id: blockPartId(assistantMessageID, type, ordinal),
                 sessionID,
                 messageID: assistantMessageID,
                 type,
