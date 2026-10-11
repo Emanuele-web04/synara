@@ -5540,9 +5540,10 @@ export default function ChatView({
     );
   }
 
-  // Open-thread tabs belong to the single chat on desktop; split panes, the editor rail, and
-  // phone-width headers keep the plain thread title.
-  const showOpenThreadTabs = !isMobileViewport && surfaceMode === "single" && !isEditorRail;
+  // Open-thread tabs belong to the single chat on desktop; split panes, the editor rail,
+  // phone-width headers, and users who turned tabs off keep the plain thread title.
+  const showOpenThreadTabs =
+    settings.showOpenThreadTabs && !isMobileViewport && surfaceMode === "single" && !isEditorRail;
 
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
     title: isCoordinatorConversation

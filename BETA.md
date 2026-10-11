@@ -284,20 +284,15 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `groups` (Hubs), gated off in Stable.
-Tasks, Inbox, and Auto-fix CI are available in both apps.
-Oh My Pi, the rail sidebar layout, and message trail
-sound are available in both Stable and Beta.
+The list is currently empty. Hubs, Tasks, Inbox, Auto-fix CI, Oh My Pi,
+the rail sidebar layout, and message trail sound are available in both apps.
 
-On Stable, Hubs are inert rather than hidden data: the server refuses the hub
-APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
-leaves saved Hub check-ins and completion evaluations unchanged and unscheduled,
-uses ordinary Synara tool approvals for former coordinator chats, and refuses
-creating a hub; the web hides the Hubs tab, route, setting, and
-thread actions, and shows any existing hub folder as an ordinary project so its
-chats stay reachable. The gate lives in
-`apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
-`apps/web/src/betaFeatures.ts`.
+Hubs became available in Stable 1.0.2. The same shared policy enables the Hub
+APIs, Library, coordinator wakes, monitoring, check-ins, completion evaluations,
+and web entry points in Stable and Beta. Existing saved Hubs in the current
+app's data home remain Hubs; this promotion does not import Beta data into
+Stable. Each app retains its own identity, data home, and update feed. Diagnostics
+remain Beta-only and are independent of this feature list.
 
 Tasks and its delegation APIs are available in Stable and Beta. Tasks takes
 Kanban's navigation slot and preserves its saved order and visibility; its

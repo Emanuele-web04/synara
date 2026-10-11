@@ -21,7 +21,7 @@ import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/Pro
 import type { HubWorkRepositoryShape } from "../persistence/Services/HubWorkRepository";
 import type { ManagedAttachmentRepositoryShape } from "../persistence/Services/ManagedAttachments";
 import type { ProjectAgentRepositoryShape } from "../persistence/Services/ProjectAgentRepository";
-import { isServerGroupsEnabled } from "../projectAgent/groupsBetaGate";
+import { GROUPS_BETA_ONLY_MESSAGE, isServerGroupsEnabled } from "../projectAgent/groupsBetaGate";
 import { makeHubWorkService } from "../projectAgent/hubWorkService";
 import type { ProjectAgentServiceShape } from "../projectAgent/Services/ProjectAgentService";
 import type { makeCreateThreadsHandler } from "./creationCoordinator";
@@ -74,7 +74,7 @@ export function makeHubWorkGateway(dependencies: {
     Effect.gen(function* () {
       if (!isServerGroupsEnabled())
         return yield* Effect.fail(
-          new GatewayToolError("capability_denied", "Hubs are available in Synara Beta."),
+          new GatewayToolError("capability_denied", GROUPS_BETA_ONLY_MESSAGE),
         );
       const config = yield* projectAgentRepository.getConfig(record.projectId);
       const current = yield* repository.get(record.id);
