@@ -58,7 +58,7 @@ the measured install layout and allowing Bun to hardlink package files. Full
 Linux installs retain their modules cache; the Bun package archive is restored
 only when modules are not an exact hit. Frozen installation and lifecycle patches
 still run on cache hits. Lifecycle scripts use `--concurrent-scripts=1` in every
-scope: multiple workspace `prepare` hooks patch the same TypeScript files, and
+scope, including the separate marketing workflow: multiple workspace `prepare` hooks patch the same TypeScript files, and
 parallel hooks can read a partially written compiler file. Scripts and dependency
 patches remain enabled. The September measurements below predate this serialization.
 Turbo persistence is opt-in for unit/build consumers.
