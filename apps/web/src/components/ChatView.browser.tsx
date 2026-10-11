@@ -2211,6 +2211,8 @@ async function mountChatView(options: {
     }),
   );
 
+  await router.load();
+
   const content = options.onRender ? (
     <Profiler id="issue-550-root" onRender={options.onRender}>
       <RouterProvider router={router} />
