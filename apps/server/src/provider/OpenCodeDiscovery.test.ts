@@ -18,6 +18,7 @@ type OpenCodeCommandInput = Parameters<typeof flattenOpenCodeCommands>[0][number
 type TestModelInput = Omit<Partial<Model>, "capabilities"> &
   Pick<Model, "id" | "name"> & {
     readonly capabilities?: Partial<Model["capabilities"]>;
+    readonly reasoning_options?: unknown;
   };
 
 function makeProvider(input: {
@@ -70,7 +71,7 @@ function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "prov
     ...input.capabilities,
   };
 
-  return {
+  const model = {
     id: input.id,
     providerID: input.providerID,
     api: input.api ?? { id: "openai", url: "https://api.openai.com/v1", npm: "@ai-sdk/openai" },
@@ -95,6 +96,10 @@ function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "prov
     ...(input.family ? { family: input.family } : {}),
     ...(input.variants ? { variants: input.variants } : {}),
   };
+  if (input.reasoning_options !== undefined) {
+    Object.assign(model, { reasoning_options: input.reasoning_options });
+  }
+  return model;
 }
 
 describe("resolvePreferredOpenCodeModelProviders", () => {
@@ -597,6 +602,122 @@ describe("flattenOpenCodeModels", () => {
           },
         ],
         defaultReasoningEffort: "medium",
+      },
+    ]);
+  });
+
+  it.each([
+    { reasoningOptions: [{ type: "budget_tokens", min: 1024, max: 8192 }] },
+    { reasoningOptions: [{ type: "effort", values: ["low", "high", "max"] }] },
+    { reasoningOptions: null },
+  ])("preserves server-normalized variants when raw metadata is %j", ({ reasoningOptions }) => {
+    const models = flattenOpenCodeModels({
+      inventory: {
+        providerList: {
+          connected: ["anthropic"],
+          all: [
+            makeProvider({
+              id: "anthropic",
+              name: "Anthropic",
+              source: "api",
+              models: {
+                "claude-test": makeModel({
+                  id: "claude-test",
+                  providerID: "anthropic",
+                  name: "Claude Test",
+                  reasoning_options: reasoningOptions,
+                  variants: { high: { thinking: { budgetTokens: 4096 } } },
+                }),
+              },
+            }),
+          ],
+        },
+        consoleState: null,
+      },
+    });
+
+    expect(models[0]?.supportedReasoningEfforts).toEqual([{ value: "high" }]);
+  });
+
+  it.each([{ variants: {} }, { variants: { creative: { temperature: 0.9 } } }])(
+    "does not restore reasoning disabled in normalized variants: %j",
+    ({ variants }) => {
+      const models = flattenOpenCodeModels({
+        inventory: {
+          providerList: {
+            connected: ["anthropic"],
+            all: [
+              makeProvider({
+                id: "anthropic",
+                name: "Anthropic",
+                source: "api",
+                models: {
+                  "claude-test": makeModel({
+                    id: "claude-test",
+                    providerID: "anthropic",
+                    name: "Claude Test",
+                    reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+                    variants,
+                  }),
+                },
+              }),
+            ],
+          },
+          consoleState: null,
+        },
+      });
+
+      expect(models[0]?.supportedReasoningEfforts ?? []).toEqual([]);
+    },
+  );
+
+  it("surfaces models.dev reasoning_options when normalized variants are absent", () => {
+    const models = flattenOpenCodeModels({
+      inventory: {
+        providerList: {
+          connected: ["opencode-go"],
+          all: [
+            makeProvider({
+              id: "opencode-go",
+              name: "OpenCode Go",
+              source: "api",
+              models: {
+                "muse-spark-1.3-contributor": {
+                  id: "muse-spark-1.3-contributor",
+                  name: "Muse Spark 1.3 Contributor",
+                  capabilities: {
+                    reasoning: true,
+                  },
+                  reasoning_options: [
+                    {
+                      type: "effort",
+                      values: ["minimal", "low", "medium", "high", "xhigh"],
+                    },
+                  ],
+                },
+              },
+            }),
+          ],
+        },
+        consoleState: null,
+      },
+    });
+
+    expect(models).toEqual([
+      {
+        slug: "opencode-go/muse-spark-1.3-contributor",
+        name: "Muse Spark 1.3 Contributor",
+        upstreamProviderId: "opencode-go",
+        upstreamProviderName: "OpenCode Go",
+        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
+        defaultContextWindow: "128k",
+        supportedReasoningEfforts: [
+          { value: "minimal" },
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+          { value: "xhigh" },
+        ],
       },
     ]);
   });

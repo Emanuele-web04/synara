@@ -208,7 +208,7 @@ export function ThemeModePicker({
             </div>
             <span
               className={cn(
-                "text-xs transition-colors motion-reduce:transition-none",
+                "text-ui leading-snug transition-colors motion-reduce:transition-none",
                 isActive ? "font-medium text-foreground" : "text-muted-foreground",
               )}
             >

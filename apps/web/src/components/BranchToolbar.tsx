@@ -1,3 +1,4 @@
+import { requestCurrentAppSnap } from "../appSnap.logic";
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
@@ -8,7 +9,7 @@ import type {
   ThreadId,
   RuntimeMode,
 } from "@synara/contracts";
-import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
+import { ChevronDownIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
@@ -27,7 +28,7 @@ import { useStore } from "../store";
 import {
   createAccountRateLimitThreadsSelector,
   createProjectSelector,
-  createThreadSelector,
+  createThreadShellSettingsSelector,
 } from "../storeSelectors";
 import {
   EnvMode,
@@ -44,24 +45,21 @@ import {
   RUNTIME_AUTO_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-  COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentRowBody,
-  EnvironmentRowChevron,
 } from "./chat/environment/EnvironmentRow";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { ComposerEnvironmentPicker } from "./chat/ComposerEnvironmentPicker";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   Menu,
-  MenuGroup,
-  MenuGroupLabel,
   MenuItem,
   MenuRadioGroup,
   MenuRadioItem,
@@ -72,40 +70,6 @@ import type { ThreadWorkspacePatch } from "../types";
 
 function WorktreeGlyph({ className }: { className?: string }) {
   return <WorktreeIcon className={className} />;
-}
-
-/** Leading glyph treatment shared by every "Work in" menu row (16px, muted). */
-const ENV_MENU_ICON_CLASS_NAME = "size-3.5 text-muted-foreground";
-
-/**
- * One row of the "Work in" menu: `[glyph] [label …grows] [✓ when selected]`.
- * Centralizes the icon/label/check treatment so the local, worktree, and handoff
- * entries stay on one grid instead of repeating the same class strings per row.
- */
-function WorkInMenuItem({
-  icon,
-  label,
-  selected: selectedProp,
-  disabled: disabledProp,
-  onSelect,
-}: {
-  icon: ReactNode;
-  label: ReactNode;
-  selected?: boolean;
-  disabled?: boolean;
-  onSelect?: () => void;
-}) {
-  const selected = selectedProp ?? false;
-  const disabled = disabledProp ?? false;
-  return (
-    <MenuItem disabled={disabled} {...(onSelect ? { onClick: onSelect } : {})}>
-      {icon}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {selected ? (
-        <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
-      ) : null}
-    </MenuItem>
-  );
 }
 
 function RuntimeModeMenuItem({
@@ -121,9 +85,10 @@ function RuntimeModeMenuItem({
   return (
     <MenuRadioItem
       value={mode}
+      preserveChildLayout
+      closeOnClick
       className={cn(
-        "runtime-mode-menu-item",
-        mode === "auto" && "runtime-mode-menu-item--auto",
+        "runtime-mode-menu-item data-checked:bg-[var(--color-background-button-secondary-hover)]",
         accent &&
           "text-[var(--runtime-full-access-accent)] data-highlighted:text-[var(--runtime-full-access-accent)]",
       )}
@@ -134,7 +99,7 @@ function RuntimeModeMenuItem({
           <span>{presentation.label}</span>
           <span
             className={cn(
-              "runtime-mode-menu-description text-xs font-normal",
+              "runtime-mode-menu-description text-ui leading-snug font-normal",
               accent ? "text-current" : "text-muted-foreground",
             )}
           >
@@ -162,7 +127,9 @@ export interface BranchToolbarProps {
   variant?: BranchSelectorVariant;
   // Keeps the Local/Worktree control visible while hiding Git-only branch UI for non-repo cwd.
   showBranchSelector?: boolean;
-  // Studio-like containers bind the toolbar to one concrete local folder and
+  // The new-chat landing tray swaps the Local/Worktree picker for its own Worktree checkbox.
+  showEnvironmentPicker?: boolean;
+  // Group-like containers bind the toolbar to one concrete local folder and
   // must not persist project/worktree metadata from branch selector actions.
   fixedLocalWorkspaceCwd?: string | null;
 }
@@ -172,6 +139,7 @@ export interface RuntimeUsageControlsProps {
   runtimeModel?: ProviderModelDescriptor | undefined;
   providerStatus?: ServerProviderStatus | null | undefined;
   runtimeMode?: RuntimeMode | undefined;
+  activeRuntimeMode?: RuntimeMode | undefined;
   onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
   contextWindow?: ContextWindowSnapshot | null | undefined;
   cumulativeCostUsd?: number | null | undefined;
@@ -189,6 +157,7 @@ export function RuntimeUsageControls({
   runtimeModel,
   providerStatus,
   runtimeMode,
+  activeRuntimeMode,
   onRuntimeModeChange,
   className,
   hideLabel: hideLabelProp,
@@ -197,6 +166,10 @@ export function RuntimeUsageControls({
     provider !== undefined &&
     providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
   const runtimePresentation = RUNTIME_MODE_PRESENTATION[runtimeMode ?? "approval-required"];
+  const runtimeModePending = activeRuntimeMode !== undefined && activeRuntimeMode !== runtimeMode;
+  const pendingDescription = runtimeModePending
+    ? ` Applies next turn. This turn still uses ${RUNTIME_MODE_PRESENTATION[activeRuntimeMode].label}.`
+    : "";
   const hideLabel = hideLabelProp ?? false;
   return (
     <div
@@ -218,7 +191,7 @@ export function RuntimeUsageControls({
                   runtimeMode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
-                title={`${runtimePresentation.label}: ${runtimePresentation.description}. Click to change permissions.`}
+                title={`${runtimePresentation.label}: ${runtimePresentation.description}.${pendingDescription} Click to change permissions.`}
               />
             }
           >
@@ -232,6 +205,7 @@ export function RuntimeUsageControls({
               )}
               <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
                 {runtimePresentation.label}
+                {runtimeModePending ? " (next turn)" : ""}
               </span>
               <ChevronDownIcon
                 className={cn(
@@ -277,6 +251,12 @@ export function RuntimeUsageControls({
                 icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
               />
             </MenuRadioGroup>
+            {typeof window !== "undefined" && window.desktopBridge?.appSnap?.captureCurrentApp ? (
+              <>
+                <MenuSeparator />
+                <MenuItem onClick={requestCurrentAppSnap}>Share current app</MenuItem>
+              </>
+            ) : null}
           </ComposerPickerMenuPopup>
         </Menu>
       ) : null}
@@ -297,11 +277,13 @@ export default function BranchToolbar({
   onComposerFocusRequest,
   variant: variantProp,
   showBranchSelector: showBranchSelectorProp,
+  showEnvironmentPicker: showEnvironmentPickerProp,
   fixedLocalWorkspaceCwd,
 }: BranchToolbarProps) {
   const handoffBusy = handoffBusyProp ?? false;
   const variant = variantProp ?? "toolbar";
   const showBranchSelector = showBranchSelectorProp ?? true;
+  const showEnvironmentPicker = showEnvironmentPickerProp ?? true;
   const isPanel = variant === "panel";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
@@ -310,7 +292,12 @@ export default function BranchToolbar({
   const threads = useStore(rateLimitThreadsSelector);
   const { settings } = useAppSettings();
 
-  const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  // Settings and session only, never the transcript: subscribing to the whole thread
+  // re-rendered the toolbar for every streamed token.
+  const serverThread = useStore(
+    useMemo(() => createThreadShellSettingsSelector(threadId), [threadId]),
+  );
+  const serverThreadSession = useStore((state) => state.threadSessionById?.[threadId] ?? null);
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
@@ -327,7 +314,7 @@ export default function BranchToolbar({
     ? (serverThread.workingDirectory ?? null)
     : (draftThread?.workingDirectory ?? null);
   const activeProvider =
-    serverThread?.session?.provider ?? serverThread?.modelSelection.provider ?? null;
+    serverThreadSession?.provider ?? serverThread?.modelSelection.provider ?? null;
   const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
   const branchCwd = usesFixedLocalWorkspace
     ? fixedLocalWorkspaceCwd
@@ -358,7 +345,7 @@ export default function BranchToolbar({
         }
 
         const api = readNativeApi();
-        if (serverThread?.session && api) {
+        if (serverThreadSession && api) {
           void api.orchestration
             .dispatchCommand({
               type: "thread.session.stop",
@@ -408,7 +395,7 @@ export default function BranchToolbar({
       const api = readNativeApi();
       // If the effective cwd is about to change, stop the running session so the
       // next message creates a new one with the correct cwd.
-      if (serverThread?.session && worktreePath !== activeWorktreePath && api) {
+      if (serverThreadSession && worktreePath !== activeWorktreePath && api) {
         void api.orchestration
           .dispatchCommand({
             type: "thread.session.stop",
@@ -455,7 +442,7 @@ export default function BranchToolbar({
       activeThreadId,
       activeThreadBranch,
       activeWorkingDirectory,
-      serverThread?.session,
+      serverThreadSession,
       activeWorktreePath,
       hasServerThread,
       setThreadWorkspaceAction,
@@ -494,16 +481,8 @@ export default function BranchToolbar({
     fetchOpenUsageData: false,
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
-  const [envPickerOpen, setEnvPickerOpen] = useState(false);
 
   if (!activeThreadId || !activeProject) return null;
-
-  const envGlyph = (className: string) =>
-    environmentPresentation.mode === "local" ? (
-      <CentralIcon name="macbook-air" className={className} />
-    ) : (
-      <WorktreeGlyph className={className} />
-    );
 
   return (
     <div
@@ -515,122 +494,51 @@ export default function BranchToolbar({
       )}
     >
       <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
-        {showEnvPicker ? (
-          <Menu open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
-            <MenuTrigger
-              render={
-                <button
-                  type="button"
-                  className={
-                    isPanel
-                      ? ENVIRONMENT_ROW_CLASS_NAME
-                      : COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME
-                  }
-                />
-              }
-            >
-              {isPanel ? (
-                <EnvironmentRowBody
-                  icon={envGlyph(ENVIRONMENT_ROW_ICON_CLASS_NAME)}
-                  label={environmentPresentation.shortLabel}
-                  trailing={<EnvironmentRowChevron />}
-                />
-              ) : (
-                <>
-                  {envGlyph("size-3.5")}
-                  {environmentPresentation.shortLabel}
-                  <ChevronDownIcon className="size-3 opacity-60" />
-                </>
-              )}
-            </MenuTrigger>
-            <ComposerPickerMenuPopup
-              align="start"
-              side={isPanel ? "bottom" : "top"}
-              sideOffset={6}
-              className="w-60 min-w-60"
-            >
-              <MenuGroup>
-                <MenuGroupLabel>Work in</MenuGroupLabel>
-                {environmentPresentation.mode === "local" ? (
-                  <WorkInMenuItem
-                    icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label={environmentPresentation.localOptionLabel}
-                    selected
-                  />
-                ) : (
-                  <WorkInMenuItem
-                    icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label={environmentPresentation.localOptionLabel}
-                    onSelect={() => onEnvModeChange("local")}
-                  />
-                )}
-                {canSwitchToWorktree ? (
-                  <WorkInMenuItem
-                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="New worktree"
-                    onSelect={() => onEnvModeChange("worktree")}
-                  />
-                ) : null}
-                {effectiveEnvMode === "worktree" && !canHandoffToLocal ? (
-                  <WorkInMenuItem
-                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label={environmentPresentation.worktreeOptionLabel}
-                    selected
-                  />
-                ) : null}
-                {canHandoffToWorktree && onHandoffToWorktree ? (
-                  <WorkInMenuItem
-                    icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to new worktree"
-                    disabled={handoffBusy}
-                    onSelect={() => onHandoffToWorktree()}
-                  />
-                ) : null}
-                {canHandoffToLocal && onHandoffToLocal ? (
-                  <WorkInMenuItem
-                    icon={<HandoffIcon className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to local"
-                    disabled={handoffBusy}
-                    onSelect={() => onHandoffToLocal()}
-                  />
-                ) : null}
-              </MenuGroup>
+        {!showEnvironmentPicker ? null : showEnvPicker ? (
+          <ComposerEnvironmentPicker
+            environmentPresentation={environmentPresentation}
+            onEnvModeChange={onEnvModeChange}
+            canSwitchToWorktree={canSwitchToWorktree}
+            canHandoffToLocal={canHandoffToLocal}
+            canHandoffToWorktree={canHandoffToWorktree}
+            onHandoffToLocal={onHandoffToLocal}
+            onHandoffToWorktree={onHandoffToWorktree}
+            handoffBusy={handoffBusy}
+            isPanel={isPanel}
+          >
+            {/* Rate limits are noise while drafting a new chat — no session has run yet. */}
+            {hasServerThread ? (
+              <>
+                <MenuSeparator />
 
-              {/* Rate limits are noise while drafting a new chat — no session has run yet. */}
-              {hasServerThread ? (
-                <>
-                  <MenuSeparator />
-
-                  <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
-                    <MenuItem
-                      closeOnClick={false}
-                      onClick={() => setRateLimitsOpen((open) => !open)}
-                    >
-                      <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
-                      <DisclosureChevron
-                        open={rateLimitsOpen}
-                        className="text-[var(--color-text-foreground-secondary)]"
-                      />
-                    </MenuItem>
-                    <CollapsiblePanel>
-                      <ProviderUsagePanelContent
-                        provider={activeProvider}
-                        rateLimits={usageSummary.rateLimits}
-                        usageLines={usageSummary.usageLines}
-                        notice={usageSummary.usageNotice}
-                        isLoading={usageSummary.isLoading}
-                        learnMoreHref={usageSummary.learnMoreHref}
-                        showTitle={false}
-                        showLearnMore={true}
-                        className="px-2 pb-1 pt-1"
-                      />
-                    </CollapsiblePanel>
-                  </Collapsible>
-                </>
-              ) : null}
-            </ComposerPickerMenuPopup>
-          </Menu>
+                <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
+                  <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
+                    <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
+                    <DisclosureChevron
+                      open={rateLimitsOpen}
+                      className="text-[var(--color-text-foreground-secondary)]"
+                    />
+                  </MenuItem>
+                  <CollapsiblePanel>
+                    <ProviderUsagePanelContent
+                      provider={activeProvider}
+                      rateLimits={usageSummary.rateLimits}
+                      usageLines={usageSummary.usageLines}
+                      notice={usageSummary.usageNotice}
+                      isLoading={usageSummary.isLoading}
+                      resetCredits={usageSummary.resetCredits}
+                      resetCreditsSurface="popover"
+                      learnMoreHref={usageSummary.learnMoreHref}
+                      showTitle={false}
+                      showLearnMore={true}
+                      className="px-2 pb-1 pt-1"
+                    />
+                  </CollapsiblePanel>
+                </Collapsible>
+              </>
+            ) : null}
+          </ComposerEnvironmentPicker>
         ) : isPanel ? (
           <div className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default hover:bg-transparent")}>
             <EnvironmentRowBody
@@ -639,7 +547,7 @@ export default function BranchToolbar({
             />
           </div>
         ) : (
-          <span className="inline-flex items-center gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]">
+          <span className="inline-flex items-center gap-2 px-1.5 text-ui-sm font-normal text-[var(--color-text-foreground-secondary)]">
             <WorktreeGlyph className="size-3.5" />
             {environmentPresentation.shortLabel}
           </span>

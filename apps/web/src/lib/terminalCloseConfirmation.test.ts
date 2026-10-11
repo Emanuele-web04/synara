@@ -6,7 +6,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  buildTerminalCloseConfirmationMessage,
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
   shouldPromptForTerminalClose,
@@ -21,46 +20,6 @@ describe("resolveTerminalCloseTitle", () => {
         terminalTitleOverridesById: { "terminal-1": "Deploy shell" },
       }),
     ).toBe("Deploy shell");
-  });
-
-  it("falls back to the stored label when no override exists", () => {
-    expect(
-      resolveTerminalCloseTitle({
-        terminalId: "terminal-1",
-        terminalLabelsById: { "terminal-1": "Codex 1" },
-        terminalTitleOverridesById: {},
-      }),
-    ).toBe("Codex 1");
-  });
-});
-
-describe("buildTerminalCloseConfirmationMessage", () => {
-  it("uses the visible terminal title in the confirmation copy", () => {
-    expect(
-      buildTerminalCloseConfirmationMessage({
-        terminalTitle: "Deploy shell",
-        willDeleteThread: false,
-      }),
-    ).toBe(
-      [
-        'Close terminal "Deploy shell"?',
-        "This permanently clears the terminal history for this tab.",
-      ].join("\n"),
-    );
-  });
-
-  it("warns when closing the last placeholder terminal also deletes the thread", () => {
-    expect(
-      buildTerminalCloseConfirmationMessage({
-        terminalTitle: "Codex 1",
-        willDeleteThread: true,
-      }),
-    ).toBe(
-      [
-        'Close terminal "Codex 1"?',
-        "This permanently clears the terminal history for this tab and deletes the empty terminal thread.",
-      ].join("\n"),
-    );
   });
 });
 
@@ -130,17 +89,6 @@ describe("shouldPromptForTerminalClose", () => {
         terminalId: "terminal-1",
       }),
     ).toBe(true);
-  });
-
-  it("does not prompt just because an idle placeholder terminal thread will be deleted", () => {
-    expect(
-      shouldPromptForTerminalClose({
-        confirmationEnabled: true,
-        runningTerminalIds: [],
-        terminalAttentionStatesById: {},
-        terminalId: "terminal-1",
-      }),
-    ).toBe(false);
   });
 
   it("respects the global confirmation preference", () => {

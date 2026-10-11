@@ -30,7 +30,7 @@ export function useWorkspaceFileEditorSession(input: {
   const [pendingDiscard, setPendingDiscard] = useState<WorkspaceFileEditorDiscardIntent | null>(
     null,
   );
-  const { dirty, reloadFromDisk, save } = controller;
+  const { dirty, reloadFromDisk, save, flush, pauseAutosave, resumeAutosave } = controller;
   const saving = controller.state.saving;
   // A close or reload requested while a save is in flight waits for that save:
   // unmounting immediately would let the write land after "discard" promised
@@ -67,16 +67,10 @@ export function useWorkspaceFileEditorSession(input: {
   }, [saving]);
 
   const requestClose = useCallback(() => {
-    if (saving) {
-      setAfterSave("close");
-      return;
-    }
-    if (dirty) {
-      setPendingDiscard("close");
-      return;
-    }
-    onClose();
-  }, [dirty, onClose, saving]);
+    void flush().then((saved) => {
+      if (saved) onClose();
+    });
+  }, [flush, onClose]);
 
   const requestReload = useCallback(() => {
     if (saving) {
@@ -84,11 +78,12 @@ export function useWorkspaceFileEditorSession(input: {
       return;
     }
     if (dirty) {
+      pauseAutosave();
       setPendingDiscard("reload");
       return;
     }
     reloadFromDisk();
-  }, [dirty, reloadFromDisk, saving]);
+  }, [pauseAutosave, dirty, reloadFromDisk, saving]);
 
   const confirmPendingDiscard = useCallback(() => {
     const intent = pendingDiscard;
@@ -109,10 +104,11 @@ export function useWorkspaceFileEditorSession(input: {
 
   const cancelPendingDiscard = useCallback(() => {
     setPendingDiscard(null);
-  }, []);
+    resumeAutosave();
+  }, [resumeAutosave]);
 
   useEffect(() => {
-    if (!enabled || dirty) {
+    if (!enabled || dirty || saving) {
       return;
     }
     const handler = (event: globalThis.KeyboardEvent) => {
@@ -124,7 +120,7 @@ export function useWorkspaceFileEditorSession(input: {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [dirty, enabled, onClose]);
+  }, [dirty, enabled, onClose, saving]);
 
   return {
     ...controller,

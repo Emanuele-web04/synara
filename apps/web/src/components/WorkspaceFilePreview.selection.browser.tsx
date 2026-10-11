@@ -1,5 +1,5 @@
 // FILE: WorkspaceFilePreview.selection.browser.tsx
-// Purpose: Browser regressions for the highlight -> "Add to chat" flow in the
+// Purpose: Browser regressions for the highlight -> "Add to Chat" flow in the
 //          rendered-markdown preview (snippet references) and source view.
 // Layer: Focused component integration tests
 
@@ -73,7 +73,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-it("offers Add to chat for an editable rendered-markdown selection", async () => {
+it("offers Add to Chat for an editable rendered-markdown selection", async () => {
   const readFile = vi.fn().mockResolvedValue(loadedMarkdown());
   const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
   const onReferenceInChat = vi.fn<(reference: ChatFileReference) => void>();
@@ -99,7 +99,7 @@ it("offers Add to chat for an editable rendered-markdown selection", async () =>
 
     selectNodeContentsAndRelease(list);
 
-    const addToChat = page.getByRole("button", { name: "Add to chat" });
+    const addToChat = page.getByRole("button", { name: "Add to Chat" });
     await expect.element(addToChat).toBeVisible();
     await addToChat.click();
 
@@ -108,13 +108,13 @@ it("offers Add to chat for an editable rendered-markdown selection", async () =>
       path: MARKDOWN_PATH,
       snippet: "Ship the selection toolbar\nThen celebrate",
     });
-    await vi.waitFor(() => expect(document.querySelector('[aria-label="Add to chat"]')).toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Add to Chat"]')).toBeNull());
   } finally {
     restoreNativeApi();
   }
 });
 
-it("does not offer Add to chat in the markdown preview without a chat target", async () => {
+it("does not offer Add to Chat in the markdown preview without a chat target", async () => {
   const readFile = vi.fn().mockResolvedValue(loadedMarkdown());
   const restoreNativeApi = installNativeApi({ projects: { readFile } } as unknown as NativeApi);
 
@@ -139,7 +139,7 @@ it("does not offer Add to chat in the markdown preview without a chat target", a
 
     // Give the deferred selection read a frame to settle before asserting.
     await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)));
-    expect(document.querySelector('[aria-label="Add to chat"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Add to Chat"]')).toBeNull();
   } finally {
     restoreNativeApi();
   }

@@ -124,6 +124,24 @@ describe("thread retention", () => {
     ).toEqual([unpinnedThread.id]);
   });
 
+  it("does not select snoozed threads even when they are old", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
+    const snoozedThread = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-snoozed"),
+      latestUserMessageAt: oldActivityAt,
+      snoozedUntil: new Date(nowMs + THREAD_RETENTION_UNUSED_MS).toISOString(),
+    });
+    const unsnoozedThread = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-unsnoozed"),
+      latestUserMessageAt: oldActivityAt,
+    });
+
+    expect(
+      getRetentionArchiveRootIds(makeReadModel([snoozedThread, unsnoozedThread]), nowMs),
+    ).toEqual([unsnoozedThread.id]);
+  });
+
   it("does not select enabled heartbeat automation target threads", () => {
     const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
     const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();

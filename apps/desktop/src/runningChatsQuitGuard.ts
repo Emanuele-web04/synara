@@ -98,7 +98,14 @@ export function parseQuitConfirmationResponse(
 
 export interface RunningChatsQuitGuard {
   readonly hasAllowedQuit: () => boolean;
+  readonly hasPendingAsk: () => boolean;
   readonly cancelPending: () => void;
+  /**
+   * Resolve the pending ask as allowed WITHOUT latching `allowed` — a dead
+   * renderer proved the ask can never be answered, not that the user said
+   * yes, so a later quit must still get to ask.
+   */
+  readonly allowPending: () => void;
   readonly receiveResponse: (payload: unknown) => void;
   readonly askRenderer: (input: {
     readonly send: (request: DesktopQuitConfirmationRequest) => void;
@@ -169,8 +176,17 @@ export function makeRunningChatsQuitGuard(
 
   return {
     hasAllowedQuit: () => allowed,
+    hasPendingAsk: () => pending !== null,
     cancelPending(): void {
       finish(false);
+    },
+    allowPending(): void {
+      const current = pending;
+      pending = null;
+      if (current?.readyTimer) {
+        clearTimeout(current.readyTimer);
+      }
+      current?.resolve(true);
     },
     receiveResponse(payload: unknown): void {
       const response = parseQuitConfirmationResponse(payload);
@@ -185,7 +201,7 @@ export function makeRunningChatsQuitGuard(
         clearTimeout(pending.readyTimer);
         pending.readyTimer = null;
       }
-      if (response.runningCount <= 0) {
+      if (response.runningCount <= 0 && pending.presentation === "native") {
         finish(true);
         return;
       }

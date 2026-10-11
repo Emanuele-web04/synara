@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  type AssistantMessage,
+  type Tool,
+} from "@earendil-works/pi-ai";
 import type {
   AgentSession,
   AgentSessionEvent,
@@ -16,12 +22,16 @@ import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import type { AgentGatewayMcpFetch } from "../../agentGateway/mcpInjection.ts";
+import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import { ServerConfig } from "../../config.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import { makePiAdapterLive } from "./PiAdapter.ts";
 
 const captured = vi.hoisted(() => ({
   sessions: [] as AgentSession[],
+  modelSystemPrompts: [] as string[],
+  modelTools: [] as Tool[][],
   extensions: [] as InlineExtension[],
   events: [] as AgentSessionEvent[],
   stream: undefined as StreamFn | undefined,
@@ -36,6 +46,8 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     SessionManager: {
       ...sdk.SessionManager,
       create: (cwd: string) => sdk.SessionManager.create(cwd, path.join(cwd, "sessions")),
+      open: (...args: Parameters<typeof sdk.SessionManager.open>) =>
+        sdk.SessionManager.open(...args),
     },
     createAgentSessionServices: async (
       options: Parameters<typeof sdk.createAgentSessionServices>[0],
@@ -61,16 +73,20 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   captured.sessions.length = 0;
+  captured.modelSystemPrompts.length = 0;
+  captured.modelTools.length = 0;
   captured.extensions.length = 0;
   captured.events.length = 0;
   captured.stream = undefined;
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "until-abort";
+type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "tool" | "until-abort";
 function responses(...kinds: ResponseKind[]) {
   let calls = 0;
-  captured.stream = (model, _context, options) => {
+  captured.stream = (model, context, options) => {
+    captured.modelSystemPrompts.push(getCurrentSystemPrompt(context.messages));
+    captured.modelTools.push(getCurrentTools(context.messages));
     const kind = kinds[calls++] ?? "success";
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = {
@@ -112,6 +128,15 @@ function responses(...kinds: ResponseKind[]) {
         message.stopReason = "error";
         message.errorMessage = "[rate_limit_exceeded] Rate limit exceeded";
         stream.push({ type: "error", reason: "error", error: message });
+      } else if (kind === "tool") {
+        message.content.push({
+          type: "toolCall",
+          id: "read-settings",
+          name: "read",
+          arguments: { path: "settings.json" },
+        });
+        message.stopReason = "toolUse";
+        stream.push({ type: "done", reason: "toolUse", message });
       } else if (kind === "until-abort") {
         const abort = () => {
           message.stopReason = "aborted";
@@ -138,6 +163,8 @@ async function withAdapter(
   run: (adapter: PiAdapterShape, events: ProviderRuntimeEvent[], cwd: string) => Promise<void>,
   delayMs = 100,
   credentials?: AgentGatewayCredentialsShape,
+  startSessionOverrides?: { readonly enableComputerControl?: boolean },
+  gatewayFetchOverride?: AgentGatewayMcpFetch,
 ) {
   vi.stubEnv("PI_OFFLINE", "1");
   const cwd = mkdtempSync(path.join(tmpdir(), "synara-pi-lifecycle-"));
@@ -164,10 +191,19 @@ async function withAdapter(
             description: "List threads",
             inputSchema: { type: "object", properties: {} },
           },
+          ...(startSessionOverrides?.enableComputerControl === true
+            ? ["computer_get_state", "computer_click", "computer_press_key", "computer_run"].map(
+                (name) => ({
+                  name,
+                  description: name,
+                  inputSchema: { type: "object", properties: {} },
+                }),
+              )
+            : []),
         ],
       },
     });
-  let layer = makePiAdapterLive({ agentGatewayFetch: gatewayFetch }).pipe(
+  let layer = makePiAdapterLive({ agentGatewayFetch: gatewayFetchOverride ?? gatewayFetch }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(cwd, path.join(cwd, "server"))),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -191,6 +227,9 @@ async function withAdapter(
         runtimeMode: "full-access",
         providerOptions: { pi: { agentDir: cwd } },
         modelSelection: { provider: "pi", model: "openai/gpt-4o" },
+        ...(startSessionOverrides?.enableComputerControl !== undefined
+          ? { enableComputerControl: startSessionOverrides.enableComputerControl }
+          : {}),
       });
       yield* Effect.promise(() => run(adapter, events, cwd));
     }).pipe(Effect.provide(layer), Effect.scoped),
@@ -201,11 +240,22 @@ async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
 
+it("passes the current Pi system prompt and tools to the model stream", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(captured.modelSystemPrompts[0]).toBeTruthy();
+    expect(captured.modelTools[0]?.some((tool) => tool.name === "read")).toBe(true);
+  });
+});
+
 it.each([
   { toolName: "bash", args: { command: "printf hello \n" }, title: "printf hello" },
   { toolName: "bash", args: { command: " \n" }, title: "bash" },
   { toolName: "read", args: { path: "file.txt " }, title: "read file.txt" },
-  { toolName: "grep", args: { pattern: "needle \n" }, title: "grep needle" },
+  { toolName: " custom_tool \n", args: { command: " raw input \n" }, title: "custom_tool" },
+  { toolName: " \t", args: { command: " raw input \n" }, title: "Tool" },
 ])(
   "persists $toolName lifecycle titles without changing tool arguments: $title",
   async ({ toolName, args, title }) => {
@@ -247,13 +297,49 @@ it.each([
           ),
         );
         expect(encodable).toBe(true);
-        expect(event.payload).toMatchObject({ title });
+        expect(event.payload).toMatchObject({ title, data: { toolName, args } });
       }
       const snapshot = await Effect.runPromise(adapter.readThread(threadId));
       expect(snapshot.turns.find((entry) => entry.id === turn.turnId)?.items).toContainEqual(
         expect.objectContaining({ callId: "title-tool", args }),
       );
       await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+      await waitFor(() => expect(completions(events)).toHaveLength(1));
+      const assistant = session.messages.find((message) => message.role === "assistant");
+      if (!assistant) throw new Error("Expected the completed SDK assistant message");
+      session.agent.state.messages = [
+        {
+          ...assistant,
+          content: [{ type: "toolCall", id: "history-tool", name: toolName, arguments: args }],
+          stopReason: "toolUse",
+        },
+        {
+          role: "toolResult",
+          toolCallId: "history-tool",
+          toolName,
+          content: [{ type: "text", text: "done" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+      ];
+      const history = await Effect.runPromise(adapter.readThread(threadId));
+      const historyItems = history.turns.flatMap((entry) => entry.items);
+      expect(historyItems).toEqual([
+        expect.objectContaining({
+          callId: "history-tool",
+          status: "started",
+          title,
+          toolName,
+          args,
+        }),
+        expect.objectContaining({
+          callId: "history-tool",
+          status: "completed",
+          title,
+          toolName,
+          data: expect.objectContaining({ args }),
+        }),
+      ]);
     });
   },
 );
@@ -554,8 +640,226 @@ it("keeps steering during backoff inside the same logical turn", async () => {
   });
 });
 
+it("queues a send during an active turn as an SDK follow-up instead of erroring", async () => {
+  const calls = responses("error", "success", "success");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    const session = captured.sessions[0]!;
+    await waitFor(() => expect(session.isRetrying).toBe(true));
+    const queued = await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Queued while running" }),
+    );
+    expect(queued.turnId).toBe(turn.turnId);
+    expect(
+      session.getFollowUpMessages().some((text) => text.includes("Queued while running")),
+    ).toBe(true);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: turn.turnId,
+      payload: { state: "completed" },
+    });
+    expect(calls()).toBe(3);
+    expect(
+      session.messages.some(
+        (message) =>
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("Queued while running"),
+      ),
+    ).toBe(true);
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("serializes a concurrent send dispatching behind a committing prompt", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const first = Effect.runPromise(adapter.sendTurn({ threadId, input: "First prompt" }));
+    const second = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Second while first commits" }),
+    );
+    const session = captured.sessions[0]!;
+    const [firstTurn, secondTurn] = await Promise.all([first, second]);
+    expect(secondTurn.turnId).toBe(firstTurn.turnId);
+    await waitFor(() => expect(session.isStreaming).toBe(true));
+    expect(
+      session.getFollowUpMessages().some((text) => text.includes("Second while first commits")),
+    ).toBe(true);
+    await Effect.runPromise(adapter.interruptTurn(threadId, firstTurn.turnId));
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+  });
+});
+
+it("does not strand a concurrent send when the committing prompt is an extension command", async () => {
+  let markCommandStarted!: () => void;
+  const commandStarted = new Promise<void>((resolve) => {
+    markCommandStarted = resolve;
+  });
+  let releaseCommand!: () => void;
+  const commandGate = new Promise<void>((resolve) => {
+    releaseCommand = resolve;
+  });
+  captured.extensions.push((pi) => {
+    pi.registerCommand("pause", {
+      description: "Pause without inference",
+      handler: async () => {
+        markCommandStarted();
+        await commandGate;
+      },
+    });
+  });
+  const calls = responses("success", "success");
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const command = Effect.runPromise(adapter.sendTurn({ threadId, input: "/pause" }));
+    await commandStarted;
+    const prompt = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Run after the command" }),
+    );
+    releaseCommand();
+    const [commandTurn, promptTurn] = await Promise.all([command, prompt]);
+    expect(promptTurn.turnId).not.toBe(commandTurn.turnId);
+    await waitFor(() => expect(completions(events)).toHaveLength(3));
+    expect(calls()).toBe(2);
+    expect(captured.sessions[0]!.pendingMessageCount).toBe(0);
+    expect(
+      captured.sessions[0]!.messages.some(
+        (message) =>
+          message.role === "user" &&
+          JSON.stringify(message.content).includes("Run after the command"),
+      ),
+    ).toBe(true);
+  });
+});
+
+it("starts a concurrent send cleanly after the committing prompt rejects preflight", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let rejectPrompt!: (cause: Error) => void;
+    vi.spyOn(session, "prompt")
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectPrompt = reject;
+          }),
+      )
+      .mockImplementation(realPrompt);
+    const first = await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Rejected in preflight" }),
+    );
+    const secondPromise = Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "Run after rejection" }),
+    );
+    rejectPrompt(new Error("preflight rejected"));
+    const second = await secondPromise;
+    expect(second.turnId).not.toBe(first.turnId);
+    await waitFor(() => expect(completions(events)).toHaveLength(2));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: first.turnId,
+      payload: { state: "failed", errorMessage: "preflight rejected" },
+    });
+    expect(completions(events)[1]).toMatchObject({
+      turnId: second.turnId,
+      payload: { state: "completed" },
+    });
+    expect(session.pendingMessageCount).toBe(0);
+  });
+});
+
+it("aborts a turn interrupted while its prompt is still committing", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      await promptGate;
+      return realPrompt(text, options);
+    });
+    const turn = await send(adapter);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    // prompt() is gated in preflight — nothing exists for abort() to reach.
+    expect(session.isStreaming).toBe(false);
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    releasePrompt();
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({
+      turnId: turn.turnId,
+      payload: { state: "interrupted" },
+    });
+    spy.mockRestore();
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("rejects a send to a turn whose interrupt is pending while still committing", async () => {
+  responses("until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const realPrompt = session.prompt.bind(session);
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    const spy = vi.spyOn(session, "prompt").mockImplementation(async (text, options) => {
+      await promptGate;
+      return realPrompt(text, options);
+    });
+    const turn = await send(adapter);
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    const outcome = await Effect.runPromise(
+      adapter
+        .sendTurn({ threadId, input: "Would be dropped" })
+        .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null })),
+    );
+    expect(outcome).toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "sendTurn",
+    });
+    releasePrompt();
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(completions(events)[0]).toMatchObject({ payload: { state: "interrupted" } });
+    spy.mockRestore();
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("rejects steering into an untracked SDK run instead of orphaning a queued turn", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    const streamingSpy = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
+    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue(undefined);
+    const promptSpy = vi.spyOn(session, "prompt");
+    const outcome = await Effect.runPromise(
+      adapter.steerTurn!({ threadId, input: "Fresh turn during untracked run" }).pipe(
+        Effect.match({ onFailure: (error) => error, onSuccess: () => null }),
+      ),
+    );
+    expect(outcome).toMatchObject({
+      _tag: "ProviderAdapterValidationError",
+      operation: "steerTurn",
+    });
+    expect(steerSpy).not.toHaveBeenCalled();
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(session.pendingMessageCount).toBe(0);
+    expect(completions(events)).toHaveLength(0);
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.activeTurnId).toBeUndefined();
+    streamingSpy.mockRestore();
+  });
+});
+
 it("keeps the turn alive through SDK overflow compaction and its continuation", async () => {
-  const calls = responses("success", "overflow", "success", "success");
+  // Pi summarizes history and the split-turn prefix separately before retrying.
+  const calls = responses("success", "overflow", "success", "success", "success");
   await withAdapter(async (adapter, events) => {
     await send(adapter);
     await waitFor(() => expect(completions(events)).toHaveLength(1));
@@ -566,7 +870,7 @@ it("keeps the turn alive through SDK overflow compaction and its continuation", 
     expect(
       captured.events.some((event) => event.type === "compaction_end" && event.willRetry),
     ).toBe(true);
-    expect(calls()).toBe(4);
+    expect(calls()).toBe(5);
     expect(completions(events)[1]).toMatchObject({
       turnId: turn.turnId,
       payload: { state: "completed" },
@@ -665,12 +969,15 @@ it.each(["adapter", "extension"] as const)(
   },
 );
 
-it("keeps partial assistant and reasoning items open across retries until final settlement", async () => {
+it("closes failed message items before retrying with separate items", async () => {
   responses("partial-error", "success");
   await withAdapter(async (adapter, events) => {
     const turn = await send(adapter);
     await waitFor(() => expect(captured.sessions[0]!.isRetrying).toBe(true));
-    expect(events.filter((event) => event.type === "item.completed")).toHaveLength(0);
+    await waitFor(() =>
+      expect(events.filter((event) => event.type === "item.completed")).toHaveLength(2),
+    );
+    expect(completions(events)).toHaveLength(0);
     await waitFor(() => expect(completions(events)).toHaveLength(1));
     for (const itemType of ["assistant_message", "reasoning"] as const) {
       const started = events.filter(
@@ -679,18 +986,23 @@ it("keeps partial assistant and reasoning items open across retries until final 
       const completed = events.filter(
         (event) => event.type === "item.completed" && event.payload.itemType === itemType,
       );
-      expect(started).toHaveLength(1);
-      expect(completed).toHaveLength(1);
+      expect(started).toHaveLength(2);
+      expect(completed).toHaveLength(2);
       expect(completed[0]).toMatchObject({
         itemId: started[0]!.itemId,
         turnId: turn.turnId,
-        payload: { status: "completed" },
+        payload: { status: "failed" },
       });
       expect(
         events.filter(
           (event) => event.type === "content.delta" && event.itemId === started[0]!.itemId,
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
+      expect(completed[1]).toMatchObject({
+        itemId: started[1]!.itemId,
+        payload: { status: "completed" },
+      });
+      expect(started[1]!.itemId).not.toBe(started[0]!.itemId);
     }
   });
 });
@@ -723,6 +1035,68 @@ function gatewayCredentials() {
     stdioProxy: { command: process.execPath, args: [] },
   } satisfies AgentGatewayCredentialsShape;
 }
+
+it.each(["request failure", "empty catalog", "ordinary-only catalog"] as const)(
+  "rejects enabled Computer startup with %s before creating a Pi runtime",
+  async (failure) => {
+    const modelCalls = responses("success");
+    const credentials = gatewayCredentials();
+    const run = vi.fn();
+    const fetch: AgentGatewayMcpFetch = async (_input, init) => {
+      if (failure === "request failure") return new Response("Unavailable", { status: 503 });
+      return Response.json({
+        jsonrpc: "2.0",
+        id: JSON.parse(String(init?.body)).id,
+        result: {
+          tools:
+            failure === "empty catalog"
+              ? []
+              : [
+                  {
+                    name: "synara_list_threads",
+                    description: "List threads",
+                    inputSchema: { type: "object", properties: {} },
+                  },
+                ],
+        },
+      });
+    };
+
+    await expect(
+      withAdapter(run, 1, credentials, { enableComputerControl: true }, fetch),
+    ).rejects.toThrow("Computer Use could not start");
+    expect(run).not.toHaveBeenCalled();
+    expect(captured.sessions).toHaveLength(0);
+    expect(modelCalls()).toBe(0);
+    expect(credentials.revokeSessionToken).toHaveBeenCalledExactlyOnceWith("lease-1");
+
+    // Ordinary chats retain the existing fallback and do not acquire Computer
+    // descriptors merely because gateway registration failed or was partial.
+    await withAdapter(
+      async (adapter, events) => {
+        await send(adapter);
+        await waitFor(() => expect(completions(events)).toHaveLength(1));
+        expect(captured.modelTools.at(-1)?.some((tool) => tool.name.startsWith("computer_"))).toBe(
+          false,
+        );
+      },
+      1,
+      gatewayCredentials(),
+      { enableComputerControl: false },
+      fetch,
+    );
+    expect(modelCalls()).toBe(1);
+  },
+);
+
+it("rejects enabled Computer startup when no gateway credentials are available", async () => {
+  const modelCalls = responses("success");
+  await expect(
+    withAdapter(async () => undefined, 1, undefined, { enableComputerControl: true }),
+  ).rejects.toThrow("Pi did not receive a thread-scoped Synara gateway connection");
+  expect(captured.sessions).toHaveLength(0);
+  expect(modelCalls()).toBe(0);
+});
 
 it.each(["success", "failure", "cancel", "rejection"] as const)(
   "retires or revokes the gateway turn authority once on %s",
@@ -811,6 +1185,17 @@ it("cancels retry and queued steering before awaiting gateway teardown drainage"
       const stopped = Effect.runPromise(adapter.stopSession(threadId));
       try {
         await waitFor(() => expect(credentials.cancelSessionTurnRequests).toHaveBeenCalled());
+        const sendDuringStop = Effect.runPromise(
+          adapter
+            .sendTurn({ threadId, input: "Must not restart during teardown" })
+            .pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => null })),
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        drain();
+        await stopped;
+        expect(await sendDuringStop).toMatchObject({
+          _tag: "ProviderAdapterSessionNotFoundError",
+        });
         await waitFor(() => expect(session.isIdle).toBe(true));
         expect(calls()).toBe(1);
         expect(session.pendingMessageCount).toBe(0);
@@ -830,4 +1215,161 @@ it("cancels retry and queued steering before awaiting gateway teardown drainage"
     100,
     credentials,
   );
+});
+
+it("keeps Computer schemas out of idle model requests and refreshes them on resume", async () => {
+  responses("success", "success", "success", "success");
+  const grants = new Map<string, boolean>();
+  let sequence = 0;
+  const credentials: AgentGatewayCredentialsShape = {
+    ...gatewayCredentials(),
+    connectionForThread: (_threadId, _provider, options) => {
+      const bearerToken = `projection-${++sequence}`;
+      grants.set(
+        `Bearer ${bearerToken}`,
+        options?.additionalCapabilities?.includes("computer:control") === true,
+      );
+      return { url: "http://127.0.0.1:3773/mcp", bearerToken };
+    },
+  };
+  const computer = {
+    name: "computer_run",
+    description: "Run known desktop steps.",
+    inputSchema: {
+      type: "object",
+      properties: { steps: { type: "array", items: { type: "object" } } },
+      required: ["steps"],
+    },
+  };
+  const requiredComputerTools = [
+    computer,
+    ...["computer_get_state", "computer_click", "computer_press_key"].map((name) => ({
+      name,
+      description: name,
+      inputSchema: { type: "object", properties: {} },
+    })),
+  ];
+  const fetch: AgentGatewayMcpFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const enabled = grants.get(new Headers(init?.headers).get("Authorization") ?? "") === true;
+    return Response.json({
+      jsonrpc: "2.0",
+      id: body.id,
+      result: {
+        tools: [
+          {
+            name: "synara_list_threads",
+            description: "List threads",
+            inputSchema: { type: "object", properties: {} },
+          },
+          ...(enabled ? requiredComputerTools : []),
+        ],
+      },
+    });
+  };
+  await withAdapter(
+    async (adapter, events, cwd) => {
+      const sessionId = captured.sessions[0]!.sessionId;
+      const sessionFile = captured.sessions[0]!.sessionFile;
+      expect(sessionFile).toBeTruthy();
+      for (const [index, enabled] of [false, true, true, false].entries()) {
+        if (index === 1 || index === 3) {
+          const session = (await Effect.runPromise(adapter.listSessions()))[0]!;
+          await Effect.runPromise(adapter.stopSession(threadId));
+          await Effect.runPromise(
+            adapter.startSession({
+              threadId,
+              cwd,
+              runtimeMode: "full-access",
+              providerOptions: { pi: { agentDir: cwd } },
+              modelSelection: { provider: "pi", model: "openai/gpt-4o" },
+              resumeCursor: session.resumeCursor,
+              enableComputerControl: enabled,
+            }),
+          );
+          const resumed = captured.sessions.at(-1)!;
+          expect(resumed.sessionId).toBe(sessionId);
+          expect(resumed.sessionFile).toBe(sessionFile);
+          expect(resumed.messages.filter((message) => message.role === "assistant")).toHaveLength(
+            index,
+          );
+        }
+        await send(adapter);
+        await waitFor(() => expect(completions(events)).toHaveLength(index + 1));
+        // This is the real SDK's model request, after tool installation and
+        // credential rotation, rather than the gateway's tools/list response.
+        const modelTools = captured.modelTools.at(-1)!;
+        const computerTools = modelTools.filter((tool) => tool.name.startsWith("computer_"));
+        const descriptorCharacters = computerTools
+          .map((tool) => JSON.stringify(tool))
+          .join("").length;
+        expect(computerTools.map((tool) => tool.name)).toEqual(
+          enabled
+            ? [
+                ...requiredComputerTools.map((tool) => tool.name),
+                ...SYNARA_COMPUTER_TOOL_NAMES.filter(
+                  (name) => !requiredComputerTools.some((tool) => tool.name === name),
+                ),
+              ]
+            : [],
+        );
+        if (enabled) {
+          expect(computerTools[0]!.parameters).toEqual(computer.inputSchema);
+          expect(descriptorCharacters).toBeGreaterThan(0);
+        } else {
+          expect(descriptorCharacters).toBe(0);
+        }
+        expect(modelTools.some((tool) => tool.name === "synara_list_threads")).toBe(true);
+      }
+      expect(captured.sessions).toHaveLength(3);
+      expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "runtime.warning" &&
+            event.payload.message.includes("gateway tool catalog changed after rotation"),
+        ),
+      ).toHaveLength(0);
+    },
+    1,
+    credentials,
+    { enableComputerControl: false },
+    fetch,
+  );
+});
+
+it("separates assistant and reasoning messages across a real SDK tool loop", async () => {
+  const calls = responses("tool", "success");
+  await withAdapter(async (adapter, events) => {
+    const turn = await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(calls()).toBe(2);
+    const toolStart = events.findIndex(
+      (event) => event.type === "item.started" && event.itemId === "pi-tool-read-settings",
+    );
+    expect(toolStart).toBeGreaterThan(-1);
+    for (const itemType of ["assistant_message", "reasoning"] as const) {
+      const started = events.filter(
+        (event) => event.type === "item.started" && event.payload.itemType === itemType,
+      );
+      const completed = events.filter(
+        (event) => event.type === "item.completed" && event.payload.itemType === itemType,
+      );
+      expect(started).toHaveLength(2);
+      expect(completed).toHaveLength(2);
+      expect(started[0]!.itemId).not.toBe(started[1]!.itemId);
+      expect(events.indexOf(completed[0]!)).toBeLessThan(toolStart);
+      expect(events.indexOf(started[1]!)).toBeGreaterThan(toolStart);
+      for (const [index, start] of started.entries()) {
+        expect(completed[index]).toMatchObject({
+          itemId: start.itemId,
+          turnId: turn.turnId,
+          payload: { status: "completed" },
+        });
+        expect(
+          events.filter((event) => event.type === "content.delta" && event.itemId === start.itemId),
+        ).toHaveLength(1);
+      }
+    }
+  });
 });

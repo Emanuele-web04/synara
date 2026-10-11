@@ -5,6 +5,8 @@ description: Install, authenticate, verify, and run the Pi coding agent through 
 
 Synara integrates the Pi coding-agent runtime and its model registry. Pi owns provider credentials, models, extensions, skills, commands, and session behavior; Synara supplies the durable task, working environment, transcript, review surfaces, Agent Gateway connection, and Git lifecycle around it.
 
+Synara runs its bundled Pi SDK for tasks. The standalone `pi --version` reports the CLI version, which can differ from the SDK in Synara. Extensions must be compatible with the SDK version shipped with Synara.
+
 ## Install
 
 Install Pi from its official npm package:
@@ -109,7 +111,9 @@ Pi sessions can expose:
 - Native steering of a running turn
 - Synara’s terminal, browser, diff, checkpoint, worktree, and Git delivery surfaces
 
-Native steering lets Synara queue a follow-up for a supported active Pi session without cancelling the turn first. The runtime still decides when it can incorporate the message.
+A normal message sent during an active Pi turn is queued as a follow-up instead of failing with a streaming error. Explicit steering remains a separate request to incorporate a correction into the active turn; the runtime decides when it can act on it.
+
+Pi automatic retries appear as inline warnings while the task remains active. **End task** also stops retry backoff and queued continuation. Extension status messages stay separate from tool activity.
 
 Pi extensions and packages execute with the permissions of your user account. Review third-party code before enabling it in a repository Synara will operate.
 

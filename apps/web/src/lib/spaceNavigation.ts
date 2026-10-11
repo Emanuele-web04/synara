@@ -11,6 +11,7 @@ import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 import type { ServerWorkspacePaths } from "~/lib/serverWorkspacePaths";
 import { isOrdinarySpaceProject } from "~/lib/spaces";
 import type { Project, SidebarThreadSummary } from "~/types";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 /** Strict membership: a project Spaces organize, filed into `spaceId`. */
 export function isProjectInSpace(
@@ -22,7 +23,7 @@ export function isProjectInSpace(
 }
 
 /**
- * Whether a Space may land on a thread in this project. The Chats and Studio containers belong
+ * Whether a Space may land on a thread in this project. The Chats and Groups containers belong
  * to no Space and are reachable from every one of them; any other thread belongs to exactly its
  * project's Space. Fails closed on a project we cannot resolve — a thread we cannot classify is
  * not a safe landing, and a fresh chat beats silently reverting the user's Space selection.
@@ -69,7 +70,7 @@ export function resolveSpaceSelectionTarget(input: {
   const availableThreads = input.threads.filter(
     (thread) =>
       thread.archivedAt == null &&
-      !thread.sidechatSourceThreadId &&
+      !isSidechatThread(thread) &&
       isProjectInSpace(projectById.get(thread.projectId), spaceId, paths),
   );
 

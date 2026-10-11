@@ -4,46 +4,50 @@
 
 import "../../index.css";
 
-import { TurnId } from "@synara/contracts";
+import { MessageId, TurnId } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { WorkspaceFileOpenerContext } from "../../lib/workspaceFileOpener";
 import { formatTimestamp } from "../../timestampFormat";
+import { deriveTimelineEntries, type TimelineEntry } from "../../workLog";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
+import { BackgroundTaskRow, BackgroundTaskStopContext } from "./BackgroundTaskRow";
 
-function ToolDetailsTimeline() {
+function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
   return (
     <MessagesTimeline
       hasMessages
-      isWorking={false}
-      activeTurnInProgress={false}
+      isWorking={entries !== undefined}
+      activeTurnInProgress={entries !== undefined}
       activeTurnStartedAt={null}
-      timelineEntries={[
-        {
-          id: "entry-command-details",
-          kind: "work",
-          createdAt: "2026-03-17T19:12:28.000Z",
-          entry: {
-            id: "work-command-details",
+      timelineEntries={
+        entries ?? [
+          {
+            id: "entry-command-details",
+            kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
-            label: "Ran command",
-            tone: "tool",
-            itemType: "command_execution",
-            toolTitle: "Searched",
-            command: `rg -n "toolDetails" apps/web/src`,
-            toolDetails: {
-              kind: "command",
-              title: "Searched",
+            entry: {
+              id: "work-command-details",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Searched",
               command: `rg -n "toolDetails" apps/web/src`,
-              output: {
-                stdout: "apps/web/src/session-logic.ts:55: toolDetails",
+              toolDetails: {
+                kind: "command",
+                title: "Searched",
+                command: `rg -n "toolDetails" apps/web/src`,
+                output: {
+                  stdout: "apps/web/src/session-logic.ts:55: toolDetails",
+                },
               },
             },
           },
-        },
-      ]}
+        ]
+      }
       turnDiffSummaryByAssistantMessageId={new Map()}
       nowIso="2026-03-17T19:12:30.000Z"
       expandedWorkGroups={{}}
@@ -106,8 +110,164 @@ async function settleLayout(): Promise<void> {
 }
 
 describe("MessagesTimeline tool details", () => {
+  it("updates one background row through completion and sends Stop to the running task", async () => {
+    const host = createTimelineHost();
+    const onStop = vi.fn();
+    const task = {
+      taskId: "background-command",
+      taskType: "local_bash",
+      description: "Delayed echo",
+      command: "sleep 20 && echo done",
+      status: "running" as const,
+      startedAt: "2026-10-10T00:00:00Z",
+      completedAt: null,
+      exitCode: null,
+    };
+    const view = (next: Parameters<typeof BackgroundTaskRow>[0]["task"]) => (
+      <BackgroundTaskStopContext.Provider value={onStop}>
+        <BackgroundTaskRow task={next} fontSizePx={13} />
+      </BackgroundTaskStopContext.Provider>
+    );
+    const screen = await render(view(task), { container: host });
+    try {
+      const row = host.querySelector("[data-background-task='background-command']");
+      const button = host.querySelector<HTMLButtonElement>("button");
+      expect(button?.textContent).toContain("Stop");
+      button?.click();
+      expect(onStop).toHaveBeenCalledWith("background-command");
+      await screen.rerender(
+        view({ ...task, status: "finished", completedAt: "2026-10-10T00:00:20Z", exitCode: 0 }),
+      );
+      expect(host.querySelector("[data-background-task='background-command']")).toBe(row);
+      expect(host.textContent).toContain("finished");
+      expect(host.textContent).toContain("20s");
+      expect(host.querySelector("button")).toBeNull();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("keeps Monitor notices compact and exposes multiline output only on disclosure", async () => {
+    const screen = await render(
+      <TimelineWorkEntryRow
+        workEntry={{
+          id: "monitor-ci-failure",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Monitor · CI checks failed",
+          detail: "Lint failed\nSecond diagnostic",
+          tone: "error",
+          monitorNotification: {
+            taskId: "ci",
+            name: "CI checks",
+            outcome: "failed",
+            output: "Lint failed\nSecond diagnostic",
+          },
+        }}
+        chatMetaFontSizePx={18}
+        textFontSizePx={22}
+        markdownCwd={undefined}
+        onImageExpand={() => {}}
+        timestampFormat="locale"
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Monitor · CI checks failed" });
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect.poll(() => document.querySelector("[data-tool-details-inline]")).toBeNull();
+    await trigger.click();
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect.element(screen.getByText(/Lint failed\s+Second diagnostic/)).toBeVisible();
+    await expect
+      .element(screen.getByText(formatTimestamp("2026-03-17T19:12:28.000Z", "locale")))
+      .toBeVisible();
+    await trigger.click();
+    await expect.element(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps historical tool disclosures above the next request after late updates", async () => {
+    const oldTurn = TurnId.makeUnsafe("old-tools");
+    const newTurn = TurnId.makeUnsafe("current-tools");
+    const entries = (late: boolean) =>
+      deriveTimelineEntries(
+        [
+          {
+            id: MessageId.makeUnsafe("old-user"),
+            role: "user",
+            text: "Earlier request",
+            createdAt: "2026-09-07T00:00:00Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("old-answer"),
+            role: "assistant",
+            turnId: oldTurn,
+            text: "Earlier answer",
+            createdAt: "2026-09-07T00:01:00Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("current-user"),
+            role: "user",
+            text: "Current request",
+            createdAt: "2026-09-07T00:02:00Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("current-answer"),
+            role: "assistant",
+            turnId: newTurn,
+            text: "Current answer",
+            createdAt: "2026-09-07T00:02:01Z",
+            streaming: true,
+          },
+        ],
+        [],
+        [
+          ...Array.from({ length: 79 }, (_, index) => ({
+            id: `earlier-tool-${index}`,
+            turnId: oldTurn,
+            tone: "tool" as const,
+            label: "Earlier tool",
+            createdAt: late ? "2026-09-07T00:03:00Z" : "2026-09-07T00:00:30Z",
+          })),
+          {
+            id: "current-tool",
+            turnId: newTurn,
+            tone: "tool",
+            label: "Current tool",
+            createdAt: "2026-09-07T00:02:02Z",
+          },
+        ],
+      );
+    const host = createTimelineHost();
+    const screen = await render(<ToolDetailsTimeline entries={entries(false)} />, {
+      container: host,
+    });
+    try {
+      await screen.rerender(<ToolDetailsTimeline entries={entries(true)} />);
+      await settleLayout();
+      const boundary = host.querySelector('[data-message-id="current-user"]')!;
+      expect(boundary).not.toBeNull();
+      const rows = [...host.querySelectorAll("[data-timeline-row-kind]")];
+      const currentRows = rows.filter((row) =>
+        Boolean(boundary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING),
+      );
+      const currentText = currentRows.map((row) => row.textContent).join(" ");
+      expect(currentText).toContain("Current tool");
+      expect(currentText).not.toMatch(/Earlier tool|Show .* more/);
+      const earlierRows = rows.filter((row) =>
+        Boolean(boundary.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING),
+      );
+      expect(earlierRows.length).toBeGreaterThan(0);
+      expect(earlierRows.some((row) => row.textContent?.includes("Earlier answer"))).toBe(true);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
   });
 
   it("opens and closes command details with the shared disclosure motion", async () => {
@@ -226,49 +386,6 @@ describe("MessagesTimeline tool details", () => {
     }
   });
 
-  it("states settled tool calls as a sentence without a lifecycle tail", async () => {
-    const host = createTimelineHost();
-    const screen = await render(
-      <TimelineWorkEntryRow
-        workEntry={{
-          id: "work-settled-command",
-          createdAt: "2026-03-17T19:12:28.000Z",
-          label: "Ran command",
-          tone: "tool",
-          itemType: "command_execution",
-          toolTitle: "Searched",
-          command: `rg -n "toolDetails" apps/web/src`,
-          liveActivity: {
-            state: "completed",
-            label: "Searched",
-            startedAt: "2026-03-17T19:12:28.000Z",
-            lastActivityAt: "2026-03-17T19:12:29.000Z",
-            elapsedSeconds: 1,
-          },
-        }}
-        chatMetaFontSizePx={12}
-        textFontSizePx={13}
-        density="compact"
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        timestampFormat="locale"
-      />,
-      { container: host },
-    );
-
-    try {
-      const rowText = document.querySelector("[data-work-entry-display-text='true']")?.textContent;
-      expect(rowText).toBe("Searched for toolDetails in web/src");
-      expect(document.querySelector("[data-live-activity-meta='true']")).toBeNull();
-      expect(document.body.textContent ?? "").not.toContain("Completed");
-      expect(document.body.textContent ?? "").not.toContain("elapsed");
-    } finally {
-      await screen.unmount();
-      host.remove();
-      await settleLayout();
-    }
-  });
-
   it("keeps agent activity as the primary action when live metadata is present", async () => {
     const onOpenAgentActivity = vi.fn();
     const nowMs = Date.now();
@@ -306,7 +423,7 @@ describe("MessagesTimeline tool details", () => {
       expect(onOpenAgentActivity).toHaveBeenCalledWith("agent-live-activity");
       expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
       expect(document.body.textContent ?? "").toContain("Agent task");
-      expect(document.body.textContent ?? "").toContain("Active");
+      expect(document.body.textContent ?? "").toContain("Subagent working");
     } finally {
       await screen.unmount();
       host.remove();

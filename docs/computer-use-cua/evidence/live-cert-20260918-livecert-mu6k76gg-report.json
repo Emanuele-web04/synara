@@ -1,0 +1,58 @@
+{
+  "run": "livecert-mu6k76gg",
+  "date": "2026-09-18T06:10:13.021Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-xt41YS/host.sock",
+  "elapsedMs": 8493,
+  "rows": [
+    {
+      "name": "masked-activation",
+      "verdict": "pass",
+      "detail": "panel=1 front=95851 (want 95851) masked=1 wrote=true released=true",
+      "evidence": {
+        "engage": {
+          "ok": true,
+          "result": {
+            "engaged": true,
+            "shield_id": "lc49873a127580"
+          },
+          "desktopEpoch": 0,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panels": [
+          {
+            "id": 1831,
+            "bounds": {
+              "x": 165,
+              "y": 86,
+              "width": 586,
+              "height": 488
+            },
+            "layer": 25
+          }
+        ],
+        "raise": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"Brought exact window 1822 for pid 95851 to the foreground.\",\"type\":\"text\"}],\"structuredContent\":{\"activated\":true,\"code\":\"bring_to_front_exact_window_verified\"",
+        "frontPid": 95851,
+        "targetPid": 95851,
+        "write": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readback\"}],\"route\":\"accessibility\"}},\"desktopE",
+        "value": "livecert-mu6k76gg-masked",
+        "release": {
+          "ok": true,
+          "desktopEpoch": 0,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panelsAfter": []
+      },
+      "elapsedMs": 5716
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 1,
+    "fail": 0,
+    "skipped": 0,
+    "verdict": "pass"
+  }
+}

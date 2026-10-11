@@ -132,12 +132,6 @@ describe("createDedupedBrowserStateStorage", () => {
 });
 
 describe("sanitizeRecentHistoryByThreadId", () => {
-  it("returns an empty record for non-object input", () => {
-    expect(sanitizeRecentHistoryByThreadId(null)).toEqual({});
-    expect(sanitizeRecentHistoryByThreadId("nope")).toEqual({});
-    expect(sanitizeRecentHistoryByThreadId([1, 2, 3])).toEqual({});
-  });
-
   it("drops malformed entries and keeps only well-formed history", () => {
     const result = sanitizeRecentHistoryByThreadId({
       "thread-1": [

@@ -245,14 +245,26 @@ export function useTranscriptAssistantSelectionAction(
     const handleWindowChange = () => {
       setPendingTranscriptSelectionAction(null);
     };
+    const handleSelectionChange = () => {
+      // The browser can deliver the release's selectionchange after the toolbar mounts.
+      // Keep it open while that event still describes the quote we just captured.
+      const current = readTranscriptAssistantSelection({ container: document.body });
+      if (
+        current?.selection.assistantMessageId !==
+          pendingTranscriptSelectionAction.selection.assistantMessageId ||
+        current?.selection.text !== pendingTranscriptSelectionAction.selection.text
+      ) {
+        setPendingTranscriptSelectionAction(null);
+      }
+    };
 
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("resize", handleWindowChange);
-    document.addEventListener("selectionchange", handleWindowChange);
+    document.addEventListener("selectionchange", handleSelectionChange);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("resize", handleWindowChange);
-      document.removeEventListener("selectionchange", handleWindowChange);
+      document.removeEventListener("selectionchange", handleSelectionChange);
     };
   }, [pendingTranscriptSelectionAction]);
 

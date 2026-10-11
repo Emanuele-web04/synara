@@ -13,6 +13,7 @@ import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
+import { listFiles, pruneProductionIcons } from "./scripts/production-assets";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -24,25 +25,8 @@ const buildSourcemap =
       ? "hidden"
       : false;
 
-const CENTRAL_ICON_DIR = "central-icons-reversed";
-const CENTRAL_ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
-const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
-
-async function listFiles(root: string): Promise<string[]> {
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-  const result: string[] = [];
-  for (const entry of entries) {
-    const entryPath = path.join(root, entry.name);
-    if (entry.isDirectory()) {
-      result.push(...(await listFiles(entryPath)));
-    } else if (entry.isFile()) {
-      result.push(entryPath);
-    }
-  }
-  return result;
-}
-
-// Finds literal icon basenames in source, then prunes the copied public icon set after build.
+// Prune before compression. closeBundle hooks are parallel by default;
+// enforce: "post" alone does not make the asynchronous compression hook wait.
 function centralIconPrunePlugin(): Plugin {
   let resolvedRoot = process.cwd();
   let resolvedOutDir = "dist";
@@ -53,51 +37,22 @@ function centralIconPrunePlugin(): Plugin {
       resolvedRoot = config.root;
       resolvedOutDir = path.resolve(config.root, config.build.outDir);
     },
-    async closeBundle() {
-      const publicIconDir = path.join(resolvedRoot, "public", CENTRAL_ICON_DIR);
-      const distIconDir = path.join(resolvedOutDir, CENTRAL_ICON_DIR);
-      const iconFiles = await fs.readdir(publicIconDir).catch(() => []);
-      const availableIcons = new Set(
-        iconFiles
-          .filter((name) => name.endsWith(".svg"))
-          .map((name) => name.slice(0, -".svg".length)),
-      );
-      if (availableIcons.size === 0) return;
-
-      const sourceFiles = (await listFiles(path.join(resolvedRoot, "src"))).filter((file) =>
-        SOURCE_EXTENSIONS.has(path.extname(file)),
-      );
-      const requiredIcons = new Set<string>();
-      const literalPattern = /["'`]([a-z0-9][a-z0-9-]*)["'`]/g;
-      for (const sourceFile of sourceFiles) {
-        const source = await fs.readFile(sourceFile, "utf8").catch(() => "");
-        for (const match of source.matchAll(literalPattern)) {
-          const iconName = match[1];
-          if (
-            iconName &&
-            CENTRAL_ICON_NAME_PATTERN.test(iconName) &&
-            availableIcons.has(iconName)
-          ) {
-            requiredIcons.add(iconName);
-          }
-        }
-      }
-
-      if (requiredIcons.size === 0) return;
-      const copiedIconFiles = await fs.readdir(distIconDir).catch(() => []);
-      let removedCount = 0;
-      await Promise.all(
-        copiedIconFiles.map(async (fileName) => {
-          if (!fileName.endsWith(".svg")) return;
-          const iconName = fileName.slice(0, -".svg".length);
-          if (requiredIcons.has(iconName)) return;
-          removedCount += 1;
-          await fs.rm(path.join(distIconDir, fileName), { force: true });
-        }),
-      );
-      console.info(
-        `[central-icons] kept ${requiredIcons.size}/${availableIcons.size} referenced SVGs, pruned ${removedCount}.`,
-      );
+    closeBundle: {
+      order: "pre",
+      sequential: true,
+      async handler() {
+        await pruneProductionIcons(path.join(resolvedRoot, "public"), resolvedOutDir, [
+          path.join(resolvedRoot, "src"),
+          path.resolve(resolvedRoot, "../../packages/contracts/src"),
+          path.resolve(resolvedRoot, "../../packages/shared/src"),
+        ]);
+        // MSW is used by the dev-served browser tests, never the production app.
+        await Promise.all(
+          ["", ".gz", ".br"].map((suffix) =>
+            fs.rm(path.join(resolvedOutDir, `mockServiceWorker.js${suffix}`), { force: true }),
+          ),
+        );
+      },
     },
   };
 }
@@ -196,7 +151,19 @@ export default defineConfig({
       // This is causing our packages/ directory to fail to parse, as they are not relative to the CWD.
       parserOpts: { plugins: ["typescript", "jsx"] },
       presets: [reactCompilerPreset()],
-    }),
+    }).then((plugin) => ({
+      ...plugin,
+      // Large chat modules make the compiler expensive on cold loads and every
+      // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
+      // Keep production builds and browser tests compiled, with an opt-in for
+      // debugging compiler-specific behavior in the development app.
+      apply: ((_config, { command, mode }) =>
+        command === "build" ||
+        mode === "test" ||
+        /^(1|true)$/i.test(
+          process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "",
+        )) satisfies Plugin["apply"],
+    })),
     tailwindcss(),
     centralIconPrunePlugin(),
     precompressPlugin(),

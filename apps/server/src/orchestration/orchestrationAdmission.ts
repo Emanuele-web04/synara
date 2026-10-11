@@ -1,37 +1,25 @@
 import type { OrchestrationCommand } from "@synara/contracts";
-import { Effect, Option, Queue } from "effect";
 
 export const ORCHESTRATION_COMMAND_QUEUE_CAPACITY = 256;
 export const ORCHESTRATION_COMMAND_CONTROL_RESERVE = 32;
 export const ORCHESTRATION_EVENT_PUBSUB_CAPACITY = 1_024;
-
-export interface OrchestrationCommandAdmissionPolicy {
-  readonly capacity: number;
-  readonly reservedCapacity: number;
-}
 
 export type OrchestrationCommandAdmissionDecision =
   | { readonly accepted: true }
   | { readonly accepted: false; readonly reason: "overloaded" | "stopped" };
 
 /**
- * Priority lanes, drained strictly highest-first.
+ * Priority for ready aggregate heads and commit waiters. Commands retain FIFO
+ * within an aggregate key; priority does not preempt an active command/commit.
  *
  * - `control`: settle or abort work that already exists (stop, interrupt,
- *   completion commands). Never blocked behind anything.
+ *   completion commands). Ahead of other ready keys, with reserved admission.
  * - `user`: direct user actions that create new work. Ahead of background
- *   traffic, but behind control so a stop can never queue behind a burst of
- *   turn starts.
+ *   traffic, but behind ready controls. Existing same-key work and occupied
+ *   preparation workers can still delay a control.
  * - `normal`: retention, projections and every other background command.
  */
 export type OrchestrationCommandLane = "control" | "user" | "normal";
-
-export interface OrchestrationCommandQueues<A> {
-  readonly control: Queue.Queue<A>;
-  readonly user: Queue.Queue<A>;
-  readonly normal: Queue.Queue<A>;
-  readonly wake: Queue.Queue<void>;
-}
 
 /**
  * Commands that may use the reserved capacity and stay admissible while the
@@ -65,6 +53,12 @@ export function usesReservedCommandAdmission(type: OrchestrationCommand["type"])
   }
 }
 
+export function isQuiescingCommandAdmissible(type: OrchestrationCommand["type"]): boolean {
+  // Settlement diagnostics must survive quiesce, but remain in the normal lane
+  // so activity traffic cannot consume the capacity reserved for stopping work.
+  return usesReservedCommandAdmission(type) || type === "thread.activity.append";
+}
+
 export function orchestrationCommandLane(
   type: OrchestrationCommand["type"],
 ): OrchestrationCommandLane {
@@ -74,7 +68,7 @@ export function orchestrationCommandLane(
   switch (type) {
     // Direct user actions must not sit behind retention and other background
     // projection traffic. They get their own lane rather than the control lane,
-    // so a burst of turn starts cannot delay a stop.
+    // so ready turn starts on other keys do not outrank a ready stop.
     case "thread.create":
     case "thread.turn.start":
     case "thread.checkpoint.revert":
@@ -84,84 +78,4 @@ export function orchestrationCommandLane(
     default:
       return "normal";
   }
-}
-
-export function tryAdmitOrchestrationCommand<A>(input: {
-  readonly queues: OrchestrationCommandQueues<A>;
-  readonly envelope: A;
-  readonly commandType: OrchestrationCommand["type"];
-  readonly policy?: OrchestrationCommandAdmissionPolicy;
-}): OrchestrationCommandAdmissionDecision {
-  const policy = input.policy ?? {
-    capacity: ORCHESTRATION_COMMAND_QUEUE_CAPACITY,
-    reservedCapacity: ORCHESTRATION_COMMAND_CONTROL_RESERVE,
-  };
-  if (
-    !Number.isSafeInteger(policy.capacity) ||
-    policy.capacity <= 0 ||
-    !Number.isSafeInteger(policy.reservedCapacity) ||
-    policy.reservedCapacity <= 0 ||
-    policy.reservedCapacity >= policy.capacity
-  ) {
-    throw new RangeError(
-      "Orchestration command admission requires a positive capacity and a smaller positive reserve.",
-    );
-  }
-  if (
-    input.queues.control.state._tag !== "Open" ||
-    input.queues.user.state._tag !== "Open" ||
-    input.queues.normal.state._tag !== "Open" ||
-    input.queues.wake.state._tag !== "Open"
-  ) {
-    return { accepted: false, reason: "stopped" };
-  }
-
-  const lane = orchestrationCommandLane(input.commandType);
-  // The reserve is measured against everything already queued, so only control
-  // commands can consume the last `reservedCapacity` slots.
-  const admissionLimit =
-    lane === "control" ? policy.capacity : policy.capacity - policy.reservedCapacity;
-  const queued =
-    Queue.sizeUnsafe(input.queues.control) +
-    Queue.sizeUnsafe(input.queues.user) +
-    Queue.sizeUnsafe(input.queues.normal);
-  if (queued >= admissionLimit) {
-    return { accepted: false, reason: "overloaded" };
-  }
-  const target = input.queues[lane];
-  if (!Queue.offerUnsafe(target, input.envelope)) {
-    return {
-      accepted: false,
-      reason: target.state._tag === "Open" ? "overloaded" : "stopped",
-    };
-  }
-  // One wake token per accepted envelope lets the worker drain the lanes in
-  // priority order without racing several destructive Queue.take operations.
-  Queue.offerUnsafe(input.queues.wake, undefined);
-  return { accepted: true };
-}
-
-export function takeNextOrchestrationCommand<A>(
-  queues: OrchestrationCommandQueues<A>,
-): Effect.Effect<A> {
-  // The token is offered after the envelope, so by the time one is taken its
-  // envelope is already queued: polling the higher lanes can only miss it if a
-  // lower lane holds it.
-  return Queue.take(queues.wake).pipe(
-    Effect.flatMap(() => Queue.poll(queues.control)),
-    Effect.flatMap(
-      Option.match({
-        onSome: Effect.succeed,
-        onNone: () =>
-          Queue.poll(queues.user).pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () => Queue.take(queues.normal),
-              }),
-            ),
-          ),
-      }),
-    ),
-  );
 }

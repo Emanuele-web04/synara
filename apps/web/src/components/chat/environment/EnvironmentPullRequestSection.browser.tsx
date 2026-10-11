@@ -7,29 +7,58 @@
 import "../../../index.css";
 
 import {
+  DEFAULT_SERVER_SETTINGS_VIEW,
+  ProjectId,
   ThreadId,
   type GitPullRequestSnapshotResult,
   type GitResolvedPullRequest,
   type GitStatusResult,
   type NativeApi,
+  type PullRequestAutoFixState,
 } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { gitPullRequestSnapshotQueryOptions, gitQueryKeys } from "~/lib/gitReactQuery";
+import { pullRequestQueryKeys } from "~/lib/pullRequestReactQuery";
+import { serverQueryKeys } from "~/lib/serverReactQuery";
+import { deferred } from "~/lib/pullRequestReactQuery.testUtils";
 import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 
-const { getGitStatus, getPullRequestSnapshot } = vi.hoisted(() => ({
+const {
+  getGitStatus,
+  getPullRequestSnapshot,
+  getPullRequestDetail,
+  runPullRequestAction,
+  getAutoFix,
+  setAutoFix,
+  getSettings,
+} = vi.hoisted(() => ({
   getGitStatus: vi.fn<NativeApi["git"]["status"]>(),
   getPullRequestSnapshot: vi.fn<NativeApi["git"]["pullRequestSnapshot"]>(),
+  getPullRequestDetail: vi.fn<NativeApi["pullRequests"]["detail"]>(),
+  getAutoFix: vi.fn<NativeApi["pullRequests"]["getAutoFix"]>(),
+  setAutoFix: vi.fn<NativeApi["pullRequests"]["setAutoFix"]>(),
+  getSettings: vi.fn<NativeApi["server"]["getSettings"]>(),
+  runPullRequestAction: vi.fn<NativeApi["pullRequests"]["action"]>(),
 }));
 
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => ({
     git: { status: getGitStatus, pullRequestSnapshot: getPullRequestSnapshot },
+    pullRequests: {
+      detail: getPullRequestDetail,
+      action: runPullRequestAction,
+      getAutoFix,
+      setAutoFix,
+    },
+    server: {
+      getSettings,
+      updateSettings: () => Promise.resolve(DEFAULT_SERVER_SETTINGS_VIEW),
+    },
   }),
 }));
 
@@ -104,15 +133,19 @@ function createQueryClient(commentsOverride?: GitPullRequestSnapshotResult["comm
   return queryClient;
 }
 
-function section(queryClient: QueryClient, onClose = vi.fn(), enabled = true) {
+function section(
+  queryClient: QueryClient,
+  onClose = vi.fn(),
+  options: { enabled?: boolean; projectId?: ProjectId } = {},
+) {
   return (
     <QueryClientProvider client={queryClient}>
       <EnvironmentPullRequestSection
         gitCwd={cwd}
-        enabled={enabled}
+        enabled={options.enabled ?? true}
         activeThreadId={threadId}
-        // No project: Merge/Status stay hidden and View PR falls back to the URL handler.
-        projectId={null}
+        // Link-only tests omit a project; status tests exercise the real mutation.
+        projectId={options.projectId ?? null}
         configuredRepositories={[{ nameWithOwner: "example/synara" }]}
         onOpenUrl={vi.fn()}
         onClose={onClose}
@@ -137,6 +170,36 @@ function draftCards() {
 }
 
 describe("EnvironmentPullRequestSection", () => {
+  beforeEach(() => {
+    getAutoFix.mockResolvedValue({ states: [] });
+    getSettings.mockResolvedValue(DEFAULT_SERVER_SETTINGS_VIEW);
+  });
+  it("turns off a redirected PR through its canonical identity and clears its visible checkbox", async () => {
+    const client = createQueryClient();
+    client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+    const state: PullRequestAutoFixState = {
+      threadId,
+      pullRequestUrl: "https://github.com/new/repo/pull/321",
+      requestedPullRequestUrl: pullRequest.url,
+      status: "watching",
+      pauseReason: null,
+      attempts: 0,
+      lastHandledHeadSha: null,
+      updatedAt: "2026-10-03T10:00:00.000Z",
+    };
+    client.setQueryData(pullRequestQueryKeys.autoFix(threadId), { states: [state] });
+    setAutoFix.mockResolvedValue({ state: null });
+    await renderSection(client);
+    await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+    const checkbox = page.getByTestId("pr-auto-fix-ci");
+    await expect.element(checkbox).toHaveAttribute("aria-checked", "true");
+    await checkbox.click();
+    await expect
+      .poll(() => setAutoFix.mock.calls)
+      .toEqual([[{ threadId, enabled: false, pullRequestUrl: state.pullRequestUrl }]]);
+    await expect.element(checkbox).toHaveAttribute("aria-checked", "false");
+    expect(client.getQueryData(pullRequestQueryKeys.autoFix(threadId))).toEqual({ states: [] });
+  });
   afterEach(async () => {
     await cleanup();
     for (const queryClient of queryClients) {
@@ -147,11 +210,107 @@ describe("EnvironmentPullRequestSection", () => {
     useComposerDraftStore.getState().clearDraftThread(threadId);
   });
 
+  it.each(["ready"] as const)(
+    "shows %s immediately while GitHub is pending and restores the menu on failure",
+    async (action) => {
+      const queryClient = createQueryClient();
+      const projectId = ProjectId.makeUnsafe("project-pr-status");
+      const initialPr = { ...pullRequest, isDraft: action === "ready" };
+      const statusKey = gitQueryKeys.status(cwd);
+      const snapshotKey = gitPullRequestSnapshotQueryOptions({
+        cwd,
+        reference: pullRequest.url,
+      }).queryKey;
+      queryClient.setQueryData<GitStatusResult>(statusKey, (current) =>
+        current ? { ...current, pr: initialPr } : current,
+      );
+      queryClient.setQueryData<GitPullRequestSnapshotResult>(snapshotKey, (current) =>
+        current ? { ...current, pullRequest: initialPr } : current,
+      );
+      getGitStatus.mockResolvedValue(queryClient.getQueryData<GitStatusResult>(statusKey)!);
+      getPullRequestSnapshot.mockResolvedValue(
+        queryClient.getQueryData<GitPullRequestSnapshotResult>(snapshotKey)!,
+      );
+      // Status changes do not depend on the separate merge-capability read finishing.
+      getPullRequestDetail.mockReturnValue(new Promise(() => {}));
+      const request = deferred<Awaited<ReturnType<NativeApi["pullRequests"]["action"]>>>();
+      runPullRequestAction.mockReturnValue(request.promise);
+      await render(section(queryClient, vi.fn(), { projectId }));
+
+      await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+      await page.getByRole("menuitem", { name: /^Status/ }).hover();
+      const targetLabel = action === "ready" ? "Ready for review" : "Draft";
+      const originalLabel = action === "ready" ? "Draft" : "Ready for review";
+      await page.getByRole("menuitemradio", { name: targetLabel, exact: true }).click();
+
+      await expect.poll(() => runPullRequestAction.mock.calls.length).toBe(1);
+      expect(runPullRequestAction).toHaveBeenCalledWith({
+        projectId,
+        repository: "example/synara",
+        number: 321,
+        action,
+      });
+      await expect
+        .element(page.getByRole("menuitem", { name: `Status ${targetLabel}`, exact: true }))
+        .toBeVisible();
+
+      request.reject(new Error("GitHub rejected the status change"));
+      await expect
+        .element(page.getByRole("menuitem", { name: `Status ${originalLabel}`, exact: true }))
+        .toBeVisible();
+    },
+  );
+
+  it("closes the pull request from the Status menu after confirmation", async () => {
+    const queryClient = createQueryClient();
+    const projectId = ProjectId.makeUnsafe("project-pr-status");
+    getPullRequestDetail.mockReturnValue(new Promise(() => {}));
+    runPullRequestAction.mockReturnValue(new Promise(() => {}));
+    await render(section(queryClient, vi.fn(), { projectId }));
+
+    await page.getByText("#321 Keep PR context visible", { exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Status/ }).hover();
+    await page.getByRole("menuitemradio", { name: "Closed", exact: true }).click();
+    expect(runPullRequestAction).not.toHaveBeenCalled();
+
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await expect.poll(() => runPullRequestAction.mock.calls.length).toBe(1);
+    expect(runPullRequestAction).toHaveBeenCalledWith({
+      projectId,
+      repository: "example/synara",
+      number: 321,
+      action: "close",
+    });
+  });
+
+  it("reopens a closed pull request from the Status menu", async () => {
+    const queryClient = createQueryClient();
+    const projectId = ProjectId.makeUnsafe("project-pr-status");
+    queryClient.setQueryData<GitStatusResult>(gitQueryKeys.status(cwd), (status) =>
+      status ? { ...status, pr: { ...pullRequest, state: "closed" } } : status,
+    );
+    getPullRequestDetail.mockReturnValue(new Promise(() => {}));
+    runPullRequestAction.mockReturnValue(new Promise(() => {}));
+    await render(section(queryClient, vi.fn(), { projectId }));
+
+    await page.getByRole("button", { name: "#321 Keep PR context visible Closed" }).click();
+    await page.getByRole("menuitem", { name: /^Status/ }).hover();
+    await page.getByRole("menuitem", { name: "Reopen", exact: true }).click();
+
+    await expect.poll(() => runPullRequestAction.mock.calls.length).toBe(1);
+    expect(runPullRequestAction).toHaveBeenCalledWith({
+      projectId,
+      repository: "example/synara",
+      number: 321,
+      action: "reopen",
+    });
+  });
+
   it("refreshes an old missing PR when the mounted panel opens", async () => {
     const queryClient = createQueryClient();
     const status = queryClient.getQueryData<GitStatusResult>(gitQueryKeys.status(cwd))!;
     getGitStatus.mockResolvedValue(status);
-    const view = await render(section(queryClient, vi.fn(), false));
+    const view = await render(section(queryClient, vi.fn(), { enabled: false }));
     queryClient.setQueryData(
       gitQueryKeys.status(cwd),
       { ...status, pr: null },
@@ -169,7 +328,7 @@ describe("EnvironmentPullRequestSection", () => {
     expect(getGitStatus).toHaveBeenCalledExactlyOnceWith({ cwd });
   });
 
-  it.each(["merged", "closed"] as const)(
+  it.each(["merged"] as const)(
     "shows a branch's %s PR on first open without loading active PR details",
     async (state) => {
       const queryClient = createQueryClient();
@@ -186,15 +345,21 @@ describe("EnvironmentPullRequestSection", () => {
       await expect.element(prRow).toBeVisible();
       await expect
         .element(page.getByText(`${stateLabel} on GitHub`, { exact: true }))
-        .toBeVisible();
+        .not.toBeInTheDocument();
       expect(queryClient.isFetching()).toBe(0);
+      expect(getSettings).not.toHaveBeenCalled();
       expect(getPullRequestSnapshot).not.toHaveBeenCalled();
 
       await prRow.click();
       await expect.element(page.getByText("View PR", { exact: true })).toBeVisible();
       await expect.element(page.getByText("Code changes", { exact: true })).toBeVisible();
       await expect.element(page.getByText("Add to chat", { exact: true })).toBeVisible();
-      await expect.element(page.getByText("Open in GitHub", { exact: true })).toBeVisible();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Copy link", exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Open in GitHub", exact: true }))
+        .toBeVisible();
       await expect.element(page.getByText("Repair", { exact: true })).not.toBeInTheDocument();
       await expect.element(page.getByText("Merge", { exact: true })).not.toBeInTheDocument();
     },
@@ -214,7 +379,10 @@ describe("EnvironmentPullRequestSection", () => {
     await expect
       .element(page.getByText("#321 Keep PR context visible", { exact: true }))
       .toBeVisible();
-    await expect.element(page.getByText("Merged on GitHub", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Merged", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText("Merged on GitHub", { exact: true }))
+      .not.toBeInTheDocument();
     await page.getByText("#321 Keep PR context visible", { exact: true }).click();
     await expect.element(page.getByText("Repair", { exact: true })).not.toBeInTheDocument();
   });

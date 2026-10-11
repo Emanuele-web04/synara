@@ -7,11 +7,12 @@
 // Layer: Chat composer UI
 // Exports: ComposerInputBanners
 
-import { type ReactNode } from "react";
+import { type ComponentProps, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { ComposerAutomationSetupBanner } from "./ComposerAutomationSetupBanner";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
+import { ComposerSnoozeNotice } from "./ComposerSnoozeNotice";
 import { COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME } from "./composerPickerStyles";
 
 interface ComposerInputBannersProps {
@@ -23,12 +24,15 @@ interface ComposerInputBannersProps {
   // Setup-mode control while gathering an automation's task/schedule (the exchange
   // itself renders as bubbles in the transcript).
   automationSetup: { onCancel: () => void } | null;
+  // A snoozed chat stays reachable; this strip explains what sending does.
+  snooze: ComponentProps<typeof ComposerSnoozeNotice> | null;
 }
 
 export function ComposerInputBanners({
   roundedTopReset,
   planFollowUp,
   automationSetup,
+  snooze,
 }: ComposerInputBannersProps) {
   let content: ReactNode = null;
   if (planFollowUp) {
@@ -37,7 +41,7 @@ export function ComposerInputBanners({
     content = <ComposerAutomationSetupBanner onCancel={automationSetup.onCancel} />;
   }
 
-  if (!content) {
+  if (!content && !snooze) {
     return null;
   }
 
@@ -49,6 +53,7 @@ export function ComposerInputBanners({
         roundedTopReset && "!rounded-t-none",
       )}
     >
+      {snooze ? <ComposerSnoozeNotice {...snooze} /> : null}
       {content}
     </div>
   );

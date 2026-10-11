@@ -48,7 +48,7 @@ describe("windowsProcess", () => {
     ).toBe(commandPath);
   });
 
-  it("does not search the working directory unless it is on PATH", () => {
+  it("does not implicitly search the working directory", () => {
     const workingDirectory = Path.join(root, "working");
     const pathDirectory = Path.join(root, "bin");
     mkdirSync(workingDirectory);
@@ -65,6 +65,23 @@ describe("windowsProcess", () => {
     ).toBe(commandPath);
   });
 
+  it("filters the working directory even when it is explicitly first on PATH", () => {
+    const workingDirectory = Path.join(root, "working");
+    const pathDirectory = Path.join(root, "bin");
+    mkdirSync(workingDirectory);
+    mkdirSync(pathDirectory);
+    writeFileSync(Path.join(workingDirectory, "codex.EXE"), "local executable");
+    const commandPath = Path.join(pathDirectory, "codex.CMD");
+    writeFileSync(commandPath, "@echo off\r\n");
+    expect(
+      resolveWindowsCommandPath("codex", {
+        platform: "win32",
+        cwd: workingDirectory,
+        env: { PATH: `${workingDirectory};${pathDirectory}`, PATHEXT: ".EXE;.CMD" },
+      }),
+    ).toBe(commandPath);
+  });
+
   it("resolves extensionless qualified shims through the same filesystem lookup", () => {
     const command = Path.join(root, "codex");
     writeFileSync(command, "#!/bin/sh\n");
@@ -76,6 +93,26 @@ describe("windowsProcess", () => {
       }),
     ).toBe(`${command}.CMD`);
   });
+
+  it.runIf(process.platform === "win32")(
+    "resolves project-relative shims against the launch working directory",
+    () => {
+      writeFileSync(Path.join(root, "codex.CMD"), "@echo off\r\n");
+      expect(
+        prepareWindowsSafeProcess(".\\codex", ["app-server"], {
+          platform: "win32",
+          cwd: root,
+          env: { PATH: "", PATHEXT: ".CMD", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        }),
+      ).toEqual({
+        command: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/s", "/v:off", "/c", 'call ".\\codex.CMD" "app-server"'],
+        shell: false,
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+      });
+    },
+  );
 
   it("keeps explicit path-like Windows executables without resolving", () => {
     expect(

@@ -15,7 +15,7 @@ function read(relative) {
 test("v0.7.2 feature guides are public navigation entries with complete frontmatter", () => {
   const meta = JSON.parse(read("content/docs/features/meta.json"));
 
-  for (const slug of ["thread-goals", "ios-simulator"]) {
+  for (const slug of ["thread-goals", "ios-simulator", "subagents", "conversation-history"]) {
     assert.ok(meta.pages.includes(slug), `${slug} is missing from feature navigation`);
     const frontmatter = parseFrontmatter(read(`content/docs/features/${slug}.mdx`));
     assert.equal(frontmatter.error, undefined, `${slug} has invalid frontmatter`);
@@ -47,6 +47,19 @@ test("workspace search shortcuts and destination behavior are documented", () =>
   assert.ok(shortcuts.includes("`mod+shift+f`"));
   assert.ok(organize.includes("## Search files and source"));
   assert.ok(organize.includes("right-dock file pane"));
+});
+
+test("new chat actions and side chat shortcut are documented", () => {
+  const shortcuts = read("content/docs/reference/keyboard-shortcuts.mdx");
+
+  for (const shortcut of [
+    "`mod+alt+s`",
+    "`mod+alt+shift+a`",
+    "`mod+alt+shift+s`",
+    "`mod+alt+shift+u`",
+  ]) {
+    assert.ok(shortcuts.includes(shortcut), `keyboard reference is missing ${shortcut}`);
+  }
 });
 
 test("the feature map links to the durable v0.7.2 guides", () => {
@@ -116,4 +129,93 @@ test("v0.8.3 documents packaged dependency recovery and persistent diff layout",
   assert.ok(providers.includes("does not repair the app bundle"));
   assert.ok(organize.includes("**Split diff** or **Stacked diff**"));
   assert.ok(organize.includes("after an app restart"));
+});
+
+test("v0.8.4 editor and browser guides are connected and preserve safety boundaries", () => {
+  const meta = JSON.parse(read("content/docs/features/meta.json"));
+  const overview = extractInternalLinks(read("content/docs/features/overview.mdx"));
+  const home = extractInternalLinks(read("content/docs/index.mdx"));
+  for (const slug of ["workspace-editor", "browser-sessions"]) {
+    const guide = read(`content/docs/features/${slug}.mdx`);
+    const frontmatter = parseFrontmatter(guide);
+    assert.equal(frontmatter.error, undefined);
+    assert.ok(frontmatter.values.title?.trim());
+    assert.ok(frontmatter.values.description?.trim());
+    assert.ok(meta.pages.includes(slug));
+    assert.ok(overview.includes(`/docs/features/${slug}`));
+    assert.ok(home.includes(`/docs/features/${slug}`));
+  }
+  const editor = read("content/docs/features/workspace-editor.mdx");
+  assert.ok(editor.includes("400 ms"));
+  assert.ok(editor.includes("does not repeatedly retry a failed write"));
+  assert.ok(editor.includes("**Partial diff**"));
+  assert.ok(editor.includes("Some files or changes may be missing"));
+  const browser = read("content/docs/features/browser-sessions.mdx");
+  assert.ok(browser.includes("shared across Synara browser tabs and agent workflows"));
+  assert.ok(browser.includes("Agent password filling and password generation are unavailable"));
+  assert.ok(browser.includes("Nothing is copied merely by opening or completing"));
+  assert.ok(browser.includes("clean app shutdown"));
+});
+
+test("v0.8.4 removes saved transcript marker promises and documents recovery", () => {
+  const organize = read("content/docs/features/organize.mdx");
+  const overview = read("content/docs/features/overview.mdx");
+  assert.ok(!organize.includes("## Mark transcript moments"));
+  assert.ok(!overview.includes("**Pins, markers & notes**"));
+  assert.ok(organize.includes("pinned messages and thread notes remain available"));
+  const runtime = read("content/docs/troubleshooting/tasks-and-runtime.mdx");
+  assert.ok(runtime.includes("**Restore answers**"));
+  assert.ok(runtime.includes("Restoring alone does not send anything"));
+  const claude = read("content/docs/providers/claude-code.mdx");
+  assert.ok(claude.includes("Historical recovery is partial"));
+  assert.ok(claude.includes("not evidence that your subscription usage or bill decreased"));
+});
+
+test("v0.8.4 documents selection actions and exact automation target limitations", () => {
+  const composer = read("content/docs/features/composer.mdx");
+  assert.ok(composer.includes("**Add to new Chat**"));
+  assert.ok(composer.includes("**Open in chat**"));
+  assert.ok(composer.includes("**Choose another window**"));
+  const automations = read("content/docs/workflows/automations.mdx");
+  assert.ok(automations.includes("enabled: false"));
+  assert.ok(automations.includes("Heartbeat automations continue an existing task session"));
+  assert.ok(automations.includes("its provider is fixed"));
+  assert.ok(automations.includes("omitting the target preserves the saved selection"));
+});
+
+test("v0.9.0 guides keep platform, source preservation and interruption boundaries explicit", () => {
+  const meta = JSON.parse(read("content/docs/features/meta.json"));
+  const overview = extractInternalLinks(read("content/docs/features/overview.mdx"));
+  for (const slug of ["computer-use", "project-import"]) {
+    assert.ok(meta.pages.includes(slug));
+    assert.ok(overview.includes(`/docs/features/${slug}`));
+    assert.equal(parseFrontmatter(read(`content/docs/features/${slug}.mdx`)).error, undefined);
+  }
+  const computer = read("content/docs/features/computer-use.mdx");
+  for (const text of [
+    "in beta",
+    "macOS only",
+    "Linux is coming soon",
+    "/computer-use",
+    "Input Monitoring",
+    "Closing the preview only hides it",
+    "Escape interrupts the current action",
+  ]) {
+    assert.ok(computer.includes(text), `missing Computer boundary: ${text}`);
+  }
+  assert.ok(
+    read("content/docs/features/project-import.mdx").includes("Source history is preserved"),
+  );
+  assert.ok(read("content/docs/providers/codex.mdx").includes("10% or less remaining"));
+  assert.ok(
+    read("content/docs/providers/claude-code.mdx").includes("Resume from summary (recommended)"),
+  );
+});
+
+test("Hubs guide documents Stable availability, human approvals and separate app state", () => {
+  const hubs = read("content/docs/features/hubs.mdx");
+  assert.ok(hubs.includes("Synara 1.0.2 Stable"));
+  assert.ok(hubs.includes("It never approves a worker's pending request for you"));
+  assert.ok(hubs.includes("Stable and Beta keep separate Hubs and chats"));
+  assert.ok(hubs.includes("Beta data is not copied back to Stable"));
 });

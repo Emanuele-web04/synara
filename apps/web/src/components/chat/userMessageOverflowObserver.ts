@@ -1,7 +1,7 @@
-type OverflowMeasure = () => void;
+type OverflowMeasure = (contentHeight: number) => void;
 
 const measuresByElement = new Map<Element, OverflowMeasure>();
-const pendingElements = new Set<Element>();
+const pendingElements = new Map<Element, number>();
 let sharedObserver: ResizeObserver | null = null;
 let pendingFrame: number | null = null;
 
@@ -9,8 +9,8 @@ function flushPendingMeasures(): void {
   pendingFrame = null;
   const elements = [...pendingElements];
   pendingElements.clear();
-  for (const element of elements) {
-    measuresByElement.get(element)?.();
+  for (const [element, contentHeight] of elements) {
+    measuresByElement.get(element)?.(contentHeight);
   }
 }
 
@@ -20,7 +20,7 @@ function getSharedObserver(): ResizeObserver | null {
   }
   sharedObserver ??= new ResizeObserver((entries) => {
     for (const entry of entries) {
-      pendingElements.add(entry.target);
+      pendingElements.set(entry.target, entry.contentRect.height);
     }
     if (pendingFrame === null) {
       pendingFrame = requestAnimationFrame(flushPendingMeasures);

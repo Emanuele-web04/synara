@@ -29,12 +29,18 @@ export const DiffPanelPatchViewport = memo(
     isLoading: boolean;
     hasNoChanges: boolean;
     error: string | null;
+    refreshStatus?: string | null;
     loadingLabel: string;
     emptyLabel: string;
     unavailableLabel: string;
     viewKind: "repo" | "turn";
   }) {
     const viewportClassName = "flex h-full min-h-0 w-full flex-1 flex-col";
+    const refreshStatus = props.refreshStatus ? (
+      <p role="status" className="shrink-0 px-3 py-2 text-ui-xs text-muted-foreground/75">
+        {props.refreshStatus}
+      </p>
+    ) : null;
 
     if (props.error && !props.renderablePatch) {
       return (
@@ -44,13 +50,22 @@ export const DiffPanelPatchViewport = memo(
             fill="flex"
             className="items-start justify-start px-3 pt-3"
           >
-            <p className="text-left text-[11px] text-red-500/80">{props.error}</p>
+            <p className="text-left text-ui-sm text-red-500/80">{props.error}</p>
           </PanelStateMessage>
         </div>
       );
     }
 
     if (!props.renderablePatch) {
+      if (refreshStatus) {
+        return (
+          <div className={viewportClassName}>
+            <PanelStateMessage density="compact" fill="flex">
+              {refreshStatus}
+            </PanelStateMessage>
+          </div>
+        );
+      }
       if (props.isLoading) {
         return (
           <div className={viewportClassName}>
@@ -76,6 +91,7 @@ export const DiffPanelPatchViewport = memo(
     if (props.renderablePatch.kind === "files") {
       return (
         <div className={viewportClassName}>
+          {refreshStatus}
           <DiffPanelFileList
             renderableFiles={props.renderableFiles}
             resolvedTheme={props.resolvedTheme}
@@ -93,11 +109,12 @@ export const DiffPanelPatchViewport = memo(
 
     return (
       <div className={cn(viewportClassName, "overflow-auto p-2")}>
+        {refreshStatus}
         <div className="space-y-2">
-          <p className="text-[11px] text-muted-foreground/75">{props.renderablePatch.reason}</p>
+          <p className="text-ui-sm text-muted-foreground/75">{props.renderablePatch.reason}</p>
           <pre
             className={cn(
-              "max-h-[72vh] rounded-md border border-border/70 bg-background/70 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground/90",
+              "max-h-[72vh] rounded-md border border-border/70 bg-background/70 p-3 font-mono text-ui-sm leading-relaxed text-muted-foreground/90",
               props.diffWordWrap
                 ? "overflow-auto whitespace-pre-wrap wrap-break-word"
                 : "overflow-auto",
@@ -124,6 +141,7 @@ export const DiffPanelPatchViewport = memo(
       previous.isLoading === next.isLoading &&
       previous.hasNoChanges === next.hasNoChanges &&
       previous.error === next.error &&
+      previous.refreshStatus === next.refreshStatus &&
       previous.loadingLabel === next.loadingLabel &&
       previous.emptyLabel === next.emptyLabel &&
       previous.unavailableLabel === next.unavailableLabel &&

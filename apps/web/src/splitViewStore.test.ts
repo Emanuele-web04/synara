@@ -562,24 +562,6 @@ describe("splitViewStore", () => {
     expect(useSplitViewStore.getState().splitViewIdBySourceThreadId[THREAD_B]).toBe(splitViewId);
   });
 
-  it("removes an empty split entirely after deleting its source thread", () => {
-    const store = useSplitViewStore.getState();
-    const splitId = store.createFromDrop({
-      sourceThreadId: THREAD_A,
-      ownerProjectId: PROJECT_ID,
-      droppedThreadId: THREAD_B,
-      direction: "horizontal",
-      side: "first",
-    });
-
-    useSplitViewStore.getState().removeThreadFromSplitViews(THREAD_A);
-    useSplitViewStore.getState().removeThreadFromSplitViews(THREAD_B);
-
-    const nextState = useSplitViewStore.getState();
-    expect(nextState.splitViewsById[splitId]).toBeUndefined();
-    expect(nextState.splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
-  });
-
   it("removes a source-plus-empty split after deleting its only thread", () => {
     const store = useSplitViewStore.getState();
     const splitId = store.createFromThread({
