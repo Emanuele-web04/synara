@@ -26,6 +26,7 @@ import {
 } from "@synara/shared/threadSummary";
 
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
+import { textSegmentsCoverText } from "./messageTextSegments";
 import {
   countOutstandingBackgroundWork,
   derivePendingBackgroundWork,
@@ -232,7 +233,8 @@ export function threadTurnStatesEqual(
   return (
     left !== undefined &&
     latestTurnsEqual(left.latestTurn, right.latestTurn) &&
-    sourceProposedPlansEqual(left.pendingSourceProposedPlan, right.pendingSourceProposedPlan)
+    sourceProposedPlansEqual(left.pendingSourceProposedPlan, right.pendingSourceProposedPlan) &&
+    left.pendingTurnStartMessageId === right.pendingTurnStartMessageId
   );
 }
 
@@ -642,11 +644,12 @@ export function normalizeChatMessage(
 function normalizeChatMessages(
   incoming: ReadModelThread["messages"],
   previous: ChatMessage[] | undefined,
+  preserveHistory = false,
 ): ChatMessage[] {
   const previousById = new Map(previous?.map((message) => [message.id, message] as const));
-  const nextMessages = incoming
-    .slice(-MAX_THREAD_MESSAGES)
-    .map((message) => normalizeChatMessage(message, previousById.get(message.id)));
+  const nextMessages = (preserveHistory ? incoming : incoming.slice(-MAX_THREAD_MESSAGES)).map(
+    (message) => normalizeChatMessage(message, previousById.get(message.id)),
+  );
   return arraysShallowEqual(previous, nextMessages) ? previous : nextMessages;
 }
 
@@ -765,6 +768,7 @@ function mergeReadModelMessagesWithLiveHotPath(
     // Turn the snapshot has just settled: its message contents are final, so the
     // "local row looks richer" heuristics must not resurrect mid-stream text.
     readonly authoritativeTurnId?: TurnId | null;
+    readonly preserveLoadedHistory?: boolean;
   },
 ): ReadModelThread["messages"] {
   if (!previousThread || previousThread.messages.length === 0) {
@@ -777,6 +781,13 @@ function mergeReadModelMessagesWithLiveHotPath(
   );
   const mergedById = new Map<MessageId, ReadModelThread["messages"][number]>();
   let changed = false;
+  if (options?.preserveLoadedHistory) {
+    const incomingIds = new Set(incomingMessages.map((message) => message.id));
+    for (const previousMessage of previousThread.messages) {
+      mergedById.set(previousMessage.id, readModelMessageFromChatMessage(previousMessage));
+      if (!incomingIds.has(previousMessage.id)) changed = true;
+    }
+  }
 
   for (const incomingMessage of incomingMessages) {
     const previousMessage = previousMessageById.get(incomingMessage.id);
@@ -825,8 +836,19 @@ function mergeReadModelMessagesWithLiveHotPath(
     }
 
     changed = true;
+    // Segments must spell the text they ship with: the snapshot's describe its
+    // own (shorter) text, so keep whichever side still covers the retained text.
+    const { textSegments: _incomingTextSegments, ...incomingMessageWithoutSegments } =
+      incomingMessage;
+    const retainedTextSegments = [incomingMessage.textSegments, previousMessage.textSegments].find(
+      (segments) =>
+        segments !== undefined &&
+        segments.length > 0 &&
+        textSegmentsCoverText(segments, previousMessage.text),
+    );
     mergedById.set(incomingMessage.id, {
-      ...incomingMessage,
+      ...incomingMessageWithoutSegments,
+      ...(retainedTextSegments !== undefined ? { textSegments: retainedTextSegments } : {}),
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
@@ -1070,6 +1092,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
   incoming: ReadModelThread,
   previousThread: Thread | undefined,
   snapshotSequence?: number,
+  preserveLoadedHistory = false,
 ): ReadModelThread {
   if (!previousThread) {
     return incoming;
@@ -1094,11 +1117,21 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     settledLocalTurnId === null && shouldPreserveRunningTurn(previousThread, incoming);
   const mergedMessages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread, {
     authoritativeTurnId: settledLocalTurnId,
+    preserveLoadedHistory,
   });
   const messages =
     settledLocalTurnId === null
       ? mergedMessages
       : clearSettledTurnStreamingFlags(mergedMessages, settledLocalTurnId);
+  const incomingActivityIds = preserveLoadedHistory
+    ? new Set(incoming.activities.map((activity) => activity.id))
+    : undefined;
+  const activities = incomingActivityIds
+    ? [
+        ...previousThread.activities.filter((activity) => !incomingActivityIds.has(activity.id)),
+        ...incoming.activities,
+      ]
+    : incoming.activities;
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
     preserveRunningTurn,
     incomingLatestTurn: incoming.latestTurn,
@@ -1123,6 +1156,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
     : incoming.snoozeReminderAt;
   if (
     messages === incoming.messages &&
+    activities === incoming.activities &&
     session === incoming.session &&
     latestTurn === incoming.latestTurn &&
     claudeCacheReview === incoming.claudeCacheReview &&
@@ -1134,6 +1168,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
   return {
     ...incoming,
     messages,
+    activities,
     session,
     latestTurn,
     ...(claudeCacheReview !== undefined ? { claudeCacheReview } : {}),
@@ -1224,6 +1259,7 @@ function normalizeTurnDiffSummaries(
     const files = normalizeTurnDiffFiles(checkpoint.files, existing?.files);
     if (
       existing &&
+      existing.startedAt === (checkpoint.startedAt ?? existing.startedAt) &&
       existing.completedAt === checkpoint.completedAt &&
       existing.status === checkpoint.status &&
       existing.assistantMessageId === (checkpoint.assistantMessageId ?? undefined) &&
@@ -1233,8 +1269,10 @@ function normalizeTurnDiffSummaries(
     ) {
       return existing;
     }
+    const startedAt = checkpoint.startedAt ?? existing?.startedAt;
     return {
       turnId: checkpoint.turnId,
+      ...(startedAt ? { startedAt } : {}),
       completedAt: checkpoint.completedAt,
       status: checkpoint.status,
       assistantMessageId: checkpoint.assistantMessageId ?? undefined,
@@ -1249,6 +1287,7 @@ function normalizeTurnDiffSummaries(
 export function normalizeActivities(
   incoming: ReadModelThread["activities"],
   previous: Thread["activities"] | undefined,
+  preserveHistory = false,
 ): Thread["activities"] {
   const previousActivities = previous ? dedupeActivitiesById(previous) : undefined;
   const incomingActivities = dedupeActivitiesById(incoming);
@@ -1266,7 +1305,7 @@ export function normalizeActivities(
     }
     return activity;
   });
-  const cappedActivities = capThreadActivities(nextActivities);
+  const cappedActivities = preserveHistory ? nextActivities : capThreadActivities(nextActivities);
   return arraysShallowEqual(previous, cappedActivities) ? previous : cappedActivities;
 }
 
@@ -1295,6 +1334,7 @@ export interface ThreadActivityAccumulator {
 
 export function createThreadActivityAccumulator(
   previous: Thread["activities"],
+  preserveHistory = false,
 ): ThreadActivityAccumulator {
   const deduped = dedupeActivitiesById(previous);
   // `dedupeActivitiesById` only returns a new array when it actually removed a duplicate, so a
@@ -1342,7 +1382,7 @@ export function createThreadActivityAccumulator(
           changed = true;
         }
       }
-      if (working.length > MAX_THREAD_ACTIVITIES) {
+      if (!preserveHistory && working.length > MAX_THREAD_ACTIVITIES) {
         const capped = capThreadActivities(working);
         // `capThreadActivities` only filters, so an unchanged length means unchanged contents.
         if (capped.length !== working.length) {
@@ -1369,7 +1409,9 @@ export function withOrchestrationEventSequence(
   // Match the read-model projection: runtime journal activity sequences and
   // orchestration envelope sequences are different counters. Overwriting the
   // former only on live updates reorders snapshot history into the new turn.
-  return { ...activity, sequence: activity.sequence ?? sequence };
+  return activity.sequence !== undefined
+    ? activity
+    : { ...activity, sequence, sequenceSource: "orchestration" };
 }
 
 /**
@@ -1600,6 +1642,7 @@ function activitiesEqual(
     deepEqualJson(left.payload, right.payload) &&
     left.turnId === right.turnId &&
     left.sequence === right.sequence &&
+    left.sequenceSource === right.sequenceSource &&
     left.createdAt === right.createdAt
   );
 }
@@ -1735,11 +1778,15 @@ export function normalizeThreadFromReadModel(
   previous: Thread | undefined,
   snapshotSequence?: number,
   /** `restoringSession`: see resolveInitialLastVisitedAt. */
-  options: { readonly restoringSession?: boolean } = {},
+  options: { readonly restoringSession?: boolean; readonly preserveMessageHistory?: boolean } = {},
 ): Thread {
   const modelSelection = normalizeModelSelection(incoming.modelSelection, previous?.modelSelection);
   const session = normalizeThreadSession(incoming.session, previous?.session);
-  const messages = normalizeChatMessages(incoming.messages, previous?.messages);
+  const messages = normalizeChatMessages(
+    incoming.messages,
+    previous?.messages,
+    options.preserveMessageHistory,
+  );
   const proposedPlans = normalizeProposedPlans(incoming.proposedPlans, previous?.proposedPlans);
   const latestTurn = normalizeLatestTurn(incoming.latestTurn, previous?.latestTurn);
   const handoff =
@@ -1795,7 +1842,11 @@ export function normalizeThreadFromReadModel(
     incoming.checkpoints,
     previous?.turnDiffSummaries,
   );
-  const activities = normalizeActivities(incoming.activities, previous?.activities);
+  const activities = normalizeActivities(
+    incoming.activities,
+    previous?.activities,
+    options?.preserveMessageHistory,
+  );
   const incomingPendingInteractions = Object.hasOwn(incoming, "pendingInteractions")
     ? (incoming.pendingInteractions ?? [])
     : previous?.pendingInteractions;
@@ -1847,6 +1898,10 @@ export function normalizeThreadFromReadModel(
   const pendingSourceProposedPlan =
     latestTurn?.sourceProposedPlan ??
     (incoming.session?.status === "running" ? previous?.pendingSourceProposedPlan : undefined);
+  // Snapshots carry no pending request. Preserve known clears as well as live
+  // claims; native compaction explicitly clears the server's pending request.
+  const pendingTurnStartMessageId =
+    claudeCacheReview?.status === "compacting" ? null : previous?.pendingTurnStartMessageId;
 
   if (
     previous &&
@@ -1869,6 +1924,7 @@ export function normalizeThreadFromReadModel(
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.latestTurn === latestTurn &&
     previous.pendingSourceProposedPlan === pendingSourceProposedPlan &&
+    previous.pendingTurnStartMessageId === pendingTurnStartMessageId &&
     previous.lastVisitedAt === lastVisitedAt &&
     (previous.parentThreadId ?? null) === (incoming.parentThreadId ?? null) &&
     (previous.creationSource ?? null) === (incoming.creationSource ?? null) &&
@@ -1935,6 +1991,7 @@ export function normalizeThreadFromReadModel(
     isPinned: incoming.isPinned ?? false,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
+    ...(pendingTurnStartMessageId !== undefined ? { pendingTurnStartMessageId } : {}),
     lastVisitedAt,
     parentThreadId: incoming.parentThreadId ?? null,
     creationSource: incoming.creationSource ?? null,
@@ -2145,6 +2202,12 @@ export function normalizeThreadShellSnapshot(
       ...(latestTurn?.sourceProposedPlan
         ? { pendingSourceProposedPlan: latestTurn.sourceProposedPlan }
         : {}),
+      // Keep known clears when shell snapshots replace the normalized turn state.
+      ...(claudeCacheReview?.status === "compacting"
+        ? { pendingTurnStartMessageId: null }
+        : previous?.pendingTurnStartMessageId !== undefined
+          ? { pendingTurnStartMessageId: previous.pendingTurnStartMessageId }
+          : {}),
     },
   };
 }

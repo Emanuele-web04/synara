@@ -1,0 +1,18 @@
+---
+title: Conversation history and reload
+description: Load earlier messages, restore recent context and understand when recovered conversations are ready for actions.
+---
+
+In **1.0.2-beta.1**, long chats open at their recent messages and work. Choose **Load earlier messages** to retrieve older pages without losing your reading position. **Go to first message**, transcript search, pinned messages and message links load the pages needed for their target. Imported history keeps its original loader. Paging does not truncate stored conversations or exports. A single long turn can exceed the ordinary page target.
+
+## Cached display and verified actions
+
+A private browser IndexedDB cache can show recent context promptly. It stores conversation content locally, without connection credentials or authentication tokens. Stable and Beta retain separate browser profiles, server identities and data homes. Denied storage, quota failure or an oversized entry falls back to normal loading. Clearing browser storage clears this cache.
+
+Cached approvals, questions, provider actions and automatic queued sends wait for an authoritative snapshot or complete replay. Displayed messages are not proof that a running turn is still live. A new server process discards old displayed detail and cursors before accepting fresh state. If synchronization fails, queued sends wait for recovery.
+
+## Limits and older servers
+
+The client targets 100 messages and 100 activities per recent window, expanding boundary turns. The cache holds at most 32 records, 4 MB each, 16 MB total and seven days of age. Older servers without paging metadata keep their existing snapshot behavior. Search and export retain their existing server-side history paths.
+
+See [organize and navigate](/docs/features/organize), [queue pause controls](/docs/features/composer#pause-and-resume-queued-messages), and [task recovery](/docs/troubleshooting/tasks-and-runtime).

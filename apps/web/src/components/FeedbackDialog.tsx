@@ -218,7 +218,7 @@ export function FeedbackDialogForm({
       {category === "bug" && onDraftGithubIssue && (
         <>
           <div className="border-t" />
-          <p className="text-center text-xs text-muted-foreground">
+          <p className="text-center text-ui-xs text-muted-foreground">
             Opens a new thread. Your agent interviews you, then files the issue with your GitHub
             account, but only after you confirm.
           </p>

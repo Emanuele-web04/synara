@@ -1,10 +1,21 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from "@tanstack/react-router";
 import type { PropsWithChildren } from "react";
 import { afterEach, expect, it } from "vitest";
-import { renderHook } from "vitest-browser-react";
+import { render, renderHook } from "vitest-browser-react";
 
-import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  reclaimUnreachableDetachedDraftThreads,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { serverQueryKeys } from "../lib/serverReactQuery";
 import { runComposerSendOnce } from "../lib/composerSendOwnership";
@@ -16,7 +27,7 @@ import {
   createBrowserTestServerConfig,
   createBrowserTestServerSettings,
 } from "../test/browserHarness";
-import { useOpenThreadTabs } from "./useOpenThreadTabs";
+import { useOpenThreadTabs, useReadRouteThreadId } from "./useOpenThreadTabs";
 
 function createQueryClient() {
   const queryClient = new QueryClient();
@@ -124,5 +135,45 @@ it("starts and stops the worktree tab spinner with its send before a session exi
     await operation;
     await hook.unmount();
     queryClient.clear();
+  }
+});
+
+it("protects the committed draft using router history when the browser URL differs", async () => {
+  const projectId = ProjectId.makeUnsafe("report-project");
+  const draftThreadId = ThreadId.makeUnsafe("report-draft");
+  let readThreadId: () => ThreadId | null = () => null;
+  function Shell() {
+    readThreadId = useReadRouteThreadId();
+    return <Outlet />;
+  }
+  const root = createRootRoute({ component: Shell });
+  const thread = createRoute({
+    getParentRoute: () => root,
+    path: "/$threadId",
+    component: () => <p>Thread</p>,
+  });
+  const router = createRouter({
+    routeTree: root.addChildren([thread]),
+    history: createMemoryHistory({ initialEntries: ["/previous-thread"] }),
+  });
+  const view = await render(<RouterProvider router={router} />);
+
+  try {
+    await expect.poll(() => readThreadId()).toBe("previous-thread");
+    const readAfterNavigation = readThreadId;
+    useComposerDraftStore.getState().registerDraftThread(draftThreadId, {
+      projectId,
+      isReclaimableDraft: true,
+    });
+    await router.navigate({ to: "/$threadId", params: { threadId: draftThreadId } });
+    await expect.poll(() => router.state.status).toBe("idle");
+
+    const displayedId = readAfterNavigation();
+    expect(displayedId).toBe(draftThreadId);
+    expect(window.location.pathname).not.toBe(`/${draftThreadId}`);
+    reclaimUnreachableDetachedDraftThreads(new Set(displayedId ? [displayedId] : []));
+    expect(useComposerDraftStore.getState().getDraftThread(draftThreadId)).not.toBeNull();
+  } finally {
+    await view.unmount();
   }
 });

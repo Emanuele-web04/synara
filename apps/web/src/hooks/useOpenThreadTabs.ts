@@ -8,7 +8,7 @@
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -163,7 +163,7 @@ export function useActivateThreadTab(): (threadId: ThreadId) => Promise<void> {
  */
 export function useReadRouteThreadId(): () => ThreadId | null {
   const router = useRouter();
-  return () => {
+  return useCallback(() => {
     for (const match of router.state.matches) {
       const threadId = (match.params as { threadId?: unknown }).threadId;
       if (typeof threadId === "string") {
@@ -171,5 +171,5 @@ export function useReadRouteThreadId(): () => ThreadId | null {
       }
     }
     return null;
-  };
+  }, [router]);
 }

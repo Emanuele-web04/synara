@@ -17,6 +17,7 @@ import {
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeRequestId,
   type RuntimeMode,
@@ -137,6 +138,43 @@ import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 const PROVIDER = "cursor" as const;
 export const resolveCursorStartInstanceId = resolveProviderSessionInstanceId;
 
+const nonNegativeInteger = (value: number | null | undefined) =>
+  value !== undefined && value !== null && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+
+/**
+ * ACP's final PromptResponse usage is a cumulative session counter. Keep it
+ * separate from the live context occupancy updates so Profile can account for
+ * Cursor spend without treating the context window as spend a second time.
+ */
+export function cursorPromptUsageSnapshot(
+  usage: Acp.Usage | null | undefined,
+  contextUsage?: ThreadTokenUsageSnapshot,
+): ThreadTokenUsageSnapshot | undefined {
+  if (!usage || !Number.isFinite(usage.totalTokens) || usage.totalTokens < 0) {
+    return undefined;
+  }
+  const totalProcessedTokens = nonNegativeInteger(usage.totalTokens);
+  if (totalProcessedTokens === undefined) return undefined;
+  const inputTokens = nonNegativeInteger(usage.inputTokens);
+  const outputTokens = nonNegativeInteger(usage.outputTokens);
+  const reasoningOutputTokens = nonNegativeInteger(usage.thoughtTokens);
+  const cachedInputTokens = nonNegativeInteger(usage.cachedReadTokens);
+  const cacheCreationInputTokens = nonNegativeInteger(usage.cachedWriteTokens);
+  return {
+    // Cursor's ACP response does not report context occupancy. The cumulative
+    // spend counter is still useful to Profile via totalProcessedTokens.
+    ...(contextUsage ?? { usedTokens: 0 }),
+    totalProcessedTokens,
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+  };
+}
+
 export function stampCursorTerminalEventInstance(
   event: ProviderRuntimeEvent,
   providerInstanceId: ProviderSession["providerInstanceId"],
@@ -232,6 +270,7 @@ interface CursorSessionContext {
   activeTurnId: TurnId | undefined;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  latestContextUsage: ThreadTokenUsageSnapshot | undefined;
   // Epoch-ms of the last inbound ACP activity for the active turn; drives the
   // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
@@ -241,6 +280,13 @@ interface CursorSessionContext {
   // startup configuration has completed under the thread lock.
   sessionConfigReady: Deferred.Deferred<void> | undefined;
   stopped: boolean;
+}
+
+function cursorNativeSessionRefs(
+  ctx: CursorSessionContext,
+): ProviderRuntimeEvent["providerRefs"] | undefined {
+  const sessionId = parseCursorResume(ctx.session.resumeCursor)?.sessionId;
+  return sessionId === undefined ? undefined : { providerThreadId: sessionId };
 }
 
 function clearCursorActiveTurn(ctx: CursorSessionContext, turnId: TurnId): boolean {
@@ -1061,6 +1107,7 @@ export function makeCursorAdapter(
             activeTurnId: undefined,
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            latestContextUsage: undefined,
             lastTurnActivityAt: undefined,
             latestSessionCostUsd: undefined,
             sessionConfigReady,
@@ -1174,6 +1221,7 @@ export function makeCursorAdapter(
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    ctx.latestContextUsage = event.usage;
                     recordCursorSessionCost(ctx, event.cost);
                     yield* offerRuntimeEvent(
                       input.lifecycleGeneration,
@@ -1182,6 +1230,9 @@ export function makeCursorAdapter(
                         provider: PROVIDER,
                         threadId: ctx.threadId,
                         turnId: ctx.activeTurnId,
+                        ...(cursorNativeSessionRefs(ctx)
+                          ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                          : {}),
                         usage: event.usage,
                         rawPayload: event.rawPayload,
                       }),
@@ -1451,6 +1502,23 @@ export function makeCursorAdapter(
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
+                const promptUsage = cursorPromptUsageSnapshot(result.usage, ctx.latestContextUsage);
+                if (promptUsage !== undefined) {
+                  yield* offerRuntimeEvent(
+                    ctx.lifecycleGeneration,
+                    makeAcpTokenUsageEvent({
+                      stamp: yield* makeEventStamp(),
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      turnId,
+                      ...(cursorNativeSessionRefs(ctx)
+                        ? { providerRefs: cursorNativeSessionRefs(ctx) }
+                        : {}),
+                      usage: promptUsage,
+                      rawPayload: result,
+                    }),
+                  );
+                }
                 yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),

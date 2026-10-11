@@ -2,6 +2,7 @@ import { ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DRAFT_NAVIGATION_COALESCE_WINDOW_MS,
   draftNavigationSlotKey,
   getInFlightDraftThreadIds,
   runDraftNavigationOnce,
@@ -131,6 +132,37 @@ describe("stagedDraftNavigation", () => {
     expect(rollback).toHaveBeenCalledOnce();
     expect(getInFlightDraftThreadIds().has(threadId)).toBe(false);
   });
+  it.each(["before staging", "during navigation"] as const)(
+    "releases a cancelled draft %s without finalizing it",
+    async (cancelAt) => {
+      const draftThreadId = ThreadId.makeUnsafe(`cancelled-${cancelAt}`);
+      const controller = new AbortController();
+      const stage = vi.fn();
+      const finalize = vi.fn();
+      const rollback = vi.fn();
+      if (cancelAt === "before staging") controller.abort();
+
+      const committed = await stageDraftNavigation({
+        draftThreadId,
+        signal: controller.signal,
+        stage,
+        navigate: async () => {
+          expect(getInFlightDraftThreadIds().has(draftThreadId)).toBe(true);
+          controller.abort();
+        },
+        isDestinationActive: () => true,
+        finalize,
+        rollback,
+      });
+
+      expect(committed).toBe(false);
+      expect(stage).toHaveBeenCalledTimes(cancelAt === "before staging" ? 0 : 1);
+      expect(finalize).not.toHaveBeenCalled();
+      expect(rollback).toHaveBeenCalledOnce();
+      expect(getInFlightDraftThreadIds().has(draftThreadId)).toBe(false);
+    },
+  );
+
   it("releases draft tracking even when rollback itself throws", async () => {
     const draftThreadId = ThreadId.makeUnsafe("rollback-throws");
     const rollback = vi.fn(() => {
@@ -148,5 +180,72 @@ describe("stagedDraftNavigation", () => {
     ).rejects.toThrow("rollback failed");
     expect(rollback).toHaveBeenCalledOnce();
     expect(getInFlightDraftThreadIds().has(draftThreadId)).toBe(false);
+  });
+
+  it("does not let a navigation that never settles block later attempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const stuckRun = vi.fn(() => new Promise<string>(() => undefined));
+      const retryRun = vi.fn(async () => "retry");
+      const slotKey = draftNavigationSlotKey("project-stuck", "chat");
+
+      const stuck = runDraftNavigationOnce(slotKey, stuckRun);
+      // A double click right away still joins the pending attempt.
+      expect(runDraftNavigationOnce(slotKey, retryRun)).toBe(stuck);
+      await Promise.resolve();
+      expect(stuckRun).toHaveBeenCalledOnce();
+      expect(retryRun).not.toHaveBeenCalled();
+
+      // Once the attempt is clearly lost, "New thread" must work again without a reload.
+      vi.advanceTimersByTime(DRAFT_NAVIGATION_COALESCE_WINDOW_MS);
+      await expect(runDraftNavigationOnce(slotKey, retryRun)).resolves.toBe("retry");
+      expect(retryRun).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("keeps the newer draft when expired preparation finishes after the retry", async () => {
+    vi.useFakeTimers();
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let activeDraft = "home";
+    const finalized: string[] = [];
+    const staged: string[] = [];
+    const slotKey = draftNavigationSlotKey("project-slow-group", "chat");
+    const createDraft = (name: string, beforeStage: Promise<void>) =>
+      runDraftNavigationOnce(slotKey, async (signal?: AbortSignal) => {
+        await beforeStage;
+        return stageDraftNavigation({
+          signal,
+          stage: () => {
+            staged.push(name);
+          },
+          navigate: async () => {
+            activeDraft = name;
+          },
+          isDestinationActive: () => activeDraft === name,
+          finalize: () => {
+            finalized.push(name);
+          },
+          rollback: () => undefined,
+        });
+      });
+    try {
+      const older = createDraft("older", preparation);
+      await Promise.resolve();
+      vi.advanceTimersByTime(DRAFT_NAVIGATION_COALESCE_WINDOW_MS);
+      await expect(createDraft("newer", Promise.resolve())).resolves.toBe(true);
+      expect(activeDraft).toBe("newer");
+      releasePreparation();
+      await older;
+      expect(activeDraft).toBe("newer");
+      expect(staged).toEqual(["newer"]);
+      expect(finalized).toEqual(["newer"]);
+    } finally {
+      releasePreparation();
+      vi.useRealTimers();
+    }
   });
 });

@@ -210,6 +210,17 @@ describe("buildFeedbackSubmission", () => {
     expect(submission.details).toContain("[REDACTED]");
   });
 
+  it.each([
+    ['"password": "correct horse battery staple"', "correct horse battery staple"],
+    ["'api_key': 'private key with spaces'", "private key with spaces"],
+    ['"token": "prefix\\\"secret suffix"', "secret suffix"],
+  ])("redacts quoted credential assignments: %s", (assignment, secret) => {
+    const { text } = redactObviousSecrets(`config: {${assignment}, "retries": 3}`);
+
+    expect(text).not.toContain(secret);
+    expect(text).toContain('[REDACTED], "retries": 3');
+  });
+
   it("redacts credentials embedded in URLs but keeps the host", () => {
     const { text } = redactObviousSecrets(
       "DATABASE_URL=postgres://deploy:hunter2pass@db.internal:5432/app",

@@ -86,8 +86,9 @@ const SECRET_PATTERNS = [
   // (`secrets=`, `client_secrets=`), or numeric-suffixed (`TOKEN1=`,
   // `API_KEY2=`). Words that merely start with a credential stem
   // (`passwordless=`, `tokenizer=`, `myPassword=`) are not credentials and
-  // must survive unredacted.
-  /(?<![A-Za-z0-9_])(?:[A-Za-z0-9]+_)*(?:password|passwd|secret|api[_-]?key|apikey|token)s?[0-9]*(?:_[A-Za-z0-9]+)*\s*[:=]\s*["']?[^\s"'`;,)}]+/giu,
+  // must survive unredacted. Quoted JSON keys and values with spaces or
+  // escaped quotes are consumed together so no credential suffix remains.
+  /(?<![A-Za-z0-9_])["']?(?:[A-Za-z0-9]+_)*(?:password|passwd|secret|api[_-]?key|apikey|token)s?[0-9]*(?:_[A-Za-z0-9]+)*["']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"'`;,)}&]+)/giu,
 ] as const;
 
 // Usernames may contain dots and other punctuation (john.doe), so the segment

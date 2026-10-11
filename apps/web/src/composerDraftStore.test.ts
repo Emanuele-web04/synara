@@ -365,8 +365,16 @@ describe("composerDraftStore project draft thread mapping", () => {
       isReclaimableDraft: true,
     });
     store.setPrompt(detachedId, "");
-    store.registerDraftThread(displayedId, { projectId, entryPoint: "chat" });
-    store.registerDraftThread(promotedId, { projectId, entryPoint: "chat" });
+    store.registerDraftThread(displayedId, {
+      projectId,
+      entryPoint: "chat",
+      isReclaimableDraft: true,
+    });
+    store.registerDraftThread(promotedId, {
+      projectId,
+      entryPoint: "chat",
+      isReclaimableDraft: true,
+    });
     store.markDraftThreadPromoting(promotedId);
 
     reclaimUnreachableDetachedDraftThreads(new Set([displayedId]));

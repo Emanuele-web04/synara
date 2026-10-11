@@ -96,6 +96,13 @@ Inside a thread the coordinator started, the task is labelled with the hub, for 
 the Release Synara coordinator**.
 Click it to go back to the coordinator conversation.
 
+Pending approvals from hub threads also appear above the coordinator's composer. Each card
+names the thread (click to open it), shows the command or tool request, and offers the same
+choices as the thread: **Approve once**, **Always allow this session** when available,
+**Decline**, and **Cancel turn**. You can answer several threads from here. Answering in either
+conversation clears the request in both. These choices are human interface actions; the
+coordinator and other agents have no approval tool.
+
 Useful requests:
 
 ```text

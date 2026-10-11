@@ -21,6 +21,7 @@ import {
 } from "../composerDraftStore";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { readNativeApi } from "../nativeApi";
+import { useReadRouteThreadId } from "../hooks/useOpenThreadTabs";
 import { isSplitRoute } from "../splitViewRoute";
 import { collectSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
@@ -65,6 +66,7 @@ function ChatThreadRouteContent() {
     draftProjectId: draftThreadState?.projectId ?? null,
   });
   const navigate = useNavigate();
+  const readRouteThreadId = useReadRouteThreadId();
   const [missingThreadRecoveryState, setMissingThreadRecoveryState] =
     useState<EmptyRouteRestoreRecoveryState>("idle");
   const mountedRef = useRef(true);
@@ -110,14 +112,14 @@ function ChatThreadRouteContent() {
       // draft — by the time it runs, the location has settled.
       window.setTimeout(() => {
         const displayedThreadIds = collectSplitViewThreadIds();
-        const routedThreadId = window.location.pathname.match(/^\/([^/?#]+)/)?.[1];
-        if (routedThreadId) {
-          displayedThreadIds.add(ThreadId.makeUnsafe(decodeURIComponent(routedThreadId)));
-        }
+        // Router matches also cover Electron's hash history, where the browser
+        // pathname names the app document rather than the displayed chat.
+        const routedThreadId = readRouteThreadId();
+        if (routedThreadId) displayedThreadIds.add(routedThreadId);
         reclaimUnreachableDetachedDraftThreads(displayedThreadIds);
       }, 0);
     };
-  }, [threadId]);
+  }, [readRouteThreadId, threadId]);
 
   useEffect(() => {
     if (!threadsHydrated || !splitViewsHydrated) {
