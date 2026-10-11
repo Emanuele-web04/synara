@@ -5422,7 +5422,9 @@ describe("ProviderCommandReactor", () => {
           instanceId: "codex",
           model: "gpt-5-codex",
         },
-        message: expect.stringContaining("User intent: Fix the backend authentication callback race"),
+        message: expect.stringContaining(
+          "User intent: Fix the backend authentication callback race",
+        ),
       }),
     );
     expect((await readHarnessThread(harness))?.title).toBe("Backend auth callback");
@@ -5581,9 +5583,7 @@ describe("ProviderCommandReactor", () => {
         manualTitlePinned: true,
       }),
     );
-    harness.generateThreadTitle.mockReturnValue(
-      Effect.succeed({ title: "Fresh explicit title" }),
-    );
+    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Fresh explicit title" }));
 
     const result = await Effect.runPromise(
       harness.reactor.regenerateThreadTitle({ threadId: ThreadId.makeUnsafe("thread-1") }),

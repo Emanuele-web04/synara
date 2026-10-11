@@ -8,10 +8,18 @@ import {
 describe("threadTitleRefreshContext", () => {
   it("returns null when no usable material", () => {
     expect(
-      buildThreadTitleRefreshContext({ currentTitle: "Old", recentUserIntents: [], compactSummary: null }),
+      buildThreadTitleRefreshContext({
+        currentTitle: "Old",
+        recentUserIntents: [],
+        compactSummary: null,
+      }),
     ).toBeNull();
     expect(
-      buildThreadTitleRefreshContext({ currentTitle: "", recentUserIntents: ["  "], compactSummary: " " }),
+      buildThreadTitleRefreshContext({
+        currentTitle: "",
+        recentUserIntents: ["  "],
+        compactSummary: " ",
+      }),
     ).toBeNull();
   });
 

@@ -7970,25 +7970,25 @@ export default function Sidebar() {
             if (!nextOpen)
               setEditProjectDialog((current) => current && { ...current, open: false });
           }}
-        belowField={
-          <div className="border-t border-border/60 pt-3">
-            <TitleRefreshModePicker
-              value={editProjectDialogProject?.titleRefreshMode ?? null}
-              onChange={(mode) => {
-                if (!editProjectDialogProject) return;
-                void setProjectTitleRefreshMode(editProjectDialogProject.id, mode).catch(
-                  (error) => {
-                    toastManager.add({
-                      type: "error",
-                      title: "Could not update title setting",
-                      description: error instanceof Error ? error.message : "An error occurred.",
-                    });
-                  },
-                );
-              }}
-            />
-          </div>
-        }
+          belowField={
+            <div className="border-t border-border/60 pt-3">
+              <TitleRefreshModePicker
+                value={editProjectDialogProject?.titleRefreshMode ?? null}
+                onChange={(mode) => {
+                  if (!editProjectDialogProject) return;
+                  void setProjectTitleRefreshMode(editProjectDialogProject.id, mode).catch(
+                    (error) => {
+                      toastManager.add({
+                        type: "error",
+                        title: "Could not update title setting",
+                        description: error instanceof Error ? error.message : "An error occurred.",
+                      });
+                    },
+                  );
+                }}
+              />
+            </div>
+          }
           onSave={(next) =>
             handleEditProjectSave(
               editProjectDialogProject.id,

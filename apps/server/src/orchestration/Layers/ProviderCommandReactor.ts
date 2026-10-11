@@ -9115,21 +9115,17 @@ const make = Effect.gen(function* () {
   ): number =>
     messages.filter(
       (message) =>
-        message.role === "user" &&
-        message.streaming !== true &&
-        message.text.trim().length > 0,
+        message.role === "user" && message.streaming !== true && message.text.trim().length > 0,
     ).length;
 
-  const appendTitleRefreshAuditActivity = (
-    input: {
-      readonly threadId: ThreadId;
-      readonly triggeredBy: "explicit" | "automatic";
-      readonly mode: "off" | "suggested" | "automatic";
-      readonly status: string;
-      readonly previousTitle: string;
-      readonly candidate: string | null;
-    },
-  ) =>
+  const appendTitleRefreshAuditActivity = (input: {
+    readonly threadId: ThreadId;
+    readonly triggeredBy: "explicit" | "automatic";
+    readonly mode: "off" | "suggested" | "automatic";
+    readonly status: string;
+    readonly previousTitle: string;
+    readonly candidate: string | null;
+  }) =>
     orchestrationEngine
       .dispatch({
         type: "thread.activity.append",
@@ -9253,9 +9249,7 @@ const make = Effect.gen(function* () {
       }
       const readModel = yield* orchestrationEngine.getReadModel();
       const settings = yield* serverSettings.getSettings;
-      const project = readModel.projects.find(
-        (candidate) => candidate.id === thread.projectId,
-      );
+      const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
       const mode = resolveThreadTitleRefreshMode({
         global: settings.titleRefresh.mode,
         ...(project?.titleRefreshMode !== undefined && project.titleRefreshMode !== null
@@ -9271,9 +9265,7 @@ const make = Effect.gen(function* () {
       const userIntents = thread.messages
         .filter(
           (message) =>
-            message.role === "user" &&
-            message.streaming !== true &&
-            message.text.trim().length > 0,
+            message.role === "user" && message.streaming !== true && message.text.trim().length > 0,
         )
         .map((message) => message.text)
         .slice(-5);
@@ -9286,7 +9278,8 @@ const make = Effect.gen(function* () {
         compactSummary: null,
       });
       const context =
-        refreshContext ?? (triggeredBy === "explicit" ? buildThreadTitleConversationContext(thread.messages) : null);
+        refreshContext ??
+        (triggeredBy === "explicit" ? buildThreadTitleConversationContext(thread.messages) : null);
       if (!context) {
         return { status: "no-context", title: null };
       }

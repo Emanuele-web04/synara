@@ -15,9 +15,9 @@ describe("threadTitleRefreshPolicy", () => {
 
   it("resolves thread > project > global", () => {
     expect(resolveThreadTitleRefreshMode({ global: "automatic" })).toBe("automatic");
-    expect(
-      resolveThreadTitleRefreshMode({ global: "automatic", project: "suggested" }),
-    ).toBe("suggested");
+    expect(resolveThreadTitleRefreshMode({ global: "automatic", project: "suggested" })).toBe(
+      "suggested",
+    );
     expect(
       resolveThreadTitleRefreshMode({
         global: "automatic",

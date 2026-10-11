@@ -25,15 +25,17 @@ describe("threadTitleRefreshTrigger", () => {
   });
 
   it("blocks on turn count", () => {
-    expect(
-      evaluateThreadTitleRefreshTrigger({ ...base, newUserTurnsSinceRefresh: 2 }),
-    ).toEqual({ shouldRefresh: false, blockedBy: "need-more-turns" });
+    expect(evaluateThreadTitleRefreshTrigger({ ...base, newUserTurnsSinceRefresh: 2 })).toEqual({
+      shouldRefresh: false,
+      blockedBy: "need-more-turns",
+    });
   });
 
   it("blocks on elapsed time since last attempt", () => {
-    expect(
-      evaluateThreadTitleRefreshTrigger({ ...base, millisSinceLastAttempt: 60_000 }),
-    ).toEqual({ shouldRefresh: false, blockedBy: "need-more-time" });
+    expect(evaluateThreadTitleRefreshTrigger({ ...base, millisSinceLastAttempt: 60_000 })).toEqual({
+      shouldRefresh: false,
+      blockedBy: "need-more-time",
+    });
     expect(
       evaluateThreadTitleRefreshTrigger({
         ...base,
@@ -43,9 +45,10 @@ describe("threadTitleRefreshTrigger", () => {
   });
 
   it("blocks while provider turn active and while pinned", () => {
-    expect(
-      evaluateThreadTitleRefreshTrigger({ ...base, providerTurnActive: true }),
-    ).toEqual({ shouldRefresh: false, blockedBy: "provider-turn-active" });
+    expect(evaluateThreadTitleRefreshTrigger({ ...base, providerTurnActive: true })).toEqual({
+      shouldRefresh: false,
+      blockedBy: "provider-turn-active",
+    });
     expect(evaluateThreadTitleRefreshTrigger({ ...base, manualTitlePinned: true })).toEqual({
       shouldRefresh: false,
       blockedBy: "pinned",
@@ -53,14 +56,15 @@ describe("threadTitleRefreshTrigger", () => {
   });
 
   it("blocks on rate limit and backoff (fake clock)", () => {
-    expect(
-      evaluateThreadTitleRefreshTrigger({ ...base, attemptsInWindow: 3 }),
-    ).toEqual({ shouldRefresh: false, blockedBy: "rate-limited" });
+    expect(evaluateThreadTitleRefreshTrigger({ ...base, attemptsInWindow: 3 })).toEqual({
+      shouldRefresh: false,
+      blockedBy: "rate-limited",
+    });
     expect(
       evaluateThreadTitleRefreshTrigger({ ...base, notBeforeMillis: base.nowMillis + 1 }),
     ).toEqual({ shouldRefresh: false, blockedBy: "backoff" });
-    expect(
-      evaluateThreadTitleRefreshTrigger({ ...base, notBeforeMillis: base.nowMillis }),
-    ).toEqual({ shouldRefresh: true, blockedBy: null });
+    expect(evaluateThreadTitleRefreshTrigger({ ...base, notBeforeMillis: base.nowMillis })).toEqual(
+      { shouldRefresh: true, blockedBy: null },
+    );
   });
 });

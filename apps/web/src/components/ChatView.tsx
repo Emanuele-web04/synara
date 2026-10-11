@@ -6149,14 +6149,14 @@ export default function ChatView({
                 <ComposerBranchMismatchBanner {...settledThreadBranchMismatch} />
               </div>
             ) : null}
-              {activeThread?.pendingSuggestedTitle && activeThread ? (
-                <div className="pb-2">
-                  <TitleSuggestionSlot
-                    threadId={activeThread.id}
-                    candidate={activeThread.pendingSuggestedTitle}
-                  />
-                </div>
-              ) : null}
+            {activeThread?.pendingSuggestedTitle && activeThread ? (
+              <div className="pb-2">
+                <TitleSuggestionSlot
+                  threadId={activeThread.id}
+                  candidate={activeThread.pendingSuggestedTitle}
+                />
+              </div>
+            ) : null}
             {/* Pending approvals and AskUserQuestion prompts both render as a detached
                   card floating just above the composer (padding gives the measured gap),
                   instead of a banner fused into the composer surface. An approval takes
