@@ -13,6 +13,13 @@ import type {
 } from "@synara/contracts";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
+import {
+  EMPTY_MODEL_CAPABILITIES,
+  getClaudeModelOptionCapabilities,
+  getModelCapabilities,
+  isConfiguredCustomClaudeModel,
+  normalizeModelSlug,
+} from "@synara/shared/model";
 
 import {
   getAppModelOptions,
@@ -33,6 +40,7 @@ import {
 } from "../lib/providerDiscoveryReactQuery";
 import {
   getOmpModelSelectionIssue,
+  formatProviderModelOptionName,
   mergeDynamicModelOptions,
   type ProviderModelOption,
 } from "../providerModelOptions";
@@ -59,7 +67,7 @@ export interface ProviderModelCatalog {
    * must feed them through (see {@link selectedRuntimeModel}).
    */
   runtimeModelsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
-  /** Account-local runtime descriptors; known accounts are empty until discovery resolves. */
+  /** Account-local discovery plus explicit custom Claude controls, even before discovery. */
   runtimeModelsByProviderInstance: Partial<
     Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>
   >;
@@ -76,6 +84,55 @@ export interface ProviderModelCatalog {
 }
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
+
+// A selected-model hint is not configuration. Derive optional Claude controls
+// only from this account's saved custom list, and retract cached synthetic
+// descriptors as soon as that list changes. Real resolved model metadata wins.
+function withConfiguredClaudeModels(
+  models: ReadonlyArray<ProviderModelDescriptor>,
+  configuredCustomModels: readonly string[],
+): ReadonlyArray<ProviderModelDescriptor> {
+  const seen = new Set<string>();
+  const result = models.map((model): ProviderModelDescriptor => {
+    const slug = normalizeModelSlug(model.slug, "claudeAgent") ?? model.slug;
+    seen.add(slug);
+    const resolvedKnownModel =
+      model.resolvedModel &&
+      getModelCapabilities("claudeAgent", model.resolvedModel) !== EMPTY_MODEL_CAPABILITIES;
+    if (!resolvedKnownModel && isConfiguredCustomClaudeModel(slug, configuredCustomModels)) {
+      return {
+        ...model,
+        isConfiguredCustomModel: true,
+        optionDescriptors: getClaudeModelOptionCapabilities(slug, configuredCustomModels)
+          .optionDescriptors,
+      };
+    }
+    if (model.isConfiguredCustomModel === true) {
+      const {
+        isConfiguredCustomModel: _configured,
+        optionDescriptors: _synthetic,
+        ...discovered
+      } = model;
+      return discovered;
+    }
+    return model;
+  });
+  for (const configured of configuredCustomModels) {
+    const slug = normalizeModelSlug(configured, "claudeAgent");
+    if (!slug || seen.has(slug) || !isConfiguredCustomClaudeModel(slug, configuredCustomModels)) {
+      continue;
+    }
+    seen.add(slug);
+    result.push({
+      slug,
+      name: formatProviderModelOptionName({ provider: "claudeAgent", slug }),
+      isConfiguredCustomModel: true,
+      optionDescriptors: getClaudeModelOptionCapabilities(slug, configuredCustomModels)
+        .optionDescriptors,
+    });
+  }
+  return result;
+}
 
 // Module scope: `useQueries` recombines whenever this function's identity changes.
 function selectQueryData<Data>(
@@ -658,11 +715,23 @@ export function useProviderModelCatalog(input: {
     ],
   );
 
+  const claudeCatalogInstanceId = modelQueryOptionsByProvider.claudeAgent.queryKey[3];
+  const claudeRuntimeModels = useMemo(() => {
+    const instance = providerInstances.find(
+      (candidate) =>
+        candidate.provider === "claudeAgent" && candidate.instanceId === claudeCatalogInstanceId,
+    );
+    return withConfiguredClaudeModels(
+      claudeDynamicModelsQuery.data?.models ?? [],
+      instance ? getCustomModelsForProviderInstance(settings, instance) : [],
+    );
+  }, [claudeCatalogInstanceId, claudeDynamicModelsQuery.data?.models, providerInstances, settings]);
+
   const runtimeModelsByProvider = useMemo<
     Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>
   >(
     () => ({
-      claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
+      claudeAgent: claudeRuntimeModels,
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
       antigravity: antigravityModelsQuery.data?.models ?? [],
@@ -675,7 +744,7 @@ export function useProviderModelCatalog(input: {
     }),
     [
       antigravityModelsQuery.data?.models,
-      claudeDynamicModelsQuery.data?.models,
+      claudeRuntimeModels,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
       droidDynamicModelsQuery.data?.models,
@@ -691,13 +760,19 @@ export function useProviderModelCatalog(input: {
     const byInstance: Partial<Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>> =
       {};
     for (const instance of providerInstances) {
-      // A configured account without discovery must not fall back to a sibling's
-      // runtime metadata. Its static/custom model options remain available above.
+      // A configured account without discovery must not borrow a sibling's
+      // metadata. Its own explicit custom controls can be available immediately.
+      const discoveredModels = dynamicModelsByProviderInstance[instance.instanceId]?.models ?? [];
       byInstance[instance.instanceId] =
-        dynamicModelsByProviderInstance[instance.instanceId]?.models ?? [];
+        instance.provider === "claudeAgent"
+          ? withConfiguredClaudeModels(
+              discoveredModels,
+              getCustomModelsForProviderInstance(settings, instance),
+            )
+          : discoveredModels;
     }
     return byInstance;
-  }, [dynamicModelsByProviderInstance, providerInstances]);
+  }, [dynamicModelsByProviderInstance, providerInstances, settings]);
 
   const selectedRuntimeModel = useMemo(
     () =>

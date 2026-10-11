@@ -3,13 +3,15 @@
 // Layer: Web unit tests
 // Depends on: providerModelOptions shared formatting helpers.
 
-import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
+import { ClaudeModelOptions, MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { getAppModelOptions } from "./appSettings";
 
 import {
   buildModelSelection,
   buildNextProviderOptions,
+  buildProviderOptionPatch,
   formatProviderModelOptionName,
   getOmpModelSelectionIssue,
   groupProviderModelOptionsWithFavorites,
@@ -20,6 +22,30 @@ import {
   shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
 } from "./providerModelOptions";
+
+describe("Claude native effort default", () => {
+  it("clears the explicit effort before persisting Auto and preserves the explicit compaction budget", () => {
+    const patch = buildProviderOptionPatch("claudeAgent", "effort", "auto");
+    const options = buildNextProviderOptions(
+      "claudeAgent",
+      { effort: "high", autoCompactWindow: "200k" },
+      patch,
+    );
+    expect(patch).toEqual({ effort: undefined });
+    expect(Schema.decodeUnknownSync(ClaudeModelOptions)(options)).toEqual({
+      effort: undefined,
+      autoCompactWindow: "200k",
+    });
+    expect(JSON.parse(JSON.stringify(options))).toEqual({ autoCompactWindow: "200k" });
+  });
+
+  it("retains literal Auto values for other option protocols", () => {
+    expect(buildProviderOptionPatch("claudeAgent", "autoCompactWindow", "auto")).toEqual({
+      autoCompactWindow: "auto",
+    });
+    expect(buildProviderOptionPatch("opencode", "variant", "auto")).toEqual({ variant: "auto" });
+  });
+});
 
 describe("Antigravity model options", () => {
   it("keeps the base model and effort as separate selection fields", () => {

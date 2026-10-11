@@ -1466,7 +1466,7 @@ function toolErrorText(result: Record<string, unknown> | undefined): string {
   return content[0]?.text ?? "";
 }
 
-function makeClaudeGatewayRuntime(models: ModelInfo[]) {
+function makeClaudeGatewayRuntime(models: ModelInfo[], customModels: readonly string[] = []) {
   const queries: Array<{
     options: ClaudeQueryOptions;
     modelChanges: Array<string | undefined>;
@@ -1533,7 +1533,9 @@ function makeClaudeGatewayRuntime(models: ModelInfo[]) {
           }),
         ),
       ),
-      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(
+        ServerSettingsService.layerTest({ providers: { claudeAgent: { customModels } } }),
+      ),
       Layer.provide(
         Layer.succeed(ProviderHealth, {
           getStatuses: Effect.succeed([]),
@@ -1566,17 +1568,25 @@ describe("AgentGateway", () => {
     { value: "sonnet[1m]", resolvedModel: "claude-sonnet-5" },
     { value: "sonnet-4.6", resolvedModel: "claude-sonnet-4-6-20251117" },
     { value: "fable", resolvedModel: "claude-fable-5-1[1m]" },
+    { value: "team-model", resolvedModel: "claude-fable-5-1" },
+    // The author's proxy case needs explicit server configuration; the same
+    // unconfigured unknown-model negative case below remains unchanged.
+    { value: "unknown-model", configuredCustom: true },
   ]) {
     it.effect(
       `carries discovered Claude context windows through MCP and runtime: ${model.value} -> ${model.resolvedModel ?? model.value}`,
       () => {
-        const runtime = makeClaudeGatewayRuntime([
-          {
-            ...model,
-            displayName: model.value,
-            description: "SDK-discovered model",
-          },
-        ]);
+        const customModels = model.configuredCustom ? [model.value] : [];
+        const runtime = makeClaudeGatewayRuntime(
+          [
+            {
+              ...model,
+              displayName: model.value,
+              description: "SDK-discovered model",
+            },
+          ],
+          customModels,
+        );
         return Effect.gen(function* () {
           const adapter = yield* ClaudeAdapter;
           const discovery = yield* ProviderDiscoveryService;
@@ -1615,6 +1625,15 @@ describe("AgentGateway", () => {
               )?.allowedValues,
               ["auto", "200k", "1m"],
             );
+            if (model.configuredCustom) {
+              // MCP accepts real schema values. Native Auto is omission, not
+              // the descriptor-only UI sentinel that would fail input decode.
+              assert.deepEqual(
+                construction.optionsByModel[model.value]?.find((rule) => rule.key === "effort")
+                  ?.allowedValues,
+                ["low", "medium", "high", "xhigh", "max", "ultrathink", "ultracode"],
+              );
+            }
 
             // A rejected window must fail before creating a thread or starting a turn.
             const invalid = yield* harness.callTool({
@@ -1694,6 +1713,9 @@ describe("AgentGateway", () => {
                 provider: "claudeAgent",
                 runtimeMode: "full-access",
                 modelSelection: saved.modelSelection,
+                ...(customModels.length
+                  ? { providerOptions: { claudeAgent: { customModels } } }
+                  : {}),
               });
               yield* adapter.sendTurn({
                 threadId: create.threadId,
@@ -1708,7 +1730,7 @@ describe("AgentGateway", () => {
                   : model.value;
               assert.equal(
                 query.options.model,
-                window === "1m" && !expectedModel.endsWith("[1m]")
+                window === "1m" && !model.configuredCustom && !expectedModel.endsWith("[1m]")
                   ? `${expectedModel}[1m]`
                   : expectedModel,
               );

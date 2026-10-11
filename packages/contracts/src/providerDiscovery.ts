@@ -277,6 +277,8 @@ export const ProviderReadPluginResult = Schema.Struct({
 export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 
 export const ProviderListModelsInput = Schema.Struct({
+  // Server-resolved Claude custom models; caller values are never authoritative.
+  customModels: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   provider: ProviderDiscoveryKind,
   // Interactive reads await revalidation; manual refresh still respects server throttling.
   refresh: Schema.optional(Schema.Literals(["if-stale", "now"])),
@@ -322,6 +324,7 @@ export const ProviderModelVariantDescriptor = Schema.Struct({
 export type ProviderModelVariantDescriptor = typeof ProviderModelVariantDescriptor.Type;
 
 export const ProviderModelDescriptor = Schema.Struct({
+  isConfiguredCustomModel: Schema.optional(Schema.Boolean),
   slug: TrimmedNonEmptyString,
   resolvedModel: Schema.optional(TrimmedNonEmptyString),
   name: TrimmedNonEmptyString,

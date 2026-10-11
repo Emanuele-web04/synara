@@ -76,6 +76,23 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
 
+// Persisted draft builders own mutable arrays. Copy configured Claude model
+// lists so queued/recovered options do not alias the live settings snapshot.
+function copyProviderStartOptionsForPersistence(
+  options: ProviderStartOptions,
+): DeepMutable<ProviderStartOptions> {
+  const { claudeAgent, ...otherProviders } = options;
+  if (!claudeAgent) return { ...otherProviders };
+  const { customModels, ...claudeOptions } = claudeAgent;
+  return {
+    ...otherProviders,
+    claudeAgent: {
+      ...claudeOptions,
+      ...(customModels ? { customModels: [...customModels] } : {}),
+    },
+  };
+}
+
 function normalizePersistedModelSelectionMap(value: unknown): ModelSelectionByProviderInstance {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
   const result: ModelSelectionByProviderInstance = {};
@@ -684,7 +701,7 @@ function normalizePersistedQueuedTurns(
     const providerOptionsForDispatch = Schema.is(ProviderStartOptions)(
       candidate.providerOptionsForDispatch,
     )
-      ? candidate.providerOptionsForDispatch
+      ? copyProviderStartOptionsForPersistence(candidate.providerOptionsForDispatch)
       : undefined;
     const sourceProposedPlan = Schema.is(PersistedSourceProposedPlanReference)(
       candidate.sourceProposedPlan,
@@ -1123,7 +1140,7 @@ function normalizePersistedDraftsByThreadId(
     const providerOptionsForDispatch = Schema.is(ProviderStartOptions)(
       draftCandidate.providerOptionsForDispatch,
     )
-      ? draftCandidate.providerOptionsForDispatch
+      ? copyProviderStartOptionsForPersistence(draftCandidate.providerOptionsForDispatch)
       : undefined;
     const normalizedQueuedTurns = queuedTurns ?? [];
     const restoredSourceProposedPlan = Schema.is(PersistedRestoredSourceProposedPlan)(
@@ -1285,7 +1302,11 @@ export function partializeComposerDraftStoreState(
           selectedPromptEffort: queuedTurn.selectedPromptEffort,
           modelSelection: queuedTurn.modelSelection,
           ...(queuedTurn.providerOptionsForDispatch
-            ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+            ? {
+                providerOptionsForDispatch: copyProviderStartOptionsForPersistence(
+                  queuedTurn.providerOptionsForDispatch,
+                ),
+              }
             : {}),
           enableComputerControl:
             resolveComputerControlMode(
@@ -1320,7 +1341,11 @@ export function partializeComposerDraftStoreState(
         selectedPromptEffort: queuedTurn.selectedPromptEffort,
         modelSelection: queuedTurn.modelSelection,
         ...(queuedTurn.providerOptionsForDispatch
-          ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+          ? {
+              providerOptionsForDispatch: copyProviderStartOptionsForPersistence(
+                queuedTurn.providerOptionsForDispatch,
+              ),
+            }
           : {}),
         enableComputerControl:
           resolveComputerControlMode(
@@ -1516,7 +1541,11 @@ export function partializeComposerDraftStoreState(
           }
         : {}),
       ...(draft.providerOptionsForDispatch
-        ? { providerOptionsForDispatch: draft.providerOptionsForDispatch }
+        ? {
+            providerOptionsForDispatch: copyProviderStartOptionsForPersistence(
+              draft.providerOptionsForDispatch,
+            ),
+          }
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
@@ -1726,6 +1755,13 @@ export function toHydratedThreadDraft(
       : {}),
     restoredSourceProposedPlan: persistedDraft.restoredSourceProposedPlan ?? null,
     modelSelectionByProvider,
+    ...(persistedDraft.providerOptionsForDispatch
+      ? {
+          providerOptionsForDispatch: copyProviderStartOptionsForPersistence(
+            persistedDraft.providerOptionsForDispatch,
+          ),
+        }
+      : {}),
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,

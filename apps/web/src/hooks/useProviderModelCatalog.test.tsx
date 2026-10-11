@@ -13,11 +13,13 @@ import { useState } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_MODEL_CAPABILITIES, getClaudeModelOptionCapabilities } from "@synara/shared/model";
 
 import type { ProviderModelCatalog } from "./useProviderModelCatalog";
 import { useProviderModelCatalog } from "./useProviderModelCatalog";
 import * as nativeApi from "../nativeApi";
 import { providerModelsQueryOptions } from "../lib/providerDiscoveryReactQuery";
+import { getRuntimeAwareModelCapabilities } from "../components/chat/runtimeModelCapabilities";
 
 const mocks = vi.hoisted(() => ({
   useAppSettings: vi.fn(),
@@ -503,7 +505,7 @@ describe("useProviderModelCatalog", () => {
     ).toBe(false);
   });
 
-  it("keeps an undiscovered sibling runtime catalog empty beside a warm default", () => {
+  it("keeps an undiscovered sibling's custom controls separate from a warm default", () => {
     mocks.useAppSettings.mockReturnValue({
       settings: {
         ...SETTINGS,
@@ -532,12 +534,148 @@ describe("useProviderModelCatalog", () => {
     }).at(-1)!;
 
     expect(catalog.runtimeModelsByProvider.claudeAgent[0]?.supportsAutoMode).toBe(true);
-    // Consumers may fall back to their provider catalog only for an unknown account;
-    // a configured account without discovery has no known runtime capabilities yet.
-    expect(catalog.runtimeModelsByProviderInstance.claude_work).toEqual([]);
+    // The saved custom entry gets optional controls, never the sibling's
+    // discovered model or its Auto permission-mode capability.
+    const workModels = catalog.runtimeModelsByProviderInstance.claude_work!;
+    expect(workModels.map((model) => model.slug)).toEqual(["work-only"]);
+    expect(workModels[0]?.isConfiguredCustomModel).toBe(true);
+    expect(workModels[0]?.supportsAutoMode).toBeUndefined();
     expect(
       catalog.modelOptionsByProviderInstance.claude_work?.map((option) => option.slug),
     ).toContain("work-only");
+  });
+
+  it("exposes only the selected Claude instance's configured aliases before discovery", () => {
+    mocks.useAppSettings.mockReturnValue({
+      settings: {
+        ...SETTINGS,
+        customClaudeModels: ["personal-only"],
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            displayName: "Work",
+            config: {
+              customModels: [
+                "work-only",
+                " EnterpriseAlias ",
+                "EnterpriseAlias",
+                "claude-opus-4-1",
+              ],
+            },
+          },
+          claude_empty: {
+            driver: "claudeAgent",
+            displayName: "Empty",
+            config: { customModels: [] },
+          },
+        },
+      },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    const catalog = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      selectedProviderInstanceId: "claude_work",
+      discoveryEnabled: false,
+      modelHintByProvider: { claudeAgent: "work-only" },
+    }).at(-1)!;
+    expect(catalog.runtimeModelsByProvider.claudeAgent.map((model) => model.slug)).toEqual([
+      "work-only",
+      "EnterpriseAlias",
+    ]);
+    expect(catalog.runtimeModelsByProviderInstance.claudeAgent?.map((model) => model.slug)).toEqual(
+      ["personal-only"],
+    );
+    expect(catalog.runtimeModelsByProviderInstance.claude_empty).toEqual([]);
+    expect(catalog.selectedRuntimeModel).toMatchObject({
+      slug: "work-only",
+      isConfiguredCustomModel: true,
+    });
+    expect(
+      catalog.runtimeModelsByProvider.claudeAgent.every(
+        (model) => model.supportsAutoMode === undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not convert an unknown selected hint into configured Claude controls", () => {
+    const catalog = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      discoveryEnabled: false,
+      modelHintByProvider: { claudeAgent: "unknown-hint" },
+    }).at(-1)!;
+    expect(
+      catalog.modelOptionsByProvider.claudeAgent.some((model) => model.slug === "unknown-hint"),
+    ).toBe(true);
+    expect(catalog.selectedRuntimeModel).toBeUndefined();
+    expect(catalog.runtimeModelsByProvider.claudeAgent).toEqual([]);
+  });
+
+  it("retracts stale synthetic discovery metadata immediately after configuration is removed", () => {
+    const slug = "enterprise-model";
+    const cached: ProviderModelDescriptor = {
+      slug,
+      name: "Enterprise",
+      isConfiguredCustomModel: true,
+      optionDescriptors: getClaudeModelOptionCapabilities(slug, [slug]).optionDescriptors,
+    };
+    const staleDiscovery = { ...EMPTY_QUERY, data: { models: [cached], source: "claude-cli" } };
+    modelQueries.set("claudeAgent", staleDiscovery);
+    instanceModelQueries.set("claudeAgent", staleDiscovery);
+    mocks.useAppSettings
+      .mockReturnValueOnce({
+        settings: { ...SETTINGS, customClaudeModels: [slug] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      })
+      .mockReturnValueOnce({
+        settings: { ...SETTINGS, customClaudeModels: [] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      });
+    const [configured, removed] = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      discoveryEnabled: false,
+      modelHintByProvider: { claudeAgent: slug },
+    });
+    expect(configured!.selectedRuntimeModel?.isConfiguredCustomModel).toBe(true);
+    expect(removed!.selectedRuntimeModel?.isConfiguredCustomModel).toBeUndefined();
+    expect(removed!.selectedRuntimeModel?.optionDescriptors).toBeUndefined();
+    expect(
+      removed!.runtimeModelsByProviderInstance.claudeAgent?.[0]?.isConfiguredCustomModel,
+    ).toBeUndefined();
+    expect(
+      getRuntimeAwareModelCapabilities({
+        provider: "claudeAgent",
+        model: slug,
+        runtimeModel: removed!.selectedRuntimeModel,
+      }),
+    ).toEqual(EMPTY_MODEL_CAPABILITIES);
+    // Derivation must not mutate React Query's shared cached response.
+    expect(cached.isConfiguredCustomModel).toBe(true);
+    expect(cached.optionDescriptors).toHaveLength(2);
+  });
+
+  it("keeps resolved SDK-known model metadata ahead of a custom alias fallback", () => {
+    const known: ProviderModelDescriptor = {
+      slug: "enterprise-model",
+      name: "Enterprise",
+      resolvedModel: "claude-opus-6",
+      supportsAutoMode: true,
+    };
+    modelQueries.set("claudeAgent", {
+      ...EMPTY_QUERY,
+      data: { models: [known], source: "claude-cli" },
+    });
+    mocks.useAppSettings.mockReturnValue({
+      settings: { ...SETTINGS, customClaudeModels: [known.slug] },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    const catalog = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      discoveryEnabled: false,
+      modelHintByProvider: { claudeAgent: "claude-opus-6" },
+    }).at(-1)!;
+    expect(catalog.runtimeModelsByProvider.claudeAgent).toEqual([known]);
+    expect(catalog.selectedRuntimeModel).toBe(known);
+    expect(catalog.selectedRuntimeModel?.isConfiguredCustomModel).toBeUndefined();
   });
 
   it("discovers core agents only when selected unless eager-core is requested", () => {

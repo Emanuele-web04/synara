@@ -526,8 +526,16 @@ function providerStartOptionsEqualForProvider(
   const currentOptions = redactProviderOptionsForPersistence(current) as
     | ProviderStartOptions
     | undefined;
+  const continuationOptions = (options: ProviderStartOptions | undefined) => {
+    if (provider !== "claudeAgent") return options?.[provider];
+    if (!options?.claudeAgent) return undefined;
+    // Configured model membership changes available controls, not the native
+    // account or session storage. Every other launch field remains strict.
+    const { customModels: _customModels, ...identity } = options.claudeAgent;
+    return Object.keys(identity).length > 0 ? identity : undefined;
+  };
   return (
-    isDeepStrictEqual(persistedOptions?.[provider], currentOptions?.[provider]) &&
+    isDeepStrictEqual(continuationOptions(persistedOptions), continuationOptions(currentOptions)) &&
     persisted.credentialsFingerprint ===
       credentialsFingerprintForProvider(provider, current, credentialsFingerprintKey)
   );
@@ -1286,19 +1294,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             `Model selection provider '${input.modelSelection.provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
           );
         }
+        const instanceOptions = providerStartOptionsFromInstance(instance);
+        let providerOptions =
+          input.providerOptionsPrecedence === "caller"
+            ? mergeProviderStartOptions(instanceOptions, input.providerOptions)
+            : mergeProviderStartOptions(input.providerOptions, instanceOptions);
+        if (instance.driver === "claudeAgent" && providerOptions?.claudeAgent) {
+          // Caller-precedence recovery may retain launch identity, but custom
+          // model membership always comes from current server-owned settings.
+          const claudeOptions = { ...providerOptions.claudeAgent };
+          delete claudeOptions.customModels;
+          if (instanceOptions?.claudeAgent?.customModels) {
+            claudeOptions.customModels = instanceOptions.claudeAgent.customModels;
+          }
+          providerOptions = { ...providerOptions, claudeAgent: claudeOptions };
+        }
         return {
           instance,
           modelSelection: modelSelectionForInstance(input.modelSelection, instance),
-          providerOptions:
-            input.providerOptionsPrecedence === "caller"
-              ? mergeProviderStartOptions(
-                  providerStartOptionsFromInstance(instance),
-                  input.providerOptions,
-                )
-              : mergeProviderStartOptions(
-                  input.providerOptions,
-                  providerStartOptionsFromInstance(instance),
-                ),
+          providerOptions,
         } as const;
       });
 

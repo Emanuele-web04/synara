@@ -560,6 +560,16 @@ export function providerStartOptionsFromInstance(
         : undefined;
     }
     case "claudeAgent": {
+      const customModels = Array.isArray(config.customModels)
+        ? [
+            ...new Set(
+              config.customModels
+                .filter((value): value is string => typeof value === "string")
+                .map((value) => value.trim())
+                .filter(Boolean),
+            ),
+          ]
+        : [];
       const homePath = trimString(config.homePath);
       const configDir = trimString(config.configDir) || profileDir;
       const secureStorageDir = trimString(config.secureStorageDir);
@@ -571,9 +581,10 @@ export function providerStartOptionsFromInstance(
               ...(secureStorageDir ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir } : {}),
             }
           : environment.environment;
-      return binaryPath || homePath || claudeEnvironment
+      return binaryPath || homePath || claudeEnvironment || customModels.length > 0
         ? {
             claudeAgent: {
+              ...(customModels.length > 0 ? { customModels } : {}),
               ...(claudeEnvironment !== undefined ? { environment: claudeEnvironment } : {}),
               ...(binaryPath ? { binaryPath } : {}),
               ...(homePath ? { homePath } : {}),

@@ -360,8 +360,22 @@ function shouldDropResumeCursorForProviderOptionsChange(input: {
 }): boolean {
   // Provider options include account homes, credentials, endpoints, and agent
   // dirs. Reusing a provider-native cursor across any of those changes can
-  // silently resume the previous account/endpoint.
-  return input.providerOptionsChanged;
+  // silently resume the previous account/endpoint. Claude's configured custom
+  // model list changes option admission, not the native conversation identity.
+  if (!input.providerOptionsChanged || input.requestedProvider !== "claudeAgent") {
+    return input.providerOptionsChanged;
+  }
+  const launchIdentity = (options: ProviderStartOptions | undefined) => {
+    const normalized = normalizeProviderOptionsForComparison("claudeAgent", options);
+    if (!normalized) return undefined;
+    const identity = { ...normalized };
+    delete identity.customModels;
+    return Object.keys(identity).length > 0 ? identity : undefined;
+  };
+  return !isDeepStrictEqual(
+    launchIdentity(input.previousProviderOptions),
+    launchIdentity(input.requestedProviderOptions),
+  );
 }
 
 function escapeRegExp(value: string): string {
@@ -2402,6 +2416,7 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         requestedModelSelection.model !== activeSessionBeforeEnsure?.model;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
+      const previousProviderOptions = threadProviderOptions.get(threadId);
       const previousModelSelection = threadSessionModelSelections.get(threadId);
       // Spawn-fixed max effort and auto-compaction overrides resume the same
       // conversation. Claude owns prefix caching; a resume does not guarantee a hit.
@@ -2413,6 +2428,14 @@ const make = Effect.gen(function* () {
           ? claudeSelectionRequiresRestart(
               previousModelSelection ?? thread.modelSelection,
               desiredModelSelection,
+              {
+                previousCustomModels:
+                  (threadProviderOptions.has(threadId)
+                    ? previousProviderOptions
+                    : resolvedProviderOptions
+                  )?.claudeAgent?.customModels ?? [],
+                nextCustomModels: resolvedProviderOptions?.claudeAgent?.customModels ?? [],
+              },
             )
           : (currentProvider === "droid" ||
               currentProvider === "grok" ||
@@ -2435,7 +2458,6 @@ const make = Effect.gen(function* () {
       const computerControlChanged =
         requestedComputerControl !== undefined &&
         requestedComputerControl !== previousComputerControl;
-      const previousProviderOptions = threadProviderOptions.get(threadId);
       const providerOptionsChanged = shouldRestartForProviderOptionsChange({
         requestedProvider: desiredRoutedModelSelection.provider,
         previousProviderOptions,
@@ -3241,7 +3263,10 @@ const make = Effect.gen(function* () {
       const observation = claudeCacheForModel(
         nativeObservation,
         requestedSelection.provider === "claudeAgent"
-          ? resolveApiModelId(requestedSelection)
+          ? resolveApiModelId(
+              requestedSelection,
+              threadProviderOptions.get(input.threadId)?.claudeAgent?.customModels,
+            )
           : undefined,
       );
       const assessment = assessClaudeCache(observation, Date.now());

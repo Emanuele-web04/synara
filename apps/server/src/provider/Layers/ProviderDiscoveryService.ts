@@ -105,7 +105,7 @@ function isolateMalformedModelDescriptors(input: {
 
 const PROVIDER_DISCOVERY_OPTION_KEYS = {
   codex: ["binaryPath", "homePath", "shadowHomePath", "accountId", "environment"],
-  claudeAgent: ["binaryPath", "homePath", "environment"],
+  claudeAgent: ["binaryPath", "homePath", "environment", "customModels"],
   cursor: ["binaryPath", "apiEndpoint", "environment"],
   devin: ["binaryPath", "environment"],
   antigravity: ["binaryPath", "environment"],
@@ -190,6 +190,8 @@ const make = Effect.gen(function* () {
     replaceProviderOptions: boolean,
   ): T => {
     const base = { ...parsed } as Record<string, unknown>;
+    // Even the default instance must not trust a caller-supplied custom list.
+    if (parsed.provider === "claudeAgent") delete base.customModels;
     if (replaceProviderOptions) {
       for (const key of PROVIDER_DISCOVERY_OPTION_KEYS[parsed.provider]) {
         delete base[key];

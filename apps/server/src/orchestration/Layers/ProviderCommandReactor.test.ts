@@ -16735,6 +16735,109 @@ describe("ProviderCommandReactor", () => {
     },
   );
 
+  it.each([
+    { name: "max effort", options: { effort: "max" as const } },
+    { name: "explicit auto-compaction", options: { autoCompactWindow: "1m" as const } },
+  ])(
+    "clears configured custom $name through a resumed restart before a live native-Auto switch",
+    async ({ options }) => {
+      const model = "my-proxy/custom-opus";
+      const nextModel = "claude/custom-opus";
+      const harness = await createHarness({
+        threadModelSelection: { provider: "claudeAgent", model, options },
+        serverSettings: { providers: { claudeAgent: { customModels: [model, nextModel] } } },
+      });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("configured-bootstrap"),
+          threadId,
+          message: {
+            messageId: asMessageId("configured-message"),
+            role: "user",
+            text: "start configured proxy",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.startSession.mock.calls.length === 1);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+        modelSelection: { provider: "claudeAgent", model, options },
+        providerOptions: { claudeAgent: { customModels: [model, nextModel] } },
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("configured-return-auto"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", model },
+        }),
+      );
+      await waitFor(() => harness.startSession.mock.calls.length === 2);
+      expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+        resumeCursor: { opaque: "resume-1" },
+        modelSelection: { provider: "claudeAgent", model },
+      });
+      expect(harness.startSession.mock.calls[1]?.[1]?.modelSelection?.options).toBeUndefined();
+      expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("configured-live-proxy-switch"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", model: nextModel },
+        }),
+      );
+      await harness.drain();
+      expect(harness.startSession).toHaveBeenCalledTimes(2);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("restarts with current configured membership without discarding the same Claude continuation", async () => {
+    const model = "my-proxy/custom-opus";
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model, options: { effort: "max" } },
+      serverSettings: { providers: { claudeAgent: { customModels: [model] } } },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turn = (index: number) =>
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(`configured-membership-${index}`),
+        threadId,
+        message: {
+          messageId: asMessageId(`configured-membership-message-${index}`),
+          role: "user",
+          text: "continue",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      });
+    await Effect.runPromise(turn(1));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    await Effect.runPromise(
+      harness.serverSettings.updateSettings({ providers: { claudeAgent: { customModels: [] } } }),
+    );
+    await Effect.runPromise(turn(2));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+    const resumed = harness.startSession.mock.calls[1]?.[1];
+    expect(resumed?.resumeCursor).toEqual({ opaque: "resume-1" });
+    expect(resumed?.providerOptions?.claudeAgent?.customModels).toBeUndefined();
+    expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+  });
+
   it("restarts an idle Claude session only for spawn-fixed model selection changes", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },

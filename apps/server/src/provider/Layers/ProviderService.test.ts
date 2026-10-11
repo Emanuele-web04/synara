@@ -671,6 +671,122 @@ function makeProviderServiceLayer(
 }
 
 const routing = makeProviderServiceLayer();
+const customModelRouting = makeProviderServiceLayer();
+customModelRouting.layer("ProviderServiceLive authoritative Claude custom models", (it) => {
+  it.effect(
+    "replaces caller membership with the resolved default or named instance and persists it",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const settings = yield* ServerSettingsService;
+        const directory = yield* ProviderSessionDirectory;
+        yield* settings.updateSettings({
+          providerInstances: {
+            claudeAgent: { driver: "claudeAgent", config: { customModels: ["default-proxy"] } },
+            claude_work: { driver: "claudeAgent", config: { customModels: ["work-proxy"] } },
+            claude_empty: { driver: "claudeAgent", config: { customModels: [] } },
+          },
+        });
+        for (const [instanceId, expected] of [
+          ["claudeAgent", ["default-proxy"]],
+          ["claude_work", ["work-proxy"]],
+          ["claude_empty", undefined],
+        ] as const) {
+          const threadId = asThreadId(`custom-model-${instanceId}`);
+          yield* provider.startSession(threadId, {
+            threadId,
+            provider: "claudeAgent",
+            ...(instanceId === "claudeAgent" ? {} : { providerInstanceId: instanceId }),
+            runtimeMode: "full-access",
+            providerOptions: { claudeAgent: { customModels: ["forged-proxy"] } },
+          });
+          const start = customModelRouting.claude.startSession.mock.calls.at(-1)?.[0];
+          assert.deepEqual(start?.providerOptions?.claudeAgent?.customModels, expected);
+          const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+          const persisted = asRuntimePayloadRecord(binding.runtimePayload)
+            .providerOptions as ProviderSessionStartInput["providerOptions"];
+          assert.deepEqual(persisted?.claudeAgent?.customModels, expected);
+          yield* provider.stopSession({ threadId });
+        }
+      }),
+  );
+
+  it.effect("refreshes membership on recovery while preserving the same native continuation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const settings = yield* ServerSettingsService;
+      const threadId = asThreadId("custom-model-recovery");
+      const config = (customModels: readonly string[]) => ({
+        providerInstances: {
+          claude_custom_recovery: { driver: "claudeAgent" as const, config: { customModels } },
+        },
+      });
+      yield* settings.updateSettings(config(["old-proxy"]));
+      const session = yield* provider.startSession(threadId, {
+        threadId,
+        provider: "claudeAgent",
+        providerInstanceId: "claude_custom_recovery",
+        runtimeMode: "full-access",
+      });
+      yield* customModelRouting.claude.stopSession(threadId);
+      yield* settings.updateSettings(config(["current-proxy"]));
+      yield* provider.sendTurn({
+        threadId,
+        input: "continue with current configuration",
+        attachments: [],
+      });
+      const recovered = customModelRouting.claude.startSession.mock.calls.at(-1)?.[0];
+      assert.deepEqual(recovered?.providerOptions?.claudeAgent?.customModels, ["current-proxy"]);
+      assert.deepEqual(recovered?.resumeCursor, session.resumeCursor);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("refreshes default-instance membership despite legacy launch-option precedence", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const settings = yield* ServerSettingsService;
+      const directory = yield* ProviderSessionDirectory;
+      for (const [index, customModels] of [["current-proxy"], []].entries()) {
+        const threadId = asThreadId(`default-custom-model-recovery-${index}`);
+        yield* settings.updateSettings({
+          providerInstances: {
+            claudeAgent: { driver: "claudeAgent", config: { customModels: ["old-proxy"] } },
+          },
+        });
+        const session = yield* provider.startSession(threadId, {
+          threadId,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+          providerOptions: { claudeAgent: { binaryPath: "legacy-claude" } },
+        });
+        yield* customModelRouting.claude.stopSession(threadId);
+        yield* settings.updateSettings({
+          providerInstances: {
+            claudeAgent: {
+              driver: "claudeAgent",
+              config: { binaryPath: "new-default-claude", customModels },
+            },
+          },
+        });
+        yield* provider.sendTurn({ threadId, input: "recover the legacy launch", attachments: [] });
+        const recovered = customModelRouting.claude.startSession.mock.calls.at(-1)?.[0];
+        const expected = customModels.length > 0 ? customModels : undefined;
+        assert.equal(recovered?.providerOptions?.claudeAgent?.binaryPath, "legacy-claude");
+        assert.deepEqual(recovered?.providerOptions?.claudeAgent?.customModels, expected);
+        assert.deepEqual(recovered?.resumeCursor, session.resumeCursor);
+        const binding = Option.getOrThrow(yield* directory.getBinding(threadId));
+        const persisted = asRuntimePayloadRecord(binding.runtimePayload)
+          .providerOptions as ProviderSessionStartInput["providerOptions"];
+        assert.deepEqual(persisted?.claudeAgent?.customModels, expected);
+        if (expected === undefined) {
+          assert.equal(Object.hasOwn(persisted?.claudeAgent ?? {}, "customModels"), false);
+        }
+        yield* provider.stopSession({ threadId });
+      }
+    }),
+  );
+});
 const replacementEvents = new Map<string, ProviderRuntimeEvent>();
 const replacementRouting = makeProviderServiceLayer({
   persistRuntimeEvent: (event) =>

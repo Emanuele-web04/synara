@@ -471,6 +471,11 @@ export function buildProviderOptionPatch(
   optionId: string,
   value: string | boolean,
 ): Record<string, unknown> {
+  // Auto is a composer choice to clear an override, not a Claude API effort.
+  // Clear it before persisting draft options through the Claude effort schema.
+  if (provider === "claudeAgent" && optionId === "effort" && value === "auto") {
+    return { effort: undefined };
+  }
   return { [optionId]: value };
 }
 

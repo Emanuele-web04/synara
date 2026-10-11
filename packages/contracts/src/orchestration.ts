@@ -395,6 +395,8 @@ export const CodexProviderStartOptions = Schema.Struct({
 });
 
 export const ClaudeProviderStartOptions = Schema.Struct({
+  // Authoritative per-instance model configuration is attached by the server.
+  customModels: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
   permissionMode: Schema.optional(TrimmedNonEmptyString),

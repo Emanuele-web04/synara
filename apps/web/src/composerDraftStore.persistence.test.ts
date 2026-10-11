@@ -24,6 +24,49 @@ import {
 } from "./lib/terminalContext";
 
 describe("composerDraftStore persisted-state hydration", () => {
+  it.each(["chat", "plan-follow-up"] as const)(
+    "round-trips configured Claude options for %s without sharing the settings model list",
+    (kind) => {
+      resetComposerDraftStore();
+      const threadId = ThreadId.makeUnsafe("configured-claude-persistence");
+      const customModels = Object.freeze(["EnterpriseAlias", "router/model"]);
+      const providerOptionsForDispatch = {
+        claudeAgent: { customModels, homePath: "/work/claude-home" },
+      };
+      const store = useComposerDraftStore.getState();
+      store.setProviderOptionsForDispatch(threadId, providerOptionsForDispatch);
+      store.enqueueQueuedTurn(threadId, {
+        ...(kind === "chat" ? makeQueuedChatTurn("configured") : makeQueuedTurn("configured")),
+        providerOptionsForDispatch,
+      });
+      const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+      const draft = persisted.draftsByThreadId[threadId]!;
+      expect(draft.providerOptionsForDispatch).toEqual(providerOptionsForDispatch);
+      expect(draft.queuedTurns?.[0]?.providerOptionsForDispatch).toEqual(
+        providerOptionsForDispatch,
+      );
+      expect(draft.providerOptionsForDispatch?.claudeAgent?.customModels).not.toBe(customModels);
+      expect(
+        draft.queuedTurns?.[0]?.providerOptionsForDispatch?.claudeAgent?.customModels,
+      ).not.toBe(customModels);
+      const normalized = normalizeCurrentPersistedComposerDraftStoreState(persisted);
+      expect(
+        normalized.draftsByThreadId[threadId]?.providerOptionsForDispatch?.claudeAgent
+          ?.customModels,
+      ).not.toBe(draft.providerOptionsForDispatch?.claudeAgent?.customModels);
+      const hydrated = toHydratedThreadDraft(
+        threadId,
+        normalizeCurrentPersistedComposerDraftStoreState(JSON.parse(JSON.stringify(persisted)))
+          .draftsByThreadId[threadId]!,
+      );
+      expect(hydrated.providerOptionsForDispatch).toEqual(providerOptionsForDispatch);
+      expect(hydrated.queuedTurns[0]?.providerOptionsForDispatch).toEqual(
+        providerOptionsForDispatch,
+      );
+      expect(customModels).toEqual(["EnterpriseAlias", "router/model"]);
+    },
+  );
+
   it("keeps the queue stop and resume markers only while the queue has entries", () => {
     resetComposerDraftStore();
     const threadId = ThreadId.makeUnsafe("thread-queue-resume");

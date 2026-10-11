@@ -431,6 +431,12 @@ function modelTargetOptionRules(
       replaceAllowedValues(
         descriptor.id,
         descriptor.options
+          // Claude's UI-only Auto sentinel clears an override before schema
+          // persistence. MCP callers select the native default by omission.
+          .filter(
+            (option) =>
+              !(provider === "claudeAgent" && descriptor.id === "effort" && option.id === "auto"),
+          )
           .map((option) => convertDiscoveredOptionValue(option.id, rule.valueType))
           .filter((value): value is AgentGatewayTargetOptionValue => value !== null),
         true,

@@ -30,6 +30,7 @@ const CLAUDE_THREAD_ID = ThreadId.makeUnsafe("thread-claude-traits");
 
 function ClaudeTraitsPickerHarness(props: {
   model: string;
+  runtimeModel?: ProviderModelDescriptor;
   fallbackModelSelection: ModelSelection | null;
 }) {
   const prompt = useComposerThreadDraft(CLAUDE_THREAD_ID).prompt;
@@ -61,6 +62,7 @@ function ClaudeTraitsPickerHarness(props: {
       provider="claudeAgent"
       threadId={CLAUDE_THREAD_ID}
       model={selectedModel ?? props.model}
+      runtimeModel={props.runtimeModel}
       prompt={prompt}
       modelOptions={modelOptions?.claudeAgent}
       onPromptChange={handlePromptChange}
@@ -70,6 +72,7 @@ function ClaudeTraitsPickerHarness(props: {
 
 async function mountClaudePicker(props?: {
   model?: string;
+  runtimeModel?: ProviderModelDescriptor;
   prompt?: string;
   options?: ClaudeModelOptions;
   fallbackModelOptions?: {
@@ -132,7 +135,11 @@ async function mountClaudePicker(props?: {
         } satisfies ModelSelection)
       : null;
   const screen = await render(
-    <ClaudeTraitsPickerHarness model={model} fallbackModelSelection={fallbackModelSelection} />,
+    <ClaudeTraitsPickerHarness
+      model={model}
+      {...(props?.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
+      fallbackModelSelection={fallbackModelSelection}
+    />,
     { container: host },
   );
 
@@ -156,6 +163,65 @@ describe("TraitsPicker (Claude)", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
     });
+  });
+
+  it("persists explicit custom-model effort and clears it with Auto while retaining the thread budget", async () => {
+    await using _ = await mountClaudePicker({
+      model: "enterprise-model",
+      runtimeModel: { slug: "enterprise-model", name: "Enterprise", isConfiguredCustomModel: true },
+    });
+    const trigger = page.getByRole("button", { name: "Change effort, context, and speed" });
+    await expect.element(trigger).toHaveTextContent("Auto (Claude Code)");
+    await trigger.click();
+    await expect.element(page.getByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("menuitemradio", { name: "On (default)" }))
+      .not.toBeInTheDocument();
+    await page.getByRole("menuitemradio", { name: "High", exact: true }).click();
+    await vi.waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]
+          ?.modelSelectionByProvider.claudeAgent,
+      ).toMatchObject({ model: "enterprise-model", options: { effort: "high" } });
+    });
+    await expect.element(trigger).toHaveTextContent("High");
+    await trigger.click();
+    await page.getByRole("menuitemradio", { name: "200k", exact: true }).click();
+    await expect.element(trigger).toHaveTextContent(/^High\s*·\s*200k$/u);
+    await trigger.click();
+    const effortGroup = page.getByRole("group", { name: "Effort", exact: true });
+    await effortGroup.getByRole("menuitemradio", { name: "Auto (Claude Code)" }).click();
+    await expect.element(trigger).toHaveTextContent(/^Auto \(Claude Code\)\s*·\s*200k$/u);
+    const selection =
+      useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
+        .claudeAgent;
+    expect(selection?.provider).toBe("claudeAgent");
+    if (selection?.provider !== "claudeAgent")
+      throw new Error("Expected the configured Claude selection");
+    expect(selection.options?.effort).toBeUndefined();
+    expect(selection.options?.autoCompactWindow).toBe("200k");
+    await expect
+      .poll(() => {
+        const persisted = JSON.parse(localStorage.getItem(COMPOSER_DRAFT_STORAGE_KEY) ?? "null");
+        return persisted?.state?.draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
+          .claudeAgent?.options;
+      })
+      .toEqual({ autoCompactWindow: "200k" });
+    await trigger.click();
+    await page.getByRole("menuitemradio", { name: "Ultrathink", exact: true }).click();
+    await vi.waitFor(() => {
+      expect(useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.prompt).toBe(
+        "Ultrathink:\n",
+      );
+    });
+    await expect.element(trigger).toHaveTextContent(/^Ultrathink\s*·\s*200k$/u);
+  });
+
+  it("keeps an unconfigured custom-model hint without a traits trigger", async () => {
+    await using _ = await mountClaudePicker({ model: "enterprise-model" });
+    await expect
+      .element(page.getByRole("button", { name: "Change effort, context, and speed" }))
+      .not.toBeInTheDocument();
   });
 
   it("flips the fast mode toggle in place without closing the menu", async () => {
