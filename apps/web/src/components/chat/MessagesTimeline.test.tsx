@@ -799,6 +799,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('data-synara-working-loader="true"');
     expect(markup).toContain("synara-working-loader__mark");
+    expect(markup).toMatch(/data-synara-working-loader="true"[^>]*><svg\b/);
   });
 
   it("keeps semantic status icons when the working label is not Thinking", async () => {

@@ -1737,8 +1737,13 @@ export default function Sidebar() {
   );
   const { nonGroupThreads: nonGroupSidebarTreeThreads, groupThreads: groupSidebarTreeThreads } =
     useMemo(
-      () => partitionSidebarThreadsByProjectIds(displaySidebarTreeThreads, groupProjectIdSet),
-      [displaySidebarTreeThreads, groupProjectIdSet],
+      () =>
+        partitionSidebarThreadsByProjectIds(
+          displaySidebarTreeThreads,
+          groupProjectIdSet,
+          summariesByProjectId,
+        ),
+      [displaySidebarTreeThreads, groupProjectIdSet, summariesByProjectId],
     );
   // Drives the unread dot on the header Activity bell.
   const hasUnreadActivity = useMemo(

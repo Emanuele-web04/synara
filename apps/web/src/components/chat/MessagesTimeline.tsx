@@ -51,6 +51,7 @@ import {
 import { HubWorkItemCards } from "./group/HubWorkItemCard";
 import { AsyncUserInputCard } from "./AsyncUserInputCard";
 import ChatMarkdown from "../ChatMarkdown";
+import { SynaraLogo } from "../SynaraLogo";
 import {
   SubagentBriefCard,
   SubagentDeliveredNote,
@@ -3028,7 +3029,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           initialScrollAtEnd={tailAnchorMessageId === null || hasInheritedTailAnchor}
           {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
           maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
-          maintainScrollAtEndThreshold={0.1}
+          maintainScrollAtEndThreshold={
+            followLiveOutput && !tailAnchorSlideInFlight ? Number.POSITIVE_INFINITY : 0.1
+          }
           {...(tailAnchorMessageId !== null
             ? { maintainVisibleContentPosition: false }
             : !followLiveOutput
@@ -3481,7 +3484,7 @@ function applySettledTurnCollapseTransitions(params: {
 function SynaraWorkingLoader() {
   return (
     <span className="synara-working-loader" data-synara-working-loader="true" aria-hidden="true">
-      <span className="synara-working-loader__mark" />
+      <SynaraLogo className="synara-working-loader__mark text-current" />
     </span>
   );
 }

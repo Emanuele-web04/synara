@@ -190,6 +190,10 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_update_kanban_card",
   "synara_set_kanban_goal",
   "synara_delete_kanban_card",
+  // To-do tools (todoTools.ts)
+  "synara_create_todo",
+  "synara_list_todos",
+  "synara_update_todo",
   // Thread write tools (Layers/AgentGateway.ts)
   "synara_create_threads",
   "synara_create_thread",
