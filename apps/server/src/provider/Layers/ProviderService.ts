@@ -1933,16 +1933,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               binding.lifecycleGeneration !== event.lifecycleGeneration
             ) {
               // The pump gate lets a stale terminal event through only when it
-              // can safely settle the thread: no current generation exists, or
-              // the event still names the turn the binding has active. Mirror
-              // that acceptance here, otherwise the accepted event is journaled
-              // and published but the durable binding keeps the dead turn active
-              // forever and the thread stays a reconciliation candidate.
+              // can safely settle the thread: no current generation exists, the
+              // binding still belongs to the event generation, or the event
+              // names the binding's active turn.
+              // Mirror that acceptance here, otherwise the accepted event is
+              // journaled and published but the durable binding keeps the dead
+              // lifecycle state forever.
+              const boundActiveTurnId = runtimeActiveTurnId(binding.runtimePayload);
               const staleTerminalSettlesThread =
                 isTerminalRuntimeEvent(event) &&
                 (lifecycle.currentGeneration(event.threadId) === undefined ||
-                  (event.turnId !== undefined &&
-                    runtimeActiveTurnId(binding.runtimePayload) === String(event.turnId)));
+                  binding.lifecycleGeneration === event.lifecycleGeneration ||
+                  (event.turnId !== undefined && boundActiveTurnId === String(event.turnId)));
               if (!staleTerminalSettlesThread) {
                 return;
               }
@@ -2138,6 +2140,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // A stale settling event is let through when either:
             //  - no current generation exists (nothing newer can be corrupted
             //    by settling the old session's state), or
+            //  - the persisted binding still belongs to the event generation
+            //    (the lifecycle rotated before its durable state caught up), or
             //  - the event still names the turn the binding considers active
             //    (a newer epoch has not started a different turn, so settling
             //    this turn cannot clobber newer state).
@@ -2146,7 +2150,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // are subject to the same active-turn check below.
             const staleEventIsSettling =
               (isStaleSettlingRuntimeEvent(event) || event.type === "item.completed") &&
-              (currentGeneration === undefined || event.turnId !== undefined);
+              (currentGeneration === undefined ||
+                event.turnId !== undefined ||
+                (isTerminalRuntimeEvent(event) && !isSubagentChildRuntimeEvent(event)));
             if (
               currentGeneration !== undefined &&
               isSubagentChildRuntimeEvent(event) &&
@@ -2180,16 +2186,22 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               });
             }
             if (currentGeneration !== undefined) {
-              // A newer generation exists: only accept the stale settling event
-              // when it still names the turn the binding has active. If the
-              // binding already moved on (or is gone), keep dropping it.
+              // Terminal events may still own the persisted generation even
+              // after the lifecycle rotates. Other settling events must name
+              // the binding's active turn. An idle replacement is newer state
+              // too and must not be retired by an old exit/error.
               return directory.getBinding(event.threadId).pipe(
                 Effect.flatMap((maybeBinding) => {
                   const binding = Option.getOrUndefined(maybeBinding);
                   const boundActiveTurnId = binding
                     ? runtimeActiveTurnId(binding.runtimePayload)
                     : undefined;
-                  if (binding === undefined || boundActiveTurnId !== String(event.turnId)) {
+                  const canSettleBinding =
+                    binding !== undefined &&
+                    ((isTerminalRuntimeEvent(event) &&
+                      binding.lifecycleGeneration === event.lifecycleGeneration) ||
+                      (event.turnId !== undefined && boundActiveTurnId === String(event.turnId)));
+                  if (!canSettleBinding) {
                     return Effect.logWarning("provider.session.stale_generation_event_ignored", {
                       threadId: event.threadId,
                       provider: event.provider,
