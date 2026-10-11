@@ -1,6 +1,8 @@
 import { CODEX_CONFLICTING_ENV_VARS } from "@synara/shared/providerAccounts/codexAccountEnvironment";
 import { spawnProcess } from "@synara/shared/processRuntime";
 import type { ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+import { signalOwnedChildProcess } from "../platform/processTreeController";
 import {
   buildProviderChildEnvironment,
   withoutProviderCredentialEnvironment,
@@ -130,21 +132,33 @@ export const codexOauthLoginRunner: OAuthLoginRunner = (request) => {
   }
 
   let reportedUrl = false;
-  const inspectOutput = (chunk: Buffer) => {
-    if (reportedUrl) return;
-    const url = findVerificationUrl(chunk.toString("utf8"), CODEX_AUTH_HOSTS);
-    if (url !== undefined) {
-      reportedUrl = true;
-      request.onVerification({ verificationUrl: url });
-    }
+  const inspectOutputStream = (stream: NodeJS.ReadableStream | null | undefined) => {
+    const decoder = new StringDecoder("utf8");
+    let pending = "";
+    const inspect = (text: string, final = false) => {
+      if (reportedUrl) return;
+      pending += text;
+      // Only parse complete tokens: a valid hostname may still be the prefix of
+      // an untrusted host or an incomplete query string in the next chunk.
+      const boundary = final ? pending.length : pending.search(/[^\s]*$/);
+      const complete = pending.slice(0, boundary);
+      pending = pending.slice(boundary).slice(-16_384);
+      const url = findVerificationUrl(complete, CODEX_AUTH_HOSTS);
+      if (url !== undefined) {
+        reportedUrl = true;
+        request.onVerification({ verificationUrl: url });
+      }
+    };
+    stream?.on("data", (chunk: Buffer) => inspect(decoder.write(chunk)));
+    stream?.on("end", () => inspect(decoder.end(), true));
   };
-  child.stdout?.on("data", inspectOutput);
-  child.stderr?.on("data", inspectOutput);
+  inspectOutputStream(child.stdout);
+  inspectOutputStream(child.stderr);
 
   const done = new Promise<OAuthLoginOutcome>((resolve) => {
     const timeout = setTimeout(() => {
       cancelled = true;
-      child.kill("SIGTERM");
+      signalOwnedChildProcess(child, "SIGTERM");
       resolve({ ok: false, error: "Codex login timed out after 10 minutes." });
     }, OAUTH_LOGIN_TIMEOUT_MS);
     timeout.unref();
@@ -191,7 +205,7 @@ export const codexOauthLoginRunner: OAuthLoginRunner = (request) => {
     done,
     cancel() {
       cancelled = true;
-      child.kill("SIGTERM");
+      signalOwnedChildProcess(child, "SIGTERM");
     },
   };
 };

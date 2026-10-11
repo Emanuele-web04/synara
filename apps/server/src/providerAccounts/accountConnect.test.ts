@@ -108,6 +108,48 @@ describe("accountConnect", () => {
     await expectFailureDetail(connect.hide("cursor", 99, false), /no longer exists/);
   });
 
+  it("removes the pending directory and inaccessible operation when OAuth setup fails", async () => {
+    let failedOperationId = "";
+    const broken = makeAccountConnect({
+      storage: {
+        ...storage,
+        writePendingOperation: (_provider, operationId) => {
+          failedOperationId = operationId;
+          return Effect.fail(
+            new ProviderAccountStorageError({
+              operation: "test",
+              detail: "pending metadata failed",
+            }),
+          );
+        },
+      },
+      oauthLoginRunners: { codex: fakeOauthRunner },
+    });
+    await expectFailureDetail(
+      broken.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+      /pending metadata failed/,
+    );
+    expect(profileHomes).toEqual([]);
+    expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([]);
+    await expectFailureDetail(broken.getConnectStatus(failedOperationId), /not found|unknown/i);
+  });
+
+  it("removes pending state if the OAuth runner cannot start", async () => {
+    const broken = makeAccountConnect({
+      storage,
+      oauthLoginRunners: {
+        codex: () => {
+          throw new Error("spawn failed");
+        },
+      },
+    });
+    await expectFailureDetail(
+      broken.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+      /Could not start/,
+    );
+    expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([]);
+  });
+
   it("rejects unsupported provider/surface/auth combinations", async () => {
     await expectFailureDetail(
       connect.beginConnect({ kind: "agent-oauth", provider: "cursor" }),
@@ -333,6 +375,59 @@ describe("accountConnect", () => {
       authMethod: "oauth",
     });
     expect(JSON.stringify(metadata)).not.toContain("apiKey");
+  });
+
+  it("reclaims a fresh OAuth slot when its account record cannot commit", async () => {
+    const broken = makeAccountConnect({
+      storage: {
+        ...storage,
+        writeAccount: () =>
+          Effect.fail(
+            new ProviderAccountStorageError({
+              operation: "test",
+              detail: "record write failed",
+            }),
+          ),
+      },
+      oauthLoginRunners: { codex: fakeOauthRunner },
+    });
+    const { operationId } = await Effect.runPromise(
+      broken.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    resolveLogin!({ ok: true });
+    await waitFor(() => Effect.runSync(broken.getConnectStatus(operationId)).state === "failed");
+    expect(await Effect.runPromise(storage.listOrdinals("codex"))).toEqual([]);
+    expect(await Effect.runPromise(storage.listPendingOperations("codex"))).toEqual([]);
+  });
+
+  it("preserves committed OAuth credentials after a post-rename durability error", async () => {
+    const broken = makeAccountConnect({
+      storage: {
+        ...storage,
+        writeAccount: (record) =>
+          storage.writeAccount(record).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new ProviderAccountStorageError({
+                  operation: "test",
+                  detail: "directory sync failed",
+                }),
+              ),
+            ),
+          ),
+      },
+      oauthLoginRunners: { codex: fakeOauthRunner },
+    });
+    const { operationId } = await Effect.runPromise(
+      broken.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    writeFileSync(join(profileHomes.at(-1)!, "auth.json"), "committed-credential");
+    resolveLogin!({ ok: true });
+    await waitFor(() => Effect.runSync(broken.getConnectStatus(operationId)).state === "failed");
+    expect(await Effect.runPromise(storage.readAccount("codex", 1))).not.toBeNull();
+    expect(readFileSync(join(accountAgentHome(root, "codex", 1), "auth.json"), "utf8")).toBe(
+      "committed-credential",
+    );
   });
 
   it("does not leak operation.json into the finalized account directory", async () => {

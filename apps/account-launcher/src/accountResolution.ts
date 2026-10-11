@@ -2,6 +2,7 @@
 // global account root directly; no server, no database, no Effect runtime.
 
 import * as fs from "node:fs";
+import { isClaudeAccountIsolationEnvKey } from "@synara/shared/claudeAccountIsolation";
 
 import type { AgentAuthMethod, SupportedAccountProvider } from "@synara/contracts";
 import { applyAccountEnvironmentOverrides } from "@synara/shared/providerAccounts/accountEnvironment";
@@ -198,6 +199,11 @@ export function buildChildEnvironment(
   overrides: Readonly<Record<string, string>>,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...parentEnv };
+  if (overrides.CLAUDE_CONFIG_DIR) {
+    for (const name of Object.keys(env)) {
+      if (isClaudeAccountIsolationEnvKey(name.toUpperCase())) delete env[name];
+    }
+  }
   for (const name of launcherControlEnvVars) {
     delete env[name];
   }

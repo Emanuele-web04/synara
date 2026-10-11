@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { SYNARA_BETA_BUNDLE_ID, SYNARA_PRODUCTION_BUNDLE_ID } from "../desktopIdentity";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -26,6 +27,24 @@ describe("resolveAccountRoot", () => {
       resolveAccountRoot({ platform: "darwin", env: { SYNARA_ACCOUNT_HOME: "/tmp/acct" }, home }),
     ).toBe("/tmp/acct");
   });
+
+  it.each(["darwin", "win32", "linux"] as const)(
+    "keeps Stable and Beta account roots separate on %s",
+    (platform) => {
+      const stable = resolveAccountRoot({
+        platform,
+        home,
+        env: { SYNARA_DESKTOP_BUNDLE_ID: SYNARA_PRODUCTION_BUNDLE_ID },
+      });
+      const beta = resolveAccountRoot({
+        platform,
+        home,
+        env: { SYNARA_DESKTOP_BUNDLE_ID: SYNARA_BETA_BUNDLE_ID },
+      });
+      expect(beta).not.toBe(stable);
+      expect(beta).toMatch(/Synara Beta|synara-beta/);
+    },
+  );
 
   it("uses the macOS application support default", () => {
     expect(resolveAccountRoot({ platform: "darwin", env: {}, home })).toBe(

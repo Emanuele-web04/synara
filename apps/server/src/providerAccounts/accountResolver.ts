@@ -107,7 +107,7 @@ export function makeAccountResolver(input: AccountResolverInput) {
       const authMethod = binding.authMethod;
       const apiKey =
         surface === "agent" && authMethod === "apiKey"
-          ? yield* storage.readSecret(provider, ordinal, "agent")
+          ? yield* storage.readSecret(provider, ordinal, "agent", account.agent?.secretVersion)
           : null;
       if (surface === "agent" && authMethod === "apiKey" && apiKey === null) {
         return yield* new ProviderAccountResolutionError({
@@ -137,5 +137,8 @@ export function makeAccountResolver(input: AccountResolverInput) {
       } satisfies ResolvedAccountLaunch;
     });
 
-  return { resolveAccountLaunch };
+  return {
+    resolveAccountLaunch: (launchInput: ResolveAccountLaunchInput) =>
+      storage.withProviderLock(launchInput.provider, resolveAccountLaunch(launchInput)),
+  };
 }

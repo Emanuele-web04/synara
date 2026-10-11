@@ -72,11 +72,11 @@ async function ownsShim(file: string): Promise<boolean> {
   }
 }
 
-const shimScript = (shimName: string, launcherEntry: string): string =>
+const shimScript = (shimName: string, launcherEntry: string, accountRoot: string): string =>
   [
     "#!/bin/sh",
     SHIM_SIGNATURE,
-    `${SYNARA_LAUNCHER_SHIM}=${shimName} exec ${launcherRuntime(launcherEntry)} ${shellQuote(launcherEntry)} "$@"`,
+    `SYNARA_ACCOUNT_HOME=${shellQuote(accountRoot)} ${SYNARA_LAUNCHER_SHIM}=${shimName} exec ${launcherRuntime(launcherEntry)} ${shellQuote(launcherEntry)} "$@"`,
     "",
   ].join("\n");
 
@@ -174,7 +174,7 @@ export function makeCliIntegration(input: CliIntegrationInput) {
         }
         for (const name of shimNames) {
           const shimPath = path.join(shimDir, name);
-          await fs.writeFile(shimPath, shimScript(name, launcherEntry), { mode: 0o755 });
+          await fs.writeFile(shimPath, shimScript(name, launcherEntry, root), { mode: 0o755 });
           await fs.chmod(shimPath, 0o755);
         }
         await fs.writeFile(path.join(shimDir, VERSION_FILE), `${launcherVersion}\n`, {

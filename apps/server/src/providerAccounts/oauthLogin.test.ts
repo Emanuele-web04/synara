@@ -71,6 +71,27 @@ describe("codexOauthLoginRunner", () => {
     expect(verifications).toEqual(["https://auth.openai.com/device?code=abc"]);
   });
 
+  it("buffers split URLs without trusting a partial hostname or query", async () => {
+    installFakeCodex(
+      [
+        `printf 'Visit https://auth.openai.com'`,
+        `sleep 0.05`,
+        `printf '.evil.net/phish\\nhttps://auth.openai.com/device?co'`,
+        `sleep 0.05`,
+        `printf 'de=complete\\n'`,
+        `printf '{}' > "$CODEX_HOME/auth.json"`,
+      ].join("\n"),
+    );
+    const verifications: Array<string | undefined> = [];
+    const handle = codexOauthLoginRunner({
+      provider: "codex",
+      profileHome,
+      onVerification: (info) => verifications.push(info.verificationUrl),
+    });
+    expect((await handle.done).ok).toBe(true);
+    expect(verifications).toEqual(["https://auth.openai.com/device?code=complete"]);
+  });
+
   it("ignores URLs on unexpected hosts and surfaces the first on a known auth host", async () => {
     installFakeCodex(
       [

@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./claudeAccountIsolation": {
+      "types": "./src/claudeAccountIsolation.ts",
+      "import": "./src/claudeAccountIsolation.ts"
+    },
+    "./turnStopActivity": {
+      "types": "./src/turnStopActivity.ts",
+      "import": "./src/turnStopActivity.ts"
+    },
     "./diagnosticIssue": {
       "types": "./src/diagnosticIssue.ts",
       "import": "./src/diagnosticIssue.ts"

@@ -15,6 +15,10 @@ describe("buildClaudeAccountEnvironment", () => {
     });
     expect(result.environment.CLAUDE_CONFIG_DIR).toBe("/accounts/claudeAgent/1/agent");
     expect(result.profilePath).toBe("/accounts/claudeAgent/1/agent");
+    expect(result.environment.HOME).toBe("/accounts/claudeAgent/1/agent");
+    expect(result.environment.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(
+      "/accounts/claudeAgent/1/agent",
+    );
   });
 
   it("strips conflicting inherited auth overrides", () => {
@@ -34,6 +38,11 @@ describe("buildClaudeAccountEnvironment", () => {
       "CLAUDE_CODE_USE_BEDROCK",
       "CLAUDE_CODE_USE_VERTEX",
       "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "CLAUDE_CODE_USE_MANTLE",
+      "AWS_SECRET_ACCESS_KEY",
+      "GOOGLE_APPLICATION_CREDENTIALS",
+      "AZURE_CLIENT_SECRET",
     ]) {
       expect(result.environment[name]).toBe(ACCOUNT_ENV_UNSET);
     }

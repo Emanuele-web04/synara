@@ -178,6 +178,28 @@ describe("resolveLaunchEnvironment", () => {
 });
 
 describe("buildChildEnvironment", () => {
+  it("removes ambient Claude cloud credentials and wildcard endpoints for managed launches", () => {
+    const env = buildChildEnvironment(
+      {
+        HOME: "/native",
+        ANTHROPIC_API_KEY: "native-key",
+        AWS_SECRET_ACCESS_KEY: "aws-secret",
+        AWS_ENDPOINT_URL_BEDROCK: "https://ambient.example",
+        VERTEX_REGION_CLAUDE_SONNET: "us-test",
+        CLAUDE_CODE_USE_FOUNDRY: "1",
+        AZURE_CLIENT_SECRET: "azure-secret",
+        PATH: "/bin",
+      },
+      { HOME: "/managed", CLAUDE_CONFIG_DIR: "/managed", ANTHROPIC_API_KEY: "selected-key" },
+    );
+    expect(env).toEqual({
+      HOME: "/managed",
+      CLAUDE_CONFIG_DIR: "/managed",
+      ANTHROPIC_API_KEY: "selected-key",
+      PATH: "/bin",
+    });
+  });
+
   it("strips launcher control variables and applies overrides with unset markers", () => {
     const env = buildChildEnvironment(
       {

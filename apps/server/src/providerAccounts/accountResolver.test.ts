@@ -281,6 +281,77 @@ describe("accountResolver", () => {
     expect(resolved.environment.GROK_HOME).toBe(resolved.profilePath);
   });
 
+  it("keeps credential generation and key consistent during a concurrent reconnect", async () => {
+    const record = {
+      ...codexAccount({ ordinal: 1 }),
+      agent: {
+        generation: 1,
+        state: "connected" as const,
+        authMethod: "apiKey" as const,
+        secretVersion: 1,
+      },
+    };
+    await Effect.runPromise(storage.writeAccount(record));
+    await Effect.runPromise(storage.writeSecret("codex", 1, "agent", "old-key", 1));
+    let releaseRead!: () => void;
+    let didRead!: () => void;
+    const pausedRead = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readStarted = new Promise<void>((resolve) => {
+      didRead = resolve;
+    });
+    const pausedResolver = makeAccountResolver({
+      storage: {
+        ...storage,
+        readAccount: (provider, ordinal) =>
+          storage.readAccount(provider, ordinal).pipe(
+            Effect.tap(() =>
+              Effect.promise(() => {
+                didRead();
+                return pausedRead;
+              }),
+            ),
+          ),
+      },
+    });
+    const launch = Effect.runPromise(
+      pausedResolver.resolveAccountLaunch({
+        provider: "codex",
+        surface: "agent",
+        explicitOrdinal: 1,
+      }),
+    );
+    await readStarted;
+    const reconnect = Effect.runPromise(
+      storage.withProviderLock(
+        "codex",
+        Effect.gen(function* () {
+          yield* storage.writeSecret("codex", 1, "agent", "new-key", 2);
+          yield* storage.writeAccount({
+            ...record,
+            agent: { ...record.agent, generation: 2, secretVersion: 2 },
+          });
+        }),
+      ),
+    );
+    releaseRead();
+    expect(await launch).toMatchObject({
+      generation: 1,
+      environment: { OPENAI_API_KEY: "old-key" },
+    });
+    await reconnect;
+    expect(
+      await Effect.runPromise(
+        resolver.resolveAccountLaunch({
+          provider: "codex",
+          surface: "agent",
+          explicitOrdinal: 1,
+        }),
+      ),
+    ).toMatchObject({ generation: 2, environment: { OPENAI_API_KEY: "new-key" } });
+  });
+
   it("keeps OAuth launches free of injected API keys", async () => {
     await Effect.runPromise(storage.writeAccount(codexAccount({ ordinal: 1 })));
     const resolved = await Effect.runPromise(

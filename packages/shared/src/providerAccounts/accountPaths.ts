@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import type { AccountSurface, SupportedAccountProvider } from "@synara/contracts";
 import { accountDirName, secretName } from "./accountIds";
+import { desktopFlavorFromBundleId } from "../betaFeatures";
+import { synaraDesktopIdentity, SYNARA_DESKTOP_BUNDLE_ID_ENV } from "../desktopIdentity";
 
 export interface ResolveAccountRootOptions {
   readonly platform?: NodeJS.Platform;
@@ -18,21 +20,23 @@ export function resolveAccountRoot(options: ResolveAccountRootOptions = {}): str
   if (override !== undefined && override.length > 0) {
     return override;
   }
+  const flavor = desktopFlavorFromBundleId(env[SYNARA_DESKTOP_BUNDLE_ID_ENV]);
+  const identity = synaraDesktopIdentity(flavor === "unknown" ? "production" : flavor);
   if (platform === "darwin") {
-    return join(home, "Library", "Application Support", "Synara", "Accounts");
+    return join(home, "Library", "Application Support", identity.displayName, "Accounts");
   }
   if (platform === "win32") {
     const localAppData =
       env.LOCALAPPDATA !== undefined && env.LOCALAPPDATA.length > 0
         ? env.LOCALAPPDATA
         : join(home, "AppData", "Local");
-    return join(localAppData, "Synara", "Accounts");
+    return join(localAppData, identity.displayName, "Accounts");
   }
   const xdgDataHome =
     env.XDG_DATA_HOME !== undefined && env.XDG_DATA_HOME.length > 0
       ? env.XDG_DATA_HOME
       : join(home, ".local", "share");
-  return join(xdgDataHome, "synara", "accounts");
+  return join(xdgDataHome, identity.userDataDirectoryName, "accounts");
 }
 
 export function activePointerDir(root: string): string {

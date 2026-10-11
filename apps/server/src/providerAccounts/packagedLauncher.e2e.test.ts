@@ -128,7 +128,8 @@ describe("packaged launcher artifact", () => {
       encoding: "utf8",
       env: {
         PATH: [shimDir, fakeBinDir, binDirOf("node"), "/usr/bin", "/bin"].join(delimiter),
-        SYNARA_ACCOUNT_HOME: accountRoot,
+        // The installed shim must pin its own root despite a foreign shell environment.
+        SYNARA_ACCOUNT_HOME: join(stageRoot, "other-channel-accounts"),
       },
       timeout: 30_000,
     });

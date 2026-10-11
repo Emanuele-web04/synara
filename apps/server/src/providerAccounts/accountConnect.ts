@@ -277,11 +277,24 @@ export function makeAccountConnect(input: AccountConnectInput) {
           }
           const existing = yield* storage.readAccount(provider, ordinal);
           const record = buildConnectedRecord(operation, existing, ordinal, identity);
-          yield* storage.writeAccount(
-            homeVersion !== undefined && record.agent
-              ? { ...record, agent: { ...record.agent, homeVersion } }
-              : record,
-          );
+          yield* storage
+            .writeAccount(
+              homeVersion !== undefined && record.agent
+                ? { ...record, agent: { ...record.agent, homeVersion } }
+                : record,
+            )
+            .pipe(
+              Effect.tapError(() =>
+                Effect.gen(function* () {
+                  // A failed atomic write can already have committed its rename.
+                  // Only reclaim a fresh slot proven to have no committed record.
+                  if (operation.reconnectOrdinal !== undefined) return;
+                  if ((yield* storage.readAccount(provider, ordinal)) === null) {
+                    yield* storage.releaseOrdinalDirectory(provider, ordinal);
+                  }
+                }),
+              ),
+            );
           yield* activateIfFirst(provider, ordinal);
           operation.state = "succeeded";
           operation.ordinal = ordinal;
@@ -412,30 +425,48 @@ export function makeAccountConnect(input: AccountConnectInput) {
       // cancelled, or interrupted login never touches live credentials: new
       // accounts turn the pending directory into a numbered slot on success,
       // reconnects atomically swap the staged home into the existing slot.
-      yield* storage.createPendingDirectory(provider, operation.operationId);
-      // Persist non-secret metadata so a restart can surface the interrupted
-      // operation as a truthful terminal state instead of "unknown".
-      yield* storage.writePendingOperation(
-        provider,
-        operation.operationId,
-        JSON.stringify({
-          operationId: operation.operationId,
+      yield* Effect.gen(function* () {
+        yield* storage.createPendingDirectory(provider, operation.operationId);
+        // Persist non-secret metadata so a restart can surface the interrupted
+        // operation as a truthful terminal state instead of "unknown".
+        yield* storage.writePendingOperation(
           provider,
-          surface,
-          authMethod,
-          ...(connectInput.ordinal !== undefined ? { reconnectOrdinal: connectInput.ordinal } : {}),
-          startedAt: now(),
-          // Owner pid so sibling server instances sharing the account root
-          // can tell a live in-flight login from an interrupted one.
-          pid: process.pid,
-        }),
+          operation.operationId,
+          JSON.stringify({
+            operationId: operation.operationId,
+            provider,
+            surface,
+            authMethod,
+            ...(connectInput.ordinal !== undefined
+              ? { reconnectOrdinal: connectInput.ordinal }
+              : {}),
+            startedAt: now(),
+            // Owner pid so sibling server instances sharing the account root
+            // can tell a live in-flight login from an interrupted one.
+            pid: process.pid,
+          }),
+        );
+        const profileHome = path.join(
+          pendingPath(storage.root, provider, operation.operationId),
+          "agent",
+          "home",
+        );
+        yield* Effect.try({
+          try: () => startOauthLogin(operation, profileHome),
+          catch: () =>
+            connectError("accountConnect.beginConnect", "Could not start the OAuth login."),
+        });
+      }).pipe(
+        Effect.onExit((exit) =>
+          exit._tag === "Success"
+            ? Effect.void
+            : Effect.gen(function* () {
+                operation.loginHandle?.cancel();
+                operations.delete(operation.operationId);
+                yield* storage.cancelPendingDirectory(provider, operation.operationId);
+              }).pipe(Effect.ignore),
+        ),
       );
-      const profileHome = path.join(
-        pendingPath(storage.root, provider, operation.operationId),
-        "agent",
-        "home",
-      );
-      startOauthLogin(operation, profileHome);
       return { operationId: operation.operationId };
     });
 
