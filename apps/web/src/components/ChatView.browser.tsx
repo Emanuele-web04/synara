@@ -8566,7 +8566,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
   it.each([
     { picker: "model", label: "Change model and reasoning" },
-    { picker: "traits", label: "Change effort, context, and speed" },
+    { picker: "permissions", label: "Full access" },
   ])("preserves the $picker picker on first window activation", async ({ label }) => {
     // Vitest hosts the real app in a same-origin frame. Give its parent actual
     // focus before mounting, so the app must defer its initial composer focus.
