@@ -30,6 +30,32 @@ function windowsEnv(pathValue = root): NodeJS.ProcessEnv {
 }
 
 describe("prepareProcess", () => {
+  it("plans the non-cwd Windows PATH shim and fails closed when only cwd matches", () => {
+    const workingDirectory = path.join(root, "working");
+    const pathDirectory = path.join(root, "bin");
+    mkdirSync(workingDirectory);
+    mkdirSync(pathDirectory);
+    writeFileSync(path.join(workingDirectory, "tool.EXE"), "local executable");
+    const shim = path.join(pathDirectory, "tool.CMD");
+    writeFileSync(shim, "@echo off\r\n");
+    const input = {
+      platform: "win32" as const,
+      cwd: workingDirectory,
+      env: windowsEnv(`${workingDirectory};${pathDirectory}`),
+      requireExecutable: true,
+    };
+    expect(prepareProcess("tool", ["--version"], input)).toMatchObject({
+      resolvedCommand: shim,
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/v:off", "/c", `call "${shim}" "--version"`],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+    expect(() =>
+      prepareProcess("tool", [], { ...input, env: windowsEnv(workingDirectory) }),
+    ).toThrow(ExecutableNotFoundError);
+  });
+
   it.each(["linux", "darwin"] as const)(
     "preserves lower inherited priority before exec on %s",
     (platform) => {

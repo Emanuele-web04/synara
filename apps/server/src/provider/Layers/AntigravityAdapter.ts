@@ -21,6 +21,7 @@ import {
   spawnProcess as spawnPlatformProcess,
   type RuntimeSpawnOptions,
 } from "@synara/shared/processRuntime";
+import { ProcessArgumentValidationError } from "@synara/shared/platformProcess";
 import { Effect, Layer, Option, Queue, Stream } from "effect";
 
 import {
@@ -585,12 +586,15 @@ interface AntigravityProcessTerminal {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly spawnError?: Error;
+  readonly inputError?: Error;
   readonly teardownError?: unknown;
 }
 
 export function superviseAntigravityTurnProcess(
   child: ChildProcess,
   input: {
+    readonly inputDelivery?: Promise<void>;
+    readonly cancelInput?: () => void;
     readonly teardownProcessTree: typeof teardownChildProcessTree;
     readonly detachOutput: () => void;
     readonly onFinalize: (terminal: AntigravityProcessTerminal) => Promise<void>;
@@ -608,6 +612,12 @@ export function superviseAntigravityTurnProcess(
   // the failure; teardown callers observe this same rejecting completion promise.
   void finalization.catch(() => undefined);
 
+  let inputError: Error | undefined;
+  const inputSettled = input.inputDelivery?.catch((cause: unknown) => {
+    inputError =
+      cause instanceof Error ? cause : new Error("Antigravity prompt delivery failed.", { cause });
+  });
+
   const teardown = () => {
     teardownPromise ??= Promise.resolve().then(async () => {
       const result = await input.teardownProcessTree(child);
@@ -624,13 +634,17 @@ export function superviseAntigravityTurnProcess(
     child.removeListener("close", onClose);
     input.detachOutput();
     void (async () => {
+      if (terminal.spawnError || Object.hasOwn(terminal, "teardownError")) input.cancelInput?.();
+      // A clean exit cannot prove delivery of a prompt written to stdin. Keep
+      // delivery failure distinct from spawn/teardown failure and await it.
+      if (inputSettled) await inputSettled;
       let teardownError = terminal.teardownError;
       let teardownFailed = Object.hasOwn(terminal, "teardownError");
       // An asynchronous spawn failure has no process tree. Every requested stop
       // and abnormal exit of an existing process must await the same teardown.
       if (
         teardownPromise ||
-        (terminal.spawnError
+        (terminal.spawnError || inputError
           ? child.pid !== undefined
           : terminal.code !== 0 || terminal.signal !== null)
       ) {
@@ -644,13 +658,18 @@ export function superviseAntigravityTurnProcess(
       let finalizerError: unknown;
       let finalizerFailed = false;
       try {
-        await input.onFinalize({ ...terminal, ...(teardownFailed ? { teardownError } : {}) });
+        await input.onFinalize({
+          ...terminal,
+          ...(inputError ? { inputError } : {}),
+          ...(teardownFailed ? { teardownError } : {}),
+        });
       } catch (cause) {
         finalizerError = cause;
         finalizerFailed = true;
       }
       if (teardownFailed) throw teardownError;
       if (terminal.spawnError) throw terminal.spawnError;
+      if (inputError) throw inputError;
       if (finalizerFailed) throw finalizerError;
     })().then(resolveFinalization, rejectFinalization);
   };
@@ -660,23 +679,69 @@ export function superviseAntigravityTurnProcess(
     beginFinalization({ code, signal });
   child.once("error", onError);
   child.once("close", onClose);
+  const teardownAndFinalize = async () => {
+    if (!finalizationStarted) {
+      try {
+        await teardown();
+      } catch (teardownError) {
+        beginFinalization({ code: child.exitCode, signal: child.signalCode, teardownError });
+      }
+    }
+    // A successful teardown proves root exit, but close can still be draining
+    // stdout and hooks. Do not release the caller until that work also ends.
+    await finalization;
+  };
+  // Do not leave a CLI waiting for a prompt after delivery fails. This shares
+  // the same owned teardown and terminal as a racing Cancel or process exit.
+  void input.inputDelivery
+    ?.catch(() => (child.pid === undefined ? finalization : teardownAndFinalize()))
+    .catch(() => undefined);
   return {
     child,
     finalization,
     teardown,
-    async teardownAndFinalize() {
-      if (!finalizationStarted) {
-        try {
-          await teardown();
-        } catch (teardownError) {
-          beginFinalization({ code: child.exitCode, signal: child.signalCode, teardownError });
-        }
-      }
-      // A successful teardown proves root exit, but close can still be draining
-      // stdout and hooks. Do not release the caller until that work also ends.
-      await finalization;
-    },
+    teardownAndFinalize,
   };
+}
+
+function deliverAntigravityPrompt(child: ChildProcess, prompt: string) {
+  let cancel!: () => void;
+  const completion = new Promise<void>((resolveDelivery, rejectDelivery) => {
+    const stdin = child.stdin;
+    cancel = () => {
+      rejectDelivery(new Error("Antigravity prompt delivery stopped before completion."));
+      stdin?.destroy();
+    };
+    if (!stdin) {
+      rejectDelivery(new Error("Antigravity prompt stdin is unavailable."));
+      return;
+    }
+    let delivered = false;
+    const onError = (cause: Error) => rejectDelivery(cause);
+    stdin.once("error", onError);
+    stdin.once("close", () => {
+      stdin.removeListener("error", onError);
+      if (!delivered) rejectDelivery(new Error("Antigravity prompt stdin closed before delivery."));
+    });
+    try {
+      // The documented stream-json input protocol accepts one user event and
+      // keeps the active turn alive after EOF. No prompt bytes reach argv.
+      stdin.end(
+        `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`,
+        (cause?: Error | null) => {
+          if (cause) {
+            rejectDelivery(cause);
+            return;
+          }
+          delivered = true;
+          resolveDelivery();
+        },
+      );
+    } catch (cause) {
+      rejectDelivery(cause);
+    }
+  });
+  return { completion, cancel };
 }
 
 export async function readCompleteAntigravityLines(
@@ -2720,6 +2785,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           providerPrompt,
         ];
         let child: AntigravityChildProcess;
+        let usePromptStdin = false;
         try {
           const spawnProcess =
             dependencies.spawnProcess ??
@@ -2728,7 +2794,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 ...options,
                 requireExecutable: true,
               }) as AntigravityChildProcess);
-          child = spawnProcess(context.binaryPath, args, {
+          const spawnOptions: RuntimeSpawnOptions = {
             lowerPriority: yield* providerProcessPriorityEnabled,
             cwd: context.session.cwd ?? serverConfig.cwd,
             env: buildAntigravityTurnProcessEnvironment({
@@ -2742,7 +2808,27 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 : {}),
             }),
             stdio: ["ignore", "pipe", "pipe"],
-          });
+          };
+          try {
+            child = spawnProcess(context.binaryPath, args, spawnOptions);
+          } catch (cause) {
+            if (
+              !(cause instanceof ProcessArgumentValidationError) ||
+              cause.kind !== "argument" ||
+              cause.argumentIndex !== args.length - 1
+            ) {
+              throw cause;
+            }
+            // Only a proven pre-spawn rejection of the prompt can select the
+            // documented input protocol. The shared launcher validates the
+            // command and every remaining argument again; OS failures never retry.
+            child = spawnProcess(
+              context.binaryPath,
+              [...args.slice(0, -2), "--input-format", "stream-json"],
+              { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] },
+            );
+            usePromptStdin = true;
+          }
         } catch (cause) {
           // Shared launch validation can reject before a child exists. Roll
           // back only this unlaunched turn, without leaving a running session
@@ -2774,12 +2860,33 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           sessions.get(input.threadId) === context &&
           context.activeProcess === child &&
           context.activeTurnId === turnId;
-        const onSpawn = () => {
-          if (ownsTurn() && policyDeliveryState.harnessPolicyDelivered === true) {
+        const promptDelivery = usePromptStdin
+          ? deliverAntigravityPrompt(child, providerPrompt)
+          : undefined;
+        let spawned = false;
+        let inputDelivered = !usePromptStdin;
+        const commitPolicyDelivery = () => {
+          if (
+            spawned &&
+            inputDelivered &&
+            ownsTurn() &&
+            policyDeliveryState.harnessPolicyDelivered === true
+          ) {
             context.harnessPolicyDelivered = true;
           }
         };
+        const onSpawn = () => {
+          spawned = true;
+          commitPolicyDelivery();
+        };
         child.once("spawn", onSpawn);
+        void promptDelivery?.completion.then(
+          () => {
+            inputDelivered = true;
+            commitPolicyDelivery();
+          },
+          () => undefined,
+        );
         const output = createBoundedProcessOutput();
         // Keep the complete stdout stream for legacy plain-text responses. The
         // bounded capture above is reserved for diagnostics/raw process-exit
@@ -2813,6 +2920,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           if (ownsTurn()) void pollHookFile(context);
         }, POLL_INTERVAL_MS);
         const lifecycle = superviseAntigravityTurnProcess(child, {
+          ...(promptDelivery
+            ? { inputDelivery: promptDelivery.completion, cancelInput: promptDelivery.cancel }
+            : {}),
           teardownProcessTree,
           detachOutput: () => {
             clearInterval(timer);
@@ -2821,7 +2931,8 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             child.stderr.removeListener("data", onStderr);
           },
           onFinalize: async (terminal) => {
-            const { code, signal, spawnError, teardownError } = terminal;
+            const { code, signal, spawnError, inputError, teardownError } = terminal;
+            const processError = spawnError ?? inputError;
             const teardownFailed = Object.hasOwn(terminal, "teardownError");
             let finalizationFailed = false;
             try {
@@ -2830,18 +2941,18 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
                 return;
               }
-              if (spawnError || teardownFailed) {
+              if (processError || teardownFailed) {
                 offer({
                   ...base(context, { includeTurn: false }),
                   type: "runtime.error",
                   payload: {
                     message: messageFromCause(
-                      teardownFailed ? teardownError : spawnError,
+                      teardownFailed ? teardownError : processError,
                       "Antigravity process finalization failed.",
                     ),
                     class: "transport_error",
                   },
-                  raw: raw("process-error", { spawnError, teardownError }),
+                  raw: raw("process-error", { spawnError, inputError, teardownError }),
                 } satisfies ProviderRuntimeEvent);
               }
               // Another path may already have settled (interrupt / stop-hook kill).
@@ -2881,6 +2992,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               // drains. Do not publish a buffered fallback reply after Cancel.
               if (
                 !context.interrupted &&
+                !inputError &&
                 !context.turnTerminalEmitted &&
                 !context.sawAssistant &&
                 responseText
@@ -2949,12 +3061,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 }
               }
               const completedAfterExpectedPostResponseExit =
-                !spawnError &&
+                !processError &&
                 !teardownFailed &&
                 (completedAfterStopTeardown || completedAfterBenignPostResponseTimeout);
               const interrupted =
                 context.interrupted ||
-                (!spawnError &&
+                (!processError &&
                   !teardownFailed &&
                   (printResult?.state === "interrupted" ||
                     (signal !== null &&
@@ -2963,7 +3075,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               const failed =
                 !interrupted &&
                 !completedAfterExpectedPostResponseExit &&
-                (spawnError !== undefined ||
+                (processError !== undefined ||
                   teardownFailed ||
                   (code ?? 1) !== 0 ||
                   (printResult !== undefined && printResult.state !== "completed"));
@@ -2986,7 +3098,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                               teardownError,
                               "Antigravity process teardown was unproven.",
                             )
-                          : spawnError?.message) ||
+                          : processError?.message) ||
                         printResult?.error ||
                         stderr.trim() ||
                         (printResult?.state === undefined && printResult !== undefined
@@ -3010,14 +3122,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               // terminal and remain available to a later stop caller.
               if (ownsTurn()) {
                 const errorMessage = messageFromCause(
-                  teardownFailed ? teardownError : (spawnError ?? cause),
+                  teardownFailed ? teardownError : (processError ?? cause),
                   "Antigravity process finalization failed.",
                 );
                 offer({
                   ...base(context, { includeTurn: false }),
                   type: "runtime.error",
                   payload: { message: errorMessage, class: "transport_error" },
-                  raw: raw("finalization-error", { cause, spawnError, teardownError }),
+                  raw: raw("finalization-error", { cause, spawnError, inputError, teardownError }),
                 } satisfies ProviderRuntimeEvent);
                 settleActiveTurn(context, {
                   state: context.interrupted ? "interrupted" : "failed",

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import * as Path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ProcessArgumentValidationError } from "./platformProcess";
 
 import {
   buildWindowsBatchCommandArgs,
@@ -48,7 +49,7 @@ describe("windowsProcess", () => {
     ).toBe(commandPath);
   });
 
-  it("does not search the working directory unless it is on PATH", () => {
+  it("does not implicitly search the working directory", () => {
     const workingDirectory = Path.join(root, "working");
     const pathDirectory = Path.join(root, "bin");
     mkdirSync(workingDirectory);
@@ -61,6 +62,23 @@ describe("windowsProcess", () => {
         platform: "win32",
         cwd: workingDirectory,
         env: { PATH: pathDirectory, PATHEXT: ".CMD" },
+      }),
+    ).toBe(commandPath);
+  });
+
+  it("filters the working directory even when it is explicitly first on PATH", () => {
+    const workingDirectory = Path.join(root, "working");
+    const pathDirectory = Path.join(root, "bin");
+    mkdirSync(workingDirectory);
+    mkdirSync(pathDirectory);
+    writeFileSync(Path.join(workingDirectory, "codex.EXE"), "local executable");
+    const commandPath = Path.join(pathDirectory, "codex.CMD");
+    writeFileSync(commandPath, "@echo off\r\n");
+    expect(
+      resolveWindowsCommandPath("codex", {
+        platform: "win32",
+        cwd: workingDirectory,
+        env: { PATH: `${workingDirectory};${pathDirectory}`, PATHEXT: ".EXE;.CMD" },
       }),
     ).toBe(commandPath);
   });
@@ -198,6 +216,29 @@ describe("windowsProcess", () => {
       /Cannot safely execute Windows batch argument/,
     );
   });
+
+  it.each(["\r", "\n", "&", "|", "<", ">", "^", "%"])(
+    "identifies the rejected token without weakening batch refusal (%j)",
+    (character) => {
+      for (const kind of ["command", "argument"] as const) {
+        let failure: unknown;
+        try {
+          buildWindowsBatchCommandArgs(
+            kind === "command" ? `C:\\bad${character}path\\agy.cmd` : "C:\\tools\\agy.cmd",
+            ["--model", "safe", `prompt${character}value`],
+          );
+        } catch (cause) {
+          failure = cause;
+        }
+        expect(failure).toBeInstanceOf(ProcessArgumentValidationError);
+        expect(failure).toMatchObject({
+          kind,
+          argumentIndex: kind === "argument" ? 2 : undefined,
+          message: `Cannot safely execute Windows batch ${kind} containing cmd.exe control characters.`,
+        });
+      }
+    },
+  );
 
   it("allows batch paths with spaces and parentheses", () => {
     expect(

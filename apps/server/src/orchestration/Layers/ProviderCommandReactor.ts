@@ -1629,6 +1629,9 @@ const make = Effect.gen(function* () {
       thread.session?.providerInstanceId !== requestedProviderInstanceId
         ? thread.session?.providerName
         : null;
+    const runtimeSession = (yield* providerService.listSessions()).find(
+      (session) => session.threadId === input.threadId,
+    );
     yield* setThreadSession({
       threadId: input.threadId,
       session: {
@@ -1637,7 +1640,13 @@ const make = Effect.gen(function* () {
         providerName:
           existingBoundProviderName ?? resolvedProviderName ?? errorModelSelection.provider,
         providerInstanceId: thread.session?.providerInstanceId ?? requestedProviderInstanceId,
-        runtimeMode: input.runtimeMode ?? thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        // A failed rebind can leave the previous process alive. Report its
+        // actual permissions while keeping the requested mode on the thread.
+        runtimeMode:
+          runtimeSession?.runtimeMode ??
+          input.runtimeMode ??
+          thread.session?.runtimeMode ??
+          DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: input.detail,
         updatedAt: input.createdAt,
@@ -2368,7 +2377,9 @@ const make = Effect.gen(function* () {
       thread.session && thread.session.status !== "stopped" ? activeSessionBeforeEnsure : undefined;
     if (reusableSession) {
       const existingSessionThreadId = thread.id;
-      const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
+      // Persisted projections can predate a failed rebind. The live process
+      // determines whether its permission mode still needs to change.
+      const runtimeModeChanged = desiredRuntimeMode !== reusableSession.runtimeMode;
       // A live session whose provider diverged from the binding (a stale
       // projection or an interrupted rebind) is treated as a provider change:
       // it is restarted on the preferred provider and its resume cursor —
@@ -4627,9 +4638,8 @@ const make = Effect.gen(function* () {
       // idle until the runtime's first event. Mirrors the message-edit-resend
       // path. Never touches a live session — a steer turn on a running provider
       // session must keep its running state and activeTurnId. Keeps the existing
-      // session's runtimeMode: ensureSessionForThread detects mode changes by
-      // comparing against it, and adopting the requested mode here would mask
-      // the restart.
+      // session's runtimeMode until the live process is actually reconfigured;
+      // ensureSessionForThread compares the request with the runtime itself.
       // The pre-turn session row can be an optimistic placeholder carrying a
       // stale provider; only defer to it for a real established binding, and
       // otherwise honor the turn's explicit requested selection.
@@ -7163,33 +7173,12 @@ const make = Effect.gen(function* () {
           threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
           return;
         }
-        case "thread.runtime-mode-set": {
-          const thread = yield* resolveThread(event.payload.threadId);
-          if (!thread?.session || thread.session.status === "stopped") {
-            return;
-          }
-          if (
-            thread.session.activeTurnId !== null ||
-            Array.from(pendingClaudeCacheResponses.values()).some(
-              (response) => response.threadId === event.payload.threadId,
-            )
-          ) {
-            // Ensuring now would restart the provider session and invalidate
-            // the active turn or cache worker's reviewed context. The projected thread already carries the desired
-            // runtime mode; the next turn's ensure compares it against the
-            // session's spawn mode and restarts between turns instead.
-            return;
-          }
-          const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
-          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
-            ...(cachedProviderOptions !== undefined
-              ? { providerOptions: cachedProviderOptions }
-              : {}),
-            modelSelection: thread.modelSelection,
-            runtimeMode: event.payload.runtimeMode,
-          });
+        case "thread.runtime-mode-set":
+          // The projection already saves the desired mode. Apply it when the
+          // next turn ensures its session, even if the thread is idle: eagerly
+          // restarting here publishes `starting` without a turn and makes the
+          // composer and finished work log briefly look active.
           return;
-        }
         case "thread.interaction-mode-set": {
           if (
             event.payload.previousInteractionMode !== "plan" ||

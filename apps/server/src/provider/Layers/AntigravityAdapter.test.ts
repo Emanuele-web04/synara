@@ -4,11 +4,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
 import { resolveWindowsPowerShellExecutable } from "@synara/shared/platformEnvironment";
+import * as platformProcess from "@synara/shared/platformProcess";
 import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -254,6 +255,238 @@ describe("Antigravity process lifecycle ownership", () => {
     expect(teardownProcessTree).not.toHaveBeenCalled();
     cleanup.resolve();
     await lateStop;
+  });
+
+  it("keeps a clean close pending until prompt delivery is proven", async () => {
+    const fake = childProcess();
+    const input = deferred<void>();
+    const teardownProcessTree = vi.fn(completeProcessTeardown);
+    const onFinalize = vi.fn(async () => undefined);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      inputDelivery: input.promise,
+      teardownProcessTree,
+      onFinalize,
+      detachOutput: () => undefined,
+    });
+    fake.close(0);
+    await expectPending(lifecycle.finalization);
+    expect(onFinalize).not.toHaveBeenCalled();
+    input.resolve();
+    await lifecycle.finalization;
+    expect(teardownProcessTree).not.toHaveBeenCalled();
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith({ code: 0, signal: null });
+  });
+
+  it.each(["resolve", "reject"])(
+    "awaits owned teardown after stdin failure and preserves error precedence (%s)",
+    async (outcome) => {
+      const fake = childProcess();
+      const input = deferred<void>();
+      const teardown = deferred<processTeardown.SupervisedProcessTeardownResult>();
+      const teardownProcessTree = vi.fn(() => teardown.promise);
+      const onFinalize = vi.fn(async (_terminal: unknown) => undefined);
+      const inputError = new Error("stdin EPIPE");
+      const teardownError = new Error("stdin failure cleanup unproven");
+      const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+        inputDelivery: input.promise,
+        teardownProcessTree,
+        onFinalize,
+        detachOutput: () => undefined,
+      });
+      const assertion = expect(lifecycle.finalization).rejects.toBe(
+        outcome === "resolve" ? inputError : teardownError,
+      );
+      input.reject(inputError);
+      await vi.waitFor(() => expect(teardownProcessTree).toHaveBeenCalledOnce());
+      const racingStop = lifecycle.teardownAndFinalize();
+      void racingStop.catch(() => undefined);
+      fake.close(0);
+      await expectPending(lifecycle.finalization);
+      expect(onFinalize).not.toHaveBeenCalled();
+      if (outcome === "resolve") teardown.resolve({ escalated: false, signalErrors: [] });
+      else teardown.reject(teardownError);
+      await assertion;
+      await expect(racingStop).rejects.toBe(outcome === "resolve" ? inputError : teardownError);
+      expect(teardownProcessTree).toHaveBeenCalledOnce();
+      expect(onFinalize).toHaveBeenCalledExactlyOnceWith({
+        code: 0,
+        signal: null,
+        inputError,
+        ...(outcome === "reject" ? { teardownError } : {}),
+      });
+    },
+  );
+
+  it("keeps a spawn failure authoritative when stdin also closes without a child", async () => {
+    const fake = childProcess(null);
+    const input = deferred<void>();
+    const spawnError = new Error("spawn ENOENT");
+    const inputError = new Error("stdin closed before delivery");
+    const teardownProcessTree = vi.fn(completeProcessTeardown);
+    const onFinalize = vi.fn(async (_terminal: unknown) => undefined);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      inputDelivery: input.promise,
+      teardownProcessTree,
+      onFinalize,
+      detachOutput: () => undefined,
+    });
+    const assertion = expect(lifecycle.finalization).rejects.toBe(spawnError);
+    input.reject(inputError);
+    fake.child.emit("error", spawnError);
+    fake.close(-1);
+    await assertion;
+    expect(teardownProcessTree).not.toHaveBeenCalled();
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith({
+      code: null,
+      signal: null,
+      spawnError,
+      inputError,
+    });
+  });
+
+  it("cancels unfinished stdin when teardown cannot prove exit", async () => {
+    const fake = childProcess();
+    const input = deferred<void>();
+    const teardownError = new Error("owned process did not exit");
+    const inputError = new Error("stdin delivery canceled");
+    const cancelInput = vi.fn(() => input.reject(inputError));
+    const onFinalize = vi.fn(async (_terminal: unknown) => undefined);
+    const lifecycle = superviseAntigravityTurnProcess(fake.child, {
+      inputDelivery: input.promise,
+      cancelInput,
+      teardownProcessTree: async () => {
+        throw teardownError;
+      },
+      onFinalize,
+      detachOutput: () => undefined,
+    });
+    await expect(lifecycle.teardownAndFinalize()).rejects.toBe(teardownError);
+    expect(cancelInput).toHaveBeenCalledOnce();
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith({
+      code: null,
+      signal: null,
+      inputError,
+      teardownError,
+    });
+  });
+
+  it("retains host context after stdin delivery fails and suppresses an undelivered reply", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-stdin-"));
+    const inputError = new Error("owned prompt stdin EPIPE");
+    const prompts: string[] = [];
+    let rejectFirstWrite: ((error: Error) => void) | undefined;
+    let childCount = 0;
+    const teardownProcessTree = vi.fn(closeProcessDuringTeardown);
+    const spawnProcess: NonNullable<AntigravityAdapterDependencies["spawnProcess"]> = (
+      _command,
+      args,
+      options,
+    ) => {
+      const promptIndex = args.indexOf("-p");
+      if (promptIndex >= 0 && args[promptIndex + 1]!.includes("\n")) {
+        throw new platformProcess.ProcessArgumentValidationError("argument", promptIndex + 1);
+      }
+      const fake = childProcess(12_000 + ++childCount);
+      const first = childCount === 1;
+      const complete = () => {
+        fake.stdout.end("accepted\n");
+        fake.stderr.end();
+        fake.close(0);
+      };
+      if (promptIndex < 0) {
+        expect(options.stdio).toEqual(["pipe", "pipe", "pipe"]);
+        expect(args.slice(-2)).toEqual(["--input-format", "stream-json"]);
+        const stdin = new Writable({
+          write(chunk, _encoding, callback) {
+            const event = JSON.parse(String(chunk));
+            expect(event.event).toBe("user");
+            prompts.push(event.message.content);
+            if (first) rejectFirstWrite = callback;
+            else callback();
+          },
+        });
+        stdin.once("finish", () => setTimeout(complete, 0));
+        Object.assign(fake.child, { stdin });
+      } else {
+        expect(options.stdio).toEqual(["ignore", "pipe", "pipe"]);
+        prompts.push(args[promptIndex + 1]!);
+        setTimeout(complete, 0);
+      }
+      queueMicrotask(() => fake.child.emit("spawn"));
+      if (first) fake.stdout.write("undelivered fallback reply");
+      return fake.child;
+    };
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("antigravity-stdin-retry");
+          const terminalStates: unknown[] = [];
+          const content: string[] = [];
+          const errors: string[] = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                if (event.type === "turn.completed") terminalStates.push(event.payload);
+                if (event.type === "content.delta") content.push(event.payload.delta);
+                if (event.type === "runtime.error") errors.push(event.payload.message);
+              }),
+            ),
+            Effect.forkScoped,
+          );
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fixture/agy" } },
+          });
+          const waitForStatus = (status: "ready" | "error") =>
+            Effect.gen(function* () {
+              for (let attempt = 0; attempt < 100; attempt++) {
+                if ((yield* adapter.listSessions())[0]?.status === status) return;
+                yield* Effect.sleep(10);
+              }
+              throw new Error(`stdin fixture did not reach ${status}`);
+            });
+          yield* adapter.sendTurn({ threadId, input: "first", attachments: [] });
+          expect(rejectFirstWrite).toBeTypeOf("function");
+          rejectFirstWrite!(inputError);
+          yield* waitForStatus("error");
+          expect(terminalStates).toEqual([
+            { state: "failed", stopReason: "error", errorMessage: inputError.message },
+          ]);
+          expect(errors).toContain(inputError.message);
+          expect(content).toEqual([]);
+          expect(teardownProcessTree).toHaveBeenCalledOnce();
+          yield* adapter.sendTurn({ threadId, input: "retry\nsecond line", attachments: [] });
+          yield* waitForStatus("ready");
+          yield* adapter.sendTurn({ threadId, input: "next turn", attachments: [] });
+          yield* waitForStatus("ready");
+          expect(prompts).toHaveLength(3);
+          expect(prompts[0]).toContain("<synara_host_context>");
+          expect(prompts[1]).toContain("<synara_host_context>");
+          expect(prompts[1]!.endsWith("\n\nretry\nsecond line")).toBe(true);
+          expect(prompts[2]).toBe("next turn");
+          expect(terminalStates).toHaveLength(3);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+              teardownProcessTree,
+            }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "stdin-retry-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("reports abnormal-exit teardown failures before finalization completes", async () => {
@@ -550,11 +783,16 @@ using System.IO;
 using System.Text;
 public static class Fixture {
   public static void Main(string[] args) {
+    Console.InputEncoding = new UTF8Encoding(false);
     Console.OutputEncoding = new UTF8Encoding(false);
     File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launched"), "yes");
+    File.WriteAllLines(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "argv"), Array.ConvertAll(args, arg => Convert.ToBase64String(Encoding.UTF8.GetBytes(arg))));
     int promptIndex = Array.IndexOf(args, "-p");
-    if (promptIndex >= 0) {
-      string prompt = Convert.ToBase64String(Encoding.UTF8.GetBytes(args[promptIndex + 1]));
+    int inputIndex = Array.IndexOf(args, "--input-format");
+    if (promptIndex >= 0 || inputIndex >= 0) {
+      if (inputIndex >= 0 && (promptIndex >= 0 || args[inputIndex + 1] != "stream-json")) Environment.Exit(3);
+      string input = inputIndex >= 0 ? Console.In.ReadToEnd() : args[promptIndex + 1];
+      string prompt = Convert.ToBase64String(Encoding.UTF8.GetBytes(input));
       Console.WriteLine("{\\"event\\":\\"result\\",\\"result\\":{\\"status\\":\\"SUCCESS\\",\\"response\\":\\"" + prompt + "\\"}}");
     } else {
       foreach (string arg in args) Console.WriteLine(Convert.ToBase64String(Encoding.UTF8.GetBytes(arg)));
@@ -612,99 +850,139 @@ public static class Fixture {
     },
   );
 
-  it("keeps native turn prompts literal, including host context and control characters", async () => {
-    const prompt = "città 汉字 & literal <content>\nsecond line %PATH%";
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* AntigravityAdapter;
-        const threadId = ThreadId.makeUnsafe("windows-native-antigravity");
-        yield* adapter.startSession({
-          provider: "antigravity",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: root,
-          providerOptions: { antigravity: { binaryPath: nativePath } },
-        });
-        const eventsFiber = yield* adapter.streamEvents.pipe(
-          Stream.takeUntil((event) => event.type === "turn.completed"),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-        yield* adapter.sendTurn({ threadId, input: prompt, attachments: [] });
-        const events = Array.from(
-          yield* Fiber.join(eventsFiber).pipe(Effect.timeout("10 seconds")),
-        );
-        const encoded = events
-          .filter((event) => event.type === "content.delta")
-          .map((event) => event.payload.delta)
-          .join("");
-        const received = Buffer.from(encoded, "base64").toString("utf8");
-        expect(received).toContain("<synara_host_context>");
-        expect(received.endsWith(`\n\n${prompt}`)).toBe(true);
-        expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
-          state: "completed",
-        });
-        yield* adapter.stopSession(threadId);
-      }).pipe(
-        Effect.provide(
-          makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
-            Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "native-boundary-" })),
-            Layer.provideMerge(NodeServices.layer),
+  it.each([
+    ["native", "\n"],
+    ["batch", "\n"],
+    ["batch", "\r\n"],
+  ] as const)(
+    "keeps %s turn prompts literal through host context and %j line breaks",
+    async (kind, newline) => {
+      const prompt = `città 汉字 & literal <content>${newline}second line %PATH% | ^ ! "quoted"`;
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe(`windows-${kind}-antigravity`);
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: {
+              antigravity: { binaryPath: kind === "native" ? nativePath : batchPath },
+            },
+          });
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "turn.completed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* adapter.sendTurn({ threadId, input: prompt, attachments: [] });
+          const events = Array.from(
+            yield* Fiber.join(eventsFiber).pipe(Effect.timeout("10 seconds")),
+          );
+          const encoded = events
+            .filter((event) => event.type === "content.delta")
+            .map((event) => event.payload.delta)
+            .join("");
+          const transport = Buffer.from(encoded, "base64").toString("utf8");
+          const received = kind === "batch" ? JSON.parse(transport).message.content : transport;
+          if (kind === "batch") {
+            expect(transport.endsWith("\n")).toBe(true);
+            expect(transport.trim().split("\n")).toHaveLength(1);
+            expect(JSON.parse(transport)).toEqual({ event: "user", message: { content: received } });
+          }
+          expect(received).toContain("<synara_host_context>");
+          expect(received.endsWith(`\n\n${prompt}`)).toBe(true);
+          const argv = (yield* Effect.promise(() => fs.readFile(path.join(root, "argv"), "utf8")))
+            .trim()
+            .split(/\r?\n/)
+            .map((line) => Buffer.from(line, "base64").toString("utf8"));
+          if (kind === "batch") {
+            expect(argv).toContain("--input-format");
+            expect(argv).not.toContain("-p");
+            expect(argv).not.toContain(received);
+          } else {
+            expect(argv[argv.indexOf("-p") + 1]).toBe(received);
+            expect(argv).not.toContain("--input-format");
+          }
+          expect(events.find((event) => event.type === "turn.completed")?.payload).toMatchObject({
+            state: "completed",
+          });
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "native-boundary-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
           ),
         ),
-      ),
-    );
-  });
+      );
+    },
+  );
 
-  it("refuses an unsafe batch turn before execution without stripping host context", async () => {
-    await fs.rm(markerPath, { force: true });
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* AntigravityAdapter;
-        const threadId = ThreadId.makeUnsafe("windows-batch-antigravity");
-        yield* adapter.startSession({
-          provider: "antigravity",
-          threadId,
-          runtimeMode: "full-access",
-          cwd: root,
-          providerOptions: { antigravity: { binaryPath: batchPath } },
-        });
-        const startedTurns: unknown[] = [];
-        yield* adapter.streamEvents.pipe(
-          Stream.runForEach((event) =>
-            Effect.sync(() => {
-              if (event.type === "turn.started") startedTurns.push(event);
-            }),
-          ),
-          Effect.forkScoped,
-        );
-        const failure = yield* adapter
-          .sendTurn({ threadId, input: "hello", attachments: [] })
-          .pipe(Effect.flip);
-        expect(failure).toMatchObject({
-          _tag: "ProviderAdapterRequestError",
-          method: "turn/start",
-          detail:
-            "Cannot safely execute Windows batch argument containing cmd.exe control characters.",
-        });
-        expect(fsSync.existsSync(markerPath)).toBe(false);
-        expect((yield* adapter.listSessions())[0]).toMatchObject({ status: "ready" });
-        expect((yield* adapter.listSessions())[0]?.activeTurnId).toBeUndefined();
-        expect((yield* adapter.readThread(threadId)).turns).toEqual([]);
-        yield* Effect.yieldNow;
-        expect(startedTurns).toEqual([]);
-        yield* adapter.stopSession(threadId);
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
-            Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "batch-boundary-" })),
-            Layer.provideMerge(NodeServices.layer),
+  it.each(["argument", "command"] as const)(
+    "refuses an unsafe batch %s before execution without stripping host context",
+    async (kind) => {
+      await fs.rm(markerPath, { force: true });
+      const unsafeCommand = path.join(root, "bad%PATH%.cmd");
+      await fs.copyFile(batchPath, unsafeCommand);
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("windows-batch-antigravity");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: {
+              antigravity: { binaryPath: kind === "command" ? unsafeCommand : batchPath },
+            },
+          });
+          const startedTurns: unknown[] = [];
+          yield* adapter.streamEvents.pipe(
+            Stream.runForEach((event) =>
+              Effect.sync(() => {
+                if (event.type === "turn.started") startedTurns.push(event);
+              }),
+            ),
+            Effect.forkScoped,
+          );
+          const failure = yield* adapter
+            .sendTurn({
+              threadId,
+              input: "hello",
+              attachments: [],
+              ...(kind === "argument"
+                ? { modelSelection: { provider: "antigravity" as const, model: "unsafe&model" } }
+                : {}),
+            })
+            .pipe(Effect.flip);
+          expect(failure).toMatchObject({
+            _tag: "ProviderAdapterRequestError",
+            method: "turn/start",
+            detail: `Cannot safely execute Windows batch ${kind} containing cmd.exe control characters.`,
+          });
+          expect(fsSync.existsSync(markerPath)).toBe(false);
+          expect((yield* adapter.listSessions())[0]).toMatchObject({ status: "ready" });
+          expect((yield* adapter.listSessions())[0]?.activeTurnId).toBeUndefined();
+          expect((yield* adapter.readThread(threadId)).turns).toEqual([]);
+          yield* Effect.yieldNow;
+          expect(startedTurns).toEqual([]);
+          yield* adapter.stopSession(threadId);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            makeAntigravityAdapterLive({ ensurePlugin: async () => undefined }).pipe(
+              Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "batch-boundary-" })),
+              Layer.provideMerge(NodeServices.layer),
+            ),
           ),
         ),
-      ),
-    );
-  });
+      );
+    },
+  );
 });
 
 describe("Antigravity CLI model translation", () => {

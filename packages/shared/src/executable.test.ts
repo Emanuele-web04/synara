@@ -1,9 +1,13 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createBatchExecutableResolver, resolveExecutable } from "./executable";
+import {
+  createBatchExecutableResolver,
+  executableCandidates,
+  resolveExecutable,
+} from "./executable";
 
 const tempDirs: string[] = [];
 
@@ -14,10 +18,63 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("createBatchExecutableResolver", () => {
+  it.each(["absolute", "relative", "normalized", "case-folded", "default cwd"])(
+    "filters the launch cwd from Windows PATH candidates (%s)",
+    (kind) => {
+      const cwd = makeTempDir();
+      const bin = makeTempDir();
+      const local = join(cwd, "tool.CMD");
+      const expected = join(bin, "tool.CMD");
+      writeFileSync(local, "@echo off\r\n");
+      writeFileSync(expected, "@echo off\r\n");
+      const entry =
+        kind === "relative"
+          ? "."
+          : kind === "normalized"
+            ? `${cwd}/.`
+            : kind === "case-folded"
+              ? `${cwd.toUpperCase()}/`
+              : cwd;
+      if (kind === "default cwd") vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      const options = {
+        platform: "win32" as const,
+        ...(kind === "default cwd" ? {} : { cwd }),
+        env: { PATH: `${entry};${bin}`, PATHEXT: ".CMD" },
+      };
+      expect(
+        [...executableCandidates("tool", options)].every(
+          (candidate) => candidate.directory === bin,
+        ),
+      ).toBe(true);
+      expect(resolveExecutable("tool", options)).toBe(expected);
+      expect(createBatchExecutableResolver(options)("tool")).toBe(expected);
+    },
+  );
+
+  it("preserves an explicitly qualified Windows command in the launch cwd", () => {
+    const cwd = makeTempDir();
+    const command = join(cwd, "tool");
+    writeFileSync(`${command}.CMD`, "@echo off\r\n");
+    const options = { platform: "win32" as const, cwd, env: { PATH: cwd, PATHEXT: ".CMD" } };
+    expect(resolveExecutable(command, options)).toBe(`${command}.CMD`);
+    expect(createBatchExecutableResolver(options)(command)).toBe(`${command}.CMD`);
+  });
+
+  it("retains explicit cwd entries in POSIX PATH lookup", () => {
+    expect([
+      ...executableCandidates("tool", {
+        platform: "linux",
+        cwd: "/working",
+        env: { PATH: "/working" },
+      }),
+    ]).toEqual([{ directory: "/working", path: join("/working", "tool") }]);
+  });
+
   it("matches resolveExecutable across PATH order, PATHEXT, and missing entries", () => {
     const first = makeTempDir();
     const second = makeTempDir();
