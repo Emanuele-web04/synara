@@ -133,6 +133,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Open the chat Environment panel automatically on normal threads. default closed open environment panel preference",
   },
   {
+    id: "general:environment-subagents",
+    section: "general",
+    title: "Subagents",
+    keywords:
+      "Show a compact summary of the chat's subagents in the Environment panel and open the full list in the right dock. agents roster lineage running done stop background",
+  },
+  {
     id: "general:environment-usage",
     section: "general",
     title: "Usage",
@@ -432,6 +439,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Include fork upstreams",
     keywords:
       "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. code review inbox github upstream remote fork",
+  },
+  {
+    id: "behavior:diff-layout",
+    section: "behavior",
+    title: "Diff layout",
+    keywords: "Default stacked split review panel side by side unified layout per thread",
   },
   {
     id: "behavior:diff-line-wrapping",

@@ -323,6 +323,24 @@ export function computeTrailGeometry(input: {
   };
 }
 
+/** Visible fixed-spacing ticks plus four neighbours on each edge. End is exclusive. */
+export function computeTrailWindow(
+  geometry: TrailGeometry | null,
+  scrollTop: number,
+  viewportHeight: number,
+): { start: number; end: number } {
+  const count = geometry?.centerYs.length ?? 0;
+  if (!geometry || count <= 1 || geometry.spacing <= 0) {
+    return { start: 0, end: count };
+  }
+  const top = clampNumber(scrollTop, 0, geometry.contentHeight);
+  const height = Math.max(0, Number.isFinite(viewportHeight) ? viewportHeight : 0);
+  return {
+    start: clampNumber(Math.floor((top - geometry.startY) / geometry.spacing) - 4, 0, count),
+    end: clampNumber(Math.ceil((top + height - geometry.startY) / geometry.spacing) + 5, 0, count),
+  };
+}
+
 /**
  * Gaussian sigma tied to tick density so the focus radius stays ~1.5 ticks
  * whether the rail is sparse or dense: `clamp(spacing*1.5, min(spacing*2, 8), 22)`.
@@ -469,17 +487,19 @@ export function audioTickGain(index: number): number {
  */
 export function computeAudioTickWidths(input: {
   count: number;
+  startIndex?: number;
   centerIndex: number;
   history: readonly number[];
   framesPerTick: number;
   baseW: number;
   maxW: number;
 }): number[] {
-  const { count, centerIndex, history, framesPerTick, baseW, maxW } = input;
+  const { count, startIndex = 0, centerIndex, history, framesPerTick, baseW, maxW } = input;
   const widths: number[] = [];
   for (let i = 0; i < count; i += 1) {
-    const level = history[Math.abs(i - centerIndex) * framesPerTick] ?? 0;
-    widths.push(baseW + (maxW - baseW) * clampNumber(level, 0, 1) * audioTickGain(i));
+    const index = startIndex + i;
+    const level = history[Math.abs(index - centerIndex) * framesPerTick] ?? 0;
+    widths.push(baseW + (maxW - baseW) * clampNumber(level, 0, 1) * audioTickGain(index));
   }
   return widths;
 }

@@ -50,6 +50,8 @@ Write replies and completion reports as a TL;DR: the result first, then only wha
 
 ## Verification and completion
 
+Keep unrelated formatter changes out of logic commits. If those formatting changes are necessary, place them in a separate format-only commit.
+
 Use the smallest relevant checks while iterating. For code changes, finish with `bun run fmt:check`, `bun run lint`, `bun run typecheck`, and affected Vitest tests. Use `bun run test`, never `bun test`, which selects a different runner. Cross-package or lifecycle changes warrant the broader repository test suite.
 
 Run `bun run windows-runtime:check` for platform/process-boundary changes and `bun run migrations:check` for migration changes. Group heavyweight workspace checks into one final pass where practical. Prose-only changes need link, command, and instruction-consistency checks, not an unrelated application rebuild. Respect explicit user restrictions on execution and report any resulting verification gaps.

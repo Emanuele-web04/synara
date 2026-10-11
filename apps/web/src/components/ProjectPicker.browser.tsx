@@ -13,6 +13,7 @@ import { useStore } from "../store";
 import { initialState } from "../storeState";
 import type { Project, SidebarThreadSummary } from "../types";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { useCreateProjectDialogStore } from "../createProjectDialogStore";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-picker-synara");
 const PROJECT_ROOT = "/Users/tester/projects/synara";
@@ -219,6 +220,47 @@ describe("ProjectPicker workspace choices", () => {
       expect(onSelectProject).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
+    }
+  });
+});
+
+describe("ProjectPicker new projects", () => {
+  function installNativeApi(overrides: { pickFolder?: () => Promise<string | null> }) {
+    const previous = Object.getOwnPropertyDescriptor(window, "nativeApi");
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        dialogs: { pickFolder: overrides.pickFolder ?? (async () => null) },
+      },
+    });
+    return () => {
+      if (previous) Object.defineProperty(window, "nativeApi", previous);
+      else Reflect.deleteProperty(window, "nativeApi");
+    };
+  }
+
+  afterEach(() => {
+    useCreateProjectDialogStore.setState({ isOpen: false });
+  });
+
+  it("opens the shared Create project dialog when there is no folder dialog", async () => {
+    const pickFolder = vi.fn(async () => null);
+    const restore = installNativeApi({ pickFolder });
+    const onCreateProjectFromPath = vi.fn();
+    const screen = await mountPicker({
+      selectionMode: "project",
+      onSelectProject: vi.fn(),
+      onCreateProjectFromPath,
+    });
+    try {
+      await page.getByTestId("project-picker-trigger").click();
+      await page.getByText("New project").click();
+      await vi.waitFor(() => expect(useCreateProjectDialogStore.getState().isOpen).toBe(true));
+      expect(onCreateProjectFromPath).not.toHaveBeenCalled();
+      await expect.element(page.getByPlaceholder("Search projects")).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+      restore();
     }
   });
 });

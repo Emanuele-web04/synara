@@ -2,6 +2,13 @@ import type { OrchestrationEvent, ThreadId } from "@synara/contracts";
 
 export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.message-sent",
+  // Names the request a newly started turn answers, so the client can group a
+  // queued request's turn under it (provider options are sanitized on send).
+  "thread.turn-start-requested",
+  // Cache decisions and stopping a session clear or restore that pending request.
+  "thread.claude-cache-set",
+  "thread.claude-cache-response-requested",
+  "thread.session-stop-requested",
   "thread.async-user-input-answered",
   "thread.proposed-plan-upserted",
   "thread.activity-appended",
