@@ -68,7 +68,7 @@ export function WorkspaceFileFindBar({
     <div
       role="search"
       data-testid="workspace-file-find-bar"
-      className="flex w-72 max-w-[calc(100vw-2rem)] items-center rounded-lg border border-border/60 bg-[var(--color-background-elevated-primary-opaque)] px-2.5 shadow-lg"
+      className="flex w-72 max-w-full items-center rounded-lg border border-border/60 bg-[var(--color-background-elevated-primary-opaque)] px-2.5 shadow-lg"
     >
       <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <input

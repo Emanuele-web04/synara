@@ -1441,8 +1441,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onReload={workspaceRoot && filePath ? handleFileReload : undefined}
         onFind={fileFindEnabled ? openFileFind : undefined}
       />
-      <div className="pointer-events-none absolute top-1 right-3 z-20">
-        <div className="pointer-events-auto">
+      {fileFindEnabled && fileFindOpen ? (
+        <div className="relative z-20 flex shrink-0 justify-end px-3 py-1">
           <WorkspaceFileFindBar
             open={fileFindEnabled && fileFindOpen}
             focusNonce={fileFindFocusNonce}
@@ -1455,7 +1455,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             onClose={closeFileFind}
           />
         </div>
-      </div>
+      ) : null}
       {activeEditBuffer?.error ? (
         <div
           role="alert"

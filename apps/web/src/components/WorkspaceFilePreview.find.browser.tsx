@@ -67,7 +67,11 @@ function findRange(): Range | undefined {
   return active ? Array.from(active[1])[0] : undefined;
 }
 
-async function mountPreview(contents: string, keybindings: ResolvedKeybindingsConfig = []) {
+async function mountPreview(
+  contents: string,
+  keybindings: ResolvedKeybindingsConfig = [],
+  width = 760,
+) {
   const readFile = vi.fn().mockResolvedValue(loadedFile(contents));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(["server", "config"], { keybindings });
@@ -78,7 +82,7 @@ async function mountPreview(contents: string, keybindings: ResolvedKeybindingsCo
   try {
     const view = await render(
       <QueryClientProvider client={client}>
-        <div style={{ height: 340, width: 760, display: "flex" }}>
+        <div style={{ height: 340, width, display: "flex" }}>
           <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} />
         </div>
       </QueryClientProvider>,
@@ -206,12 +210,17 @@ describe("WorkspaceFilePreview find ownership", () => {
 
   it("anchors the active match by offset when an earlier hit disappears on reload", async () => {
     const contents = `// needle first\n// ${"x".repeat(100)}\n// needle stable\n// needle tail\n`;
-    const mounted = await mountPreview(contents);
+    const mounted = await mountPreview(contents, [], 320);
     try {
       await openFind("needle");
       await expect.element(page.getByText("1 / 3", { exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Next match (Enter)" }).click();
       await expect.element(page.getByText("2 / 3", { exact: true })).toBeVisible();
+      const preview = document.querySelector<HTMLElement>("[data-workspace-file-preview]")!;
+      const bar = page.getByTestId("workspace-file-find-bar").element().getBoundingClientRect();
+      const bounds = preview.getBoundingClientRect();
+      expect(bar.left).toBeGreaterThanOrEqual(bounds.left);
+      expect(bar.right).toBeLessThanOrEqual(bounds.right);
       mounted.readFile.mockResolvedValue(
         loadedFile(contents.replace("needle first", "absent first")),
       );
