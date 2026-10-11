@@ -72,7 +72,6 @@ describe("providerModelsQueryOptions", () => {
       vi.fn().mockRejectedValue(new Error("Cursor CLI is not installed or not on PATH")),
     );
     const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
-    expect(options.retry).toBe(0);
 
     const queryClient = new QueryClient();
     await expect(queryClient.fetchQuery(options)).rejects.toThrow(
@@ -80,6 +79,49 @@ describe("providerModelsQueryOptions", () => {
     );
     expect(listModels).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryState(options.queryKey)?.status).toBe("error");
+  });
+
+  it.each(["cursor", "droid", "codex", "claudeAgent", "pi"] as const)(
+    "does not multiply exhausted transport capacity retries for %s",
+    async (provider) => {
+      const capacity = Object.assign(
+        new Error("WebSocket expensive-read request capacity exceeded."),
+        {
+          code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
+          retryable: true,
+          retryAfterMs: 250,
+        },
+      );
+      const listModels = mockListModels(vi.fn().mockRejectedValue(capacity));
+      const client = new QueryClient();
+      const options = { ...providerModelsQueryOptions({ provider }), retryDelay: 0 };
+      const previous = {
+        models: [{ slug: "auto", name: "Auto" }],
+        source: "runtime",
+        cached: false,
+      };
+      client.setQueryData(options.queryKey, previous);
+      await expect(client.fetchQuery({ ...options, staleTime: 0 })).rejects.toBe(capacity);
+      expect(listModels).toHaveBeenCalledTimes(1);
+      expect(client.getQueryData(options.queryKey)).toEqual(previous);
+      client.clear();
+    },
+  );
+
+  it.each([
+    ["cursor", 1],
+    ["droid", 3],
+    ["codex", 4],
+  ] as const)("preserves ordinary discovery attempts for %s", async (provider, attempts) => {
+    const listModels = mockListModels(
+      vi.fn().mockRejectedValue(new Error("Discovery unavailable")),
+    );
+    const client = new QueryClient();
+    await expect(
+      client.fetchQuery({ ...providerModelsQueryOptions({ provider }), retryDelay: 0 }),
+    ).rejects.toThrow("Discovery unavailable");
+    expect(listModels).toHaveBeenCalledTimes(attempts);
+    client.clear();
   });
 
   it("serializes different provider catalogs before they reach native admission", async () => {
@@ -316,8 +358,8 @@ describe("providerModelsQueryOptions", () => {
 
   it("caches runtime catalogs long enough to skip respawning provider CLIs", () => {
     // Server-side catalogs persist across restarts (30min fresh / 24h SWR), so
-    // the client keeps a matching window; OMP stays short because its
-    // file-backed modelRoles are re-resolved per request.
+    // the client keeps a matching window; OMP stays short to revalidate its
+    // adapter-owned five-minute catalog cache while observed.
     expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(15 * 60_000);
     expect(providerModelsQueryOptions({ provider: "codex" }).staleTime).toBe(15 * 60_000);
     expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(30 * 60_000);
@@ -407,18 +449,50 @@ describe("providerModelsQueryOptions", () => {
     },
   );
 
-  it("scopes OMP's model query by cwd so project modelRoles participate", () => {
+  it("shares OMP's account-global model query across projects", async () => {
+    const catalog = {
+      models: [{ slug: "upstream/model", name: "Model" }],
+      source: "omp-cli",
+      cached: false,
+    };
+    const listModels = mockListModels(vi.fn().mockResolvedValue(catalog));
     const options = providerModelsQueryOptions({
       provider: "omp",
       binaryPath: "/bin/omp",
       agentDir: "/agent",
       cwd: "/some/project",
     });
-    // The catalog is global, but OMP merges `<cwd>/.omp/config.yml` roles into
-    // the picker — the query key carries cwd so a project's own roles show.
     expect(options.queryKey).toEqual(
-      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", "/some/project"),
+      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", null),
     );
+    const client = new QueryClient();
+    try {
+      await expect(client.fetchQuery(options)).resolves.toEqual(catalog);
+      await expect(
+        client.fetchQuery(
+          providerModelsQueryOptions({
+            provider: "omp",
+            binaryPath: "/bin/omp",
+            agentDir: "/agent",
+            cwd: "/another/project",
+          }),
+        ),
+      ).resolves.toEqual(catalog);
+      expect(listModels).toHaveBeenCalledExactlyOnceWith({
+        provider: "omp",
+        binaryPath: "/bin/omp",
+        agentDir: "/agent",
+      });
+    } finally {
+      client.clear();
+    }
+  });
+
+  it("keeps OMP catalogs isolated by provider instance and agent directory", () => {
+    const key = (instanceId: string, agentDir: string) =>
+      providerModelsQueryOptions({ provider: "omp", instanceId, agentDir }).queryKey;
+    expect(key("omp_work", "/work")).not.toEqual(key("omp_personal", "/work"));
+    expect(key("omp_work", "/work")).not.toEqual(key("omp_work", "/other"));
   });
 
   it("scopes non-OMP providers by cwd in their query key", () => {

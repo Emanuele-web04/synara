@@ -2683,6 +2683,49 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkPiProviderStatus", () => {
+    it.effect("allows a cold Pi CLI to finish its first version probe", () =>
+      Effect.gen(function* () {
+        const probe = yield* checkPiProviderStatus().pipe(
+          Effect.provide(
+            Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make(() =>
+                Effect.succeed(
+                  mockHandle(
+                    { stdout: "pi 0.87.1\n", stderr: "", code: 0 },
+                    {
+                      exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)).pipe(
+                        Effect.delay(Duration.seconds(12)),
+                      ),
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust(Duration.seconds(12));
+        const status = yield* Fiber.join(probe);
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.version, "0.87.1");
+      }),
+    );
+
+    it.effect("keeps the first Pi CLI probe bounded when it never finishes", () =>
+      Effect.gen(function* () {
+        const probe = yield* checkPiProviderStatus().pipe(
+          Effect.provide(hangingSpawnerLayer({ shouldHang: () => true, onKill: () => {} })),
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust(Duration.seconds(20));
+        const status = yield* Fiber.join(probe);
+        assert.strictEqual(status.status, "warning");
+        assert.strictEqual(status.available, true);
+        assert.match(status.message ?? "", /health check timed out/);
+      }),
+    );
+
     it.effect("returns ready using only the Pi CLI version probe", () =>
       Effect.gen(function* () {
         const status = yield* checkPiProviderStatus();

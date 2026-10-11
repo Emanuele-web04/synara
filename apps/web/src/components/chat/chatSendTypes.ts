@@ -30,6 +30,8 @@ export interface PlanFollowUpSubmission {
   interactionMode: "default" | "plan";
   dispatchMode: "queue" | "steer";
   queuedTurn?: QueuedComposerPlanFollowUp;
+  /** Carries the queue hold captured before the ordinary send path's async preflight. */
+  resumeQueueAfterSend?: () => void;
 }
 
 /**

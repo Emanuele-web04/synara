@@ -3,21 +3,16 @@ title: Organize & navigate
 description: Pins, notes, recaps, split views, exports, and the fastest paths between tasks.
 ---
 
+<Callout type="info" title="Stable and Beta availability">
+  Tasks is available in **Synara 1.0.1 Stable**. Hubs remain Beta-only. New 1.0.2-beta.1 behavior is
+  marked below.
+</Callout>
+
 Long-running agent work produces a lot of conversation. These features keep it navigable.
 
 ## Pin what matters
 
 Projects, threads, and individual transcript messages can be pinned. Pinned messages live in the Environment panel next to editable, autosaving thread notes — a scratchpad that stays with the task.
-
-## Activity order
-
-Activity orders chats by your last sent message, including edits you resend. Agent responses, completions, approvals,
-opening a chat, automatic continuation after reopening the app, and messages sent by another agent or an automation update its indicators
-without changing that order. Chats with no human message use their creation time.
-
-Recent shows up to five chats you sent a message to during the current working day, which
-starts at 4am. Grouping by project uses the same message dates. Pinned chats stay in Pinned;
-chats marked Done stay in Settled until you restore them or send a new message.
 
 ## Find text in the current conversation
 
@@ -31,7 +26,7 @@ The thread recap panel generates an in-place summary of a long chat and caches i
 
 ## Split views
 
-Drag a chat into a split pane to keep tasks visible side by side — even across projects. Close a pane with the X in its header; the remaining ordinary chats stay open. Closing a forked Side chat returns to its source chat. A standalone Side in another chat’s split returns to that split’s source chat.
+Drag a chat into a split pane to keep two tasks visible side by side — even across projects. Expanding a pane opens that chat full-screen.
 
 ## Jump between surfaces
 
@@ -49,7 +44,7 @@ The Explorer now edits files with syntax highlighting and a numbered plain-text 
 
 Open text, image, PDF, and diff views revalidate when workspace files change. Unsaved text edits are protected from background replacement. Check the task's checkout before treating an updated preview as evidence from a particular branch.
 
-Choose **Split diff** or **Stacked diff** in Diff options. Synara remembers this choice when you reopen the panel and after an app restart. Split is the default until you save a preference.
+Choose **Split diff** or **Stacked diff** in Diff options. Synara remembers this choice when you reopen the panel and after an app restart. In 1.0.2-beta.1, choices are independent per chat. Settings → Behavior → Diff layout supplies the default for chats without a saved choice; changing that default does not overwrite existing chat choices.
 
 ## Read larger documents
 
@@ -69,6 +64,10 @@ File results show the basename and parent path. Source results add the matching 
 
 Search is scoped to the active workspace. If a result appears to come from the wrong checkout, verify the task's local or worktree environment before editing it.
 
+## Return to tasks created here
+
+The Environment panel lists tasks created from the current task. Open a row to navigate to that task, including when it lives in another project. Its status reflects the child task; check the child transcript before treating completion as an integrated result.
+
 ## Track local dev servers
 
 The Environment panel can start, view, and stop tracked project dev servers, so the preview you are testing against is managed from the same place as the task. `mod+shift+b` toggles the browser preview, `mod+d` the diff panel.
@@ -82,3 +81,29 @@ In a saved, idle chat, run `/export` (or use the command menu) to download a ZIP
 [Import projects](/docs/features/project-import) brings local Codex and Claude Code conversations into Synara, including a replacement-folder choice for moved projects. Activity ordering follows the latest human message, so background assistant work does not continually promote untouched conversations.
 
 Drag a chat into another pane to open a split view, or into the composer to add a chat mention. The command palette and recent-view switcher share the file picker's visual layout.
+
+## Rail and open chat tabs
+
+The rail keeps main destinations in a compact icon column beside the thread panel. Customize the destinations and their order; edit a project's name, icon or emoji, and color from its controls.
+
+Saved chats appear in the horizontal tab strip. Unsent drafts remain out of the strip until their first send. Use a tab's context menu for its available chat actions. Closing or switching a tab does not mean the agent has stopped; inspect the conversation's status separately.
+
+## Snooze a conversation
+
+Use the thread's **Snooze** menu for 30 minutes, 1 hour, 2 hours, tomorrow at 9am, or a custom future time. Tomorrow uses your local calendar. Snoozing postpones attention; it does not cancel a running turn.
+
+The thread returns to recent activity at the deadline and uses your notification settings for a reminder. If Synara and its server were closed, overdue reminders recover when they restart. See [Tasks and Inbox](/docs/features/tasks-and-inbox) for managing the wider backlog.
+
+In 1.0.0, snoozed chats are excluded from inactivity cleanup. Opening a returned chat marks it seen. Closing a split preserves the surviving chat, and closing the last open tab returns to the unsent draft.
+
+## Search saved message text in the palette
+
+In 1.0.1-beta.2, `mod+k` searches settled user and assistant messages across saved chats, including chats not recently opened, alongside titles and project metadata. Results include short excerpts. Every distinct search word must match the message body; matching ignores ASCII letter case. Archived, deleted and subagent chats are excluded. The server returns at most 50 message hits.
+
+The palette also offers navigation to available Inbox, Kanban/Tasks, Hubs and Automations destinations, **New automation**, and matching Settings sections and controls. Availability follows the current host and release channel.
+
+Thread hover cards preview unsent draft text. Marking a chat **Done** offers an eight-second **Undo** toast; undoing the focused chat returns to it. On the per-project Kanban board, sendable draft cards offer **Move to In Progress**, using the same action as dragging. Derived columns and pending or unsendable drafts do not offer manual moves.
+
+Source evidence: Synara `48603e869`, the audited release head for `1.0.1-beta.2`. `apps/server/src/threadSearch.ts`, `apps/web/src/components/SidebarSearchPalette.tsx`, `apps/web/src/components/Sidebar.tsx`, and `apps/web/src/hooks/useSidebarThreadActions.ts`.
+
+For long conversations, see [paged history and reload recovery](/docs/features/conversation-history). Provider-native child agents appear in [Subagents](/docs/features/subagents).
