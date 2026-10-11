@@ -115,6 +115,7 @@ describe("OMP role-era persisted selections", () => {
     opencode: [],
     pi: [],
     omp: [],
+    external: [],
   };
   const catalog = {
     omp: [{ slug: "upstream/catalog-model", name: "Catalog Model" }],
