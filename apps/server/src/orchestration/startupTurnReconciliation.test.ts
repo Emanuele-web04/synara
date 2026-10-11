@@ -2,7 +2,7 @@ import { Effect, Option } from "effect";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
-import { ApprovalRequestId, EventId, ThreadId, TurnId } from "@synara/contracts";
+import { ApprovalRequestId, EventId, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -412,6 +412,116 @@ describe("planRestartTurnReconciliation", () => {
         updatedAt: NOW,
       },
     });
+  });
+
+  it("finalizes assistant messages the orphaned turn left streaming", () => {
+    const threads = [
+      makeThread("stuck-streaming", {
+        session: makeSession("stuck-streaming", {
+          status: "running",
+          activeTurnId: TurnId.makeUnsafe("stuck-streaming-turn"),
+        }),
+        latestTurn: { state: "running" },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("user-1"),
+            role: "user",
+            streaming: false,
+            turnId: TurnId.makeUnsafe("stuck-streaming-turn"),
+          },
+          {
+            id: MessageId.makeUnsafe("assistant:done"),
+            role: "assistant",
+            streaming: false,
+            turnId: TurnId.makeUnsafe("stuck-streaming-turn"),
+          },
+          {
+            id: MessageId.makeUnsafe("assistant:partial"),
+            role: "assistant",
+            streaming: true,
+            turnId: TurnId.makeUnsafe("stuck-streaming-turn"),
+          },
+          {
+            id: MessageId.makeUnsafe("assistant:no-turn"),
+            role: "assistant",
+            streaming: true,
+            turnId: null,
+          },
+        ],
+      }),
+    ];
+
+    const commands = planRestartTurnReconciliation({ threads, now: NOW });
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.message.assistant.complete",
+      "thread.message.assistant.complete",
+      "thread.session.set",
+    ]);
+    expect(commands.slice(0, 2)).toEqual([
+      {
+        type: "thread.message.assistant.complete",
+        commandId: `restart-reconcile-message:stuck-streaming:assistant:partial:${NOW}`,
+        threadId: "stuck-streaming",
+        messageId: "assistant:partial",
+        turnId: "stuck-streaming-turn",
+        createdAt: NOW,
+      },
+      {
+        type: "thread.message.assistant.complete",
+        commandId: `restart-reconcile-message:stuck-streaming:assistant:no-turn:${NOW}`,
+        threadId: "stuck-streaming",
+        messageId: "assistant:no-turn",
+        createdAt: NOW,
+      },
+    ]);
+    // Deterministic: the same inputs produce the same command ids, so a re-run
+    // within one startup dedups through the engine's command receipts.
+    expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual(commands);
+  });
+
+  it("finalizes streaming messages behind a dangling active turn pointer", () => {
+    const threads = [
+      makeThread("dangling-streaming", {
+        session: makeSession("dangling-streaming", {
+          status: "stopped",
+          activeTurnId: TurnId.makeUnsafe("dangling-turn"),
+        }),
+        latestTurn: { state: "interrupted" },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("assistant:dangling"),
+            role: "assistant",
+            streaming: true,
+            turnId: TurnId.makeUnsafe("dangling-turn"),
+          },
+        ],
+      }),
+    ];
+
+    const commands = planRestartTurnReconciliation({ threads, now: NOW });
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.message.assistant.complete",
+      "thread.session.set",
+    ]);
+  });
+
+  it("leaves streaming messages alone on threads without an orphaned turn", () => {
+    const threads = [
+      makeThread("clean-streaming", {
+        session: makeSession("clean-streaming", { status: "ready", activeTurnId: null }),
+        latestTurn: { state: "completed" },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("assistant:clean"),
+            role: "assistant",
+            streaming: true,
+            turnId: null,
+          },
+        ],
+      }),
+    ];
+
+    expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([]);
   });
 
   it("resolves stale pending approval and user-input requests before interrupting the session", () => {

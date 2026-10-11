@@ -1,5 +1,78 @@
 # Changelog
 
+## 1.0.2-beta.1 — 2026-10-11
+
+**A Beta focused on readable parallel work, safer queued messages and faster recovery of long conversations.**
+
+These notes audit **259 commits**, including merges, from **v1.0.1** through feature head `fa8aa49e14855999c37315dd4c6dcab34efbdf58`. Beta upgraders also receive the features shipped in 1.0.1: OpenCode v2, multi-folder projects, Tasks, message search, independent dock terminals and macOS keep-awake controls; see the entry below. Hubs and diagnostics remain Beta-only. Stable and Beta retain separate identities, data homes and update feeds.
+
+### Added
+
+#### Follow subagents without losing the conversation
+
+- Claude and Codex child agents now have their own conversations, with compact launch cards and a roster in Environment and the right dock.
+- Inspect each brief, current step, elapsed time and result; open, message, background or stop supported runs. Nested and repeated invocations keep their own identity. Background results remain visible after the parent finishes; stopped work is shown as stopped rather than completed.
+
+#### Ask your agent to maintain Tasks
+
+- Supported agent sessions can create, list and update the to-dos in your Tasks list directly from a chat.
+- Set notes, priority, due date and project, mark a to-do complete or reopen it. Retried creates use a request ID to avoid duplicates. These tools maintain the list; they do not dispatch the to-do to an agent. Synara permissions still apply.
+
+#### Resolve Hub worker approvals in one place
+
+- In Synara Beta, pending worker approvals appear above the coordinator composer, with links to the worker conversation.
+- Approve once, allow the session when supported, decline or cancel the worker turn. Answering in either conversation clears the request in both. Only you can approve; the coordinator has no approval tool. Queued Hub tasks inherit the coordinator access mode unless explicitly overridden.
+
+### Changed
+
+#### A clearer record of each turn
+
+- Turn headers and compact work groups make long conversations easier to scan, including interrupted turns and background tasks.
+- Claude Monitor wake-ups appear as compact disclosures. Tool groups use clearer action summaries and icons, while assistant text and activity retain their chronological order. Live follow survives layout changes and thread switches; scrolling away keeps you in control.
+
+#### Reopen long conversations faster
+
+- Recent messages load first, with Load earlier messages for older history and a private local cache for quicker reopening.
+- Search, pinned messages and message links load the pages they need. Cached approvals, questions and queued sends wait for authoritative synchronization. Paging does not truncate saved history or exports; unavailable browser storage falls back to normal loading.
+
+#### Stop also pauses your queued follow-ups
+
+- Queued messages stay put after you stop a turn, encounter an error or hit a usage limit.
+- Use Resume when you are ready. The pause survives reload, and an older rate-limit event does not pause an unrelated turn. Draft edits, attachments and failed sends remain recoverable instead of disappearing during thread creation or synchronization.
+
+#### Branch from the message you chose
+
+- Provider session forks now respect the selected message, and each chat remembers its own stacked or split diff layout.
+- Choose a default Diff layout in Settings without overwriting existing chat choices. Checkpoint initialization survives restart; Undo refuses to run while another chat is editing the same workspace. Detached Git status and automatic branch publication are handled more reliably.
+
+### Fixed
+
+#### More dependable provider sessions
+
+- OpenCode v2 reconnects avoid duplicate text, Pi gets more time for its first startup, and Claude shows whether Fast mode is actually serving.
+- Oh My Pi preserves explicit model choices and hides internal roles. Droid custom answers, Cursor prompt usage and completed OpenCode reasoning are retained. Antigravity preserves quota and OAuth failures, bounds helper cleanup and chooses effort only from discovered capabilities.
+
+#### Small improvements throughout the workspace
+
+- Readable chat tabs, higher-contrast light terminals, a steadier context gauge and a working Create project action improve everyday use.
+- Composer panels no longer cover the transcript on glass. Linked right-to-left text keeps its direction, the voice waveform fills wide tracks, and hidden browser panels release stale bounds. Beta data import preserves this installation’s runtime identity.
+
+- Usage totals retain native-session attribution and Claude child usage not covered by the parent.
+- Assistant text persistence batches durable deltas and retains failure propagation. Snapshot and replay ordering preserve settled messages, turn ownership and late image results; stale requests no longer lock the composer.
+- Windows relative executable paths resolve from the launch directory, login-shell capture supports Nushell, and Git checkpoint patches bypass text converters. These source changes still require packaged platform qualification.
+- The proposed editable per-pairing External MCP task capacity was reverted and is not included in this release.
+
+### Verification
+
+- Passed locally on Node 24.21.0 / Bun 1.4.2: format, lint, typecheck, release smoke, full build, Windows runtime boundary and migration lineage.
+- The full workspace test run completed with **16,431 passed / 38 skipped / 3 failed**. All failures were in `apps/server/src/orchestration/Layers/threadHistoryWindow.test.ts`: “retains the background ownership patch before a partial task update”, “retains the last unfinished prior-turn task list”, and “retains launch identity after completion so a settled workflow remains resumable”. The test imports used encoded URL pathnames on a checkout containing spaces. `fileURLToPath` corrects the imports; all three targeted reruns and all nine tests in the affected file passed. The full workspace run has not been repeated after this test-only fix.
+- Chromium: **28 chat-follow tests passed**, including the thread-switch case that had failed in the preceding CI run. The first component run on the external-volume path failed five fixture cases and could not import the diff suite. An identical APFS copy passed **all 13 tests** across SubagentRunCard, SubagentsDockPane and DiffPanel without changing their source or fixtures.
+- Documentation: 59 website tests and 58 marketing tests passed, including navigation and integrity checks; website lint and production build passed. Link scripts passed with Bun: **52/52** website and **53/53** marketing URLs. The npm/Node link command failed on this host’s CA trust; the initial marketing link run also had three transient timeouts. No TLS checks were disabled.
+- The first local battery was obstructed by untracked AppleDouble metadata; quarantining those files allowed checks to run. Next’s generated cache required a fresh rebuild on the external disk.
+- Update policy resolves to Beta: prerelease=true, make_latest=false, mirror_to_stable_channel=false.
+- Windows publication must use the version-scoped unsigned exception for 1.0.2-beta.1 and still pass packaging, provenance, startup smoke and Defender scanning.
+- Local tests do not establish live-provider operation, signed/notarized packaging, installed-app upgrades or Windows 11 browser-download qualification.
+
 ## 1.0.1 — 2026-10-08
 
 ### Added

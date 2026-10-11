@@ -1392,6 +1392,41 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ]);
     });
 
+    it("keeps an already usable Pi provider ready after its advisory timeout wording", () => {
+      const previousReadyPi = {
+        provider: "pi",
+        instanceId: "pi",
+        driver: "pi",
+        status: "ready",
+        available: true,
+        authStatus: "unknown",
+        version: "0.84.4",
+        checkedAt: "2026-09-04T01:03:00.000Z",
+        message: "Pi CLI is installed. Configure provider credentials inside Pi as needed.",
+      } satisfies ServerProviderStatus;
+      const piTimeout = {
+        provider: "pi",
+        instanceId: "pi",
+        driver: "pi",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-09-04T01:04:00.000Z",
+        message:
+          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts([previousReadyPi], [piTimeout]),
+        [
+          {
+            ...previousReadyPi,
+            checkedAt: "2026-09-04T01:04:00.000Z",
+          },
+        ],
+      );
+    });
+
     it("does not keep a stale Claude auth error after a transient auth timeout", () => {
       const previousUnauthenticatedClaude = {
         provider: "claudeAgent",
@@ -2648,6 +2683,49 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkPiProviderStatus", () => {
+    it.effect("allows a cold Pi CLI to finish its first version probe", () =>
+      Effect.gen(function* () {
+        const probe = yield* checkPiProviderStatus().pipe(
+          Effect.provide(
+            Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make(() =>
+                Effect.succeed(
+                  mockHandle(
+                    { stdout: "pi 0.87.1\n", stderr: "", code: 0 },
+                    {
+                      exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)).pipe(
+                        Effect.delay(Duration.seconds(12)),
+                      ),
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust(Duration.seconds(12));
+        const status = yield* Fiber.join(probe);
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.version, "0.87.1");
+      }),
+    );
+
+    it.effect("keeps the first Pi CLI probe bounded when it never finishes", () =>
+      Effect.gen(function* () {
+        const probe = yield* checkPiProviderStatus().pipe(
+          Effect.provide(hangingSpawnerLayer({ shouldHang: () => true, onKill: () => {} })),
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust(Duration.seconds(20));
+        const status = yield* Fiber.join(probe);
+        assert.strictEqual(status.status, "warning");
+        assert.strictEqual(status.available, true);
+        assert.match(status.message ?? "", /health check timed out/);
+      }),
+    );
+
     it.effect("returns ready using only the Pi CLI version probe", () =>
       Effect.gen(function* () {
         const status = yield* checkPiProviderStatus();

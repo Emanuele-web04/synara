@@ -60,6 +60,7 @@ import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/Projectio
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
 import { ServerConfig } from "../../config.ts";
+import { deriveTurnStopActivity } from "@synara/shared/turnStopActivity";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
@@ -177,6 +178,7 @@ const THREAD_PROPOSED_PLAN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["
 
 const THREAD_ACTIVITY_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "thread.activity-appended",
+  "thread.turn-interrupt-requested",
   "thread.reverted",
   "thread.conversation-rolled-back",
 ]);
@@ -590,6 +592,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             subagentNickname: event.payload.subagentNickname ?? null,
             subagentRole: event.payload.subagentRole ?? null,
             forkSourceThreadId: event.payload.forkSourceThreadId,
+            forkSourceMessageId: event.payload.forkSourceMessageId ?? null,
             sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
             sidechatContext: event.payload.sidechatContext,
             sidechatLastActivityAt: event.payload.sidechatLastActivityAt,
@@ -1009,7 +1012,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 : {}),
               latestTurnId:
                 event.type === "thread.session-set"
-                  ? event.payload.session.activeTurnId
+                  ? (event.payload.session.activeTurnId ?? existingRow.value.latestTurnId)
                   : event.payload.preserveLatestTurn
                     ? existingRow.value.latestTurnId
                     : event.payload.turnId,
@@ -1265,6 +1268,28 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.turn-interrupt-requested": {
+          const session = Option.getOrNull(
+            yield* projectionThreadSessionRepository.getByThreadId({
+              threadId: event.payload.threadId,
+            }),
+          );
+          const activity = deriveTurnStopActivity(event, session?.activeTurnId ?? null);
+          if (activity) {
+            yield* projectionThreadActivityRepository.upsert({
+              activityId: activity.id,
+              threadId: event.payload.threadId,
+              turnId: activity.turnId,
+              tone: activity.tone,
+              kind: activity.kind,
+              summary: activity.summary,
+              payload: activity.payload,
+              sequence: event.sequence,
+              createdAt: activity.createdAt,
+            });
+          }
+          return;
+        }
         case "thread.activity-appended":
           yield* projectionThreadActivityRepository.upsert({
             activityId: event.payload.activity.id,
@@ -1276,6 +1301,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             payload: event.payload.activity.payload,
             // The orchestration log is durable and monotonic across provider
             // restarts, unlike provider-local counters that may reset to zero.
+            // A server-created activity has no provider sequence and falls back
+            // to its own append event's sequence; the snapshot query reports
+            // that source so clients never compare it with provider sequences.
             sequence: event.payload.activity.sequence ?? event.sequence,
             createdAt: event.payload.activity.createdAt,
           });
@@ -1497,6 +1525,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 (Option.isSome(pendingTurnStart)
                   ? pendingTurnStart.value.sourceProposedPlanId
                   : null),
+              startedWithoutGitWorkspace:
+                existingTurn.value.startedWithoutGitWorkspace === true ||
+                (Option.isSome(pendingTurnStart) &&
+                  pendingTurnStart.value.startedWithoutGitWorkspace === true),
               startedAt:
                 existingTurn.value.startedAt ?? event.payload.session.updatedAt ?? event.occurredAt,
               requestedAt:
@@ -1518,6 +1550,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               sourceProposedPlanId: Option.isSome(pendingTurnStart)
                 ? pendingTurnStart.value.sourceProposedPlanId
                 : null,
+              startedWithoutGitWorkspace: Option.isSome(pendingTurnStart)
+                ? pendingTurnStart.value.startedWithoutGitWorkspace === true
+                : false,
               assistantMessageId: null,
               state: "running",
               requestedAt: Option.isSome(pendingTurnStart)
@@ -1622,14 +1657,19 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const isProviderDiffPlaceholder =
             event.payload.status === "missing" &&
             event.payload.checkpointRef.startsWith("provider-diff:");
+          // The session is the lifecycle authority: a checkpoint captured after
+          // an interrupt or failure describes files, not how the turn ended.
+          const sessionSettledState = Option.match(existingTurn, {
+            onNone: () => null,
+            onSome: (turn) =>
+              turn.state === "interrupted" || turn.state === "error" ? turn.state : null,
+          });
           const nextState = isProviderDiffPlaceholder
             ? Option.match(existingTurn, {
                 onNone: () => "running" as const,
                 onSome: (turn) => turn.state,
               })
-            : event.payload.status === "error"
-              ? "error"
-              : "completed";
+            : (sessionSettledState ?? (event.payload.status === "error" ? "error" : "completed"));
           yield* projectionTurnRepository.clearCheckpointTurnConflict({
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,

@@ -5,7 +5,11 @@
 // Layer: Web chat presentation component
 // Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
 
-import type { ProjectFileChangeEvent, ProjectReadFileResult } from "@synara/contracts";
+import type {
+  ProjectFileChangeEvent,
+  ProjectReadFileResult,
+  ResolvedKeybindingsConfig,
+} from "@synara/contracts";
 import type { FileContents as PierreFileContents } from "@pierre/diffs";
 import {
   Editor as PierreEditor,
@@ -31,6 +35,7 @@ import {
   type ReactNode,
   use,
   useCallback,
+  useDeferredValue,
   useEffect,
   useInsertionEffect,
   useId,
@@ -40,6 +45,7 @@ import {
 } from "react";
 
 import { basenameOfPath } from "~/file-icons";
+import { resolveShortcutCommand } from "~/keybindings";
 import { useWorkspaceFileEditorBuffer } from "~/hooks/useWorkspaceFileEditor";
 import { useTheme } from "~/hooks/useTheme";
 import { useProjectFileChangeSubscription } from "~/hooks/useProjectFileChangeSubscription";
@@ -68,6 +74,7 @@ import {
   projectResolveOutOfRootFileReferenceQueryOptions,
 } from "~/lib/projectReactQuery";
 import { refreshGitAfterFileWrite } from "~/lib/gitReactQuery";
+import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   cacheSyntaxHighlightedHtml,
@@ -88,10 +95,13 @@ import { useFileLineCommenting } from "./chat/useFileLineCommenting";
 import { WorkspaceFilePreviewHeader } from "./chat/WorkspaceFilePreviewHeader";
 import { WorkspaceFileFindBar } from "./chat/WorkspaceFileFindBar";
 import {
+  anchorWorkspaceFileFindIndex,
   collectWorkspaceFileFindMatches,
   stepWorkspaceFileFindIndex,
+  wasWorkspaceFileFindShortcutResolved,
   WORKSPACE_FILE_PREVIEW_FIND_EVENT,
   workspaceFileFindEnabled,
+  type WorkspaceFileFindRange,
 } from "./chat/workspaceFileFind.logic";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
@@ -282,6 +292,15 @@ interface HighlightRegistryLike {
 }
 
 const FILE_FIND_MAX_MATCHES = 1000;
+const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+
+type FileFindHighlightNames = { all: string; active: string };
+
+type FileFindResult = {
+  count: number;
+  activeIndex: number;
+  activeRange: WorkspaceFileFindRange | null;
+};
 
 function workspaceFileFindHighlightRegistry(): HighlightRegistryLike | null {
   const css = (globalThis as typeof globalThis & { CSS?: { highlights?: HighlightRegistryLike } })
@@ -289,64 +308,77 @@ function workspaceFileFindHighlightRegistry(): HighlightRegistryLike | null {
   return css?.highlights ?? null;
 }
 
-/**
- * Highlight the rendered DOM without rewriting Shiki or Markdown HTML. The
- * CSS Custom Highlight API keeps code spans and parsed Markdown intact; older
- * engines still get precise scrolling/counts, simply without the paint layer.
- */
+function clearWorkspaceFileFindHighlights(
+  root: HTMLElement | null,
+  highlightNames: FileFindHighlightNames,
+): void {
+  const registry = workspaceFileFindHighlightRegistry();
+  registry?.delete(highlightNames.all);
+  registry?.delete(highlightNames.active);
+  for (const element of root?.querySelectorAll(
+    `.${highlightNames.all}, .${highlightNames.active}`,
+  ) ?? []) {
+    element.classList.remove(highlightNames.all, highlightNames.active);
+  }
+}
+
+/** Paint rendered matches without rewriting Shiki/Markdown or scrolling another pane. */
 function applyWorkspaceFileFindHighlights(
   root: HTMLElement | null,
   query: string,
   activeIndex: number,
-  highlightNames: { all: string; active: string },
-): number {
-  const registry = workspaceFileFindHighlightRegistry();
-  registry?.delete(highlightNames.all);
-  registry?.delete(highlightNames.active);
+  highlightNames: FileFindHighlightNames,
+  previousRange: WorkspaceFileFindRange | null,
+  scroll: boolean,
+): FileFindResult {
+  clearWorkspaceFileFindHighlights(root, highlightNames);
+  const empty: FileFindResult = { count: 0, activeIndex: 0, activeRange: null };
   // The viewer also hosts status text and selection controls, which are not
-  // part of the file. Count and highlight the same rendered content only.
-  const contentRoot = root?.querySelector(
-    ".editor-markdown-preview__body, .editor-file-viewer__highlight, .editor-file-viewer__plain",
-  );
-  if (!contentRoot || query.trim().length === 0) return 0;
+  // part of the file. Suspense can retain a hidden old body beside its fallback.
+  const contentRoot = Array.from(
+    root?.querySelectorAll<HTMLElement>(
+      ".editor-markdown-preview__body, .editor-file-viewer__highlight, .editor-file-viewer__plain",
+    ) ?? [],
+  ).find((element) => element.getClientRects().length > 0);
+  if (!root || !contentRoot || query.trim().length === 0) return empty;
 
-  const ranges: Range[] = [];
-  const textNodes: Text[] = [];
-  const walker = document.createTreeWalker(contentRoot, 4 /* NodeFilter.SHOW_TEXT */);
-  let node = walker.nextNode();
-  while (node) {
-    if (node.nodeType === 3 && node.textContent) textNodes.push(node as Text);
-    node = walker.nextNode();
-  }
   const nodeSpans: Array<{ node: Text; start: number; end: number }> = [];
+  const walker = document.createTreeWalker(contentRoot, NodeFilter.SHOW_TEXT);
   let renderedText = "";
-  for (const textNode of textNodes) {
-    const text = textNode.textContent ?? "";
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.textContent ?? "";
+    if (!text) continue;
     const start = renderedText.length;
     renderedText += text;
-    nodeSpans.push({ node: textNode, start, end: renderedText.length });
+    nodeSpans.push({ node: node as Text, start, end: renderedText.length });
   }
   const renderedMatches = collectWorkspaceFileFindMatches(
     renderedText,
     query,
     FILE_FIND_MAX_MATCHES + 1,
   );
-  for (const match of renderedMatches.slice(0, FILE_FIND_MAX_MATCHES)) {
-    const startSpan = nodeSpans.find(
-      (span) => match.startOffset >= span.start && match.startOffset < span.end,
-    );
-    const endSpan = nodeSpans.find(
-      (span) => match.endOffset > span.start && match.endOffset <= span.end,
-    );
-    if (!startSpan || !endSpan) continue;
+  const navigableMatches = renderedMatches.slice(0, FILE_FIND_MAX_MATCHES);
+  const safeIndex = previousRange
+    ? anchorWorkspaceFileFindIndex(navigableMatches, previousRange)
+    : Math.min(Math.max(activeIndex, 0), navigableMatches.length - 1);
+  if (safeIndex < 0) return empty;
+  const ranges: Range[] = [];
+  const matchedSpans: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  let end = 0;
+  for (const match of navigableMatches) {
+    while (nodeSpans[start]!.end <= match.startOffset) start += 1;
+    while (nodeSpans[end]!.end < match.endOffset) end += 1;
+    const startSpan = nodeSpans[start]!;
+    const endSpan = nodeSpans[end]!;
     const range = document.createRange();
     range.setStart(startSpan.node, match.startOffset - startSpan.start);
     range.setEnd(endSpan.node, match.endOffset - endSpan.start);
     ranges.push(range);
+    matchedSpans.push({ start, end });
   }
-  if (ranges.length === 0) return 0;
 
-  const safeIndex = Math.min(Math.max(activeIndex, 0), ranges.length - 1);
+  const registry = workspaceFileFindHighlightRegistry();
   const HighlightCtor = (
     globalThis as typeof globalThis & {
       Highlight?: new (...ranges: Range[]) => object;
@@ -355,10 +387,42 @@ function applyWorkspaceFileFindHighlights(
   if (registry && HighlightCtor) {
     registry.set(highlightNames.all, new HighlightCtor(...ranges));
     registry.set(highlightNames.active, new HighlightCtor(ranges[safeIndex]!));
+  } else {
+    // Older engines retain a block/line paint layer without replacing text nodes.
+    for (let index = 0; index < matchedSpans.length; index += 1) {
+      const span = matchedSpans[index]!;
+      for (let nodeIndex = span.start; nodeIndex <= span.end; nodeIndex += 1) {
+        const parent = nodeSpans[nodeIndex]!.node.parentElement;
+        const line = parent?.closest(".line, p, li, h1, h2, h3, h4, h5, h6, td, pre") ?? parent;
+        if (!line || !contentRoot.contains(line)) continue;
+        line.classList.add(highlightNames.all);
+        if (index === safeIndex) line.classList.add(highlightNames.active);
+      }
+    }
   }
-  const activeElement = ranges[safeIndex]?.commonAncestorContainer.parentElement;
-  activeElement?.scrollIntoView({ block: "nearest" });
-  return renderedMatches.length;
+  if (scroll) {
+    // A cross-token match's common ancestor can be the entire code block. Range
+    // geometry also handles huge plain files that deliberately omit line spans.
+    const match = ranges[safeIndex]!.getBoundingClientRect();
+    const viewport = root.getBoundingClientRect();
+    const top = viewport.top + root.clientTop;
+    const left = viewport.left + root.clientLeft;
+    const bottom = top + root.clientHeight;
+    const right = left + root.clientWidth;
+    if (match.top < top) root.scrollTop += match.top - top;
+    else if (match.bottom > bottom) {
+      root.scrollTop += Math.min(match.top - top, match.bottom - bottom);
+    }
+    if (match.left < left) root.scrollLeft += match.left - left;
+    else if (match.right > right) {
+      root.scrollLeft += Math.min(match.left - left, match.right - right);
+    }
+  }
+  return {
+    count: renderedMatches.length,
+    activeIndex: safeIndex,
+    activeRange: navigableMatches[safeIndex]!,
+  };
 }
 
 function createPierreEditor(options: PierreEditorOptions<undefined>) {
@@ -659,8 +723,22 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const [fileFindOpen, setFileFindOpen] = useState(false);
   const [fileFindFocusNonce, setFileFindFocusNonce] = useState(0);
   const [fileFindQuery, setFileFindQuery] = useState("");
+  const deferredFileFindQuery = useDeferredValue(fileFindQuery);
   const [fileFindActiveIndex, setFileFindActiveIndex] = useState(0);
+  const [fileFindStepNonce, setFileFindStepNonce] = useState(0);
   const [fileFindRenderedMatchCount, setFileFindRenderedMatchCount] = useState(0);
+  const fileFindAnchorRef = useRef<{
+    query: string;
+    scope: string;
+    stepNonce: number;
+    activeRange: WorkspaceFileFindRange | null;
+  } | null>(null);
+  const fileFindScrollRequestRef = useRef<{
+    query: string;
+    scope: string;
+    contents: string;
+    stepNonce: number;
+  } | null>(null);
   const taskWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestTaskWriteVersionRef = useRef({ next: 0, byFile: new Map<string, number>() });
   const taskFileDiskVersionRef = useRef(new Map<string, string>());
@@ -672,6 +750,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     workspaceRoot,
   } = props;
   const queryClient = useQueryClient();
+  const shortcutConfig = useQuery(serverConfigQueryOptions());
+  const keybindings = shortcutConfig.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const openFileFind = useCallback(() => {
     setFileFindOpen(true);
     setFileFindFocusNonce((current) => current + 1);
@@ -876,9 +956,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     editableDocument: editableDocument !== null,
     showMarkdownPreview,
   });
-  // The app-level keybinding dispatcher sends a targeted event after resolving
-  // configurable `file.find`/`chat.find` rules. The direct keyboard listener
-  // keeps standalone preview mounts (outside the chat route) equally useful.
+  // Route capture handlers resolve the full app context first. Standalone
+  // previews use the same configured resolver during the later bubble phase.
   useEffect(() => {
     const onPreviewFind = (event: Event) => {
       if (!fileFindEnabled) return;
@@ -889,21 +968,25 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       openFileFind();
     };
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (!fileFindEnabled || event.defaultPrevented || event.key.toLowerCase() !== "f") return;
-      if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (!fileFindEnabled || event.defaultPrevented || wasWorkspaceFileFindShortcutResolved(event))
+        return;
       const target = event.target;
       if (!(target instanceof Node) || !filePreviewRootRef.current?.contains(target)) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: { filePreviewFocus: true },
+      });
+      if (command !== "file.find" && command !== "chat.find") return;
       event.preventDefault();
       event.stopPropagation();
       openFileFind();
     };
     window.addEventListener(WORKSPACE_FILE_PREVIEW_FIND_EVENT, onPreviewFind);
-    window.addEventListener("keydown", onWindowKeyDown, { capture: true });
+    window.addEventListener("keydown", onWindowKeyDown);
     return () => {
       window.removeEventListener(WORKSPACE_FILE_PREVIEW_FIND_EVENT, onPreviewFind);
-      window.removeEventListener("keydown", onWindowKeyDown, { capture: true });
+      window.removeEventListener("keydown", onWindowKeyDown);
     };
-  }, [fileFindEnabled, openFileFind]);
+  }, [fileFindEnabled, keybindings, openFileFind]);
   const activeEditBuffer =
     editableDocument && editor.canEdit
       ? {
@@ -919,14 +1002,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     editableDocument != null &&
     editor.state.format?.expectedVersion !== editableDocument.version;
   const displayedFileContents = activeEditBuffer?.contents ?? fileContents;
-  useEffect(
-    () => () => {
-      const registry = workspaceFileFindHighlightRegistry();
-      registry?.delete(`synara-file-find-${fileFindHighlightId}`);
-      registry?.delete(`synara-file-find-active-${fileFindHighlightId}`);
-    },
-    [fileFindHighlightId],
-  );
+  const fileFindScope = `${workspaceRoot ?? ""}\0${filePath ?? ""}\0${showMarkdownPreview}`;
   useEffect(() => {
     const style = document.createElement("style");
     style.dataset.workspaceFileFind = fileFindHighlightId;
@@ -934,7 +1010,13 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ::highlight(synara-file-find-${fileFindHighlightId}) {
         background-color: color-mix(in srgb, #f59e0b 24%, transparent);
       }
+      .synara-file-find-${fileFindHighlightId} {
+        background-color: color-mix(in srgb, #f59e0b 24%, transparent);
+      }
       ::highlight(synara-file-find-active-${fileFindHighlightId}) {
+        background-color: color-mix(in srgb, #f97316 38%, transparent);
+      }
+      .synara-file-find-active-${fileFindHighlightId} {
         background-color: color-mix(in srgb, #f97316 38%, transparent);
       }
     `;
@@ -942,55 +1024,97 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     return () => style.remove();
   }, [fileFindHighlightId]);
   useEffect(() => {
+    const root = contentsRef.current;
+    const highlightNames = {
+      all: `synara-file-find-${fileFindHighlightId}`,
+      active: `synara-file-find-active-${fileFindHighlightId}`,
+    };
     if (!fileFindOpen || !fileFindEnabled) {
       setFileFindRenderedMatchCount(0);
+      fileFindAnchorRef.current = null;
+      fileFindScrollRequestRef.current = null;
+      clearWorkspaceFileFindHighlights(root, highlightNames);
       return;
     }
-    const renderedMatchCount = applyWorkspaceFileFindHighlights(
-      contentsRef.current,
-      fileFindQuery,
-      fileFindActiveIndex,
-      {
-        all: `synara-file-find-${fileFindHighlightId}`,
-        active: `synara-file-find-active-${fileFindHighlightId}`,
-      },
-    );
-    setFileFindRenderedMatchCount((current) =>
-      current === renderedMatchCount ? current : renderedMatchCount,
-    );
-    const navigableMatchCount = Math.min(FILE_FIND_MAX_MATCHES, renderedMatchCount);
-    if (navigableMatchCount === 0) {
-      setFileFindActiveIndex(0);
-    } else if (fileFindActiveIndex >= navigableMatchCount) {
-      setFileFindActiveIndex(navigableMatchCount - 1);
-    }
+    const update = (scroll: boolean) => {
+      const previous = fileFindAnchorRef.current;
+      const queryChanged = previous?.query !== deferredFileFindQuery;
+      const preserveAnchor =
+        !queryChanged &&
+        previous !== null &&
+        previous.scope === fileFindScope &&
+        previous.stepNonce === fileFindStepNonce;
+      const result = applyWorkspaceFileFindHighlights(
+        root,
+        deferredFileFindQuery,
+        queryChanged ? 0 : fileFindActiveIndex,
+        highlightNames,
+        preserveAnchor ? previous.activeRange : null,
+        scroll,
+      );
+      fileFindAnchorRef.current = {
+        activeRange: result.activeRange,
+        query: deferredFileFindQuery,
+        scope: fileFindScope,
+        stepNonce: fileFindStepNonce,
+      };
+      setFileFindRenderedMatchCount(result.count);
+      setFileFindActiveIndex(result.activeIndex);
+    };
+    const previousRequest = fileFindScrollRequestRef.current;
+    const scroll =
+      previousRequest?.query !== deferredFileFindQuery ||
+      previousRequest.scope !== fileFindScope ||
+      previousRequest.contents !== displayedFileContents ||
+      previousRequest.stepNonce !== fileFindStepNonce;
+    fileFindScrollRequestRef.current = {
+      query: deferredFileFindQuery,
+      scope: fileFindScope,
+      contents: displayedFileContents,
+      stepNonce: fileFindStepNonce,
+    };
+    update(scroll);
+    // Shiki and Markdown can replace descendants after the parent effect ran.
+    // Rebind ranges without pulling a reader back on unrelated DOM repaint.
+    const observer = new MutationObserver(() => update(false));
+    if (root) observer.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      clearWorkspaceFileFindHighlights(root, highlightNames);
+    };
   }, [
+    deferredFileFindQuery,
     displayedFileContents,
     fileFindActiveIndex,
     fileFindEnabled,
     fileFindHighlightId,
     fileFindOpen,
-    fileFindQuery,
-    showMarkdownPreview,
+    fileFindScope,
+    fileFindStepNonce,
   ]);
   const closeFileFind = useCallback(() => {
     setFileFindOpen(false);
     setFileFindQuery("");
     setFileFindActiveIndex(0);
     setFileFindRenderedMatchCount(0);
-    const registry = workspaceFileFindHighlightRegistry();
-    registry?.delete(`synara-file-find-${fileFindHighlightId}`);
-    registry?.delete(`synara-file-find-active-${fileFindHighlightId}`);
+    fileFindAnchorRef.current = null;
+    clearWorkspaceFileFindHighlights(contentsRef.current, {
+      all: `synara-file-find-${fileFindHighlightId}`,
+      active: `synara-file-find-active-${fileFindHighlightId}`,
+    });
+    filePreviewRootRef.current?.focus({ preventScroll: true });
   }, [fileFindHighlightId]);
   const handleFileFindQueryChange = useCallback((query: string) => {
+    // Reset when the deferred query actually changes, so its older match pass
+    // cannot restore an index from the preceding query during the urgent render.
     setFileFindQuery(query);
-    setFileFindActiveIndex(0);
   }, []);
   const handleFileFindStep = useCallback(
     (direction: "next" | "previous") => {
       const count = Math.min(FILE_FIND_MAX_MATCHES, fileFindRenderedMatchCount);
       if (count === 0) return;
       setFileFindActiveIndex((current) => stepWorkspaceFileFindIndex(count, current, direction));
+      setFileFindStepNonce((current) => current + 1);
     },
     [fileFindRenderedMatchCount],
   );
@@ -1278,7 +1402,15 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ref={filePreviewRootRef}
       data-workspace-file-preview="true"
       data-workspace-file-find-enabled={fileFindEnabled ? "true" : undefined}
-      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface"
+      tabIndex={fileFindEnabled ? 0 : undefined}
+      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+      onMouseDown={(event) => {
+        if (!fileFindEnabled || !(event.target instanceof Element)) return;
+        if (event.target.closest("input, textarea, select, button, a, [contenteditable='true']")) {
+          return;
+        }
+        filePreviewRootRef.current?.focus({ preventScroll: true });
+      }}
     >
       <WorkspaceFilePreviewHeader
         workspaceRoot={props.workspaceRoot}

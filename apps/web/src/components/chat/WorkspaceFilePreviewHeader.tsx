@@ -365,7 +365,7 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
             type="button"
             tone="plain"
             label="Find in file"
-            title="Find in file (⌘F / Ctrl+F)"
+            title="Find in file"
             onClick={props.onFind}
           >
             <SearchIcon aria-hidden="true" className="size-3.5" />

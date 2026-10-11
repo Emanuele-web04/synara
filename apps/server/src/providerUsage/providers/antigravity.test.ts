@@ -198,4 +198,104 @@ describe("antigravityUsageFetcher", () => {
     expect(saved.token.access_token).toBe("ya29-new");
     expect(saved.token.refresh_token).toBe("1//new-refresh");
   });
+
+  it.each([
+    {
+      name: "revoked refresh token",
+      response: jsonResponse({ error: "invalid_grant" }, 400),
+      expectedStatus: "needs-auth",
+    },
+    {
+      name: "malformed refresh request",
+      response: jsonResponse({ error: "invalid_request" }, 400),
+      expectedStatus: "error",
+    },
+    {
+      name: "rejected OAuth client",
+      response: jsonResponse({ error: "invalid_client" }, 401),
+      expectedStatus: "error",
+    },
+    {
+      name: "refresh throttling",
+      response: jsonResponse({ error: "rate_limit_exceeded" }, 429),
+      expectedStatus: "error",
+    },
+    {
+      name: "refresh server failure",
+      response: jsonResponse({ error: "unavailable" }, 503),
+      expectedStatus: "error",
+    },
+    {
+      name: "refresh transport failure",
+      response: new Error("connection failed"),
+      expectedStatus: "error",
+    },
+    {
+      name: "missing refreshed access token",
+      response: jsonResponse({ expires_in: 3600 }),
+      expectedStatus: "error",
+    },
+  ])("reports $name without reusing expired credentials", async ({ response, expectedStatus }) => {
+    const { homeDir, credPath } = makeGeminiHome(".gemini/oauth_creds.json", {
+      access_token: "ya29-expired",
+      refresh_token: "1//refresh",
+      expiry_date: NOW_MS - 60_000,
+    });
+    const originalCreds = readFileSync(credPath, "utf8");
+    const fetchMock = vi.fn(async () => {
+      if (response instanceof Error) throw response;
+      return response;
+    });
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await antigravityUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.status).toBe(expectedStatus);
+    expect(snapshot.limits).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(readFileSync(credPath, "utf8")).toBe(originalCreds);
+  });
+
+  it.each([
+    { name: "unauthorized", response: jsonResponse({}, 401), expectedStatus: "needs-auth" },
+    { name: "forbidden", response: jsonResponse({}, 403), expectedStatus: "needs-auth" },
+    { name: "throttled", response: jsonResponse({}, 429), expectedStatus: "error" },
+    { name: "unavailable", response: jsonResponse({}, 503), expectedStatus: "error" },
+    { name: "unreachable", response: new Error("connection failed"), expectedStatus: "error" },
+  ])("reports $name quota with the confirmed plan", async ({ response, expectedStatus }) => {
+    const { homeDir } = makeGeminiHome(".gemini/oauth_creds.json", {
+      access_token: "ya29-access",
+      expiry_date: NOW_MS + 3_600_000,
+    });
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const target = String(url);
+      if (target.includes("loadCodeAssist")) {
+        return jsonResponse({ paidTier: { name: "Google AI Pro" } });
+      }
+      if (target.includes("retrieveUserQuota")) {
+        if (response instanceof Error) throw response;
+        return response;
+      }
+      throw new Error(`unexpected url ${target}`);
+    });
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await antigravityUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+
+    expect(snapshot.status).toBe(expectedStatus);
+    expect(snapshot.planName).toBe("Google AI Pro");
+    expect(snapshot.limits).toEqual([]);
+    expect(snapshot.detail).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

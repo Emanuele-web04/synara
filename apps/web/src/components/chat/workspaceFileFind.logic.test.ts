@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  anchorWorkspaceFileFindIndex,
   collectWorkspaceFileFindMatches,
   lineIndexForWorkspaceFileFindOffset,
   stepWorkspaceFileFindIndex,
@@ -136,6 +137,25 @@ describe("stepWorkspaceFileFindIndex", () => {
     expect(stepWorkspaceFileFindIndex(3, 0, "previous")).toBe(2);
     expect(stepWorkspaceFileFindIndex(3, 2, "next")).toBe(0);
     expect(stepWorkspaceFileFindIndex(0, 0, "next")).toBe(-1);
+  });
+});
+
+describe("anchorWorkspaceFileFindIndex", () => {
+  it("preserves an exact offset after an earlier hit disappears", () => {
+    const original = collectWorkspaceFileFindMatches("needle\nneedle\nneedle", "needle");
+    const refreshed = collectWorkspaceFileFindMatches("absent\nneedle\nneedle", "needle");
+    expect(anchorWorkspaceFileFindIndex(refreshed, original[1]!)).toBe(0);
+  });
+
+  it("chooses the nearest rendered offset when the active text moves", () => {
+    const matches = collectWorkspaceFileFindMatches("needle\n.....needle\nneedle", "needle");
+    expect(anchorWorkspaceFileFindIndex(matches, { startOffset: 13, endOffset: 19 })).toBe(1);
+  });
+
+  it("keeps source-order ties deterministic and reports an empty result", () => {
+    const matches = collectWorkspaceFileFindMatches("x.....x", "x");
+    expect(anchorWorkspaceFileFindIndex(matches, { startOffset: 3, endOffset: 4 })).toBe(0);
+    expect(anchorWorkspaceFileFindIndex([], { startOffset: 3, endOffset: 4 })).toBe(-1);
   });
 });
 

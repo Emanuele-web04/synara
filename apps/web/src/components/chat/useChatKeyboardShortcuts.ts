@@ -19,7 +19,10 @@ import { type Thread } from "../../types";
 import { resolveCycledModelSlug } from "../ChatView.logic";
 import { collectForegroundRunningSubagentStripItems } from "./ComposerSubagentStrip.logic";
 import { eventTargetsInAppBrowser, shouldCaptureChatFindShortcut } from "./threadFind.logic";
-import { WORKSPACE_FILE_PREVIEW_FIND_EVENT } from "./workspaceFileFind.logic";
+import {
+  markWorkspaceFileFindShortcutResolved,
+  WORKSPACE_FILE_PREVIEW_FIND_EVENT,
+} from "./workspaceFileFind.logic";
 import { useChatProjectScripts } from "./useChatProjectScripts";
 import { useChatProviderModels } from "./useChatProviderModels";
 import { useChatTerminalController } from "./useChatTerminalController";
@@ -268,6 +271,9 @@ export function useChatKeyboardShortcuts({
       const command = resolveShortcutCommand(event, keybindings, {
         context: shortcutContext,
       });
+      if (shortcutContext.filePreviewFocus) {
+        markWorkspaceFileFindShortcutResolved(event);
+      }
       if (!command) return;
 
       if (command === "model.effort.next") {

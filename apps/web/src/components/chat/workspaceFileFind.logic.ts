@@ -12,6 +12,18 @@ export type WorkspaceFileFindStepDirection = "next" | "previous";
 /** Window event used by the app-level keybinding dispatcher to target the focused preview. */
 export const WORKSPACE_FILE_PREVIEW_FIND_EVENT = "synara:file-preview-find";
 
+// A route dispatcher has the full shortcut context. Its decision, including
+// no binding, takes precedence over a standalone preview's fallback listener.
+const resolvedShortcutEvents = new WeakSet<Event>();
+
+export function markWorkspaceFileFindShortcutResolved(event: Event): void {
+  resolvedShortcutEvents.add(event);
+}
+
+export function wasWorkspaceFileFindShortcutResolved(event: Event): boolean {
+  return resolvedShortcutEvents.has(event);
+}
+
 /** Whether a mounted preview should expose the in-preview finder. */
 export function workspaceFileFindEnabled(input: {
   fileContentsReady: boolean;
@@ -62,6 +74,23 @@ export function stepWorkspaceFileFindIndex(
   return direction === "next"
     ? (safeIndex + 1) % matchCount
     : (safeIndex - 1 + matchCount) % matchCount;
+}
+
+/** Preserve the active rendered offset across reloads, then choose its nearest hit. */
+export function anchorWorkspaceFileFindIndex(
+  matches: readonly WorkspaceFileFindRange[],
+  previous: WorkspaceFileFindRange,
+): number {
+  let nearest = -1;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < matches.length; index += 1) {
+    const distance = Math.abs(matches[index]!.startOffset - previous.startOffset);
+    if (distance < nearestDistance) {
+      nearest = index;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
 }
 
 /** Resolve a source offset to its zero-based line number for source scrolling. */
