@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { providerModelSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
+import { providerSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
 import { type Thread } from "../../types";
 import {
   createRuntimeModePersistenceQueue,
@@ -153,11 +153,12 @@ export function useChatRuntimeModes({
     if (
       activeThread &&
       runtimeMode === "auto" &&
-      !providerModelSupportsAutoRuntimeMode(
-        selectedProvider,
-        selectedRuntimeModel,
-        activeProviderStatus,
-      )
+      // Missing discovery data during startup/reconnect is not evidence that
+      // the saved mode is unsupported. Only persist a fallback on known lack
+      // of support; the server still validates Auto before starting a turn.
+      (!providerSupportsAutoRuntimeMode(selectedProvider) ||
+        activeProviderStatus?.supportsAutoRuntimeMode === false ||
+        (selectedProvider === "claudeAgent" && selectedRuntimeModel?.supportsAutoMode === false))
     ) {
       handleRuntimeModeChange("approval-required");
     }
