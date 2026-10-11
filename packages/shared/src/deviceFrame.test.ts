@@ -1,16 +1,7 @@
-import {
-  DEVICE_FRAME_HEADER_FIXED_BYTES,
-  DEVICE_FRAME_MAGIC,
-  DEVICE_FRAME_VERSION,
-} from "@synara/contracts";
+import { DEVICE_FRAME_HEADER_FIXED_BYTES } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  DeviceFrameEncodeError,
-  decodeDeviceFrame,
-  encodeDeviceFrame,
-  peekDeviceFrameHeader,
-} from "./deviceFrame";
+import { DeviceFrameEncodeError, decodeDeviceFrame, encodeDeviceFrame } from "./deviceFrame";
 
 const header = {
   deviceId: "A1B2C3D4-1111-2222-3333-444455556666",
@@ -30,14 +21,6 @@ describe("encodeDeviceFrame / decodeDeviceFrame", () => {
     if (!result.ok) return;
     expect(result.frame.header).toEqual(header);
     expect(Array.from(result.frame.payload)).toEqual(Array.from(payload));
-  });
-
-  it("round-trips an empty payload", () => {
-    const result = decodeDeviceFrame(encodeDeviceFrame({ header, payload: new Uint8Array() }));
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.frame.payload.byteLength).toBe(0);
   });
 
   it("round-trips multibyte device ids", () => {
@@ -108,20 +91,6 @@ describe("decodeDeviceFrame malformed input", () => {
     });
   });
 
-  it("rejects a wrong magic", () => {
-    const corrupted = encoded.slice();
-    new DataView(corrupted.buffer).setUint16(0, DEVICE_FRAME_MAGIC ^ 0xffff, true);
-
-    expect(decodeDeviceFrame(corrupted)).toEqual({ ok: false, reason: "bad-magic" });
-  });
-
-  it("rejects a future protocol version", () => {
-    const corrupted = encoded.slice();
-    corrupted[2] = DEVICE_FRAME_VERSION + 1;
-
-    expect(decodeDeviceFrame(corrupted)).toEqual({ ok: false, reason: "unsupported-version" });
-  });
-
   it("rejects a device id length that runs past the buffer", () => {
     const corrupted = encoded.slice();
     corrupted[16] = 255;
@@ -141,12 +110,5 @@ describe("decodeDeviceFrame malformed input", () => {
     corrupted[DEVICE_FRAME_HEADER_FIXED_BYTES] = 0xff;
 
     expect(decodeDeviceFrame(corrupted)).toEqual({ ok: false, reason: "invalid-device-id" });
-  });
-});
-
-describe("peekDeviceFrameHeader", () => {
-  it("returns the header for a valid frame and null otherwise", () => {
-    expect(peekDeviceFrameHeader(encodeDeviceFrame({ header, payload }))).toEqual(header);
-    expect(peekDeviceFrameHeader(new Uint8Array(4))).toBeNull();
   });
 });

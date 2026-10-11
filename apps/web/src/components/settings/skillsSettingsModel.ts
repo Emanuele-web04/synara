@@ -46,6 +46,8 @@ export const ORIGIN_SECTION_ORDER = [
   "droid",
   "opencode",
   "pi",
+  "devin",
+  "omp",
   "agents",
   "project",
 ] as const;
@@ -59,6 +61,8 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.claudeAgent, provider: "claudeAgent" };
     case "cursor":
       return { label: PROVIDER_DISPLAY_NAMES.cursor, provider: "cursor" };
+    case "devin":
+      return { label: PROVIDER_DISPLAY_NAMES.devin, provider: "devin" };
     case "antigravity":
       return { label: PROVIDER_DISPLAY_NAMES.antigravity, provider: "antigravity" };
     case "grok":
@@ -69,6 +73,8 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.opencode, provider: "opencode" };
     case "pi":
       return { label: PROVIDER_DISPLAY_NAMES.pi, provider: "pi" };
+    case "omp":
+      return { label: PROVIDER_DISPLAY_NAMES.omp, provider: "omp" };
     case "agents":
       return { label: "Shared (.agents)", provider: null };
     case "project":
@@ -173,11 +179,12 @@ export function buildSettingsSkillGroups(
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
-export function buildSettingsSkillSections(
-  skills: ReadonlyArray<ProviderSkillDescriptor>,
+/** Sections from already-built groups, so callers that need both do not run the grouping twice. */
+export function buildSettingsSkillSectionsFromGroups(
+  groups: ReadonlyArray<SettingsSkillGroup>,
 ): SettingsSkillSection[] {
   const sections = new Map<string, SettingsSkillGroup[]>();
-  for (const group of buildSettingsSkillGroups(skills)) {
+  for (const group of groups) {
     sections.set(group.section, [...(sections.get(group.section) ?? []), group]);
   }
 

@@ -1,8 +1,8 @@
 // FILE: providerUsage/providers/claude.ts
 // Purpose: Live Claude (Anthropic) usage fetcher. Reads the Claude Code OAuth token from
 // ~/.claude/.credentials.json or the macOS keychain ("Claude Code-credentials", possibly
-// hex-encoded) read-only, and calls the OAuth usage endpoint, mapping the 5h/weekly/sonnet
-// utilization windows + extra-usage credits.
+// hex-encoded) read-only, and calls the OAuth usage endpoint, mapping the 5h/weekly windows,
+// the per-model weekly windows (Fable, Sonnet, Opus) + extra-usage credits.
 //
 // Token freshness is delegated to the Claude CLI (`claude auth status` under the shared
 // auth-status lock). Anthropic rotates the single-use refresh token on every redemption, so
@@ -10,7 +10,7 @@
 // consuming that refresh token without writing the rotation back to the CLI's store would
 // invalidate the on-disk/keychain login and force the user to re-authenticate.
 
-import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 
@@ -19,6 +19,7 @@ import type {
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
 } from "@synara/contracts";
+import { execProcessFile } from "@synara/shared/processRuntime";
 
 import { createLogger } from "../../logger";
 import { acquireClaudeAuthStatusLock } from "../../provider/claudeAuthStatusLock";
@@ -41,11 +42,12 @@ import {
   isoFromString,
   needsAuthSnapshot,
   titleCase,
+  unsupportedSnapshot,
 } from "../parse";
 import { createRateLimitResilience } from "../rateLimitResilience";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(execProcessFile);
 const log = createLogger("provider-usage:claude");
 
 const SOURCE = "claude-oauth-usage";
@@ -56,6 +58,14 @@ const AUTH_NUDGE_TIMEOUT_MS = 20_000;
 // A successful CLI refresh keeps the token fresh for hours; the cooldown only bounds how often a
 // *failing* nudge (logged-out user, missing binary) can re-spawn the CLI under steady polling.
 const AUTH_NUDGE_COOLDOWN_MS = 5 * 60 * 1000;
+const SESSION_WINDOW_MINS = 5 * 60;
+const WEEKLY_WINDOW_MINS = 7 * 24 * 60;
+// Legacy top-level per-model weekly keys, used only when `limits[]` lacks a scoped row for them.
+const LEGACY_MODEL_WEEKLY_WINDOWS: ReadonlyArray<readonly [label: string, key: string]> = [
+  ["Fable", "seven_day_fable"],
+  ["Sonnet", "seven_day_sonnet"],
+  ["Opus", "seven_day_opus"],
+];
 
 type ClaudeCredSource = { kind: "file"; path: string } | { kind: "keychain" };
 
@@ -100,10 +110,20 @@ function readClaudeCreds(
 async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<ClaudeCreds[]> {
   const candidates: ClaudeCreds[] = [];
   const paths: string[] = [];
-  if (ctx.env.CLAUDE_CONFIG_DIR) {
+  const secureStorageDir = ctx.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  const strictCredentials = ctx.isolateCredentials || secureStorageDir !== undefined;
+  if (strictCredentials) {
+    const credentialDir =
+      secureStorageDir !== undefined
+        ? secureStorageDir || nodePath.join(ctx.homeDir, ".claude")
+        : (ctx.env.CLAUDE_CONFIG_DIR ?? nodePath.join(ctx.homeDir, ".claude"));
+    paths.push(nodePath.join(credentialDir.normalize("NFC"), ".credentials.json"));
+  } else if (ctx.env.CLAUDE_CONFIG_DIR) {
     paths.push(nodePath.join(ctx.env.CLAUDE_CONFIG_DIR, ".credentials.json"));
   }
-  paths.push(nodePath.join(ctx.homeDir, ".claude", ".credentials.json"));
+  if (!strictCredentials) {
+    paths.push(nodePath.join(ctx.homeDir, ".claude", ".credentials.json"));
+  }
 
   for (const path of paths) {
     const record = asRecord(await readJsonFile(path));
@@ -113,19 +133,29 @@ async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<C
     }
   }
 
+  // Claude keys custom secure/config directories by the first eight SHA-256 hex
+  // characters of their NFC spelling. HOME alone does not scope its Keychain item.
+  const keychainDirectory =
+    secureStorageDir !== undefined ? secureStorageDir : ctx.env.CLAUDE_CONFIG_DIR;
+  if (strictCredentials && keychainDirectory === undefined) {
+    return candidates;
+  }
+  const keychainService = keychainDirectory
+    ? `${KEYCHAIN_SERVICE}-${createHash("sha256").update(keychainDirectory.normalize("NFC")).digest("hex").slice(0, 8)}`
+    : KEYCHAIN_SERVICE;
   const keychainAccount = asString(ctx.env.USER) ?? asString(ctx.env.LOGNAME);
   const accountKeychain =
     keychainAccount === undefined
       ? null
       : await readKeychainPassword({
-          service: KEYCHAIN_SERVICE,
+          service: keychainService,
           account: keychainAccount,
           platform: ctx.platform,
         });
   const keychain =
     accountKeychain ??
     (await readKeychainPassword({
-      service: KEYCHAIN_SERVICE,
+      service: keychainService,
       platform: ctx.platform,
     }));
   if (keychain) {
@@ -198,7 +228,11 @@ interface ClaudeAuthNudgeDeps {
 const defaultAuthNudgeDeps: ClaudeAuthNudgeDeps = {
   acquireLock: acquireClaudeAuthStatusLock,
   async runAuthStatus(input) {
+    // `execProcessFile` (rather than node's `execFile`) resolves the CLI through
+    // the shared platform boundary and keeps its console window hidden, so this
+    // background probe cannot flash a terminal on Windows.
     await execFileAsync(input.binaryPath, ["auth", "status"], {
+      encoding: "utf8",
       timeout: AUTH_NUDGE_TIMEOUT_MS,
       env: buildClaudeProcessEnv({
         env: input.env,
@@ -256,13 +290,14 @@ export function parseClaudeUsage(input: { json: unknown; nowMs: number; planName
   const limits: ServerProviderUsageLimit[] = [];
   const usageLines: ServerProviderUsageLine[] = [];
 
-  const pushWindow = (label: string, windowValue: unknown, windowDurationMins: number): void => {
-    const window = asRecord(windowValue);
-    if (!window) {
-      return;
-    }
-    const usedPercent = clampPercent(asFiniteNumber(window.utilization));
-    const resetsAt = isoFromString(window.resets_at);
+  const pushLimit = (
+    label: string,
+    percent: number | undefined,
+    resetsAtValue: unknown,
+    windowDurationMins: number,
+  ): void => {
+    const usedPercent = clampPercent(percent);
+    const resetsAt = isoFromString(resetsAtValue);
     if (usedPercent === undefined && !resetsAt) {
       return;
     }
@@ -274,10 +309,39 @@ export function parseClaudeUsage(input: { json: unknown; nowMs: number; planName
     });
   };
 
-  pushWindow("5h", root?.five_hour, 300);
-  pushWindow("Weekly", root?.seven_day, 10_080);
-  pushWindow("Sonnet", root?.seven_day_sonnet, 10_080);
-  pushWindow("Opus", root?.seven_day_opus, 10_080);
+  const pushWindow = (label: string, windowValue: unknown, windowDurationMins: number): void => {
+    const window = asRecord(windowValue);
+    if (!window) {
+      return;
+    }
+    pushLimit(label, asFiniteNumber(window.utilization), window.resets_at, windowDurationMins);
+  };
+
+  pushWindow("5h", root?.five_hour, SESSION_WINDOW_MINS);
+  pushWindow("Weekly", root?.seven_day, WEEKLY_WINDOW_MINS);
+
+  // Per-model weekly windows. Anthropic moved these off the legacy top-level `seven_day_<model>`
+  // keys (which now come back null) into `limits[]` as `weekly_scoped` rows named by
+  // `scope.model.display_name` (e.g. "Fable"). Read the array first, then fall back to the legacy
+  // keys for any model the array did not cover so older responses keep working.
+  const scopedLabels = new Set<string>();
+  for (const entry of Array.isArray(root?.limits) ? root.limits : []) {
+    const scoped = asRecord(entry);
+    if (scoped?.kind !== "weekly_scoped") {
+      continue;
+    }
+    const label = asString(asRecord(asRecord(scoped.scope)?.model)?.display_name)?.trim();
+    if (!label || scopedLabels.has(label)) {
+      continue;
+    }
+    scopedLabels.add(label);
+    pushLimit(label, asFiniteNumber(scoped.percent), scoped.resets_at, WEEKLY_WINDOW_MINS);
+  }
+  for (const [label, key] of LEGACY_MODEL_WEEKLY_WINDOWS) {
+    if (!scopedLabels.has(label)) {
+      pushWindow(label, root?.[key], WEEKLY_WINDOW_MINS);
+    }
+  }
 
   const extra = asRecord(root?.extra_usage);
   if (extra && extra.is_enabled !== false) {
@@ -324,12 +388,27 @@ export function __resetClaudeUsageRateLimitState(): void {
 export const claudeUsageFetcher: ProviderUsageFetcher = {
   provider: "claudeAgent",
   async cacheKey(ctx) {
+    if (ctx.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
+      return `environment:${credentialFingerprint(ctx.env.CLAUDE_CODE_OAUTH_TOKEN)}`;
+    }
     return claudeCredentialsCacheKey(ctx, await resolveClaudeCredCandidates(ctx));
   },
   async fetch(ctx) {
+    if (ctx.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
+      return unsupportedSnapshot(
+        "claudeAgent",
+        ctx.nowMs,
+        SOURCE,
+        "Live usage is unavailable for environment-token authentication. Tokens from `claude setup-token` support chats but do not include the user:profile scope needed for usage.",
+      );
+    }
     const candidates = await resolveClaudeCredCandidates(ctx);
     if (candidates.length === 0) {
-      return needsAuthSnapshot("claudeAgent", ctx.nowMs, SOURCE);
+      return {
+        ...needsAuthSnapshot("claudeAgent", ctx.nowMs, SOURCE),
+        detail:
+          "No Claude usage credentials were found. A token supplied by a wrapper may support chats without access to usage. Sign in with `claude auth login` for this account to enable usage.",
+      };
     }
 
     // At most one CLI nudge per fetch, shared by the proactive (near-expiry) and reactive (401)
@@ -354,8 +433,10 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
         inferenceOnlySnapshot = buildSnapshot({
           provider: "claudeAgent",
           nowMs: ctx.nowMs,
-          status: "ok",
+          status: "unsupported",
           source: SOURCE,
+          detail:
+            "This Claude login cannot report usage: its token lacks the user:profile scope. Tokens from `claude setup-token` can still be used for chats.",
           ...(planName ? { planName } : {}),
         });
         continue;

@@ -17,11 +17,9 @@
 export const MCP_DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const MCP_SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26", "2024-11-05"]);
 
-export const JSON_RPC_PARSE_ERROR = -32700;
 export const JSON_RPC_INVALID_REQUEST = -32600;
 export const JSON_RPC_METHOD_NOT_FOUND = -32601;
 export const JSON_RPC_INVALID_PARAMS = -32602;
-export const JSON_RPC_INTERNAL_ERROR = -32603;
 
 export type JsonRpcId = string | number | null;
 
@@ -37,6 +35,28 @@ export interface JsonRpcNotification {
   readonly params: Record<string, unknown>;
 }
 
+/**
+ * MCP `_meta` on a tool definition: namespaced hints a client may honour.
+ *
+ * The spec reserves `_meta` for exactly this and requires clients to ignore
+ * namespaces they do not know, so every key here is inert for every consumer
+ * except the one that defined it. The shape is closed rather than an open
+ * record: each key has to be a documented, verified contract with some client,
+ * and a typo in a namespaced string key is otherwise undetectable.
+ *
+ * - `anthropic/alwaysLoad`: the Claude Code harness includes this tool's schema
+ *   in the prompt instead of deferring it behind its tool-search indirection
+ *   (equivalent to `defer_loading: false` on the API). Verified against the
+ *   2.1.x CLI's generic MCP tool normalization, which reads it for any server
+ *   type, and documented in `@anthropic-ai/claude-agent-sdk`.
+ * - `anthropic/searchHint`: replaces the description the same harness indexes
+ *   (and sends) for a *deferred* tool. Unused today — see computerTools.ts.
+ */
+export interface McpToolMeta {
+  readonly "anthropic/alwaysLoad"?: boolean;
+  readonly "anthropic/searchHint"?: string;
+}
+
 export interface McpToolDefinition {
   readonly name: string;
   readonly description: string;
@@ -49,6 +69,7 @@ export interface McpToolDefinition {
     readonly idempotentHint?: boolean;
     readonly openWorldHint?: boolean;
   };
+  readonly _meta?: McpToolMeta;
 }
 
 export interface McpToolCallResult {
@@ -58,10 +79,6 @@ export interface McpToolCallResult {
   >;
   readonly isError?: boolean;
   readonly structuredContent?: Record<string, unknown>;
-}
-
-export function mcpToolResultText(text: string): McpToolCallResult {
-  return { content: [{ type: "text", text }] };
 }
 
 export function mcpToolResultError(text: string): McpToolCallResult {

@@ -6,11 +6,12 @@ import { useSyncExternalStore } from "react";
 
 import type { WorkLogLiveActivity } from "../workLog";
 import { formatClockDuration } from "../session-logic";
+import { startVisibleInterval } from "./visibleInterval";
 
 const NO_ACTIVITY_THRESHOLD_MS = 30_000;
 const LIVE_ACTIVITY_TICK_MS = 1_000;
 const liveActivityClockListeners = new Set<() => void>();
-let liveActivityClockIntervalId: number | null = null;
+let stopLiveActivityClock: (() => void) | null = null;
 let liveActivityClockNowMs = Date.now();
 
 function emitLiveActivityClockTick(): void {
@@ -24,17 +25,14 @@ function subscribeLiveActivityClock(listener: () => void): () => void {
   liveActivityClockListeners.add(listener);
   if (liveActivityClockListeners.size === 1) {
     liveActivityClockNowMs = Date.now();
-    liveActivityClockIntervalId = window.setInterval(
-      emitLiveActivityClockTick,
-      LIVE_ACTIVITY_TICK_MS,
-    );
+    stopLiveActivityClock = startVisibleInterval(emitLiveActivityClockTick, LIVE_ACTIVITY_TICK_MS);
   }
 
   return () => {
     liveActivityClockListeners.delete(listener);
-    if (liveActivityClockListeners.size === 0 && liveActivityClockIntervalId !== null) {
-      window.clearInterval(liveActivityClockIntervalId);
-      liveActivityClockIntervalId = null;
+    if (liveActivityClockListeners.size === 0) {
+      stopLiveActivityClock?.();
+      stopLiveActivityClock = null;
     }
   };
 }
@@ -131,6 +129,12 @@ export function formatLiveActivityElapsed(
   return elapsedMs === null ? null : formatClockDuration(elapsedMs);
 }
 
+export interface LiveActivityMetaOptions {
+  // Subagent rows (Cursor/Claude `Task`, Codex collab) only hear back from the child
+  // agent when it finishes, so quiet time is the expected state — never idleness.
+  readonly subagent?: boolean;
+}
+
 // Live meta only exists to explain work the row can't state on its own: how long
 // something in flight has been running, or that it ended badly. A tool call that
 // simply succeeded already reads as a finished sentence ("Searched for foo in
@@ -138,6 +142,7 @@ export function formatLiveActivityElapsed(
 export function formatLiveActivityMeta(
   activity: WorkLogLiveActivity,
   nowMs: number,
+  options?: LiveActivityMetaOptions,
 ): string | null {
   if (activity.state === "completed") {
     return null;
@@ -148,7 +153,9 @@ export function formatLiveActivityMeta(
   const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
 
   if (isLiveActivityInProgress(activity)) {
-    if (lastActivityAtMs !== null) {
+    if (options?.subagent) {
+      parts.push("Subagent working");
+    } else if (lastActivityAtMs !== null) {
       const idleMs = Math.max(0, nowMs - lastActivityAtMs);
       parts.push(
         idleMs >= NO_ACTIVITY_THRESHOLD_MS

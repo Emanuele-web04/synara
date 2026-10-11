@@ -13,9 +13,11 @@ import {
   AntigravityIcon,
   ClaudeAI,
   CursorIcon,
+  DevinIcon,
   DroidIcon,
   GrokIcon,
   type Icon,
+  OmpIcon,
   OpenAI,
   OpenCodeIcon,
   PiIcon,
@@ -66,11 +68,13 @@ export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
+  devin: DevinIcon,
   antigravity: AntigravityIcon,
   grok: GrokIcon,
   droid: DroidIcon,
   opencode: OpenCodeProviderIcon,
   pi: PiIcon,
+  omp: OmpIcon,
 };
 
 export function providerIconToneClassName(

@@ -1,17 +1,15 @@
-import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@synara/contracts";
+import {
+  GIT_TEXT_GENERATION_PROVIDERS,
+  type GitTextGenerationProvider,
+  type ModelSelection,
+  type ProviderKind,
+  type ProviderStartOptions,
+} from "@synara/contracts";
 
-export const GIT_TEXT_GENERATION_PROVIDER_ORDER = [
-  "codex",
-  "cursor",
-  "opencode",
-  "droid",
-] as const satisfies readonly ProviderKind[];
+export const GIT_TEXT_GENERATION_PROVIDER_ORDER = GIT_TEXT_GENERATION_PROVIDERS;
+export type { GitTextGenerationProvider };
 
-export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDER_ORDER)[number];
-
-const GIT_TEXT_GENERATION_PROVIDER_SET = new Set<ProviderKind>([
-  ...GIT_TEXT_GENERATION_PROVIDER_ORDER,
-]);
+const GIT_TEXT_GENERATION_PROVIDER_SET = new Set<ProviderKind>(GIT_TEXT_GENERATION_PROVIDERS);
 
 export interface TextGenerationProviderInput {
   readonly modelSelection: ModelSelection;
@@ -28,14 +26,26 @@ export function hasDedicatedTextGenerationProvider(
 export function resolveTextGenerationInputForSelection(
   modelSelection: ModelSelection | undefined,
   providerOptions: ProviderStartOptions | undefined,
+  resolvedProvider?: ProviderKind,
 ): TextGenerationProviderInput | null {
-  if (!modelSelection || !hasDedicatedTextGenerationProvider(modelSelection.provider)) {
+  if (!modelSelection) {
+    return null;
+  }
+  const routedModelSelection =
+    resolvedProvider !== undefined && resolvedProvider !== modelSelection.provider
+      ? ({
+          provider: resolvedProvider,
+          instanceId: modelSelection.instanceId,
+          model: modelSelection.model,
+        } as ModelSelection)
+      : modelSelection;
+  if (!hasDedicatedTextGenerationProvider(routedModelSelection.provider)) {
     return null;
   }
 
-  if (modelSelection.provider === "codex") {
+  if (routedModelSelection.provider === "codex") {
     return {
-      modelSelection,
+      modelSelection: routedModelSelection,
       ...(providerOptions ? { providerOptions } : {}),
       ...(providerOptions?.codex?.homePath
         ? { codexHomePath: providerOptions.codex.homePath }
@@ -44,7 +54,7 @@ export function resolveTextGenerationInputForSelection(
   }
 
   return {
-    modelSelection,
+    modelSelection: routedModelSelection,
     ...(providerOptions ? { providerOptions } : {}),
   };
 }

@@ -29,9 +29,10 @@ import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { detectPrTemplate } from "../PrTemplateDetection.ts";
 import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
+import { reportBetaOperationalIssue } from "../../betaOperationalIssue.ts";
+import { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
 import { ServerConfig } from "../../config.ts";
 
-const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const OPEN_PR_LOOKUP_LIMIT = 10;
 // Any-state lookups scan more PRs so the newest merged/closed PR still surfaces.
@@ -1210,10 +1211,12 @@ export const makeGitManager = Effect.gen(function* () {
               },
             }
           : null;
-      const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
-        timeoutMs: COMMIT_TIMEOUT_MS,
-        ...(commitProgress ? { progress: commitProgress } : {}),
-      });
+      const { commitSha } = yield* gitCore.commit(
+        cwd,
+        suggestion.subject,
+        suggestion.body,
+        commitProgress ? { progress: commitProgress } : undefined,
+      );
       if (currentHookName !== null) {
         yield* emit({
           kind: "hook_finished",
@@ -1411,7 +1414,27 @@ export const makeGitManager = Effect.gen(function* () {
 
   const readWorkingTreeDiff: GitManagerShape["readWorkingTreeDiff"] = Effect.fnUntraced(
     function* (input) {
+      if (
+        input.filePath !== undefined &&
+        input.scope !== undefined &&
+        input.scope !== "workingTree"
+      ) {
+        return yield* gitManagerError(
+          "readWorkingTreeDiff",
+          "File-scoped diffs are only supported for the working tree scope.",
+        );
+      }
       switch (input.scope) {
+        case "ref": {
+          const compareRef = input.compareRef?.trim() ?? "";
+          if (compareRef.length === 0) {
+            return yield* gitManagerError(
+              "readWorkingTreeDiff",
+              "A branch or commit is required to compare the working tree against.",
+            );
+          }
+          return yield* gitCore.readRefPatch(input.cwd, compareRef);
+        }
         case "branch":
           return yield* gitCore.readBranchPatch(input.cwd);
         case "staged":
@@ -1420,21 +1443,58 @@ export const makeGitManager = Effect.gen(function* () {
           return yield* gitCore.readUnstagedPatch(input.cwd);
         case "workingTree":
         default:
-          return yield* gitCore.readWorkingTreePatch(input.cwd);
+          return yield* gitCore.readWorkingTreePatch(input.cwd, input.filePath);
       }
     },
   );
+
+  const blameLine: GitManagerShape["blameLine"] = Effect.fnUntraced(function* (input) {
+    return yield* gitCore.blameLine(input);
+  });
+
+  const readFileAtRev: GitManagerShape["readFileAtRev"] = Effect.fnUntraced(function* (input) {
+    return yield* gitCore.readFileAtRev(input);
+  });
+
+  // Same reason as summarizeDiff below: the badge surfaces need three integers, not the patch.
+  // Deriving them from the very patch readWorkingTreeDiff would have returned keeps the numbers
+  // identical to the ones a client-side parse produced, so no surface changes what it displays.
   const readWorkingTreeDiffStats: GitManagerShape["readWorkingTreeDiffStats"] = Effect.fnUntraced(
     function* (input) {
+      if (input.filePath !== undefined) {
+        return yield* gitManagerError(
+          "readWorkingTreeDiffStats",
+          "File-scoped diff statistics are not supported.",
+        );
+      }
+      if (input.scope === "ref") {
+        const compareRef = input.compareRef?.trim() ?? "";
+        if (compareRef.length === 0) {
+          return yield* gitManagerError(
+            "readWorkingTreeDiffStats",
+            "A branch or commit is required to compare the working tree against.",
+          );
+        }
+        return yield* gitCore.readDiffStats(input.cwd, "ref", compareRef);
+      }
       return yield* gitCore.readDiffStats(input.cwd, input.scope ?? "workingTree");
     },
   );
 
   // Resolve the patch server-side so large repository data never makes a client→RPC round trip.
   const summarizeDiff: GitManagerShape["summarizeDiff"] = Effect.fnUntraced(function* (input) {
-    const { patch } = yield* readWorkingTreeDiff({ cwd: input.cwd, scope: input.scope });
+    const { patch, truncated } = yield* readWorkingTreeDiff({
+      cwd: input.cwd,
+      scope: input.scope,
+    });
     if (patch.length === 0) {
       return yield* gitManagerError("summarizeDiff", "Cannot summarize an empty diff.");
+    }
+    if (truncated) {
+      return yield* gitManagerError(
+        "summarizeDiff",
+        "Cannot summarize a truncated diff. Narrow the changes and try again.",
+      );
     }
 
     const generated = yield* textGeneration.generateDiffSummary({
@@ -1454,11 +1514,12 @@ export const makeGitManager = Effect.gen(function* () {
   });
 
   const resolvePullRequest: GitManagerShape["resolvePullRequest"] = Effect.fnUntraced(
-    function* (input) {
+    function* (input, options) {
       const pullRequest = yield* gitHubCli
         .getPullRequest({
           cwd: input.cwd,
           reference: normalizePullRequestReference(input.reference),
+          background: options?.background ?? false,
         })
         .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
@@ -1528,28 +1589,6 @@ export const makeGitManager = Effect.gen(function* () {
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
 
-      if (input.mode === "local") {
-        yield* gitHubCli.checkoutPullRequest({
-          cwd: input.cwd,
-          reference: normalizedReference,
-          force: true,
-        });
-        const details = yield* gitCore.statusDetails(input.cwd);
-        yield* configurePullRequestHeadUpstream(
-          input.cwd,
-          {
-            ...pullRequest,
-            ...toPullRequestHeadRemoteInfo(pullRequestSummary),
-          },
-          details.branch ?? pullRequest.headBranch,
-        );
-        return {
-          pullRequest,
-          branch: details.branch ?? pullRequest.headBranch,
-          worktreePath: null,
-        };
-      }
-
       const ensureExistingWorktreeUpstream = (worktreePath: string) =>
         Effect.gen(function* () {
           const details = yield* gitCore.statusDetails(worktreePath);
@@ -1571,28 +1610,47 @@ export const makeGitManager = Effect.gen(function* () {
         resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
 
       const findLocalHeadBranch = (cwd: string) =>
-        gitCore.listBranches({ cwd }).pipe(
-          Effect.map((result) => {
-            const localBranch = result.branches.find(
-              (branch) => !branch.isRemote && branch.name === localPullRequestBranch,
-            );
-            if (localBranch) {
-              return localBranch;
+        Effect.gen(function* () {
+          const result = yield* gitCore.listBranches({ cwd });
+          const localBranch = result.branches.find(
+            (branch) => !branch.isRemote && branch.name === localPullRequestBranch,
+          );
+          if (localBranch) {
+            return localBranch;
+          }
+          if (localPullRequestBranch === pullRequest.headBranch) {
+            return null;
+          }
+          const candidate =
+            result.branches.find(
+              (branch) =>
+                !branch.isRemote &&
+                branch.name === pullRequest.headBranch &&
+                branch.worktreePath !== null &&
+                canonicalizeExistingPath(branch.worktreePath) !== rootWorktreePath,
+            ) ?? null;
+          if (!candidate) return null;
+          const remoteName = yield* readConfigValueNullable(cwd, `branch.${candidate.name}.remote`);
+          const remote = yield* resolveRemoteRepositoryContext(cwd, remoteName);
+          const expectedRepository = normalizeOptionalRepositoryNameWithOwner(
+            resolveHeadRepositoryNameWithOwner(pullRequestWithRemoteInfo),
+          );
+          const actualRepository = normalizeOptionalRepositoryNameWithOwner(
+            remote.repositoryNameWithOwner,
+          );
+          // A shared branch name does not identify a fork. Preserve unset-upstream
+          // recovery, but never retarget a worktree that belongs to a known other fork.
+          if (expectedRepository && actualRepository && expectedRepository !== actualRepository) {
+            if (input.mode === "local") {
+              return yield* gitManagerError(
+                "preparePullRequestThread",
+                "This branch is checked out in a worktree for a different GitHub repository. Use Worktree to prepare this pull request separately.",
+              );
             }
-            if (localPullRequestBranch === pullRequest.headBranch) {
-              return null;
-            }
-            return (
-              result.branches.find(
-                (branch) =>
-                  !branch.isRemote &&
-                  branch.name === pullRequest.headBranch &&
-                  branch.worktreePath !== null &&
-                  canonicalizeExistingPath(branch.worktreePath) !== rootWorktreePath,
-              ) ?? null
-            );
-          }),
-        );
+            return null;
+          }
+          return candidate;
+        });
 
       const existingBranchBeforeFetch = yield* findLocalHeadBranch(input.cwd);
       const existingBranchBeforeFetchPath = existingBranchBeforeFetch?.worktreePath
@@ -1605,10 +1663,30 @@ export const makeGitManager = Effect.gen(function* () {
         yield* ensureExistingWorktreeUpstream(existingBranchBeforeFetch.worktreePath);
         return {
           pullRequest,
-          branch: localPullRequestBranch,
+          branch: existingBranchBeforeFetch.name,
           worktreePath: existingBranchBeforeFetch.worktreePath,
         };
       }
+
+      if (input.mode === "local") {
+        yield* gitHubCli.checkoutPullRequest({
+          cwd: input.cwd,
+          reference: normalizedReference,
+          force: true,
+        });
+        const details = yield* gitCore.statusDetails(input.cwd);
+        yield* configurePullRequestHeadUpstream(
+          input.cwd,
+          pullRequestWithRemoteInfo,
+          details.branch ?? pullRequest.headBranch,
+        );
+        return {
+          pullRequest,
+          branch: details.branch ?? pullRequest.headBranch,
+          worktreePath: null,
+        };
+      }
+
       if (existingBranchBeforeFetchPath === rootWorktreePath) {
         return yield* gitManagerError(
           "preparePullRequestThread",
@@ -2593,8 +2671,9 @@ The local stash entry was kept for recovery.`,
       const progress = createProgressEmitter(input, options);
       let currentPhase: GitActionProgressPhase | null = null;
 
+      const diagnosticStartedAt = Date.now();
       const runAction = Effect.gen(function* () {
-        const initialStatus = yield* gitCore.statusDetails(input.cwd);
+        const initialStatus = yield* gitCore.readActionStatus(input.cwd);
         const textGenerationParams: GitTextGenerationParams = {
           textGenerationModel: input.textGenerationModel,
           textGenerationModelSelection: input.textGenerationModelSelection,
@@ -2659,7 +2738,8 @@ The local stash entry was kept for recovery.`,
             : null;
 
         let branchStep: { status: "created" | "skipped_not_requested"; name?: string };
-        let commitMessageForStep = input.commitMessage;
+        let commitMessageForStep =
+          input.commitMessage?.trim() || (wantsPr ? input.prTitle?.trim() : undefined);
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
         if (input.featureBranch) {
@@ -2672,7 +2752,7 @@ The local stash entry was kept for recovery.`,
           const result = yield* runFeatureBranchStep(
             input.cwd,
             initialStatus.branch,
-            input.commitMessage,
+            commitMessageForStep,
             input.filePaths,
             textGenerationParams,
             {
@@ -2759,6 +2839,15 @@ The local stash entry was kept for recovery.`,
       });
 
       return yield* runAction.pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() =>
+            reportBetaOperationalIssue({
+              code: `git.${currentPhase ?? "request"}.failed`,
+              reason: diagnosticIssueReason(error.message),
+              durationMs: Date.now() - diagnosticStartedAt,
+            }),
+          ),
+        ),
         Effect.catch((error) =>
           progress
             .emit({
@@ -2777,6 +2866,8 @@ The local stash entry was kept for recovery.`,
     pullRequestForBranch,
     readWorkingTreeDiff,
     readWorkingTreeDiffStats,
+    blameLine,
+    readFileAtRev,
     summarizeDiff,
     resolvePullRequest,
     pullRequestSnapshot,

@@ -5,9 +5,13 @@
 
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import type { LastThreadRoute } from "../chatRouteRestore";
-import type { ActivityGroupMode } from "./SidebarActivityView.logic";
+import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 const SIDEBAR_UI_STATE_STORAGE_KEY = "synara:sidebar-ui:v1";
+
+// Same-tab readers (the Inbox) hear the sidebar's own writes; "storage" events only
+// reach other tabs.
+const sameTabWriteListeners = new Set<() => void>();
 
 export type SidebarUiState = {
   chatSectionExpanded: boolean;
@@ -17,7 +21,9 @@ export type SidebarUiState = {
   lastThreadRoute: LastThreadRoute | null;
   /** Swaps the Projects surface for the flat task-feed Activity view. */
   activityViewEnabled: boolean;
-  /** Keeps the Activity feed grouped the same way across remounts and reloads. */
+  /** Project (or merged chats) the Activity feed is scoped to; null shows every project. */
+  activityScope: ActivityScopeSelection;
+  /** Keeps Activity grouping across view remounts and reloads. */
   activityGroupMode: ActivityGroupMode;
 };
 
@@ -28,6 +34,7 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   dismissedThreadStatusKeyByThreadId: {},
   lastThreadRoute: null,
   activityViewEnabled: false,
+  activityScope: null,
   activityGroupMode: "time",
 };
 
@@ -44,6 +51,10 @@ function sanitizeThreadListExtraPages(value: unknown): number {
     return 0;
   }
   return Math.min(Math.max(0, Math.floor(value)), MAX_PERSISTED_THREAD_LIST_EXTRA_PAGES);
+}
+
+function sanitizeActivityScope(value: unknown): ActivityScopeSelection {
+  return typeof value === "string" && value.length > 0 ? (value as ActivityScopeSelection) : null;
 }
 
 function sanitizeProjectThreadListExtraPagesByCwd(
@@ -89,6 +100,7 @@ export function readSidebarUiState(): SidebarUiState {
         splitViewId?: unknown;
       } | null;
       activityViewEnabled?: boolean;
+      activityScope?: unknown;
       activityGroupMode?: unknown;
     };
 
@@ -138,6 +150,7 @@ export function readSidebarUiState(): SidebarUiState {
       ),
       lastThreadRoute,
       activityViewEnabled: parsed.activityViewEnabled === true,
+      activityScope: sanitizeActivityScope(parsed.activityScope),
       activityGroupMode: parsed.activityGroupMode === "project" ? "project" : "time",
     };
   } catch {
@@ -161,6 +174,46 @@ export function subscribeSidebarUiState(listener: (state: SidebarUiState) => voi
   };
   window.addEventListener("storage", handleStorage);
   return () => window.removeEventListener("storage", handleStorage);
+}
+
+let snapshotRaw: string | null | undefined;
+let snapshot: SidebarUiState = DEFAULT_SIDEBAR_UI_STATE;
+
+/**
+ * The persisted state, parsed again only when the stored text changed, so it keeps one
+ * reference between writes (as useSyncExternalStore requires).
+ */
+export function readSidebarUiStateSnapshot(): SidebarUiState {
+  if (typeof window === "undefined") {
+    return DEFAULT_SIDEBAR_UI_STATE;
+  }
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(SIDEBAR_UI_STATE_STORAGE_KEY);
+  } catch {
+    raw = null;
+  }
+  if (raw !== snapshotRaw) {
+    snapshotRaw = raw;
+    snapshot = readSidebarUiState();
+  }
+  return snapshot;
+}
+
+/** Notifies on every write of the sidebar UI state, from this tab or another. */
+export function subscribeSidebarUiStateWrites(listener: () => void): () => void {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === SIDEBAR_UI_STATE_STORAGE_KEY) listener();
+  };
+  sameTabWriteListeners.add(listener);
+  window.addEventListener("storage", handleStorage);
+  return () => {
+    sameTabWriteListeners.delete(listener);
+    window.removeEventListener("storage", handleStorage);
+  };
 }
 
 export function persistSidebarUiState(input: SidebarUiState): void {
@@ -191,10 +244,13 @@ export function persistSidebarUiState(input: SidebarUiState): void {
             }
           : null,
         activityViewEnabled: input.activityViewEnabled,
-        activityGroupMode: input.activityGroupMode,
+        activityScope: sanitizeActivityScope(input.activityScope),
+        activityGroupMode: input.activityGroupMode === "project" ? "project" : "time",
       }),
     );
   } catch {
     // Ignore storage errors so sidebar rendering keeps working when persistence is unavailable.
+    return;
   }
+  for (const listener of sameTabWriteListeners) listener();
 }

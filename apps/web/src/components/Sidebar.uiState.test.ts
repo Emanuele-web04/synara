@@ -4,13 +4,18 @@ import {
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
+  readSidebarUiStateSnapshot,
+  subscribeSidebarUiState,
+  subscribeSidebarUiStateWrites,
 } from "./Sidebar.uiState";
+import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 describe("Sidebar.uiState", () => {
   let storage = new Map<string, string>();
 
   beforeEach(() => {
     storage = new Map<string, string>();
+    const events = new EventTarget();
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
@@ -26,12 +31,39 @@ describe("Sidebar.uiState", () => {
             storage.set(key, value);
           },
         },
+        addEventListener: events.addEventListener.bind(events),
+        removeEventListener: events.removeEventListener.bind(events),
+        dispatchEvent: events.dispatchEvent.bind(events),
       },
     });
   });
 
   afterEach(() => {
     Reflect.deleteProperty(globalThis, "window");
+  });
+
+  it("tells same-tab readers about writes and keeps one snapshot between them", () => {
+    let writes = 0;
+    const unsubscribe = subscribeSidebarUiStateWrites(() => {
+      writes += 1;
+    });
+    const before = readSidebarUiStateSnapshot();
+    expect(readSidebarUiStateSnapshot()).toBe(before);
+
+    persistSidebarUiState({
+      ...readSidebarUiState(),
+      dismissedThreadStatusKeyByThreadId: { "thread-1": "Pending Approval:turn-1" },
+      activityGroupMode: "project",
+    });
+
+    expect(writes).toBe(1);
+    expect(readSidebarUiStateSnapshot().activityGroupMode).toBe("project");
+    expect(readSidebarUiStateSnapshot().dismissedThreadStatusKeyByThreadId).toEqual({
+      "thread-1": "Pending Approval:turn-1",
+    });
+    unsubscribe();
+    persistSidebarUiState(readSidebarUiState());
+    expect(writes).toBe(1);
   });
 
   it("defaults collapsed sidebar UI state with no thread list paging", () => {
@@ -42,6 +74,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      activityScope: null,
       activityGroupMode: "time",
     });
   });
@@ -63,6 +96,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      activityScope: "project-123" as ActivityScopeSelection,
       activityGroupMode: "project",
     });
 
@@ -82,6 +116,7 @@ describe("Sidebar.uiState", () => {
         splitViewId: "split-456",
       },
       activityViewEnabled: true,
+      activityScope: "project-123",
       activityGroupMode: "project",
     });
   });
@@ -108,6 +143,7 @@ describe("Sidebar.uiState", () => {
           threadId: "thread-123",
           splitViewId: 42,
         },
+        activityScope: 42,
         activityGroupMode: "invalid",
       }),
     );
@@ -125,8 +161,34 @@ describe("Sidebar.uiState", () => {
         threadId: "thread-123",
       },
       activityViewEnabled: false,
+      activityScope: null,
       activityGroupMode: "time",
     });
+  });
+
+  it("adopts complete external sidebar state and stops observing after unsubscribe", () => {
+    const changes: Array<ReturnType<typeof readSidebarUiState>> = [];
+    const unsubscribe = subscribeSidebarUiState((state) => changes.push(state));
+    const dispatch = (key: string) => {
+      const event = new Event("storage");
+      Object.defineProperty(event, "key", { value: key });
+      window.dispatchEvent(event);
+    };
+    const next = {
+      ...readSidebarUiState(),
+      activityViewEnabled: true,
+      activityScope: "project-123" as ActivityScopeSelection,
+      activityGroupMode: "project" as const,
+      chatThreadListExtraPages: 3,
+    };
+    window.localStorage.setItem("synara:sidebar-ui:v1", JSON.stringify(next));
+    dispatch("unrelated");
+    expect(changes).toEqual([]);
+    dispatch("synara:sidebar-ui:v1");
+    expect(changes).toEqual([next]);
+    unsubscribe();
+    dispatch("synara:sidebar-ui:v1");
+    expect(changes).toEqual([next]);
   });
 
   it("migrates legacy all-or-nothing show-more state to one extra page", () => {
@@ -166,6 +228,7 @@ describe("Sidebar.uiState", () => {
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
       activityViewEnabled: false,
+      activityScope: null,
       activityGroupMode: "time",
     });
   });

@@ -83,7 +83,7 @@ function readyProviderSession(): ProviderSession {
 }
 
 describe("ProviderRuntimeReconcilerLive", () => {
-  it("retries a terminal-session turn repair without reopening the session", async () => {
+  it("keeps one activity identity while a stale-turn repair is retried and refined", async () => {
     const commands: OrchestrationCommand[] = [];
     const reconcileSettledOpenTurns = vi.fn();
     let bindingStatus: "stopped" | "error" = "stopped";
@@ -104,6 +104,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
       listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
       getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
       getThreadShellById: () => Effect.succeed(Option.some(staleShellSnapshot().threads[0]!)),
+      getThreadShellsByIds: () => Effect.succeed([staleShellSnapshot().threads[0]!]),
       getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {
@@ -112,6 +113,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
           {
             threadId: THREAD_ID,
             provider: "codex" as const,
+            providerInstanceId: "codex" as const,
             status: bindingStatus,
             runtimePayload: { activeTurnId: null },
           },
@@ -217,8 +219,11 @@ describe("ProviderRuntimeReconcilerLive", () => {
         command.type === "thread.session.set",
     );
     expect(activityCommands[0]?.activity.id).toBe(activityCommands[1]?.activity.id);
+    expect(activityCommands[0]?.activity.id).toBe(activityCommands[2]?.activity.id);
     expect(activityCommands[0]?.commandId).not.toBe(activityCommands[1]?.commandId);
+    expect(activityCommands[1]?.commandId).not.toBe(activityCommands[2]?.commandId);
     expect(sessionCommands[0]?.commandId).not.toBe(sessionCommands[1]?.commandId);
+    expect(sessionCommands[1]?.commandId).not.toBe(sessionCommands[2]?.commandId);
     expect(reconcileSettledOpenTurns).toHaveBeenCalledTimes(3);
   });
 });

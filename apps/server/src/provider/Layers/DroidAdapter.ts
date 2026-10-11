@@ -1,3 +1,4 @@
+import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 /**
  * DroidAdapterLive - Factory Droid CLI (`droid exec --output-format acp`) via ACP.
  *
@@ -79,6 +80,7 @@ import {
   acceptAcpPlanUpdate,
   clearAcpActiveTurn,
   finalizeAcpActiveTurnCost,
+  forkAcpAdapterTurnIdleWatchdog,
   makeAcpThreadLock,
   recordAcpSessionCost,
   resolveAcpSessionCwd,
@@ -87,6 +89,7 @@ import {
   scopeAcpToolCallStateForTurn,
   settleAcpPendingApprovalsAsCancelled,
   settleAcpPendingUserInputsAsEmptyAnswers,
+  waitForAcpQueuedTurnEventsDrained,
   withAcpPlanModePrompt,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import { forkViaAcpRuntime } from "../acp/acpFork.ts";
@@ -104,7 +107,7 @@ import {
 import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpDebugLoggers, makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
-  forkAcpTurnIdleWatchdog,
+  isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
@@ -114,8 +117,8 @@ import {
   makeDroidAcpRuntime,
   type DroidAcpRuntimeSettings,
 } from "../acp/DroidAcpSupport.ts";
-import { makeDroidSessionTeardownGate } from "../acp/DroidSessionTeardownGate.ts";
-import { cancelDroidTurnAndWait } from "../acp/DroidTurnCancellation.ts";
+import { makeSessionTeardownGate } from "../acp/SessionTeardownGate.ts";
+import { cancelTurnAndWait } from "../acp/TurnCancellation.ts";
 import {
   elicitationQuestionsFromRequest,
   elicitationResponseFromAnswers,
@@ -222,6 +225,7 @@ interface PendingUserInput {
 
 interface DroidSessionContext {
   harnessPolicyDelivered?: boolean;
+  readonly enableComputerControl?: boolean;
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   readonly threadId: ThreadId;
   readonly lifecycleGeneration?: string;
@@ -394,6 +398,27 @@ function setDroidDiscoveryCacheEntry<T>(cache: Map<string, T>, key: string, valu
   }
 }
 
+function droidDiscoveryCacheKey(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly instanceId?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+}): string {
+  const environment = input.environment
+    ? Object.entries(input.environment)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([name, value]) => {
+          let hash = 0x811c9dc5;
+          for (let index = 0; index < value.length; index += 1) {
+            hash ^= value.charCodeAt(index);
+            hash = Math.imul(hash, 0x01000193);
+          }
+          return [name, (hash >>> 0).toString(36)] as const;
+        })
+    : null;
+  return JSON.stringify([input.instanceId ?? null, input.binaryPath, input.cwd, environment]);
+}
+
 export function makeDroidAdapter(
   droidSettings: DroidAcpRuntimeSettings,
   options?: DroidAdapterLiveOptions,
@@ -414,7 +439,7 @@ export function makeDroidAdapter(
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
     const sessions = new Map<ThreadId, DroidSessionContext>();
-    const sessionTeardownGate = makeDroidSessionTeardownGate();
+    const sessionTeardownGate = makeSessionTeardownGate();
     const modelDiscoveryCache = new Map<
       string,
       { readonly expiresAt: number; readonly result: ProviderListModelsResult }
@@ -445,6 +470,7 @@ export function makeDroidAdapter(
     // Discovery sessions are disposable and never enter the live session directory.
     const makeDroidDiscoveryRuntime = (input: {
       readonly binaryPath?: string;
+      readonly environment?: Readonly<Record<string, string>>;
       readonly cwd: string;
       readonly clientName: string;
     }) =>
@@ -452,6 +478,8 @@ export function makeDroidAdapter(
         droidSettings: {
           ...(droidSettings.binaryPath ? { binaryPath: droidSettings.binaryPath } : {}),
           ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+          ...(droidSettings.environment ? { environment: droidSettings.environment } : {}),
+          ...(input.environment ? { environment: input.environment } : {}),
         },
         childProcessSpawner,
         cwd: input.cwd,
@@ -654,7 +682,7 @@ export function makeDroidAdapter(
       promptFiber: Fiber.Fiber<void, never> | undefined,
     ) =>
       Effect.gen(function* () {
-        const result = yield* cancelDroidTurnAndWait({
+        const result = yield* cancelTurnAndWait({
           cancel: ctx.acp.cancel,
           promptFiber,
           graceMs: DROID_CANCEL_GRACE_MS,
@@ -719,24 +747,12 @@ export function makeDroidAdapter(
         return ctx.activeTurnId;
       });
 
-    // Holds the active-turn window open until session/update events that were
-    // already enqueued when the prompt response resolved have been fully
-    // handled by the notification consumer, so they settle with their turn
-    // attribution (and recorded failed-tool detail) intact. Snapshotting the
-    // runtime's enqueued count and waiting for the adapter's processed count
-    // to catch up is immune to stream chunk buffering and in-flight handlers,
-    // unlike a queue-size probe. Returns immediately when the consumer kept
-    // up; bounded so a chatty stream cannot stall settlement past the cap.
     const waitForDroidQueuedTurnEventsDrained = (ctx: DroidSessionContext) =>
-      Effect.gen(function* () {
-        const target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
-        const startedAt = Date.now();
-        while (
-          ctx.sessionUpdatesProcessed < target &&
-          Date.now() - startedAt < DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS
-        ) {
-          yield* Effect.sleep(DROID_TURN_SETTLE_DRAIN_POLL_MS);
-        }
+      waitForAcpQueuedTurnEventsDrained({
+        sessionUpdatesEnqueuedCount: ctx.acp.sessionUpdatesEnqueuedCount,
+        sessionUpdatesProcessed: () => ctx.sessionUpdatesProcessed,
+        maxWaitMs: DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS,
+        pollMs: DROID_TURN_SETTLE_DRAIN_POLL_MS,
       });
 
     const startSession: DroidAdapterShape["startSession"] = (input) =>
@@ -775,6 +791,7 @@ export function makeDroidAdapter(
             agentGatewayCredentials,
             input.threadId,
             PROVIDER,
+            input,
           );
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
@@ -808,6 +825,12 @@ export function makeDroidAdapter(
               : {}),
             ...(providerDroidOptions?.binaryPath !== undefined
               ? { binaryPath: providerDroidOptions.binaryPath }
+              : {}),
+            ...(droidSettings.environment !== undefined
+              ? { environment: droidSettings.environment }
+              : {}),
+            ...(providerDroidOptions?.environment !== undefined
+              ? { environment: providerDroidOptions.environment }
               : {}),
             ...(droidModelSelection?.model ? { model: droidModelSelection.model } : {}),
             ...(droidModelSelection?.options?.reasoningEffort
@@ -860,6 +883,9 @@ export function makeDroidAdapter(
                   runtimeMode: input.runtimeMode,
                   interactionMode: ctx?.activeInteractionMode,
                   options: params.options,
+                  computerControlEnabled: ctx?.enableComputerControl === true,
+                  activeTurn: ctx?.activeTurnId !== undefined,
+                  toolCall: params.toolCall,
                 });
                 if (policyOutcome !== undefined) {
                   if (policyOutcome.outcome === "selected") {
@@ -946,7 +972,9 @@ export function makeDroidAdapter(
                 if (!isFormElicitationRequest(params)) {
                   return { action: "decline" as const };
                 }
-                const questions = elicitationQuestionsFromRequest(params);
+                const questions = elicitationQuestionsFromRequest(params, {
+                  otherAnswerConvention: "droid",
+                });
                 if (questions.length === 0) {
                   return { action: "decline" as const };
                 }
@@ -979,7 +1007,9 @@ export function makeDroidAdapter(
                   requestId: runtimeRequestId,
                   payload: { answers: resolved },
                 });
-                return elicitationResponseFromAnswers(params, resolved);
+                return elicitationResponseFromAnswers(params, resolved, {
+                  otherAnswerConvention: "droid",
+                });
               }),
             );
             const startedOption = yield* acp
@@ -1011,6 +1041,7 @@ export function makeDroidAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -1025,6 +1056,7 @@ export function makeDroidAdapter(
           };
 
           ctx = {
+            enableComputerControl: input.enableComputerControl === true,
             threadId: input.threadId,
             ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             ...(input.lifecycleGeneration !== undefined
@@ -1061,9 +1093,9 @@ export function makeDroidAdapter(
           const notificationFiber = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
-                // Any inbound ACP event proves the child is alive and making
-                // progress; reset the idle-progress watchdog clock.
-                ctx.lastTurnActivityAt = Date.now();
+                if (isAcpTurnProgressEventTag(event._tag)) {
+                  ctx.lastTurnActivityAt = Date.now();
+                }
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
@@ -1731,20 +1763,15 @@ export function makeDroidAdapter(
         // Backstop the forked prompt: if the child goes silent, fail the turn
         // instead of leaving it "Working" forever. Self-terminates when the
         // turn settles; pauses while a human approval is pending.
-        yield* forkAcpTurnIdleWatchdog({
+        yield* forkAcpAdapterTurnIdleWatchdog({
+          context: ctx,
+          turnId,
           idleTimeoutMs: DROID_TURN_IDLE_TIMEOUT_MS,
           currentIdleTimeoutMs: () =>
             ctx.activeNestedTaskToolCallIds.size > 0
               ? DROID_NESTED_TASK_IDLE_TIMEOUT_MS
               : DROID_TURN_IDLE_TIMEOUT_MS,
           checkIntervalMs: DROID_TURN_WATCHDOG_INTERVAL_MS,
-          scope: ctx.scope,
-          isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
-          isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
-          lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
-          touchActivity: () => {
-            ctx.lastTurnActivityAt = Date.now();
-          },
           onIdleTimeout: (idleMs) => failDroidTurnAsTimedOut(ctx, turnId, idleMs),
         });
 
@@ -1835,7 +1862,7 @@ export function makeDroidAdapter(
     const readThread: DroidAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        return { threadId, turns: ctx.turns };
+        return { threadId, turns: snapshotProviderTurns(ctx.turns) };
       });
 
     const readExternalThread: NonNullable<DroidAdapterShape["readExternalThread"]> = (input) =>
@@ -1938,6 +1965,10 @@ export function makeDroidAdapter(
                   ...(input.providerOptions?.droid?.binaryPath
                     ? { binaryPath: input.providerOptions.droid.binaryPath }
                     : {}),
+                  ...(droidSettings.environment ? { environment: droidSettings.environment } : {}),
+                  ...(input.providerOptions?.droid?.environment
+                    ? { environment: input.providerOptions.droid.environment }
+                    : {}),
                 },
                 childProcessSpawner,
                 cwd: sourceCwd,
@@ -2031,13 +2062,19 @@ export function makeDroidAdapter(
               issue: "cwd is required and no server cwd fallback is available.",
             });
           }
-          const cacheKey = `${input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid"}\u0000${cwd}`;
+          const cacheKey = droidDiscoveryCacheKey({
+            binaryPath: input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid",
+            cwd,
+            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
+          });
           const cached = modelDiscoveryCache.get(cacheKey);
           if (cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
           }
           const runtime = yield* makeDroidDiscoveryRuntime({
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
             cwd,
             clientName: "Synara Model Discovery",
           });
@@ -2152,13 +2189,19 @@ export function makeDroidAdapter(
               issue: "cwd is required and no server cwd fallback is available.",
             });
           }
-          const cacheKey = `${input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid"}\u0000${cwd}`;
+          const cacheKey = droidDiscoveryCacheKey({
+            binaryPath: input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid",
+            cwd,
+            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
+          });
           const cached = commandDiscoveryCache.get(cacheKey);
           if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
           }
           const runtime = yield* makeDroidDiscoveryRuntime({
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
             cwd,
             clientName: "Synara Command Discovery",
           });

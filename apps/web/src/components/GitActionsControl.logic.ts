@@ -1,14 +1,39 @@
 import type {
+  GitActionProgressPhase,
   GitRunStackedActionResult,
   GitStackedAction,
   GitStatusResult,
+  ThreadId,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch, resolveUniqueSynaraBranchName } from "@synara/shared/git";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
+export function buildGitActionFailureToast(input: {
+  message: string;
+  phase: GitActionProgressPhase | null;
+  threadId: ThreadId | null;
+}) {
+  const titles: Record<GitActionProgressPhase, string> = {
+    branch: "Branch creation failed",
+    commit: "Commit failed",
+    push: "Push failed",
+    pr: "PR creation failed",
+  };
+  return {
+    type: "error" as const,
+    title: input.phase ? titles[input.phase] : "Git action failed",
+    description: input.message,
+    timeout: 0,
+    data: {
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      copyText: input.message,
+    },
+  };
+}
+
 /** Every glyph a git affordance can render — see `gitActionGlyphs.tsx` for the map. */
-export type GitGlyphName = GitActionIconName | "sync" | "branch";
+export type GitGlyphName = GitActionIconName | "sync" | "branch" | "view_pr";
 
 export type GitDialogAction = "commit" | "push" | "commit_push" | "create_pr";
 
@@ -617,7 +642,7 @@ export function resolveCommitDialogActions(input: {
     {
       id: "create_pr",
       label: prExecution.kind === "open_pr" ? "View PR" : "Create PR",
-      icon: "pr",
+      icon: prExecution.kind === "open_pr" ? "view_pr" : "pr",
       action: "create_pr",
       featureBranch: false,
       disabled: prExecution.kind === "unavailable",
@@ -870,22 +895,6 @@ export function resolvePromotedPullPresentation(input: {
 }): PromotedPullPresentation | null {
   if (!shouldPromotePullAction(input)) return null;
   return { label: input.isPullRunning ? "Pulling..." : "Pull" };
-}
-
-/** Environment panel should promote Pull while it is available or already running. */
-export function shouldShowEnvironmentPanelPullRow(input: {
-  quickAction: GitQuickAction;
-  isPullRunning: boolean;
-}): boolean {
-  return shouldPromotePullAction(input);
-}
-
-/** Header Environment mode should surface Pull next to Hand off / Add action. */
-export function shouldShowHeaderPullAction(input: {
-  quickAction: GitQuickAction;
-  isPullRunning: boolean;
-}): boolean {
-  return shouldPromotePullAction(input);
 }
 
 export function shouldOfferCreateBranchPrompt(input: {

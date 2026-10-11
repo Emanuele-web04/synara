@@ -77,7 +77,7 @@ export function BrowserAnnotationStrip({
             className="w-80 max-w-[calc(100vw-2rem)] rounded-xl shadow-lg/10"
           >
             <div className="min-w-0 py-1">
-              <p className="px-2 pb-1.5 text-[11px] font-medium text-muted-foreground">
+              <p className="px-2 pb-1.5 text-ui-sm font-medium text-muted-foreground">
                 {hiddenAnnotations.length} more {pluralize(hiddenAnnotations.length, "annotation")}
               </p>
               <div

@@ -249,7 +249,7 @@ export function automationApprovalGaps(input: {
 }
 
 // Approval of an enabled legacy fast loop must also satisfy the server's hard iteration cap.
-export function maxIterationsForFastIntervalApproval(input: {
+function maxIterationsForFastIntervalApproval(input: {
   readonly schedule: AutomationSchedule;
   readonly enabled: boolean;
   readonly maxIterations: number | null;
@@ -282,16 +282,6 @@ export function acknowledgedRiskIdsForDraft(
     }
   }
   return risks;
-}
-
-export function warningIdsForAcknowledgedRisks(
-  risks: readonly AutomationAcknowledgedRiskId[],
-): ReadonlySet<AutomationDraftWarningId> {
-  const ids = new Set<AutomationDraftWarningId>();
-  for (const risk of risks) {
-    ids.add(risk === "fast-interval" ? "fast-recurring-interval" : risk);
-  }
-  return ids;
 }
 
 export function updateAutomationDraftWarningAcknowledgement(

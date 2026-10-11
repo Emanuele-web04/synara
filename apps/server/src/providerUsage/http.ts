@@ -22,6 +22,7 @@ export async function fetchJson(input: {
   /** How to encode `body`: JSON (default) or application/x-www-form-urlencoded (OAuth endpoints). */
   bodyFormat?: "json" | "form";
   timeoutMs?: number;
+  allowLoopbackHttp?: boolean;
 }): Promise<FetchJsonResult> {
   const encodedBody =
     input.body === undefined
@@ -40,6 +41,10 @@ export async function fetchJson(input: {
       maxConcurrent: 4,
       maxQueued: 8,
       requirePublicAddress: true,
+      // Fake-ip DNS proxies resolve the hard-coded provider origins these calls
+      // are pinned to into the RFC 2544 benchmark range.
+      allowBenchmarkAddressRange: true,
+      ...(input.allowLoopbackHttp === true ? { allowLoopbackHttp: true } : {}),
     },
     url: input.url,
     method: input.method ?? "GET",

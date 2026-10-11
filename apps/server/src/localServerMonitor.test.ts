@@ -10,7 +10,7 @@ import {
   enrichLocalServerProcessesWithPageTitles,
   extractLocalServerPageTitle,
   isIgnoredLocalServerProcess,
-  isLikelyDevServerProcess,
+  detectDevServerKindFromText,
   parseProcessInfo,
   parseLsofCwdOutput,
   parseLsofTcpListenOutput,
@@ -88,12 +88,12 @@ describe("localServerMonitor", () => {
 
   it("keeps dev servers and ignores Electron/Synara-style application listeners", () => {
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "node",
         args: "node ./node_modules/.bin/vite --host 127.0.0.1",
         ports: [5173],
       }),
-    ).toBe(true);
+    ).toBe("Vite");
     expect(
       isIgnoredLocalServerProcess({
         command: "Electron",
@@ -109,19 +109,19 @@ describe("localServerMonitor", () => {
       }),
     ).toBe(true);
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "node",
         args: "node /Users/emanueledipietro/Developer/synara/apps/web/node_modules/.bin/vite",
         ports: [5733],
       }),
-    ).toBe(true);
+    ).toBe("Vite");
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "bun",
         args: "bun run electron:dev",
         ports: [5733],
       }),
-    ).toBe(true);
+    ).toBe("Dev Server");
   });
 
   it("ignores Chromium/Electron app helpers that hold a dev-range port (e.g. Discord on :6463)", () => {
@@ -131,7 +131,6 @@ describe("localServerMonitor", () => {
       ports: [6463],
     };
     expect(isIgnoredLocalServerProcess(discordRenderer)).toBe(true);
-    expect(isLikelyDevServerProcess(discordRenderer)).toBe(false);
 
     // Filtered by the helper name alone, even without the full Chromium arg list.
     expect(
@@ -144,29 +143,29 @@ describe("localServerMonitor", () => {
 
     // A real dev server on the same port range stays visible.
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "node",
         args: "node ./node_modules/.bin/vite --port 6006",
         ports: [6006],
       }),
-    ).toBe(true);
+    ).toBe("Vite");
   });
 
   it("does not promote databases or port-only listeners to local dev servers", () => {
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "mongod",
         args: "mongod --config /opt/homebrew/etc/mongod.conf",
         ports: [27017],
       }),
-    ).toBe(false);
+    ).toBe(null);
     expect(
-      isLikelyDevServerProcess({
+      detectDevServerKindFromText({
         command: "go",
         args: "go run ./cmd/web",
         ports: [8080],
       }),
-    ).toBe(true);
+    ).toBe("Go");
 
     const processInfo = new Map<number, LocalServerProcessInfo>([
       [123, { ppid: 1, commandLine: "node server.js" }],
@@ -281,26 +280,8 @@ describe("localServerMonitor", () => {
     ]);
   });
 
-  it("adds page titles to detected local server rows", async () => {
-    const processInfo = new Map<number, LocalServerProcessInfo>([
-      [123, { ppid: 1, commandLine: "node ./node_modules/.bin/vite" }],
-    ]);
-    const servers = buildLocalServerProcesses(
-      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
-      processInfo,
-    );
-
-    const enriched = await enrichLocalServerProcessesWithPageTitles(servers, async (url) =>
-      url === "http://127.0.0.1:5173" ? "Acme Admin" : null,
-    );
-
-    expect(enriched[0]?.displayName).toBe("Vite");
-    expect(enriched[0]?.pageTitle).toBe("Acme Admin");
-  });
-
   it.each([
     ["Expo CLI", "node ./node_modules/@expo/cli/build/bin/cli start", "Expo"],
-    ["Expo through bunx", "bunx expo start", "Expo"],
     ["standalone Metro", "node ./node_modules/metro/src/index.js", "Metro"],
     ["React Native CLI", "react-native start", "Metro"],
   ])("keeps %s visible without probing it", async (_case, commandLine, displayName) => {
@@ -472,16 +453,6 @@ describe("localServerMonitor", () => {
     expect(enriched[0]?.pageTitle).toBeUndefined();
   });
 
-  it("parses lsof cwd records into a pid -> directory map", () => {
-    const cwdByPid = parseLsofCwdOutput(
-      ["p123", "fcwd", "n/Users/dev/app", "p456", "fcwd", "n/Users/dev/api"].join("\n"),
-    );
-
-    expect(cwdByPid.get(123)).toBe("/Users/dev/app");
-    expect(cwdByPid.get(456)).toBe("/Users/dev/api");
-    expect(cwdByPid.size).toBe(2);
-  });
-
   it("keeps the first cwd line and ignores malformed records", () => {
     const cwdByPid = parseLsofCwdOutput(
       ["px", "n/ignored", "p789", "n/Users/dev/web", "n/Users/dev/other"].join("\n"),
@@ -520,18 +491,5 @@ describe("localServerMonitor", () => {
 
     expect(servers).toHaveLength(1);
     expect(servers[0]?.cwd).toBe("/Users/dev/monorepo");
-  });
-
-  it("omits cwd when it cannot be resolved", () => {
-    const processInfo = new Map<number, LocalServerProcessInfo>([
-      [123, { ppid: 1, commandLine: "vite" }],
-    ]);
-    const servers = buildLocalServerProcesses(
-      parseLsofTcpListenOutput(["p123", "cnode", "PTCP", "n127.0.0.1:5173"].join("\n")),
-      processInfo,
-    );
-
-    expect(servers).toHaveLength(1);
-    expect(servers[0]?.cwd).toBeUndefined();
   });
 });

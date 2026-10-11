@@ -16,6 +16,7 @@ import nodePath from "node:path";
 import type { ServerProviderUsageLimit, ServerProviderUsageLine } from "@synara/contracts";
 
 import { createLogger } from "../../logger";
+import { fetchCodexResetCredits } from "../codexResetCredits";
 import {
   credentialFingerprint,
   decodeJwtExpMs,
@@ -55,6 +56,10 @@ const ACCESS_TOKEN_REFRESH_WINDOW_MS = 5 * 60 * 1000;
 // Fallback for tokens without a readable `exp`: the CLI treats a login as stale after 8 days.
 const LAST_REFRESH_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000;
 
+// The balance is a count of Codex credits, not dollars. OpenAI sells them in packs of 1,000 for
+// $40, so the dollar figure is only an estimate at that list price.
+const CREDIT_LIST_PRICE_USD = 0.04;
+
 // Refresh-token error codes that mean "this stored credential is dead — re-login required".
 const REFRESH_TOKEN_DEAD_CODES = new Set(["refresh_token_expired", "refresh_token_invalidated"]);
 // The token was already redeemed (by the CLI, or another Synara process): the file likely holds
@@ -82,6 +87,9 @@ function authFilePaths(ctx: ProviderUsageContext): string[] {
   };
   if (ctx.env.CODEX_HOME) {
     push(nodePath.join(ctx.env.CODEX_HOME, "auth.json"));
+  }
+  if (ctx.isolateCredentials) {
+    return paths;
   }
   const configHome = ctx.env.XDG_CONFIG_HOME?.trim();
   if (configHome) {
@@ -145,10 +153,12 @@ async function resolveCodexAuth(ctx: ProviderUsageContext): Promise<CodexAuth | 
     }
   }
 
-  const keychain = await readKeychainPassword({
-    service: KEYCHAIN_SERVICE,
-    platform: ctx.platform,
-  });
+  const keychain = ctx.isolateCredentials
+    ? null
+    : await readKeychainPassword({
+        service: KEYCHAIN_SERVICE,
+        platform: ctx.platform,
+      });
   if (keychain) {
     const parsed = readCodexAuthRecord(asRecord(decodeKeychainJson(keychain)), {
       kind: "keychain",
@@ -382,7 +392,9 @@ export function parseCodexUsage(input: {
   const balance =
     asFiniteNumber(headers["x-codex-credits-balance"]) ?? asFiniteNumber(credits?.balance);
   if (balance !== undefined && (credits?.has_credits !== false || balance > 0)) {
-    usageLines.push({ label: "Credits", value: `${formatUsd(balance)} remaining` });
+    const count = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(balance);
+    const estimate = formatUsd(balance * CREDIT_LIST_PRICE_USD);
+    usageLines.push({ label: "Credits", value: `${count} remaining (≈ ${estimate})` });
   }
 
   const planType = asString(root?.plan_type);
@@ -470,11 +482,20 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
           `Codex usage request failed (${result.status}).`,
         );
       }
-      return parseCodexUsage({
+      const snapshot = parseCodexUsage({
         json: result.json,
         headers: Object.fromEntries(result.headers),
         nowMs: ctx.nowMs,
       });
+      // Banked resets live behind `codex app-server`, not wham/usage. The probe rides the
+      // same snapshot cache TTL, never throws, and resolves to "not reported" when absent.
+      const resetCredits = await fetchCodexResetCredits({
+        binaryPath: ctx.codexBinaryPath,
+        expectedAccountId: state.accountId,
+        env: ctx.env,
+        cwd: ctx.homeDir,
+      });
+      return resetCredits ? { ...snapshot, resetCredits } : snapshot;
     } catch (cause) {
       log.warn("codex usage endpoint unreachable", {
         message: cause instanceof Error ? cause.message : String(cause),

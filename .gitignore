@@ -40,3 +40,14 @@ __screenshots__/
 /browser-sidebar-comment-preload.js.map
 /preload.js.map
 /bootstrap.js.map
+
+# Generated ASAR smoke fixture (bundled from scripts/betterwright-smoke.ts)
+.smoke/
+
+# Unlazy pipeline state (machine-local ledgers, dispatch, approvals log)
+.unlazy/
+# Claude Code worktrees are local scratch checkouts, not part of the repo.
+.claude/worktrees/
+
+# Local implementation plans.
+/plans/

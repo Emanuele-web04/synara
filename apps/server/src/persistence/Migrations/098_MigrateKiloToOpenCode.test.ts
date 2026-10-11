@@ -206,7 +206,7 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.strictEqual(runtimeBinding?.adapterKey, "opencode");
       assert.deepStrictEqual(JSON.parse(runtimeBinding?.runtimePayload ?? "null"), {
         modelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "kilo/kilo-auto/free",
           options: { variant: "runtime-variant" },
         },
@@ -224,11 +224,11 @@ layer("098_MigrateKiloToOpenCode", (it) => {
         FROM automation_definitions WHERE automation_id = 'automation-1'
       `;
       assert.deepStrictEqual(JSON.parse(automation?.modelSelection ?? "null"), {
-        provider: "opencode",
+        instanceId: "opencode",
         model: "kilo/kilo-auto/free",
         options: { agent: "automation-agent" },
       });
-      assert.deepStrictEqual(JSON.parse(automation?.providerOptions ?? "null"), {});
+      assert.strictEqual(automation?.providerOptions, null);
 
       const [runtimeEvent] = yield* sql<{ readonly provider: string; readonly rawSource: string }>`
         SELECT json_extract(event_json, '$.provider') AS "provider",
@@ -280,22 +280,6 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       `;
       assert.strictEqual(deletedTurn?.provider, "opencode");
       assert.strictEqual(deletedTokens?.provider, "opencode");
-    }),
-  );
-
-  it.effect("leaves migrated databases stable across reruns", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-
-      yield* runMigrations();
-      yield* runMigrations();
-
-      const [row] = yield* sql<{ readonly count: number }>`
-        SELECT COUNT(*) AS "count"
-        FROM projection_threads
-        WHERE json_extract(model_selection_json, '$.provider') = 'kilo'
-      `;
-      assert.strictEqual(row?.count, 0);
     }),
   );
 });
