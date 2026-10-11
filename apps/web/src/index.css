@@ -3648,14 +3648,6 @@ diffs-container {
   align-items: stretch;
 }
 
-.runtime-mode-menu-item--auto[data-checked] {
-  color: var(--color-text-accent);
-}
-
-.runtime-mode-menu-item--auto[data-checked] .runtime-mode-menu-description {
-  color: inherit;
-}
-
 /* Thin scrollbar for long model-provider lists inside picker submenus. */
 .composer-picker-scroll {
   scrollbar-width: thin;

@@ -101,6 +101,13 @@ these checks are not proof of arbitrary PID ownership. Root signaling still
 requires the caller to own the live process lifecycle. Direct owned-child
 cancellation must work even when external process-table tools are unavailable.
 
+Desktop Node fetch uses the pinned Undici dispatcher initialized by `httpRuntime.ts`.
+Electron 43's bundled Undici can crash in `setTypeOfService` on macOS; the upstream
+fix belongs in the HTTP writer, not an uncaught-exception handler. When updating
+Electron or Undici, run `apps/desktop/src/httpRuntime.test.ts` under both Node and
+Electron with `ELECTRON_RUN_AS_NODE=1`. The test performs real loopback HTTP
+requests while injecting the socket error and also checks ordinary request failures.
+
 Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
 `ELECTRON_RUN_AS_NODE=1` in their launch configuration. Provider child environments
 strip that inherited flag, so relying on inheritance can launch the desktop GUI

@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -33,6 +35,54 @@ afterEach(() => {
 });
 
 describe("packaged desktop startup verification", () => {
+  it("loads restored-checkpoint startup gates without workspace dependencies", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-checkpoint-startup-import-"));
+    temporaryRoots.push(root);
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    mkdirSync(join(root, "packages/shared"), { recursive: true });
+    mkdirSync(join(root, "assets"));
+    copyFileSync(new URL("../package.json", import.meta.url), join(root, "package.json"));
+    copyFileSync(
+      new URL("./verify-packaged-desktop-startup.ts", import.meta.url),
+      join(root, "scripts/verify-packaged-desktop-startup.ts"),
+    );
+    cpSync(new URL("./lib", import.meta.url), join(root, "scripts/lib"), { recursive: true });
+    cpSync(new URL("../packages/shared/src", import.meta.url), join(root, "packages/shared/src"), {
+      recursive: true,
+    });
+    const platform =
+      process.platform === "darwin" ? "mac" : process.platform === "win32" ? "win" : "linux";
+    const suffix = platform === "mac" ? ".dmg" : platform === "win" ? ".exe" : ".AppImage";
+    const env = { ...process.env };
+    delete env.NODE_PATH;
+    delete env.NODE_OPTIONS;
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(root, "scripts/verify-packaged-desktop-startup.ts"),
+        "--assets-dir",
+        join(root, "assets"),
+        "--platform",
+        platform,
+        "--arch",
+        process.arch,
+        "--version",
+        "1.2.3",
+      ],
+      { cwd: root, env, encoding: "utf8", timeout: 15_000 },
+    );
+    // The actual CLI must reach its original missing-payload gate, not fail
+    // module loading. No package is installed or application launched here.
+    expect(result.status).not.toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.error).toBeUndefined();
+    expect(result.stdout + result.stderr).toContain(
+      `Expected one ${suffix} release asset, found 0.`,
+    );
+    expect(existsSync(join(root, "node_modules"))).toBe(false);
+    expect(existsSync(join(root, "scripts/node_modules"))).toBe(false);
+  });
+
   it.skipIf(process.platform !== "linux")(
     "retains the AppImage extraction failure gate",
     async () => {

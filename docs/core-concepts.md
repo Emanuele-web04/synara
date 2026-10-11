@@ -29,7 +29,7 @@ composer; it is not sent twice.
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
-  is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs (Beta), and
+  is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs, and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
@@ -70,10 +70,6 @@ composer; it is not sent twice.
   to-dos: add one due today, or select it to edit and delegate through the same card as Tasks.
   **All tasks** opens the complete backlog in both Stable and Beta.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity.
-  Long conversations open at recent work. Load earlier messages, Find, pinned-message navigation,
-  and Go to first message can reach their earlier history. Reloads can reuse private local detail
-  after verifying the connected server; actions wait for reconciliation.
-  See [Thread history and reload recovery](thread-history.md) for compatibility and storage limits.
   The composer strip shows the live turn's subagents. The Environment panel's **Subagents** row
   summarizes all of them (running, queued, and done); clicking it opens the full list in the right dock,
   where finished subagents stay one click away after the strip hides. In split view, the list
@@ -156,9 +152,10 @@ A turn is one cycle inside that task:
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
 
-Each settled turn has a **Worked** header with its duration, completion time, and final state.
-The model appears when it changes from the previous turn. Expand the header to read the tools and
-full narration; turning off finished-turn folding keeps the same header with the work visible.
+Finished work folds into a compact **Worked for** disclosure above the final answer. Expand it
+to read the tools and full narration; turning off finished-turn folding keeps the work visible.
+Active turns show **Working for** with a live duration. These labels use the chat font size and
+keep the divider below the label, without model badges or completion icons.
 **Stopped by you** requires a request explicitly marked as user Stop, followed by an interrupted
 outcome for that turn. Agent, automatic, steering, and historical interruptions without that actor
 say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
@@ -181,6 +178,8 @@ older servers retain their existing error handling. If recovery reaches a server
 Synara reports that delivery is still unknown; reconnect to an updated server and check the conversation
 before sending again. Socket recovery restores active subscriptions
 and reports the connection as open only after the feature socket answers.
+Recovery snapshots include the last projected rollback or revert, so messages removed while a
+client was disconnected do not reappear. Ordinary refreshes still preserve newer streamed text.
 
 Thread runtime errors appear above the transcript. Use **Show details** to read the full error
 or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
