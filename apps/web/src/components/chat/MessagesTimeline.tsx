@@ -1010,10 +1010,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       firstUserMessageId,
       highlightedMessageId,
       lastLiveWorkGroupId,
+      normalizedChatFontSizePx,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      workingLabel,
     }),
     [
       hubWorkItemsByMessageId,
@@ -1031,10 +1033,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       firstUserMessageId,
       highlightedMessageId,
       lastLiveWorkGroupId,
+      normalizedChatFontSizePx,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      workingLabel,
     ],
   );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's
