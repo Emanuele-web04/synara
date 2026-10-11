@@ -2211,6 +2211,9 @@ async function mountChatView(options: {
     }),
   );
 
+  // Load the code-split route before measuring fixture RPC/hydration.
+  await router.load();
+
   const content = options.onRender ? (
     <Profiler id="issue-550-root" onRender={options.onRender}>
       <RouterProvider router={router} />
@@ -14885,7 +14888,7 @@ describe("ChatView transcript geometry (full app)", () => {
         () => {
           const settledTrigger = findInlineToolsTurnDisclosure();
           expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
-          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s$/);
           const transitionClone = document.querySelector(
             "[data-settled-turn-collapse-transition='true']",
           );
@@ -14934,7 +14937,7 @@ describe("ChatView transcript geometry (full app)", () => {
         () => {
           const settledTrigger = findInlineToolsTurnDisclosure();
           expect(settledTrigger?.getAttribute("aria-expanded")).toBe("false");
-          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+          expect(settledTrigger?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s$/);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -15092,7 +15095,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       // The turn must land folded, in one step, with no animated close replay.
       expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
-      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s·/);
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+(?:\.\d+)?s$/);
       expect(transitionFrames).toBe(0);
       // One settle step is the floor: the fold itself changes the height once.
       expect(heightChangeFrames).toBeLessThanOrEqual(2);
@@ -15136,7 +15139,7 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       expect(findInlineToolsTurnDisclosure()?.getAttribute("aria-expanded")).toBe("false");
-      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+m \d+s·/);
+      expect(findInlineToolsTurnDisclosure()?.textContent).toMatch(/^Worked \d+m \d+s$/);
       expect(document.querySelector("[data-turn-header='live']")?.textContent).toMatch(
         /^Working \d/,
       );
