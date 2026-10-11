@@ -178,6 +178,22 @@ describe("resolveLaunchEnvironment", () => {
 });
 
 describe("buildChildEnvironment", () => {
+  it("isolates inherited Grok endpoints and auth paths before applying selected credentials", () => {
+    const parent = {
+      XAI_API_KEY: "ambient-key",
+      XAI_API_BASE_URL: "https://ambient.example",
+      GROK_AUTH_PATH: "/native/auth.json",
+      GROK_CODE_OTHER_CREDENTIAL: "ambient",
+      XAI_GATEWAY_TOKEN: "ambient",
+      PATH: "/bin",
+    };
+    const overrides = { GROK_HOME: "/managed", XAI_API_KEY: "selected-key" };
+    expect(buildChildEnvironment(parent, overrides)).toEqual({ ...overrides, PATH: "/bin" });
+    expect(
+      buildChildEnvironment(parent, { ...overrides, XAI_API_BASE_URL: "https://selected.example" }),
+    ).toEqual({ ...overrides, XAI_API_BASE_URL: "https://selected.example", PATH: "/bin" });
+  });
+
   it("removes ambient Claude cloud credentials and wildcard endpoints for managed launches", () => {
     const env = buildChildEnvironment(
       {

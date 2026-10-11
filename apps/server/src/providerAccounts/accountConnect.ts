@@ -255,16 +255,15 @@ export function makeAccountConnect(input: AccountConnectInput) {
   > =>
     Effect.gen(function* () {
       const operation = yield* requireOperation("accountConnect.finalizeOauthConnect", operationId);
-      if (operation.state !== "pending" && operation.state !== "waiting-for-user") {
-        return yield* connectError(
-          "accountConnect.finalizeOauthConnect",
-          `Connect operation '${operationId}' is already ${operation.state}.`,
-        );
-      }
       const { provider } = operation;
       return yield* storage.withProviderLock(
         provider,
         Effect.gen(function* () {
+          // Cancellation shares this transaction lock. Whichever transition
+          // acquires it first determines the durable and reported outcome.
+          if (operation.state !== "pending" && operation.state !== "waiting-for-user") {
+            return toStatus(operation);
+          }
           // Reconnects committed here have already passed the runner's own
           // verification: the swap only happens after a successful login.
           let ordinal: number;
@@ -476,18 +475,21 @@ export function makeAccountConnect(input: AccountConnectInput) {
   const cancelConnect = (operationId: string) =>
     requireOperation("accountConnect.cancelConnect", operationId).pipe(
       Effect.flatMap((operation) =>
-        Effect.gen(function* () {
-          if (operation.state === "waiting-for-user" || operation.state === "pending") {
-            operation.state = "cancelled";
-            operation.finishedAt = Date.now();
-            operation.loginHandle?.cancel();
-            if (operation.authMethod === "oauth") {
-              yield* storage.cancelPendingDirectory(operation.provider, operation.operationId);
+        storage.withProviderLock(
+          operation.provider,
+          Effect.gen(function* () {
+            if (operation.state === "waiting-for-user" || operation.state === "pending") {
+              operation.state = "cancelled";
+              operation.finishedAt = Date.now();
+              operation.loginHandle?.cancel();
+              if (operation.authMethod === "oauth") {
+                yield* storage.cancelPendingDirectory(operation.provider, operation.operationId);
+              }
+              delete operation.apiKey;
             }
-            delete operation.apiKey;
-          }
-          return toStatus(operation);
-        }),
+            return toStatus(operation);
+          }),
+        ),
       ),
     );
 

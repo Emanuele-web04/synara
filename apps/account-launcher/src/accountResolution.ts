@@ -2,6 +2,7 @@
 // global account root directly; no server, no database, no Effect runtime.
 
 import * as fs from "node:fs";
+import { isGrokAccountIsolationEnvKey } from "@synara/shared/providerAccounts/grokAccountEnvironment";
 import { isClaudeAccountIsolationEnvKey } from "@synara/shared/claudeAccountIsolation";
 
 import type { AgentAuthMethod, SupportedAccountProvider } from "@synara/contracts";
@@ -199,10 +200,13 @@ export function buildChildEnvironment(
   overrides: Readonly<Record<string, string>>,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...parentEnv };
-  if (overrides.CLAUDE_CONFIG_DIR) {
-    for (const name of Object.keys(env)) {
-      if (isClaudeAccountIsolationEnvKey(name.toUpperCase())) delete env[name];
-    }
+  for (const name of Object.keys(env)) {
+    const key = name.toUpperCase();
+    if (
+      (overrides.CLAUDE_CONFIG_DIR && isClaudeAccountIsolationEnvKey(key)) ||
+      (overrides.GROK_HOME && isGrokAccountIsolationEnvKey(key))
+    )
+      delete env[name];
   }
   for (const name of launcherControlEnvVars) {
     delete env[name];

@@ -377,6 +377,44 @@ describe("accountConnect", () => {
     expect(JSON.stringify(metadata)).not.toContain("apiKey");
   });
 
+  it("returns the committed outcome when cancellation races finalization after credentials move", async () => {
+    let releaseMove!: () => void;
+    let didMove!: () => void;
+    const pausedMove = new Promise<void>((resolve) => {
+      releaseMove = resolve;
+    });
+    const moveCompleted = new Promise<void>((resolve) => {
+      didMove = resolve;
+    });
+    const racing = makeAccountConnect({
+      storage: {
+        ...storage,
+        finalizePendingDirectory: (provider, operationId) =>
+          storage.finalizePendingDirectory(provider, operationId).pipe(
+            Effect.tap(() =>
+              Effect.promise(() => {
+                didMove();
+                return pausedMove;
+              }),
+            ),
+          ),
+      },
+      oauthLoginRunners: { codex: fakeOauthRunner },
+    });
+    const { operationId } = await Effect.runPromise(
+      racing.beginConnect({ kind: "agent-oauth", provider: "codex" }),
+    );
+    resolveLogin!({ ok: true });
+    await moveCompleted;
+    const cancellation = Effect.runPromise(racing.cancelConnect(operationId));
+    releaseMove();
+    expect(await cancellation).toMatchObject({ state: "succeeded", ordinal: 1 });
+    expect(Effect.runSync(racing.getConnectStatus(operationId)).state).toBe("succeeded");
+    expect(await Effect.runPromise(storage.readAccount("codex", 1))).not.toBeNull();
+    expect(await Effect.runPromise(storage.readActiveOrdinal("codex"))).toBe(1);
+    expect(cancelled).toBe(false);
+  });
+
   it("reclaims a fresh OAuth slot when its account record cannot commit", async () => {
     const broken = makeAccountConnect({
       storage: {

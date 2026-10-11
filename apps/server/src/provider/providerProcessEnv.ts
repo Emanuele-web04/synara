@@ -1,3 +1,4 @@
+import { isGrokAccountIsolationEnvKey } from "@synara/shared/providerAccounts/grokAccountEnvironment";
 // FILE: providerProcessEnv.ts
 // Purpose: Builds account-isolated environments for provider runtimes and probes.
 // Layer: Provider runtime utility
@@ -153,12 +154,6 @@ const GEMINI_ACCOUNT_ENV_KEYS = new Set<string>([
   "CLOUDSDK_CONFIG",
   "GOOGLE_GEMINI_BASE_URL",
   "GOOGLE_VERTEX_BASE_URL",
-]);
-
-const GROK_ACCOUNT_ENV_KEYS = new Set<string>([
-  "XAI_API_KEY",
-  "XAI_API_BASE_URL",
-  "GROK_CODE_XAI_API_KEY",
 ]);
 
 const CURSOR_ACCOUNT_ENV_KEYS = new Set<string>(["CURSOR_API_KEY"]);
@@ -367,9 +362,7 @@ function isProviderAccountEnvKey(driver: ProviderProcessEnvDriver, rawKey: strin
         key.startsWith("GOOGLE_GENAI_")
       );
     case "grok":
-      return (
-        GROK_ACCOUNT_ENV_KEYS.has(key) || key.startsWith("XAI_") || key.startsWith("GROK_CODE_")
-      );
+      return isGrokAccountIsolationEnvKey(key);
     case "opencode":
       return isModelProviderAccountEnvKey(key);
     case "kilo":

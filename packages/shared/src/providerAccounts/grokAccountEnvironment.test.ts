@@ -18,6 +18,8 @@ describe("buildGrokAccountEnvironment", () => {
 
     expect(result.environment.GROK_HOME).toBe(AGENT_HOME);
     expect(result.environment.XAI_API_KEY).toBe(ACCOUNT_ENV_UNSET);
+    expect(result.environment.XAI_API_BASE_URL).toBe(ACCOUNT_ENV_UNSET);
+    expect(result.environment.GROK_AUTH_PATH).toBe(ACCOUNT_ENV_UNSET);
     expect(result.environment.GROK_CODE_XAI_API_KEY).toBe(ACCOUNT_ENV_UNSET);
     expect(result.profilePath).toBe(AGENT_HOME);
   });

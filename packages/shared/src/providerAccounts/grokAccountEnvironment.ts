@@ -6,13 +6,27 @@ import {
 
 // Inherited auth overrides that would leak the native account into a managed
 // launch. Stripped before account-specific values are applied.
-const GROK_CONFLICTING_ENV_VARS = ["GROK_HOME", "XAI_API_KEY", "GROK_CODE_XAI_API_KEY"] as const;
+const GROK_ACCOUNT_ISOLATION_ENV_KEYS = new Set([
+  "GROK_HOME",
+  "GROK_AUTH_PATH",
+  "XAI_API_KEY",
+  "XAI_API_BASE_URL",
+  "GROK_CODE_XAI_API_KEY",
+]);
+
+export function isGrokAccountIsolationEnvKey(key: string): boolean {
+  return (
+    GROK_ACCOUNT_ISOLATION_ENV_KEYS.has(key) ||
+    key.startsWith("XAI_") ||
+    key.startsWith("GROK_CODE_")
+  );
+}
 
 export function buildGrokAccountEnvironment(
   input: AccountEnvironmentBuildInput,
 ): AccountLaunchEnvironment {
   const environment: Record<string, string> = {};
-  for (const name of GROK_CONFLICTING_ENV_VARS) {
+  for (const name of GROK_ACCOUNT_ISOLATION_ENV_KEYS) {
     environment[name] = ACCOUNT_ENV_UNSET;
   }
   environment.GROK_HOME = input.agentHome;
