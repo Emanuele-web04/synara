@@ -61,13 +61,10 @@ export function ThemeStep() {
       </div>
       <div className="flex flex-col gap-2.5">
         <div className="flex items-baseline justify-between">
-          <span
-            id="onboarding-theme-pack-label"
-            className="text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/80"
-          >
+          <span id="onboarding-theme-pack-label" className="text-ui font-medium text-foreground/80">
             Theme
           </span>
-          <span className="text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/80">
+          <span className="text-ui-sm text-muted-foreground/80">
             Applies to both light and dark
           </span>
         </div>
@@ -95,12 +92,7 @@ export function ThemeStep() {
                 {...radioItemProps(option.id)}
               >
                 <ThemePackSwatch codeThemeId={option.id} variant={resolvedTheme} />
-                <span
-                  className={cn(
-                    "truncate text-[length:var(--app-font-size-ui,12px)] text-foreground",
-                    selected && "font-medium",
-                  )}
-                >
+                <span className={cn("truncate text-ui text-foreground", selected && "font-medium")}>
                   {option.label}
                 </span>
               </button>

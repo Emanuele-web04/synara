@@ -7,6 +7,7 @@
  */
 import {
   IsoDateTime,
+  ProviderInstanceId,
   ProviderSessionRuntimeStatus,
   RuntimeMode,
   ThreadId,
@@ -19,6 +20,7 @@ import type { ProviderSessionRuntimeRepositoryError } from "../Errors.ts";
 export const ProviderSessionRuntime = Schema.Struct({
   threadId: ThreadId,
   providerName: Schema.String,
+  providerInstanceId: Schema.NullOr(ProviderInstanceId),
   adapterKey: Schema.String,
   runtimeMode: RuntimeMode,
   status: ProviderSessionRuntimeStatus,

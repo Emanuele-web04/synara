@@ -12,6 +12,7 @@ import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuTrigger } from "../ui/me
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { getRetryEffortVariantGroup, useRetryEffortVariantStore } from "./retryEffortVariantStore";
+import { mergeArchivedRetryEffortVariants } from "./retryEffortArchive";
 import {
   filterSupportedRetryEfforts,
   mergeRetryVariants,
@@ -31,15 +32,25 @@ type RetryWithDifferentEffortActionProps = {
 function useMergedRetryVariants(input: {
   readonly threadId: ThreadId;
   readonly userMessageId: MessageId | null;
+  readonly userMessageText: string;
   readonly live: RetryEffortVariant | null;
+  readonly durableVariants?: ReadonlyArray<RetryEffortVariant> | undefined;
 }): ReadonlyArray<RetryEffortVariant> {
   const group = useRetryEffortVariantStore((state) =>
     input.userMessageId
-      ? getRetryEffortVariantGroup(state, input.threadId, input.userMessageId)
+      ? getRetryEffortVariantGroup(
+          state,
+          input.threadId,
+          input.userMessageId,
+          input.userMessageText,
+        )
       : null,
   );
   return mergeRetryVariants({
-    archived: group?.variants ?? [],
+    archived: mergeArchivedRetryEffortVariants({
+      durable: input.durableVariants ?? [],
+      local: group?.variants ?? [],
+    }),
     live: input.live,
   });
 }
@@ -47,17 +58,26 @@ function useMergedRetryVariants(input: {
 export function useDisplayedRetryVariantText(input: {
   readonly threadId: ThreadId;
   readonly userMessageId: MessageId | null;
+  readonly userMessageText: string;
   readonly live: RetryEffortVariant | null;
+  readonly durableVariants?: ReadonlyArray<RetryEffortVariant> | undefined;
   readonly liveText: string;
 }): string {
   const variants = useMergedRetryVariants({
     threadId: input.threadId,
     userMessageId: input.userMessageId,
+    userMessageText: input.userMessageText,
     live: input.live,
+    durableVariants: input.durableVariants,
   });
   const group = useRetryEffortVariantStore((state) =>
     input.userMessageId
-      ? getRetryEffortVariantGroup(state, input.threadId, input.userMessageId)
+      ? getRetryEffortVariantGroup(
+          state,
+          input.threadId,
+          input.userMessageId,
+          input.userMessageText,
+        )
       : null,
   );
   if (variants.length === 0) return input.liveText;
@@ -73,16 +93,20 @@ export function useDisplayedRetryVariantText(input: {
 export function RetryEffortVariantPager(props: {
   readonly threadId: ThreadId;
   readonly userMessageId: MessageId;
+  readonly userMessageText: string;
   readonly live: RetryEffortVariant | null;
+  readonly durableVariants?: ReadonlyArray<RetryEffortVariant> | undefined;
   readonly className?: string;
 }) {
   const variants = useMergedRetryVariants({
     threadId: props.threadId,
     userMessageId: props.userMessageId,
+    userMessageText: props.userMessageText,
     live: props.live,
+    durableVariants: props.durableVariants,
   });
   const group = useRetryEffortVariantStore((state) =>
-    getRetryEffortVariantGroup(state, props.threadId, props.userMessageId),
+    getRetryEffortVariantGroup(state, props.threadId, props.userMessageId, props.userMessageText),
   );
   const setActiveIndex = useRetryEffortVariantStore((state) => state.setActiveIndex);
 
@@ -107,6 +131,10 @@ export function RetryEffortVariantPager(props: {
           setActiveIndex({
             threadId: props.threadId,
             userMessageId: props.userMessageId,
+            userMessageText: props.userMessageText,
+            archivedVariants: variants.filter(
+              (variant) => variant.assistantMessageId !== props.live?.assistantMessageId,
+            ),
             activeIndex: activeIndex - 1,
           })
         }
@@ -125,6 +153,10 @@ export function RetryEffortVariantPager(props: {
           setActiveIndex({
             threadId: props.threadId,
             userMessageId: props.userMessageId,
+            userMessageText: props.userMessageText,
+            archivedVariants: variants.filter(
+              (variant) => variant.assistantMessageId !== props.live?.assistantMessageId,
+            ),
             activeIndex: activeIndex + 1,
           })
         }
@@ -158,7 +190,7 @@ function EffortMenuItems(props: {
               {option.isCurrent ? " (current)" : ""}
             </span>
             {option.description ? (
-              <span className="truncate text-[length:var(--app-font-size-ui-2xs,10px)] text-muted-foreground">
+              <span className="truncate text-ui-xs text-muted-foreground">
                 {option.description}
               </span>
             ) : null}

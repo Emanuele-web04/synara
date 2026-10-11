@@ -4,7 +4,7 @@
  * Custom nodes for the composer editor:
  * - ComposerMentionNode: File/path mentions (@path)
  * - ComposerSkillNode: Skill mentions ($skill or /skill)
- * - ComposerSlashCommandNode: app-level slash commands (/automation, /goal)
+ * - ComposerSlashCommandNode: app-level slash commands (/automation, /goal, /computer-use)
  * - ComposerAgentMentionNode: Agent mentions (@alias(task))
  * - ComposerTerminalContextNode: Terminal context blocks
  */

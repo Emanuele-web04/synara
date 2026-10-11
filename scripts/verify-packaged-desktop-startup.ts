@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { findMacBundleArchitectureMismatches } from "./lib/mac-bundle-architecture.ts";
+
 export type PackagedDesktopPlatform = "linux" | "mac" | "win";
 
 export interface PackagedDesktopStartupOptions {
@@ -28,6 +30,7 @@ export interface PackagedDesktopStartupOptions {
   readonly arch: string;
   readonly version: string;
   readonly timeoutMs: number;
+  readonly executableName: string;
 }
 
 export function parsePackagedDesktopStartupArgs(
@@ -42,7 +45,14 @@ export function parsePackagedDesktopStartupArgs(
     }
     values.set(name, value);
   }
-  const known = new Set(["--assets-dir", "--platform", "--arch", "--version", "--timeout-ms"]);
+  const known = new Set([
+    "--assets-dir",
+    "--platform",
+    "--arch",
+    "--version",
+    "--timeout-ms",
+    "--executable-name",
+  ]);
   for (const name of values.keys()) {
     if (!known.has(name)) throw new Error(`Unknown packaged startup argument: ${name}.`);
   }
@@ -59,12 +69,17 @@ export function parsePackagedDesktopStartupArgs(
   if (!Number.isInteger(timeoutMs) || timeoutMs < 5_000 || timeoutMs > 180_000) {
     throw new Error("--timeout-ms must be an integer between 5000 and 180000.");
   }
+  const executableName = values.get("--executable-name")?.trim() || "synara";
+  if (!/^[A-Za-z0-9._-]+$/.test(executableName) || executableName.includes("..")) {
+    throw new Error(`Invalid packaged startup executable name: ${executableName}.`);
+  }
   return {
     assetsDirectory: resolve(required("--assets-dir")),
     platform,
     arch: required("--arch"),
     version: required("--version"),
     timeoutMs,
+    executableName,
   };
 }
 
@@ -124,7 +139,11 @@ interface PackagedRuntime {
   readonly resourcesDirectory: string;
 }
 
-function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
+function prepareMacLaunch(
+  assetsDirectory: string,
+  extractionRoot: string,
+  arch: string,
+): LaunchCommand {
   const archive = requireSingleAsset(assetsDirectory, ".zip");
   runCommand("ditto", ["-x", "-k", archive, extractionRoot]);
   const appBundles = readdirSync(extractionRoot).filter((entry) => entry.endsWith(".app"));
@@ -132,6 +151,10 @@ function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): Laun
     throw new Error(`Expected one packaged macOS app in ${basename(archive)}.`);
   }
   const appBundle = join(extractionRoot, appBundles[0]!);
+  const mismatches = findMacBundleArchitectureMismatches(appBundle, arch);
+  if (mismatches.length > 0) {
+    throw new Error(`Packaged macOS ${arch} app has foreign binaries:\n${mismatches.join("\n")}`);
+  }
   const executables = findFiles(join(appBundle, "Contents", "MacOS"), (candidate) =>
     statSync(candidate).isFile(),
   );
@@ -149,7 +172,11 @@ function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): Laun
   };
 }
 
-function prepareLinuxLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
+function prepareLinuxLaunch(
+  assetsDirectory: string,
+  extractionRoot: string,
+  executableName: string,
+): LaunchCommand {
   const collectedAppImage = requireSingleAsset(assetsDirectory, ".AppImage");
   const appImage = join(extractionRoot, basename(collectedAppImage));
   copyFileSync(collectedAppImage, appImage);
@@ -165,7 +192,7 @@ function prepareLinuxLaunch(assetsDirectory: string, extractionRoot: string): La
     args: ["-a", appRun, "--no-sandbox", "--disable-gpu"],
     cwd: join(extractionRoot, "squashfs-root"),
     runtime: {
-      executable: join(extractionRoot, "squashfs-root", "synara"),
+      executable: join(extractionRoot, "squashfs-root", executableName),
       resourcesDirectory: join(extractionRoot, "squashfs-root", "resources"),
     },
   };
@@ -188,10 +215,12 @@ function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): 
   }
   runCommand("7z", ["x", "-y", `-o${applicationRoot}`, applicationArchives[0]!]);
   const executables = findFiles(applicationRoot, (candidate) =>
-    /[/\\]Synara\.exe$/i.test(candidate),
+    /[/\\]Synara[^/\\]*\.exe$/i.test(candidate),
   );
   if (executables.length !== 1) {
-    throw new Error(`Expected one extracted Synara.exe, found ${executables.length}.`);
+    throw new Error(
+      `Expected one extracted Synara application executable, found ${executables.length}.`,
+    );
   }
   return {
     command: executables[0]!,
@@ -241,17 +270,17 @@ function prepareLaunch(
   extractionRoot: string,
 ): LaunchCommand {
   if (options.platform === "mac") {
-    return prepareMacLaunch(options.assetsDirectory, extractionRoot);
+    return prepareMacLaunch(options.assetsDirectory, extractionRoot, options.arch);
   }
   if (options.platform === "linux") {
-    return prepareLinuxLaunch(options.assetsDirectory, extractionRoot);
+    return prepareLinuxLaunch(options.assetsDirectory, extractionRoot, options.executableName);
   }
   return prepareWindowsLaunch(options.assetsDirectory, extractionRoot);
 }
 
 export function createPackagedDesktopSmokeEnvironment(
   root: string,
-  options: Pick<PackagedDesktopStartupOptions, "platform" | "version">,
+  options: Pick<PackagedDesktopStartupOptions, "platform" | "version" | "executableName">,
   inheritedEnvironment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -264,6 +293,7 @@ export function createPackagedDesktopSmokeEnvironment(
     XDG_CACHE_HOME: join(root, "xdg-cache"),
     XDG_DATA_HOME: join(root, "xdg-data"),
     SYNARA_HOME: join(root, "synara-home"),
+    SYNARA_BETA_HOME: join(root, "synara-beta-home"),
     SYNARA_DISABLE_AUTO_UPDATE: "1",
     ELECTRON_ENABLE_LOGGING: "1",
   };
@@ -277,11 +307,17 @@ export function createPackagedDesktopSmokeEnvironment(
     env.XDG_CACHE_HOME,
     env.XDG_DATA_HOME,
     env.SYNARA_HOME,
+    env.SYNARA_BETA_HOME,
   ]) {
     if (path) mkdirSync(path, { recursive: true });
   }
   if (options.platform === "mac") {
-    const userDataPath = join(env.HOME!, "Library", "Application Support", "synara");
+    const userDataPath = join(
+      env.HOME!,
+      "Library",
+      "Application Support",
+      options.executableName === "synara-beta" ? "synara-beta" : "synara",
+    );
     mkdirSync(userDataPath, { recursive: true });
     // Prevent the packaged app's update-only icon repair from registering this
     // temporary bundle in the runner's normal Launch Services database.
@@ -359,9 +395,7 @@ export function readPackagedStartupLogTails(logDirectory: string): string {
     .join("\n");
 }
 
-export function resolveNativePackagedDesktopPlatform(
-  platform: NodeJS.Platform,
-): PackagedDesktopPlatform {
+function resolveNativePackagedDesktopPlatform(platform: NodeJS.Platform): PackagedDesktopPlatform {
   if (platform === "darwin") return "mac";
   if (platform === "win32") return "win";
   return "linux";
@@ -387,7 +421,10 @@ export async function verifyPackagedDesktopStartup(
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
     verifyPackagedRuntimeDependencies(launch.runtime, env, options.timeoutMs);
-    logDirectory = join(env.SYNARA_HOME!, "userdata", "logs");
+    // Beta deliberately ignores SYNARA_HOME to avoid opening Stable's data.
+    const appHome =
+      options.executableName === "synara-beta" ? env.SYNARA_BETA_HOME! : env.SYNARA_HOME!;
+    logDirectory = join(appHome, "userdata", "logs");
     const logPath = join(logDirectory, "desktop-main.log");
     child = spawn(launch.command, [...launch.args], {
       cwd: launch.cwd,

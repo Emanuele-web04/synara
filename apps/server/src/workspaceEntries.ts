@@ -596,10 +596,30 @@ async function buildWorkspaceIndexFromGit(cwd: string): Promise<WorkspaceIndex |
     return null;
   }
 
+  // `--cached` keeps listing tracked files that were deleted from disk but not
+  // staged (e.g. an agent's `rm`), so they would show up in search and open to
+  // ENOENT. Drop them, and fall back to the filesystem walk if this listing fails.
+  const deletedFiles = await runProcess(
+    "git",
+    [...WORKSPACE_GIT_HARDENED_CONFIG_ARGS, "ls-files", "--deleted", "-z"],
+    {
+      cwd,
+      allowNonZeroExit: true,
+      timeoutMs: 20_000,
+      maxBufferBytes: 16 * 1024 * 1024,
+      outputMode: "truncate",
+    },
+  ).catch(() => null);
+  if (!deletedFiles || deletedFiles.code !== 0 || deletedFiles.stdoutTruncated) {
+    return null;
+  }
+  const deletedPaths = new Set(splitNullSeparatedPaths(deletedFiles.stdout, false));
+
   const listedPaths = splitNullSeparatedPaths(
     listedFiles.stdout,
     Boolean(listedFiles.stdoutTruncated),
   )
+    .filter((entry) => !deletedPaths.has(entry))
     .map((entry) => toPosixPath(entry))
     .filter((entry) => entry.length > 0 && !isPathInIgnoredDirectory(entry));
   const filePaths = await filterGitIgnoredPaths(cwd, listedPaths);
@@ -1071,7 +1091,27 @@ function normalizedWorkspaceFileReference(reference: string): string | null {
   return normalized.length > 0 && normalized !== "." ? normalized : null;
 }
 
+// The index is immutable once built and replaced wholesale on rebuild, so the
+// basename map can live alongside it instead of being rebuilt over up to 25k
+// entries on every reference-resolution RPC.
+const pathsByBasenameByIndex = new WeakMap<
+  WorkspaceIndex,
+  ReadonlyMap<string, ReadonlyArray<string>>
+>();
+
 function filePathsByBasename(index: WorkspaceIndex): ReadonlyMap<string, ReadonlyArray<string>> {
+  const cached = pathsByBasenameByIndex.get(index);
+  if (cached) {
+    return cached;
+  }
+  const built = buildFilePathsByBasename(index);
+  pathsByBasenameByIndex.set(index, built);
+  return built;
+}
+
+function buildFilePathsByBasename(
+  index: WorkspaceIndex,
+): ReadonlyMap<string, ReadonlyArray<string>> {
   const pathsByBasename = new Map<string, string[]>();
   for (const entry of index.entries) {
     if (entry.kind !== "file") {

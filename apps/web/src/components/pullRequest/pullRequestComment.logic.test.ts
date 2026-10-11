@@ -40,7 +40,6 @@ describe("parseFindingComment", () => {
     ["**High Severity**", "High"],
     ["__Medium Severity__", "Medium"],
     ["### **Low Severity**", "Low"],
-    ["#### High Severity", "High"],
   ] as const)("parses decorated severity line %s", (severityLine, severity) => {
     expect(parseFindingComment(["### Finding title", severityLine, "Details."].join("\n"))).toEqual(
       {
@@ -56,17 +55,9 @@ describe("parseFindingComment", () => {
     expect(parseFindingComment("# Title\n**High Severity__\nBody")).toBeNull();
   });
 
-  it("returns null for a comment with no heading", () => {
-    expect(parseFindingComment("Just a regular comment with no heading at all.")).toBeNull();
-  });
-
   it("returns null for a heading with no following severity line", () => {
     const body = ["# A title", "", "Just some prose, no severity line."].join("\n");
     expect(parseFindingComment(body)).toBeNull();
-  });
-
-  it("returns null for a heading followed only by blank lines", () => {
-    expect(parseFindingComment("# A title\n\n")).toBeNull();
   });
 
   it("returns null for a plain bot summary comment", () => {

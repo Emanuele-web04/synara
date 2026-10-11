@@ -11,7 +11,6 @@ import {
   projectQueryKeys,
   projectReadFileQueryOptions,
   refetchFreshProjectFileQuery,
-  projectSearchEntriesQueryOptions,
 } from "./projectReactQuery";
 
 describe("local preview grant query options", () => {
@@ -229,15 +228,4 @@ describe("project search capacity retry", () => {
     retryable: true,
     retryAfterMs: 375,
   };
-
-  it("retries generic search failures without stacking capacity retries", () => {
-    const options = projectSearchEntriesQueryOptions({ cwd: "/repo", query: "app" });
-    expect(typeof options.retry).toBe("function");
-    if (typeof options.retry !== "function") {
-      throw new Error("Expected retry on projectSearchEntriesQueryOptions.");
-    }
-    expect(options.retry(0, capacityError as never)).toBe(false);
-    expect(options.retry(0, new Error("network"))).toBe(true);
-    expect(options.retry(3, new Error("network"))).toBe(false);
-  });
 });

@@ -1,6 +1,8 @@
 import type {
   ProjectEntry,
   ProviderAgentDescriptor,
+  ProviderArtifactsState,
+  ProviderInstanceId,
   ProviderNativeCommandDescriptor,
   ProviderKind,
   ProviderMentionReference,
@@ -29,9 +31,11 @@ import {
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "../composerSlashCommands";
 import { threadMentionPathForThreadId } from "@synara/shared/threadMentions";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import type { ProviderModelOption } from "../providerModelOptions";
+import { getClaudeArtifactCommandNotice } from "../lib/claudeArtifactCommands";
 import { compareProvidersByOrder } from "../providerOrdering";
 import type { ComposerThreadMentionSource, Project } from "../types";
 
@@ -42,6 +46,7 @@ type ComposerPluginSuggestion = {
 
 export type SearchableModelOption = {
   provider: ProviderKind;
+  instanceId: ProviderInstanceId;
   providerLabel: string;
   slug: string;
   name: string;
@@ -60,7 +65,10 @@ function threadSuggestionTitle(title: string): string {
 function threadSuggestionContainerName(project: Project | undefined): string {
   if (!project) return "Unknown project";
   if (project.kind === "chat") return "Chats";
-  if (project.kind === "studio") return "Studio";
+  // Group containers (legacy "studio" included) use their own title in mentions.
+  if (isGroupContainerKind(project.kind)) {
+    return project.name.trim() || "Hubs";
+  }
   return project.name.trim() || project.folderName.trim() || "Untitled project";
 }
 
@@ -164,14 +172,13 @@ function withDisambiguatedMentionNames(
   });
 }
 
-export function buildThreadMentionComposerItems(input: {
+function buildThreadMentionCandidates(input: {
   readonly threads: readonly ComposerThreadMentionSource[];
   readonly projects: readonly Project[];
   readonly currentThreadId: string | null;
-  readonly query: string;
-}): ComposerCommandItem[] {
+}): ThreadMentionCandidate[] {
   const projectById = new Map(input.projects.map((project) => [project.id, project]));
-  const candidates = withDisambiguatedMentionNames(
+  return withDisambiguatedMentionNames(
     input.threads
       .filter(
         (thread) => thread.id !== input.currentThreadId && (thread.archivedAt ?? null) === null,
@@ -182,6 +189,33 @@ export function buildThreadMentionComposerItems(input: {
         projectName: threadSuggestionContainerName(projectById.get(thread.projectId)),
       })),
   );
+}
+
+// Resolves the mention a dropped chat row should insert: the exact name/path the
+// `@` menu would produce, or null when that chat is not mentionable here.
+export function resolveThreadMentionForThreadId(input: {
+  readonly threads: readonly ComposerThreadMentionSource[];
+  readonly projects: readonly Project[];
+  readonly currentThreadId: string | null;
+  readonly threadId: string;
+}): { name: string; path: string } | null {
+  const candidate = buildThreadMentionCandidates(input).find(
+    ({ thread }) => thread.id === input.threadId,
+  );
+  if (!candidate) return null;
+  return {
+    name: candidate.mentionName,
+    path: threadMentionPathForThreadId(candidate.thread.id),
+  };
+}
+
+export function buildThreadMentionComposerItems(input: {
+  readonly threads: readonly ComposerThreadMentionSource[];
+  readonly projects: readonly Project[];
+  readonly currentThreadId: string | null;
+  readonly query: string;
+}): ComposerCommandItem[] {
+  const candidates = buildThreadMentionCandidates(input);
   const query = normalizeProviderDiscoveryText(input.query);
   const ranked = (
     query
@@ -203,8 +237,15 @@ export function buildThreadMentionComposerItems(input: {
 }
 
 export function buildSearchableModelOptions(input: {
-  providerOptions: ReadonlyArray<{ value: ProviderKind; label: string }>;
+  providerOptions: ReadonlyArray<{
+    value: ProviderKind;
+    label: string;
+    instanceId?: ProviderInstanceId | undefined;
+  }>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?:
+    | Partial<Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption>>>
+    | undefined;
   providerOrder: readonly ProviderKind[];
   hiddenProviders: readonly ProviderKind[];
   protectedProviders: readonly ProviderKind[];
@@ -221,20 +262,23 @@ export function buildSearchableModelOptions(input: {
         ? option.value === input.lockedProvider
         : protectedProviderSet.has(option.value) || !hiddenProviderSet.has(option.value),
     )
-    .flatMap((option) =>
-      input.modelOptionsByProvider[option.value].map(
-        ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-          provider: option.value,
-          providerLabel: option.label,
-          slug,
-          name,
-          searchSlug: slug.toLowerCase(),
-          searchName: name.toLowerCase(),
-          searchProvider: option.label.toLowerCase(),
-          searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
-        }),
-      ),
-    );
+    .flatMap((option) => {
+      const instanceId = option.instanceId ?? option.value;
+      return (
+        input.modelOptionsByProviderInstance?.[instanceId] ??
+        input.modelOptionsByProvider[option.value]
+      ).map(({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+        provider: option.value,
+        instanceId,
+        providerLabel: option.label,
+        slug,
+        name,
+        searchSlug: slug.toLowerCase(),
+        searchName: name.toLowerCase(),
+        searchProvider: option.label.toLowerCase(),
+        searchUpstreamProvider: (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
+      }));
+    });
 }
 
 export function useComposerCommandMenuItems(input: {
@@ -252,6 +296,8 @@ export function useComposerCommandMenuItems(input: {
   canOfferSideCommand: boolean;
   canOfferExportCommand: boolean;
   surfaceAppSlashCommands?: ReadonlySet<string>;
+  /** Artifact publishing state reported by provider command discovery. */
+  providerArtifacts?: ProviderArtifactsState | undefined;
   dynamicAgents: readonly ProviderAgentDescriptor[];
   threadMentionSources?: {
     readonly threads: readonly ComposerThreadMentionSource[];
@@ -274,6 +320,7 @@ export function useComposerCommandMenuItems(input: {
     canOfferSideCommand,
     canOfferExportCommand,
     surfaceAppSlashCommands,
+    providerArtifacts,
     dynamicAgents,
     threadMentionSources,
   } = input;
@@ -410,6 +457,11 @@ export function useComposerCommandMenuItems(input: {
       command: command.name,
       label: `/${command.name}`,
       description: command.description ?? `Run ${provider} native command`,
+      notice: getClaudeArtifactCommandNotice({
+        provider,
+        command: command.name,
+        artifacts: providerArtifacts,
+      }),
     }));
     // `/` is the universal picker surface; provider dispatch can adapt the
     // visible slash token to backend-specific skill syntax when needed.
@@ -448,10 +500,11 @@ export function useComposerCommandMenuItems(input: {
     { value: option.providerLabel, weight: 200 },
     { value: option.searchProvider, weight: 200 },
     { value: option.searchUpstreamProvider, weight: 200 },
-  ]).map(({ provider, providerLabel, slug, name }) => ({
-    id: `model:${provider}:${slug}`,
+  ]).map(({ provider, instanceId, providerLabel, slug, name }) => ({
+    id: `model:${instanceId}:${slug}`,
     type: "model" as const,
     provider,
+    instanceId,
     model: slug,
     label: name,
     description: `${providerLabel} · ${slug}`,

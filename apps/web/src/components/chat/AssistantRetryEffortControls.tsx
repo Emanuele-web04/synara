@@ -6,6 +6,7 @@
 import {
   type MessageId,
   type ModelSelection,
+  type OrchestrationThreadActivity,
   type ProviderModelDescriptor,
   type RuntimeMode,
   type ThreadId,
@@ -16,6 +17,7 @@ import type { ComponentProps, ReactNode } from "react";
 import type { ProviderOptions } from "../../providerModelOptions";
 import type { ChatMessage, TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
+import { MessageCopyButton } from "./MessageCopyButton";
 import {
   RetryEffortVariantPager,
   RetryWithDifferentEffortAction,
@@ -28,12 +30,14 @@ import {
   type RetryEffortVariant,
 } from "./retryWithDifferentEffort.logic";
 import { getComposerTraitSelection } from "./composerTraits";
+import { resolveDurableRetryEffortVariants } from "./retryEffortArchive";
 
 export type AssistantRetryEffortContext = {
   readonly threadId: ThreadId;
   readonly messages: ReadonlyArray<
     Pick<ChatMessage, "id" | "role" | "text" | "turnId" | "streaming">
   >;
+  readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
   readonly runtimeMode: RuntimeMode;
   readonly modelSelection: ModelSelection;
   readonly modelOptions: ProviderOptions | null | undefined;
@@ -51,7 +55,11 @@ function buildLiveVariant(input: {
   readonly prompt: string;
   readonly turnDiffSummary: TurnDiffSummary | undefined;
 }): RetryEffortVariant {
-  const effort = resolveEffortFromModelSelection(input.modelSelection);
+  const effort = resolveEffortFromModelSelection(
+    input.modelSelection,
+    input.runtimeModel,
+    input.prompt,
+  );
   const trait = getComposerTraitSelection(
     input.modelSelection.provider,
     input.modelSelection.model,
@@ -88,6 +96,12 @@ export function AssistantRetryEffortMessageText(props: {
     messages: props.context.messages,
     assistantMessageId: props.message.id,
   });
+  const durableVariants = resolveDurableRetryEffortVariants({
+    activities: props.context.activities,
+    userMessageId: precedingUser?.messageId ?? null,
+    userMessageText: precedingUser?.text ?? "",
+    runtimeModel: props.context.runtimeModel,
+  });
   const live = buildLiveVariant({
     message: props.message,
     modelSelection: props.context.modelSelection,
@@ -99,10 +113,47 @@ export function AssistantRetryEffortMessageText(props: {
   const displayedText = useDisplayedRetryVariantText({
     threadId: props.context.threadId,
     userMessageId: precedingUser?.messageId ?? null,
+    userMessageText: precedingUser?.text ?? "",
     live,
+    durableVariants,
     liveText: props.liveText,
   });
   return <ChatMarkdown {...props.markdownProps} text={displayedText} />;
+}
+
+export function AssistantRetryEffortCopyButton(props: {
+  readonly context: AssistantRetryEffortContext;
+  readonly message: Pick<ChatMessage, "id" | "text" | "turnId" | "createdAt" | "streaming">;
+  readonly liveText: string;
+  readonly turnDiffSummary: TurnDiffSummary | undefined;
+}): ReactNode {
+  const precedingUser = resolvePrecedingUserMessage({
+    messages: props.context.messages,
+    assistantMessageId: props.message.id,
+  });
+  const durableVariants = resolveDurableRetryEffortVariants({
+    activities: props.context.activities,
+    userMessageId: precedingUser?.messageId ?? null,
+    userMessageText: precedingUser?.text ?? "",
+    runtimeModel: props.context.runtimeModel,
+  });
+  const live = buildLiveVariant({
+    message: props.message,
+    modelSelection: props.context.modelSelection,
+    modelOptions: props.context.modelOptions,
+    runtimeModel: props.context.runtimeModel,
+    prompt: precedingUser?.text ?? "",
+    turnDiffSummary: props.turnDiffSummary,
+  });
+  const text = useDisplayedRetryVariantText({
+    threadId: props.context.threadId,
+    userMessageId: precedingUser?.messageId ?? null,
+    userMessageText: precedingUser?.text ?? "",
+    live,
+    durableVariants,
+    liveText: props.liveText,
+  });
+  return <MessageCopyButton text={text} />;
 }
 
 export function AssistantRetryEffortFooterActions(props: {
@@ -131,6 +182,12 @@ export function AssistantRetryEffortFooterActions(props: {
     messages: props.context.messages,
     assistantMessageId: props.message.id,
   });
+  const durableVariants = resolveDurableRetryEffortVariants({
+    activities: props.context.activities,
+    userMessageId: precedingUser?.messageId ?? null,
+    userMessageText: precedingUser?.text ?? "",
+    runtimeModel: props.context.runtimeModel,
+  });
   const live = buildLiveVariant({
     message: props.message,
     modelSelection: props.context.modelSelection,
@@ -140,18 +197,15 @@ export function AssistantRetryEffortFooterActions(props: {
     turnDiffSummary: props.turnDiffSummary,
   });
 
-  // Hide entirely when the model has no effort ladder at all.
-  if (availability.effortOptions.length === 0) {
-    return null;
-  }
-
   return (
     <>
       {precedingUser ? (
         <RetryEffortVariantPager
           threadId={props.context.threadId}
           userMessageId={precedingUser.messageId}
+          userMessageText={precedingUser.text}
           live={live}
+          durableVariants={durableVariants}
         />
       ) : null}
       <RetryWithDifferentEffortAction

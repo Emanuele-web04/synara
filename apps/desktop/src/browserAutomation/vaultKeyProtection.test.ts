@@ -7,6 +7,9 @@ import { VaultKeyProtection, type VaultKeyStore } from "./vaultKeyProtection";
 
 const homes: string[] = [];
 const password = "synthetic-master-test-password";
+// Keep the production KDF parameters under test without tying the suite to the
+// default five-second budget on a contended workspace runner.
+const VAULT_TEST_TIMEOUT_MS = 30_000;
 afterEach(async () => {
   for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
 });
@@ -34,7 +37,7 @@ function keyStore(): VaultKeyStore {
   };
 }
 
-describe("vault key protection", () => {
+describe("vault key protection", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
   it("requires setup without OS storage, persists only a wrapped key, and locks on restart", async () => {
     const home = await directory();
     const keys = new VaultKeyProtection(home);

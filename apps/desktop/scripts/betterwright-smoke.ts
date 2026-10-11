@@ -2,7 +2,9 @@ import { app, BrowserWindow, WebContentsView, clipboard } from "electron";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runBetterwright } from "../src/browserAutomation/betterwrightRuntime";
+import { configureElectronNetwork } from "betterwright/electron";
 
+configureElectronNetwork();
 const home = path.resolve(process.env.SYNARA_SMOKE_HOME ?? ".synara-betterwright-smoke");
 app.setPath("userData", path.join(home, "electron"));
 async function smoke() {

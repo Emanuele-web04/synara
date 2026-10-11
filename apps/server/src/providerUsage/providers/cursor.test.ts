@@ -3,11 +3,37 @@
 
 import nodePath from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { outboundHttp } from "@synara/shared/outboundHttp";
+import * as credentials from "../credentials";
 
-import { cursorStateDbPaths } from "./cursor";
+import { cursorStateDbPaths, cursorUsageFetcher } from "./cursor";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("cursorStateDbPaths", () => {
+  it("does not use the global Keychain token for an isolated account", async () => {
+    const keychainRead = vi
+      .spyOn(credentials, "readKeychainPassword")
+      .mockResolvedValue("personal-token");
+    const request = vi.spyOn(outboundHttp, "request").mockResolvedValue({
+      status: 200,
+      headers: new Headers(),
+      body: new TextEncoder().encode("{}"),
+      url: "https://api2.cursor.sh",
+    });
+    const snapshot = await cursorUsageFetcher.fetch({
+      homeDir: "/nonexistent-cursor-account",
+      env: {},
+      platform: "darwin",
+      nowMs: 1_780_000_000_000,
+      isolateCredentials: true,
+    });
+    expect(snapshot.status).toBe("needs-auth");
+    expect(keychainRead).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("uses Application Support on macOS", () => {
     expect(
       cursorStateDbPaths({

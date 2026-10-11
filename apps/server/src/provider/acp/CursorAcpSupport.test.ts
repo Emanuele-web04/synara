@@ -1,13 +1,20 @@
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { describe, expect, it } from "vitest";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { describe, expect, it, vi } from "vitest";
 
+import {
+  AcpSessionRuntime,
+  type AcpSessionRuntimeOptions,
+  type AcpSessionRuntimeShape,
+} from "./AcpSessionRuntime.ts";
 import {
   applyCursorAcpModelSelection,
   buildCursorCliModelListCommand,
   buildCursorAcpModelDescriptorsFromAvailableModels,
   buildCursorAcpSpawnInput,
   flattenCursorAcpModelChoices,
+  makeCursorAcpRuntime,
   parseCursorCliModelList,
   type CursorAcpAvailableModel,
 } from "./CursorAcpSupport.ts";
@@ -125,55 +132,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
-    });
-  });
-
-  it("maps the old ambiguous agent default to cursor-agent", () => {
-    expect(buildCursorAcpSpawnInput({ binaryPath: "agent" }, "/tmp/project")).toMatchObject({
-      command: "cursor-agent",
-      args: ["acp"],
-      cwd: "/tmp/project",
-      env: {
-        NO_BROWSER: "true",
-        BROWSER: "www-browser",
-      },
-    });
-  });
-
-  it("uses configured Cursor editor launchers when no agent command is resolved", () => {
-    expect(
-      buildCursorAcpSpawnInput(
-        { binaryPath: "/not-real/bin/cursor" },
-        "/tmp/project",
-        noCursorAgentCommandOptions,
-      ),
-    ).toMatchObject({
-      command: "/not-real/bin/cursor",
-      args: ["agent", "acp"],
-      cwd: "/tmp/project",
-      env: {
-        NO_BROWSER: "true",
-        BROWSER: "www-browser",
-      },
-    });
-  });
-
-  it("uses bundled sibling agent commands for Cursor editor ACP startup", () => {
-    const cursorPath = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor";
-    const agentPath = "/Applications/Cursor.app/Contents/Resources/app/bin/agent";
-    expect(
-      buildCursorAcpSpawnInput({ binaryPath: cursorPath }, "/tmp/project", {
-        env: { PATH: "" },
-        pathExists: (path) => path === agentPath,
-      }),
-    ).toMatchObject({
-      command: agentPath,
-      args: ["acp"],
-      cwd: "/tmp/project",
-      env: {
-        NO_BROWSER: "true",
-        BROWSER: "www-browser",
-      },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 
@@ -194,6 +153,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 
@@ -215,6 +175,7 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+      providerEnvironment: { driver: "cursor" },
     });
   });
 });
@@ -240,6 +201,33 @@ describe("buildCursorCliModelListCommand", () => {
       command: "/not-real/bin/cursor",
       args: ["agent", "-e", "http://localhost:3000", "models"],
     });
+  });
+});
+
+describe("makeCursorAcpRuntime", () => {
+  it("selects on-demand authentication so session start skips the OAuth login page", async () => {
+    const fakeRuntime = {} as AcpSessionRuntimeShape;
+    let capturedOptions: AcpSessionRuntimeOptions | undefined;
+    const layerSpy = vi.spyOn(AcpSessionRuntime, "layer").mockImplementation((options) => {
+      capturedOptions = options;
+      return Layer.succeed(AcpSessionRuntime, fakeRuntime);
+    });
+
+    try {
+      const runtime = await Effect.runPromise(
+        makeCursorAcpRuntime({
+          childProcessSpawner: {} as ChildProcessSpawner.ChildProcessSpawner["Service"],
+          cursorSettings: undefined,
+          cwd: "/tmp/project",
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        }).pipe(Effect.scoped),
+      );
+
+      expect(runtime).toBe(fakeRuntime);
+      expect(capturedOptions?.authPolicy).toBe("on-demand");
+    } finally {
+      layerSpy.mockRestore();
+    }
   });
 });
 
@@ -375,7 +363,48 @@ claude-opus-4-7 - Claude Opus 4.7
 });
 
 describe("applyCursorAcpModelSelection", () => {
-  it("selects Cursor auto explicitly when the ACP model picker exposes it", async () => {
+  it.each([
+    {
+      name: "selects Cursor auto explicitly when the ACP model picker exposes it",
+      currentValue: "composer-2[fast=true]",
+      choices: [
+        { value: "auto", name: "Auto" },
+        { value: "composer-2[fast=true]", name: "Composer 2" },
+      ],
+      model: "auto",
+      expected: "auto",
+    },
+    {
+      name: "maps Cursor auto to legacy ACP default model values named Auto",
+      currentValue: "composer-2[fast=true]",
+      choices: [
+        { value: "default[]", name: "Auto" },
+        { value: "composer-2[fast=true]", name: "Composer 2" },
+      ],
+      model: "auto",
+      expected: "default[]",
+    },
+    {
+      name: "maps legacy Cursor base slugs with fast mode defaulted off",
+      currentValue: "default[]",
+      choices: [
+        { value: "default[]", name: "Auto" },
+        { value: "composer-2[fast=true]", name: "Composer 2" },
+      ],
+      model: "composer-2",
+      expected: "composer-2[fast=false]",
+    },
+    {
+      name: "maps unsupported false boolean parameters to an available Cursor ACP model value",
+      currentValue: "grok-4-20[thinking=true]",
+      choices: [
+        { value: "default[]", name: "Auto" },
+        { value: "grok-4-20[thinking=true]", name: "Grok 4.20" },
+      ],
+      model: "grok-4-20[thinking=false]",
+      expected: "grok-4-20[thinking=true]",
+    },
+  ])("$name", async ({ currentValue, choices, model, expected }) => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
       | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
@@ -388,11 +417,8 @@ describe("applyCursorAcpModelSelection", () => {
           name: "Model",
           category: "model",
           type: "select",
-          currentValue: "composer-2[fast=true]",
-          options: [
-            { value: "auto", name: "Auto" },
-            { value: "composer-2[fast=true]", name: "Composer 2" },
-          ],
+          currentValue,
+          options: choices,
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
       setModel: (value: string) =>
@@ -408,139 +434,13 @@ describe("applyCursorAcpModelSelection", () => {
     await Effect.runPromise(
       applyCursorAcpModelSelection({
         runtime,
-        model: "auto",
+        model,
         options: undefined,
         mapError: ({ cause }) => cause,
       }),
     );
 
-    expect(calls).toEqual([{ type: "model", value: "auto" }]);
-  });
-
-  it("maps Cursor auto to legacy ACP default model values named Auto", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
-
-    const runtime = {
-      getConfigOptions: Effect.succeed([
-        {
-          id: "model",
-          name: "Model",
-          category: "model",
-          type: "select",
-          currentValue: "composer-2[fast=true]",
-          options: [
-            { value: "default[]", name: "Auto" },
-            { value: "composer-2[fast=true]", name: "Composer 2" },
-          ],
-        },
-      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
-    };
-
-    await Effect.runPromise(
-      applyCursorAcpModelSelection({
-        runtime,
-        model: "auto",
-        options: undefined,
-        mapError: ({ cause }) => cause,
-      }),
-    );
-
-    expect(calls).toEqual([{ type: "model", value: "default[]" }]);
-  });
-
-  it("maps legacy Cursor base slugs with fast mode defaulted off", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
-
-    const runtime = {
-      getConfigOptions: Effect.succeed([
-        {
-          id: "model",
-          name: "Model",
-          category: "model",
-          type: "select",
-          currentValue: "default[]",
-          options: [
-            { value: "default[]", name: "Auto" },
-            { value: "composer-2[fast=true]", name: "Composer 2" },
-          ],
-        },
-      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
-    };
-
-    await Effect.runPromise(
-      applyCursorAcpModelSelection({
-        runtime,
-        model: "composer-2",
-        options: undefined,
-        mapError: ({ cause }) => cause,
-      }),
-    );
-
-    expect(calls).toEqual([{ type: "model", value: "composer-2[fast=false]" }]);
-  });
-
-  it("maps unsupported false boolean parameters to an available Cursor ACP model value", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
-
-    const runtime = {
-      getConfigOptions: Effect.succeed([
-        {
-          id: "model",
-          name: "Model",
-          category: "model",
-          type: "select",
-          currentValue: "grok-4-20[thinking=true]",
-          options: [
-            { value: "default[]", name: "Auto" },
-            { value: "grok-4-20[thinking=true]", name: "Grok 4.20" },
-          ],
-        },
-      ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
-    };
-
-    await Effect.runPromise(
-      applyCursorAcpModelSelection({
-        runtime,
-        model: "grok-4-20[thinking=false]",
-        options: undefined,
-        mapError: ({ cause }) => cause,
-      }),
-    );
-
-    expect(calls).toEqual([{ type: "model", value: "grok-4-20[thinking=true]" }]);
+    expect(calls).toEqual([{ type: "model", value: expected }]);
   });
 
   it("sets the base model before applying separate config options", async () => {

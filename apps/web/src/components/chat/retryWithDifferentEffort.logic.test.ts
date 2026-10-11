@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MessageId, TurnId, type ModelSelection } from "@synara/contracts";
+import {
+  MessageId,
+  ProviderInstanceId,
+  TurnId,
+  type ModelSelection,
+  type ProviderModelDescriptor,
+} from "@synara/contracts";
 
 import {
   buildRetryConfirmCopy,
@@ -40,6 +46,36 @@ function messages() {
       streaming: false,
     },
   ];
+}
+
+const runtimeModel: ProviderModelDescriptor = {
+  slug: "gateway-model",
+  name: "Gateway model",
+  supportedReasoningEfforts: [{ value: "low" }, { value: "high" }],
+  defaultReasoningEffort: "high",
+};
+
+function availableInput(): Parameters<typeof resolveRetryWithDifferentEffortAvailability>[0] {
+  return {
+    messages: messages(),
+    assistantMessageId: assistantId,
+    assistantTurnId: turnId,
+    showAssistantCopyButton: true,
+    assistantTurnInProgress: false,
+    runtimeMode: "approval-required",
+    modelSelection: { provider: "codex", model: runtimeModel.slug },
+    modelOptions: undefined,
+    runtimeModel,
+    turnDiffSummary: {
+      turnId,
+      completedAt: "2026-09-14T00:00:00.000Z",
+      files: [],
+      checkpointTurnCount: 2,
+      checkpointRef: "refs/synara/checkpoints/demo/turn/2" as never,
+    },
+    activeTurnId: null,
+    isBusy: false,
+  };
 }
 
 describe("resolveRetryWithDifferentEffortAvailability", () => {
@@ -219,5 +255,166 @@ describe("resolvePrecedingUserMessage", () => {
       text: "fix the flaky test",
       index: 0,
     });
+  });
+});
+
+describe("retry effort safety boundaries", () => {
+  it.each([undefined, ""])(
+    "requires a real checkpoint ref, not just a turn counter (%s)",
+    (checkpointRef) => {
+      const input = availableInput();
+      const availability = resolveRetryWithDifferentEffortAvailability({
+        ...input,
+        turnDiffSummary: { ...input.turnDiffSummary!, checkpointRef: checkpointRef as never },
+      });
+      expect(availability.enabled).toBe(false);
+      if (availability.enabled) return;
+      expect(availability.reason).toBe("no-checkpoint");
+    },
+  );
+
+  it.each(["missing", "error"] as const)("refuses a checkpoint with status %s", (status) => {
+    const input = availableInput();
+    const availability = resolveRetryWithDifferentEffortAvailability({
+      ...input,
+      turnDiffSummary: { ...input.turnDiffSummary!, status },
+    });
+    expect(availability.enabled).toBe(false);
+    if (availability.enabled) return;
+    expect(availability.reason).toBe("no-checkpoint");
+  });
+
+  it("does not let an earlier assistant answer reuse the final answer's tail prompt", () => {
+    const input = availableInput();
+    const availability = resolveRetryWithDifferentEffortAvailability({
+      ...input,
+      messages: [
+        ...input.messages,
+        {
+          id: MessageId.makeUnsafe("later-assistant"),
+          role: "assistant",
+          text: "A later final answer for the same prompt.",
+          turnId,
+          streaming: false,
+        },
+      ],
+    });
+    expect(availability.enabled).toBe(false);
+    if (availability.enabled) return;
+    expect(availability.reason).toBe("not-tail");
+  });
+
+  it("marks the effective runtime default when no effort override was persisted", () => {
+    const availability = resolveRetryWithDifferentEffortAvailability(availableInput());
+    expect(availability.enabled).toBe(true);
+    expect(availability.currentEffort).toBe("high");
+    expect(availability.effortOptions.filter((option) => option.isCurrent)).toEqual([
+      { value: "high", label: "High", isDefault: true, isCurrent: true },
+    ]);
+  });
+
+  it("refuses a destructive retry at the already effective effort", () => {
+    expect(
+      planRetryEffortChange({
+        provider: "codex",
+        model: runtimeModel.slug,
+        runtimeModel,
+        modelOptions: undefined,
+        prompt: "fix the flaky test",
+        nextEffort: "high",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the selected provider instance and unrelated model options", () => {
+    const instanceId = ProviderInstanceId.makeUnsafe("codex-private");
+    const planned = planRetryEffortChange({
+      provider: "codex",
+      instanceId,
+      model: runtimeModel.slug,
+      runtimeModel,
+      modelOptions: { reasoningEffort: "high", fastMode: true },
+      prompt: "fix the flaky test",
+      nextEffort: "low",
+    });
+    expect(planned?.nextModelSelection).toEqual({
+      provider: "codex",
+      instanceId,
+      model: runtimeModel.slug,
+      options: { reasoningEffort: "low", fastMode: true },
+    });
+    expect(planned?.nextPrompt).toBe("fix the flaky test");
+  });
+
+  it("uses Devin reasoning effort without treating the concrete model variant as effort", () => {
+    const availability = resolveRetryWithDifferentEffortAvailability({
+      ...availableInput(),
+      modelSelection: {
+        provider: "devin",
+        model: runtimeModel.slug,
+        options: { reasoningEffort: "high", modelVariant: "gateway-model-high" },
+      },
+    });
+    expect(availability.currentEffort).toBe("high");
+    expect(availability.effortOptions.find((option) => option.isCurrent)?.value).toBe("high");
+  });
+
+  it("uses the OMP thinking level descriptor", () => {
+    const availability = resolveRetryWithDifferentEffortAvailability({
+      ...availableInput(),
+      modelSelection: {
+        provider: "omp",
+        model: runtimeModel.slug,
+        options: { thinkingLevel: "high" },
+      },
+    });
+    expect(availability.currentEffort).toBe("high");
+    expect(availability.effortOptions.find((option) => option.isCurrent)?.value).toBe("high");
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses an invalid checkpoint turn count %s",
+    (checkpointTurnCount) => {
+      const input = availableInput();
+      const availability = resolveRetryWithDifferentEffortAvailability({
+        ...input,
+        turnDiffSummary: { ...input.turnDiffSummary!, checkpointTurnCount },
+      });
+      expect(availability.enabled).toBe(false);
+      if (availability.enabled) return;
+      expect(availability.reason).toBe("no-checkpoint");
+    },
+  );
+
+  it("refuses another turn's checkpoint even if its counter is valid", () => {
+    const input = availableInput();
+    const availability = resolveRetryWithDifferentEffortAvailability({
+      ...input,
+      turnDiffSummary: { ...input.turnDiffSummary!, turnId: TurnId.makeUnsafe("other-turn") },
+    });
+    expect(availability.enabled).toBe(false);
+    if (availability.enabled) return;
+    expect(availability.reason).toBe("no-checkpoint");
+  });
+
+  it("refuses a retry while a provider turn is active even before the busy projection updates", () => {
+    const availability = resolveRetryWithDifferentEffortAvailability({
+      ...availableInput(),
+      activeTurnId: TurnId.makeUnsafe("next-turn"),
+    });
+    expect(availability.enabled).toBe(false);
+    if (availability.enabled) return;
+    expect(availability.reason).toBe("busy");
+  });
+
+  it("names the pre-turn checkpoint consistently when no files changed", () => {
+    const copy = buildRetryConfirmCopy({
+      changedFileCount: 0,
+      checkpointTurnCount: 2,
+      nextEffortLabel: "Low",
+      currentEffortLabel: "High",
+    });
+    expect(copy).toContain("checkpoint 1");
+    expect(copy).not.toContain("checkpoint 2");
   });
 });

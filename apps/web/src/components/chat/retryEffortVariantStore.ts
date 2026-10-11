@@ -12,6 +12,7 @@ import type { RetryEffortVariant } from "./retryWithDifferentEffort.logic";
 type VariantGroupKey = string;
 
 type VariantGroup = {
+  readonly userMessageText: string | null;
   readonly variants: RetryEffortVariant[];
   /** 0-based active index into `variants` (live attempt is usually last). */
   readonly activeIndex: number;
@@ -22,12 +23,15 @@ type RetryEffortVariantState = {
   archiveVariant: (input: {
     readonly threadId: ThreadId;
     readonly userMessageId: MessageId;
+    readonly userMessageText: string;
     readonly variant: RetryEffortVariant;
   }) => void;
   setActiveIndex: (input: {
     readonly threadId: ThreadId;
     readonly userMessageId: MessageId;
     readonly activeIndex: number;
+    readonly userMessageText: string;
+    readonly archivedVariants: ReadonlyArray<RetryEffortVariant>;
   }) => void;
   clearGroup: (input: { readonly threadId: ThreadId; readonly userMessageId: MessageId }) => void;
 };
@@ -74,24 +78,35 @@ function normalizeGroup(value: unknown): VariantGroup | null {
     value.activeIndex <= variants.length
       ? value.activeIndex
       : variants.length;
-  return { variants, activeIndex };
+  return {
+    variants,
+    activeIndex,
+    userMessageText: typeof value.userMessageText === "string" ? value.userMessageText : null,
+  };
 }
 
 export function getRetryEffortVariantGroup(
   state: Pick<RetryEffortVariantState, "groups">,
   threadId: ThreadId,
   userMessageId: MessageId,
+  userMessageText: string,
 ): VariantGroup | null {
-  return state.groups[groupKey(threadId, userMessageId)] ?? null;
+  const group = state.groups[groupKey(threadId, userMessageId)];
+  return group?.userMessageText === userMessageText ? group : null;
 }
 
 export const useRetryEffortVariantStore = create<RetryEffortVariantState>()(
   persist(
     (set, get) => ({
       groups: {},
-      archiveVariant: ({ threadId, userMessageId, variant }) => {
+      archiveVariant: ({ threadId, userMessageId, userMessageText, variant }) => {
         const key = groupKey(threadId, userMessageId);
-        const existing = get().groups[key];
+        const existing = getRetryEffortVariantGroup(
+          get(),
+          threadId,
+          userMessageId,
+          userMessageText,
+        );
         const withoutDuplicate = (existing?.variants ?? []).filter(
           (candidate) => candidate.assistantMessageId !== variant.assistantMessageId,
         );
@@ -100,6 +115,7 @@ export const useRetryEffortVariantStore = create<RetryEffortVariantState>()(
           groups: {
             ...get().groups,
             [key]: {
+              userMessageText,
               variants,
               // Point at the upcoming live tip after merge (archived.length).
               activeIndex: variants.length,
@@ -107,16 +123,25 @@ export const useRetryEffortVariantStore = create<RetryEffortVariantState>()(
           },
         });
       },
-      setActiveIndex: ({ threadId, userMessageId, activeIndex }) => {
+      setActiveIndex: ({
+        threadId,
+        userMessageId,
+        userMessageText,
+        archivedVariants,
+        activeIndex,
+      }) => {
         const key = groupKey(threadId, userMessageId);
-        const existing = get().groups[key];
-        if (!existing) return;
-        // Allow one past archived length so the merged live tip stays selectable.
-        if (activeIndex < 0 || activeIndex > existing.variants.length) return;
+        // A second client can page durable receipts without a prior local archive.
+        if (
+          !Number.isInteger(activeIndex) ||
+          activeIndex < 0 ||
+          activeIndex > archivedVariants.length
+        )
+          return;
         set({
           groups: {
             ...get().groups,
-            [key]: { ...existing, activeIndex },
+            [key]: { userMessageText, variants: [...archivedVariants], activeIndex },
           },
         });
       },

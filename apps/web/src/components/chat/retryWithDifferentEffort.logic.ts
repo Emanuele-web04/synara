@@ -5,15 +5,16 @@
 // Depends on: composer trait resolution and provider option patch helpers.
 
 import {
+  type CheckpointRef,
   type MessageId,
   type ModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type RuntimeMode,
   type TurnId,
 } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
-import { getModelSelectionStringOptionValue } from "@synara/shared/model";
 
 import {
   buildModelSelection,
@@ -42,6 +43,7 @@ export type RetryWithDifferentEffortDisabledReason =
   | "no-effort-levels"
   | "no-alternate-effort"
   | "no-checkpoint"
+  | "prompt-controlled"
   | "busy"
   | "missing-user-message";
 
@@ -54,6 +56,7 @@ export type RetryWithDifferentEffortAvailability =
       readonly currentEffort: string | null;
       readonly effortOptions: ReadonlyArray<RetryEffortOption>;
       readonly checkpointTurnCount: number;
+      readonly checkpointRef: CheckpointRef;
       readonly changedFileCount: number;
     }
   | {
@@ -94,6 +97,8 @@ export function retryEffortDisabledReasonLabel(
       return "This model only exposes the current effort level.";
     case "no-checkpoint":
       return "Retry is disabled because no pre-turn workspace checkpoint exists for this turn.";
+    case "prompt-controlled":
+      return "This prompt fixes the effort level. Edit the prompt to change it.";
     case "busy":
       return "Wait for the current send or checkpoint restore to finish.";
     case "missing-user-message":
@@ -101,20 +106,28 @@ export function retryEffortDisabledReasonLabel(
   }
 }
 
-function effortOptionIdForProvider(provider: ProviderKind): string {
-  if (provider === "opencode") return "variant";
-  if (provider === "pi") return "thinkingLevel";
-  if (provider === "claudeAgent") return "effort";
-  if (provider === "devin") return "modelVariant";
-  return "reasoningEffort";
+function effectiveEffort(selection: ReturnType<typeof getComposerTraitSelection>): string | null {
+  return selection.ultrathinkPromptControlled
+    ? (selection.effortLevels.find((level) => selection.promptInjectedValues.includes(level.value))
+        ?.value ?? selection.effort)
+    : selection.effort;
 }
 
 export function resolveEffortFromModelSelection(
   modelSelection: ModelSelection | null | undefined,
+  runtimeModel?: ProviderModelDescriptor,
+  prompt = "",
 ): string | null {
   if (!modelSelection) return null;
-  const optionId = effortOptionIdForProvider(modelSelection.provider);
-  return getModelSelectionStringOptionValue(modelSelection, optionId) ?? null;
+  return effectiveEffort(
+    getComposerTraitSelection(
+      modelSelection.provider,
+      modelSelection.model,
+      prompt,
+      modelSelection.options,
+      runtimeModel,
+    ),
+  );
 }
 
 export function resolvePrecedingUserMessage(input: {
@@ -144,21 +157,10 @@ export function isTerminalSettledAssistantMessage(input: {
 }
 
 function buildEffortOptions(input: {
-  readonly provider: ProviderKind;
-  readonly model: string | null | undefined;
-  readonly modelOptions: ProviderOptions | null | undefined;
-  readonly prompt: string;
-  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly selection: ReturnType<typeof getComposerTraitSelection>;
   readonly currentEffort: string | null;
 }): ReadonlyArray<RetryEffortOption> {
-  const selection = getComposerTraitSelection(
-    input.provider,
-    input.model,
-    input.prompt,
-    input.modelOptions,
-    input.runtimeModel,
-  );
-  return selection.effortLevels.map((level) => ({
+  return input.selection.effortLevels.map((level) => ({
     value: level.value,
     label: level.label,
     ...(level.description ? { description: level.description } : {}),
@@ -183,20 +185,19 @@ export function resolveRetryWithDifferentEffortAvailability(input: {
   readonly activeTurnId: TurnId | null | undefined;
   readonly isBusy: boolean;
 }): RetryWithDifferentEffortAvailability {
-  const currentEffort = resolveEffortFromModelSelection(input.modelSelection);
   const precedingUser = resolvePrecedingUserMessage({
     messages: input.messages,
     assistantMessageId: input.assistantMessageId,
   });
-  const effortOptions = buildEffortOptions({
-    provider: input.modelSelection.provider,
-    model: input.modelSelection.model,
-    modelOptions:
-      input.modelOptions ?? (input.modelSelection.options as ProviderOptions | undefined),
-    prompt: precedingUser?.text ?? "",
-    runtimeModel: input.runtimeModel,
-    currentEffort,
-  });
+  const selection = getComposerTraitSelection(
+    input.modelSelection.provider,
+    input.modelSelection.model,
+    precedingUser?.text ?? "",
+    input.modelOptions ?? input.modelSelection.options,
+    input.runtimeModel,
+  );
+  const currentEffort = effectiveEffort(selection);
+  const effortOptions = buildEffortOptions({ selection, currentEffort });
 
   const disabled = (
     reason: RetryWithDifferentEffortDisabledReason,
@@ -208,7 +209,7 @@ export function resolveRetryWithDifferentEffortAvailability(input: {
     currentEffort,
   });
 
-  if (input.isBusy) {
+  if (input.isBusy || input.activeTurnId != null) {
     return disabled("busy");
   }
 
@@ -242,22 +243,40 @@ export function resolveRetryWithDifferentEffortAvailability(input: {
   if (!editTarget.editable) {
     return disabled("not-tail");
   }
+  if (
+    input.messages.findLast((message) => message.role === "assistant")?.id !==
+    input.assistantMessageId
+  ) {
+    return disabled("not-tail");
+  }
 
   if (effortOptions.length === 0) {
     return disabled("no-effort-levels");
+  }
+  if (selection.ultrathinkPromptControlled) {
+    return disabled("prompt-controlled");
   }
   if (!effortOptions.some((option) => !option.isCurrent)) {
     return disabled("no-alternate-effort");
   }
 
-  const checkpointTurnCount = input.turnDiffSummary?.checkpointTurnCount;
-  if (typeof checkpointTurnCount !== "number") {
-    return disabled("no-checkpoint");
-  }
-
-  const turnId = input.assistantTurnId ?? input.turnDiffSummary?.turnId;
+  const turnId = input.assistantTurnId ?? assistantMessage.turnId;
   if (!turnId) {
     return disabled("not-settled");
+  }
+  const checkpointTurnCount = input.turnDiffSummary?.checkpointTurnCount;
+  const checkpointRef = input.turnDiffSummary?.checkpointRef;
+  if (
+    typeof checkpointTurnCount !== "number" ||
+    !Number.isSafeInteger(checkpointTurnCount) ||
+    checkpointTurnCount < 1 ||
+    typeof checkpointRef !== "string" ||
+    checkpointRef.length === 0 ||
+    (input.turnDiffSummary?.status !== undefined && input.turnDiffSummary.status !== "ready") ||
+    input.turnDiffSummary?.turnId !== turnId ||
+    (assistantMessage.turnId != null && assistantMessage.turnId !== turnId)
+  ) {
+    return disabled("no-checkpoint");
   }
 
   return {
@@ -268,12 +287,15 @@ export function resolveRetryWithDifferentEffortAvailability(input: {
     currentEffort,
     effortOptions,
     checkpointTurnCount,
+    checkpointRef,
     changedFileCount: input.turnDiffSummary?.files.length ?? 0,
   };
 }
 
 export function planRetryEffortChange(input: {
   readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | undefined;
+  readonly supportsAutoMode?: boolean | undefined;
   readonly model: string;
   readonly modelOptions: ProviderOptions | null | undefined;
   readonly prompt: string;
@@ -292,6 +314,7 @@ export function planRetryEffortChange(input: {
     input.modelOptions,
     input.runtimeModel,
   );
+  if (input.nextEffort === effectiveEffort(selection)) return null;
   const effortPlan = planComposerEffortChange({
     provider: input.provider,
     selection,
@@ -311,6 +334,8 @@ export function planRetryEffortChange(input: {
         input.provider,
         input.model,
         input.modelOptions ?? undefined,
+        input.supportsAutoMode,
+        { instanceId: input.instanceId },
       ),
       nextPrompt: effortPlan.prompt,
       effortLabel,
@@ -324,7 +349,13 @@ export function planRetryEffortChange(input: {
   );
   return {
     effortPlan,
-    nextModelSelection: buildModelSelection(input.provider, input.model, nextOptions),
+    nextModelSelection: buildModelSelection(
+      input.provider,
+      input.model,
+      nextOptions,
+      input.supportsAutoMode,
+      { instanceId: input.instanceId },
+    ),
     nextPrompt: input.prompt,
     effortLabel,
   };
@@ -352,7 +383,7 @@ export function buildRetryConfirmCopy(input: {
     return [
       effortLine,
       "The previous answer stays available in the variant pager.",
-      `Workspace checkpoint ${input.checkpointTurnCount} will be restored before the new attempt.`,
+      `Workspace checkpoint ${Math.max(0, input.checkpointTurnCount - 1)} will be restored before the new attempt.`,
       "A pre-retry snapshot is captured so current files are not discarded silently.",
     ].join("\n");
   }
