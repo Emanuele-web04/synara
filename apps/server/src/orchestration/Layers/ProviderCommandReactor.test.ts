@@ -5424,7 +5424,7 @@ describe("ProviderCommandReactor", () => {
           model: "gpt-5-codex",
         },
         message: expect.stringContaining(
-          "User intent: Fix the backend authentication callback race",
+          'User intent: "Fix the backend authentication callback race"',
         ),
       }),
     );

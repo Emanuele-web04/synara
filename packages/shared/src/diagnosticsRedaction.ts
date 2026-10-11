@@ -18,7 +18,7 @@ const REDACTED = "[redacted]";
  * quadratic on adversarial input.
  */
 const SENSITIVE_KEY =
-  /token|secret|password|api[_-]?key|auth|cookie|session|credential|key|sess|sid/i;
+  /token|secret|password|api[_-]?key|auth|bearer|cookie|session|credential|key|sess|sid/i;
 
 /** URL schemes that address this machine or the app bundle, never a remote org. */
 const LOCAL_URL_SCHEME =
