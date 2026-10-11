@@ -16,14 +16,16 @@ const ATTACHMENT_REMOVE_BUTTON_SIZE_STYLES: Record<
   AttachmentRemoveButtonSize,
   { button: string; icon: string }
 > = {
-  sm: { button: "size-3.5 focus-visible:ring-1", icon: "size-2.5" },
-  md: { button: "size-5 focus-visible:ring-2", icon: "size-3" },
+  // Visual discs stay compact; an invisible hit-slop pseudo-element lifts the
+  // interactive target to >=24px without changing the badge silhouette.
+  sm: { button: "size-3.5 after:-inset-[5px] focus-visible:ring-1", icon: "size-2.5" },
+  md: { button: "size-5 after:-inset-0.5 focus-visible:ring-2", icon: "size-3" },
 };
 
 const ATTACHMENT_REMOVE_BUTTON_TONE_STYLES: Record<AttachmentRemoveButtonTone, string> = {
   solid: "bg-foreground/80 text-background shadow-sm transition-colors hover:bg-foreground",
   ghost:
-    "text-[var(--color-text-foreground-tertiary)] transition-all hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+    "text-[var(--color-text-foreground-tertiary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
 };
 
 interface AttachmentRemoveButtonProps {
@@ -52,7 +54,7 @@ export function AttachmentRemoveButton({
     <button
       type="button"
       className={cn(
-        "absolute flex items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-ring",
+        "absolute flex items-center justify-center rounded-full after:absolute after:content-[''] focus-visible:outline-none focus-visible:ring-ring",
         ATTACHMENT_REMOVE_BUTTON_TONE_STYLES[tone],
         placement === "center-right" ? "right-1 top-1/2 -translate-y-1/2" : "right-1 top-1",
         styles.button,

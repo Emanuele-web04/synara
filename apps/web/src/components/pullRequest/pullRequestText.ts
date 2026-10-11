@@ -24,7 +24,7 @@ export const PR_FINE_TEXT_CLASS_NAME = "text-ui-sm";
 /** The ink for ambient metadata that frames a pull request without competing with it: author,
  *  repository, branch, relative time, diff counts, list group headers. `--muted-foreground` is
  *  the app's *secondary* tier (the runtime theme resolves it to ink at ~70%) — one step too
- *  present for a dense list, where it makes every row read as two equal lines. At 70% of that
- *  it lands on the tertiary tier the app already uses for placeholder and label text, so the
+ *  present for a dense list, where it makes every row read as two equal lines. At 80% of that —
+ *  the floor the app allows for informative text — it lands on the tertiary tier, so the
  *  title is the only thing with weight and the rest reads as texture. */
-export const PR_QUIET_INK_CLASS_NAME = "text-muted-foreground/70";
+export const PR_QUIET_INK_CLASS_NAME = "text-muted-foreground/80";

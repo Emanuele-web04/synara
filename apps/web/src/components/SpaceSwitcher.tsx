@@ -94,7 +94,7 @@ const TAB_STRIP_FADE_CLASS_NAME =
   "mask-l-from-[calc(100%-min(var(--fade-size),var(--space-overflow-start)))] mask-r-from-[calc(100%-min(var(--fade-size),var(--space-overflow-end)))] [--fade-size:1.25rem] [--space-overflow-end:0px] [--space-overflow-start:0px]";
 
 const SPACE_TAB_CLASS_NAME =
-  "relative flex size-6 shrink-0 cursor-pointer touch-none items-center justify-center rounded-md text-muted-foreground/70 outline-hidden transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  "relative flex size-6 shrink-0 cursor-pointer touch-none items-center justify-center rounded-md text-muted-foreground/80 outline-hidden transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--sidebar-accent-foreground)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
 /**
  * Hover and selection share one token (`--sidebar-accent`/`--sidebar-accent-active`
@@ -220,15 +220,15 @@ function SpaceTab(props: {
       </TooltipTrigger>
       <TooltipPopup side="bottom">
         {props.name}
-        {detail ? <span className="text-muted-foreground/70"> · {detail}</span> : null}
+        {detail ? <span className="text-muted-foreground/80"> · {detail}</span> : null}
         {props.shortcutLabel ? (
-          <span className="text-muted-foreground/70"> · {props.shortcutLabel}</span>
+          <span className="text-muted-foreground/80"> · {props.shortcutLabel}</span>
         ) : null}
         {/* Renaming and reordering are pointer gestures with no visible affordance of their
             own, so the tooltip is the only place they can be discovered. It is a deliberate
             hover, and the line is muted and secondary, so it stays out of the way once known. */}
         {props.gestureHint ? (
-          <span className="mt-0.5 block text-[0.9em] text-muted-foreground/60">
+          <span className="mt-0.5 block text-[0.9em] text-muted-foreground/80">
             {props.gestureHint}
           </span>
         ) : null}
@@ -626,7 +626,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
                 type="button"
                 aria-label="New space"
                 onClick={props.onCreate}
-                className={cn(SPACE_TAB_CLASS_NAME, "text-muted-foreground/55")}
+                className={SPACE_TAB_CLASS_NAME}
               />
             }
           >

@@ -32,7 +32,7 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
   return (
     <div className={cn(LEADING_CONTROLS_CLASS, className)}>
       <SidebarTrigger
-        className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
+        className="size-7 shrink-0 text-muted-foreground/80 hover:text-foreground"
         aria-label="Toggle thread sidebar"
       />
       <AppNavigationButtons className="ms-0" />

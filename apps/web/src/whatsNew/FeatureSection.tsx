@@ -31,7 +31,7 @@ export function FeatureSection({ feature, className }: FeatureSectionProps) {
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       <div className="flex flex-col gap-1">
-        <h3 className="font-heading text-base font-semibold leading-snug text-foreground">
+        <h3 className="font-heading text-ui-lg font-semibold leading-snug text-foreground">
           {feature.title}
         </h3>
         <p className="text-ui leading-relaxed text-muted-foreground">{feature.description}</p>

@@ -5,6 +5,7 @@
 // commit-on-change controls (select, toggle, time, commit-on-blur text input).
 
 import type { AutomationMode, AutomationWorktreeMode } from "@synara/contracts";
+import { createContext, useContext, useId } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { useCommitDraft, useCommitDraftBlurHandlers } from "~/lib/automationInlineDraft";
@@ -29,6 +30,10 @@ export const WORKTREE_OPTIONS: readonly SelectOption[] = [
   { value: "worktree", label: "Worktree" },
 ];
 
+// Names each inline control after its EditRow label: the row puts the label element's
+// id in context and every Inline* control sets aria-labelledby to it.
+const EditRowLabelContext = createContext<string | undefined>(undefined);
+
 export function worktreeModeLabel(mode: AutomationWorktreeMode): string {
   return WORKTREE_OPTIONS.find((option) => option.value === mode)?.label ?? mode;
 }
@@ -42,7 +47,7 @@ export function DetailGroup({
 }) {
   return (
     <section className="space-y-0.5">
-      <h2 className="px-1.5 pb-1 text-ui leading-snug font-medium text-muted-foreground/70">
+      <h2 className="px-1.5 pb-1 text-ui leading-snug font-medium text-muted-foreground">
         {title}
       </h2>
       <div className="flex flex-col">{children}</div>
@@ -95,11 +100,16 @@ export function EditRow({
   readonly label: React.ReactNode;
   readonly children: React.ReactNode;
 }) {
+  const labelId = useId();
   return (
-    <div className="flex items-center justify-between gap-2 rounded-md py-px pl-1.5 pr-0.5 text-ui leading-snug transition-colors hover:bg-foreground/[0.04]">
-      <span className="flex shrink-0 items-center gap-1 text-muted-foreground">{label}</span>
-      {children}
-    </div>
+    <EditRowLabelContext.Provider value={labelId}>
+      <div className="flex items-center justify-between gap-2 rounded-md py-px pl-1.5 pr-0.5 text-ui leading-snug transition-colors hover:bg-foreground/[0.04]">
+        <span id={labelId} className="flex shrink-0 items-center gap-1 text-muted-foreground">
+          {label}
+        </span>
+        {children}
+      </div>
+    </EditRowLabelContext.Provider>
   );
 }
 
@@ -119,12 +129,14 @@ export function InlineSelect({
   readonly disabled?: boolean | undefined;
   readonly title?: string | undefined;
 }) {
+  const labelId = useContext(EditRowLabelContext);
   return (
     <div className="relative flex min-w-0 items-center">
       <select
         value={value}
         disabled={disabled}
         title={title}
+        aria-labelledby={labelId}
         onChange={(event) => onChange(event.target.value)}
         className={cn(INLINE_CONTROL_CLASS, "max-w-[11rem] appearance-none truncate pr-5")}
       >
@@ -158,11 +170,14 @@ export function InlineToggle({
   readonly disabled?: boolean | undefined;
   readonly title?: string | undefined;
 }) {
+  const labelId = useContext(EditRowLabelContext);
   return (
     <button
       type="button"
       disabled={disabled}
       title={title}
+      aria-labelledby={labelId}
+      aria-pressed={value}
       onClick={() => onChange(!value)}
       className={cn(INLINE_CONTROL_CLASS, "min-w-[3rem]")}
     >
@@ -182,12 +197,14 @@ export function InlineTime({
   readonly disabled?: boolean | undefined;
   readonly title?: string | undefined;
 }) {
+  const labelId = useContext(EditRowLabelContext);
   return (
     <input
       type="time"
       value={value}
       disabled={disabled}
       title={title}
+      aria-labelledby={labelId}
       onChange={(event) => onChange(event.target.value)}
       className={INLINE_CONTROL_CLASS}
     />
@@ -195,8 +212,8 @@ export function InlineTime({
 }
 
 // Keeps free-text schedule fields editable while intermediate cron/timezone text is invalid.
-// Enter commits, Escape reverts, and an invalid draft silently reverts on blur instead of
-// sending a doomed request.
+// Enter commits, Escape reverts, and an invalid draft reverts on blur instead of sending a
+// doomed request — the error rides on `title` so the reason is still surfaced.
 export function InlineCommitTextInput({
   value,
   onCommit,
@@ -220,12 +237,16 @@ export function InlineCommitTextInput({
 }) {
   const draft = useCommitDraft({ value, onCommit, validate, normalize, flushOnUnmount });
   const { onBlur, revertAndBlur } = useCommitDraftBlurHandlers(draft);
+  const labelId = useContext(EditRowLabelContext);
 
   return (
     <input
       value={draft.draft}
       disabled={disabled}
-      title={title}
+      // Surface the computed validation error on the control itself: an invalid draft
+      // reverts on blur, so without this the reason would never reach the user.
+      title={draft.error ?? title}
+      aria-labelledby={labelId}
       placeholder={placeholder}
       aria-invalid={draft.error !== null || undefined}
       onChange={(event) => draft.setDraft(event.target.value)}

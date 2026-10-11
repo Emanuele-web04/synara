@@ -234,6 +234,10 @@ export function getWorkspaceEditorSession(client: QueryClient, cwd: string, rela
   return session;
 }
 
+export function pauseWorkspaceEditors(client: QueryClient) {
+  for (const session of sessions.get(client)?.values() ?? []) session.pause();
+}
+
 export function hasUnsavedWorkspaceEditors(client: QueryClient, cwd?: string | null) {
   return [...(sessions.get(client)?.values() ?? [])].some(
     (session) => (cwd == null || session.cwd === cwd) && (session.dirty || session.saving),

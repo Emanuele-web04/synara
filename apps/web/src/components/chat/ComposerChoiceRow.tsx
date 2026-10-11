@@ -83,7 +83,7 @@ export function ComposerChoiceRow({
       <div className="min-w-0 flex-1 leading-snug">
         <span className="text-ui-lg font-medium text-foreground/90">{label}</span>
         {description && description !== label ? (
-          <span className="ml-1.5 text-ui text-muted-foreground/55">{description}</span>
+          <span className="ml-1.5 text-ui text-muted-foreground/80">{description}</span>
         ) : null}
       </div>
       {trailing}

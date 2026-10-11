@@ -133,7 +133,7 @@ export function resolveCheckpointDiffQueryDisplayState(input: {
         : normalizeCheckpointErrorMessage(input.error),
     refreshStatus: capacityDelayed
       ? input.isFetching
-        ? "Refreshing diff..."
+        ? "Refreshing diff…"
         : "Diff refresh delayed."
       : null,
   };

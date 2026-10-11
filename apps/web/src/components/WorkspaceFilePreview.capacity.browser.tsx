@@ -88,7 +88,7 @@ it("keeps last-good file contents when a refetch hits expensive-read capacity", 
         const text = document.body.textContent ?? "";
         expect(text).toContain("export const value = 1;");
         expect(text).not.toContain(CAPACITY_MESSAGE);
-        expect(text.includes("File refresh delayed.") || text.includes("Refreshing file...")).toBe(
+        expect(text.includes("File refresh delayed.") || text.includes("Refreshing file…")).toBe(
           true,
         );
       },

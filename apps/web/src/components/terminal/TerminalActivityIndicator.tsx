@@ -24,9 +24,7 @@ export default function TerminalActivityIndicator({
         aria-hidden="true"
         className={cn(
           "inline-flex size-1.5 shrink-0 rounded-full",
-          state === "attention"
-            ? "bg-amber-500 dark:bg-amber-300/90"
-            : "bg-emerald-500 dark:bg-emerald-300/90",
+          state === "attention" ? "bg-warning" : "bg-status-success",
           className,
         )}
       />

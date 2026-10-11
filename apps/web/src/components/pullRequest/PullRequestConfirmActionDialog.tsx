@@ -134,7 +134,11 @@ export function PullRequestConfirmActionDialog({
                   onConfirm(shown);
                 }}
               >
-                {shown.kind === "close" ? "Close" : stack ? "Merge stack" : "Merge"}
+                {shown.kind === "close"
+                  ? "Close pull request"
+                  : stack
+                    ? "Merge stack"
+                    : "Merge pull request"}
               </Button>
             </AlertDialogFooter>
           </>

@@ -162,7 +162,7 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
   if (!active) return null;
 
   if (worktreesQuery.isLoading) {
-    return <WorktreesStatus>Loading managed worktrees...</WorktreesStatus>;
+    return <WorktreesStatus>Loading managed worktrees…</WorktreesStatus>;
   }
   if (worktreesQuery.isError) {
     return (

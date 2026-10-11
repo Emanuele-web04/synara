@@ -49,6 +49,7 @@ const EMPTY_ACTIVITIES: Thread["activities"] = [];
 const EMPTY_PENDING_APPROVALS: PendingApproval[] = [];
 const EMPTY_PENDING_USER_INPUTS: PendingUserInput[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const PENDING_USER_INPUT_RESUBMIT_GUARD_MS = 250;
 interface ChatPendingInteractionsInput {
   threadId: ThreadId;
   activeThread: Thread | undefined;
@@ -332,10 +333,16 @@ export function useChatPendingInteractions({
           );
         })
         .finally(() => {
-          userInputSubmissionsRef.current.delete(submissionKey);
           setRespondingUserInputRequestKeys((existing) =>
             existing.filter((key) => key !== requestKey),
           );
+          // Keep the duplicate guard briefly past settle: a second source that
+          // was triggered while the attempt was in flight (queued click,
+          // 200ms auto-advance timer) may only reach the submission check
+          // after the promise resolved. A deliberate retry comes well after.
+          window.setTimeout(() => {
+            userInputSubmissionsRef.current.delete(submissionKey);
+          }, PENDING_USER_INPUT_RESUBMIT_GUARD_MS);
         });
     },
     [activeThreadId, setStoreThreadError],

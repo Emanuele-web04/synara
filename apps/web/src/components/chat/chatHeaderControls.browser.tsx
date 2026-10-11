@@ -1,3 +1,4 @@
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 // FILE: chatHeaderControls.browser.tsx
 // Purpose: Browser regressions for interactive versus static shared surface-tab chips, the
 //          trailing close treatment used by open-thread tabs,
@@ -16,7 +17,8 @@ import { SettingsIcon } from "~/lib/icons";
 import { SurfacePanelToggle, SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
 
 describe("SurfaceTabChip selection", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

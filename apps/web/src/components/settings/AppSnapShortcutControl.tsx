@@ -74,7 +74,10 @@ export function AppSnapShortcutControl({
   // Source of truth for held modifiers: consecutive keydowns can arrive before
   // React re-renders, so the render-time capture state may lag one event behind.
   const heldCodesRef = useRef<string[]>([]);
-  const labels = appSnapShortcutLabels(candidate);
+  // Both-Option-keys reads as two ⌥ keycaps; appSnapShortcutLabels spells the
+  // sides out ("⌥ left + ⌥ right") for prose contexts, which reads wrong in a cap.
+  const labels: readonly [string, string] =
+    candidate.kind === "both-option-keys" ? ["⌥", "⌥"] : appSnapShortcutLabels(candidate);
   const changed = !sameAppSnapShortcut(candidate, shortcut);
   const canSave = changed && checkState.availability?.available === true;
   const capturedModifiers = heldModifiers(capture.heldModifierCodes);
@@ -282,7 +285,7 @@ export function AppSnapShortcutControl({
           checkState.availability?.available === false
             ? "text-destructive"
             : checkState.availability?.available === true
-              ? "text-emerald-600 dark:text-emerald-400"
+              ? "text-success"
               : "text-muted-foreground",
         )}
       >

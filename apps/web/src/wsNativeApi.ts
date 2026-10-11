@@ -1230,10 +1230,14 @@ export function createWsNativeApi(): NativeApi {
 // Browser-mode tests mount full app roots repeatedly in one page; reset the
 // singleton so each test gets a fresh WebSocket stream and cached push state.
 export async function resetWsNativeApiForTest(): Promise<void> {
+  const api = instance?.api;
   const transport = instance?.transport;
   instance = null;
   clearWsNativeApiListeners();
   fallbackBrowserStates.clear();
+  if (typeof window !== "undefined" && api && window.nativeApi === api) {
+    Reflect.deleteProperty(window, "nativeApi");
+  }
   await transport?.dispose();
 }
 

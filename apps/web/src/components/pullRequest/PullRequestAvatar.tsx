@@ -12,7 +12,7 @@ import type { PullRequestActor } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 
 const SIZE_CLASS_NAME = {
-  sm: "size-4 text-[8px]",
+  sm: "size-4 text-ui-2xs",
   md: "size-5 text-ui-2xs",
   lg: "size-7 text-ui-sm",
 } as const;

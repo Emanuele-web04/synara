@@ -59,6 +59,7 @@ import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import { Button, dialogActionButtonClassName } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
+import { TooltipProvider } from "../components/ui/tooltip";
 import { useGitProgressToastPreview } from "../components/useGitProgressToastPreview";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { useFeatureFlags } from "../featureFlags";
@@ -356,30 +357,32 @@ function RootRouteView() {
     <>
       <ToastProvider position="top-center">
         <AnchoredToastProvider>
-          <GitProgressToastPreviewDev />
-          <EventRouter />
-          <EditorDirtyRouteGuard />
-          <ProviderStatusRefreshCoordinator />
-          <ProviderModelDiscoveryWarmer />
-          <GlobalShortcutsDialog />
-          <BrowserVaultDialog />
-          <GlobalFeedbackDialog />
-          <GlobalWhatsNewSurface />
-          <TaskCompletionNotifications />
-          <QueuedComposerDrainCoordinator />
-          {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
-          <BetaWelcomeDialog />
-          <SafariAccessOnboarding startup>
-            <AppSnapWelcomeDialog>
-              <FeatureTourDialog />
-            </AppSnapWelcomeDialog>
-          </SafariAccessOnboarding>
-          <GlobalOnboardingDialog />
-          <ProjectImportAnnouncementDialog />
-          <GlobalProjectImportDialog />
-          <AppSnapCoordinator />
-          <DesktopProjectBootstrap />
-          <Outlet />
+          <TooltipProvider delay={400} closeDelay={0}>
+            <GitProgressToastPreviewDev />
+            <EventRouter />
+            <EditorDirtyRouteGuard />
+            <ProviderStatusRefreshCoordinator />
+            <ProviderModelDiscoveryWarmer />
+            <GlobalShortcutsDialog />
+            <BrowserVaultDialog />
+            <GlobalFeedbackDialog />
+            <GlobalWhatsNewSurface />
+            <TaskCompletionNotifications />
+            <QueuedComposerDrainCoordinator />
+            {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
+            <BetaWelcomeDialog />
+            <SafariAccessOnboarding startup>
+              <AppSnapWelcomeDialog>
+                <FeatureTourDialog />
+              </AppSnapWelcomeDialog>
+            </SafariAccessOnboarding>
+            <GlobalOnboardingDialog />
+            <ProjectImportAnnouncementDialog />
+            <GlobalProjectImportDialog />
+            <AppSnapCoordinator />
+            <DesktopProjectBootstrap />
+            <Outlet />
+          </TooltipProvider>
         </AnchoredToastProvider>
       </ToastProvider>
       {desktopChrome}
@@ -555,7 +558,7 @@ async function runProviderUpdateAll(params: {
     trackedToast?.toastId ??
     toastManager.add({
       type: "loading",
-      title: "Updating providers...",
+      title: "Updating providers…",
       description:
         providers.length === 1
           ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
@@ -573,7 +576,7 @@ async function runProviderUpdateAll(params: {
 
   toastManager.update(toastId, {
     type: "loading",
-    title: "Updating providers...",
+    title: "Updating providers…",
     description:
       providers.length === 1
         ? `Updating ${providerStatusDisplayName(providers[0]!)}.`

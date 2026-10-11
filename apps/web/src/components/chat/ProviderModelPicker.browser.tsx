@@ -1,3 +1,4 @@
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 import {
   type ModelSlug,
   type ProviderInstanceId,
@@ -210,7 +211,8 @@ async function mountPicker(props: {
 }
 
 describe("ProviderModelPicker", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
     localStorage.clear();
   });

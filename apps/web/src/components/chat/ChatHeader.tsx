@@ -183,7 +183,7 @@ function EditorChatHistoryMenu(props: {
             size="icon-xs"
             label="Chat history"
             title="Chat history"
-            className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+            className="size-6 shrink-0 text-muted-foreground hover:text-foreground"
           >
             <HistoryIcon className="size-3.5" />
           </IconButton>
@@ -326,7 +326,7 @@ function EditorRailTabs(props: {
                 size="icon-xs"
                 label="New editor rail item"
                 title="New"
-                className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+                className="size-6 shrink-0 text-muted-foreground hover:text-foreground"
               >
                 <PlusIcon className="size-3.5" />
               </IconButton>

@@ -24,6 +24,7 @@ const thread: SidebarSearchThread = {
   projectRemoteName: "acme/control-panel",
   spaceName: "Client work",
   provider: "codex",
+  branch: null,
   createdAt: "2026-09-16T12:00:00Z",
   messages: [{ text: "Check the expired session token" }],
 };

@@ -58,6 +58,27 @@ describe("buildSettingsSkillGroups", () => {
     expect(sections[0]?.groups.map((group) => group.key)).toEqual(["check-code"]);
   });
 
+  it("falls back when a skill description carries no real text", () => {
+    const groups = buildSettingsSkillGroups([
+      skill({
+        name: "stray-marker",
+        description: ">",
+        path: "/Users/test/.agents/skills/stray-marker/SKILL.md",
+        scope: "agents",
+      }),
+    ]);
+
+    expect(groups[0]?.description).toBe("No description.");
+  });
+
+  it.each(["检查代码", "コードを確認", "مراجعة الشفرة", "परीक्षण करें"])(
+    "preserves a skill description written in another script: %s",
+    (description) => {
+      const groups = buildSettingsSkillGroups([skill({ description })]);
+      expect(groups[0]?.description).toBe(description);
+    },
+  );
+
   it("does not show provider icons for shared alias-only skills", () => {
     const groups = buildSettingsSkillGroups([
       skill({

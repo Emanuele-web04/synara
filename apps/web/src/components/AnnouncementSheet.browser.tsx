@@ -8,6 +8,7 @@ import { render } from "vitest-browser-react";
 import { AnnouncementSheet } from "./AnnouncementSheet";
 import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
+import { waitForTransientPopups } from "../lib/browserPopupCleanup";
 
 function Sheet(props: { title: string }) {
   const [open, setOpen] = useState(true);
@@ -33,8 +34,9 @@ describe("AnnouncementSheet", () => {
       betaWelcomePending: false,
     });
   });
-  afterEach(() => {
+  afterEach(async () => {
     useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

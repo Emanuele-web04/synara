@@ -162,6 +162,11 @@ At startup, the server adds defaults for commands missing from a valid config, u
 
 The web dispatcher also has [`DEFAULT_SHORTCUT_FALLBACKS`](apps/web/src/keybindings.ts) for commands with no configured binding. A custom or `unassigned` rule suppresses that command's fallback. `git.commitAndPush` now ships server defaults as well: Cmd+Ctrl+P on macOS and Ctrl+Alt+P elsewhere.
 
+### Built-in (not configurable)
+
+- `Esc`: stop the running turn while the Stop control is visible (composer or transcript focus; menus, dialogs, and the terminal keep their own Escape)
+- `Ctrl+C` (macOS): interrupt the running turn from the composer
+
 ## Configuration
 
 ### Rule Shape

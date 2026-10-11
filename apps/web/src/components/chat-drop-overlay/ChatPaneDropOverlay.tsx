@@ -31,7 +31,16 @@ const DROP_ZONE_PREVIEW_CLASS: Record<DropZone, string> = {
   right: "top-0 bottom-0 right-0 w-1/2",
 };
 const DROP_ZONE_PREVIEW_BASE_CLASS =
-  "absolute m-1 rounded-md bg-info/18 ring-1 ring-inset ring-info/65";
+  "absolute m-1 flex items-center justify-center rounded-md bg-info/18 ring-1 ring-inset ring-info/65";
+// Centered zone label rendered inside the tinted preview so the split direction is
+// readable mid-drag instead of being conveyed by color alone.
+const DROP_ZONE_LABEL: Record<DropZone, string> = {
+  top: "Drop to split top",
+  bottom: "Drop to split bottom",
+  left: "Drop to split left",
+  right: "Drop to split right",
+};
+const DROP_ZONE_PREVIEW_LABEL_CLASS = "text-ui-sm font-medium text-info";
 const EMPTY_RECT = { left: 0, top: 0, width: 0, height: 0 };
 const EDGE_REGION_FRACTION = 1 / 3;
 
@@ -135,6 +144,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   const { onDrop, canDropInDirection, excludedThreadIds, paneScopeId, className, children } = props;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const previewLabelRef = useRef<HTMLSpanElement>(null);
   const rectRef = useRef<DOMRect | null>(null);
   const rectMeasuredAtRef = useRef(0);
   const activeZoneRef = useRef<DropZone | null>(null);
@@ -152,13 +162,22 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
       : "";
     if (activeZoneRef.current === zone && preview.className === nextClassName) return;
     activeZoneRef.current = zone;
+    const label = previewLabelRef.current;
     if (zone === null) {
       preview.removeAttribute("data-chat-pane-drop-zone");
       preview.className = "";
+      if (label) {
+        label.className = "hidden";
+        label.textContent = "";
+      }
       return;
     }
     preview.dataset.chatPaneDropZone = zone;
     preview.className = nextClassName;
+    if (label) {
+      label.textContent = DROP_ZONE_LABEL[zone];
+      label.className = DROP_ZONE_PREVIEW_LABEL_CLASS;
+    }
   };
 
   const resetOverlayState = () => {
@@ -279,7 +298,9 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
     >
       {children}
       <div className="pointer-events-none absolute inset-0 z-50" data-chat-pane-drop-zones="true">
-        <div ref={previewRef} data-chat-pane-drop-zone-active="true" />
+        <div ref={previewRef} data-chat-pane-drop-zone-active="true">
+          <span ref={previewLabelRef} className="hidden" />
+        </div>
       </div>
     </div>
   );

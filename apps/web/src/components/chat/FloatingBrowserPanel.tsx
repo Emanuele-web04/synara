@@ -441,5 +441,5 @@ export function FloatingBrowserPanel(props: FloatingBrowserPanelProps) {
 }
 
 export function FloatingBrowserPanelFallback() {
-  return <PanelStateMessage>Loading browser...</PanelStateMessage>;
+  return <PanelStateMessage>Loading browser…</PanelStateMessage>;
 }

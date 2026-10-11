@@ -118,6 +118,7 @@ export function DiffPanelCompareRefMenuSection(props: {
           nativeInput
           size="sm"
           type="text"
+          aria-label="Compare with branch, tag, or commit"
           placeholder="Branch, tag, or commit"
           value={refDraft}
           onChange={(event) => setRefDraft(event.target.value)}

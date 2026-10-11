@@ -33,7 +33,7 @@ describe("ReviewFileTreePanel", () => {
       />,
     );
 
-    expect(markup).toContain('placeholder="Filter files..."');
+    expect(markup).toContain('placeholder="Filter files…"');
     // Top-level directory plus the compressed single-child chains.
     expect(markup).toContain("apps");
     expect(markup).toContain("server/src");
@@ -83,7 +83,7 @@ describe("ReviewFileTreePanel", () => {
       />,
     );
 
-    expect(markup).toContain("Loading changed files...");
+    expect(markup).toContain("Loading changed files…");
     expect(markup).not.toContain("No files in this diff.");
   });
 });

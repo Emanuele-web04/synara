@@ -159,11 +159,32 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Reflect.deleteProperty(getWindowForTest(), "nativeApi");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("wsNativeApi", () => {
+  it("rebuilds the API after resetting a transport exposed through window.nativeApi", async () => {
+    const { createWsNativeApi, resetWsNativeApiForTest } = await import("./wsNativeApi");
+    const { readNativeApi } = await import("./nativeApi");
+    const api = createWsNativeApi();
+    getWindowForTest().nativeApi = api;
+    expect(readNativeApi()).toBe(api);
+    await resetWsNativeApiForTest();
+    expect(disposeMock).toHaveBeenCalledOnce();
+    expect(readNativeApi()).not.toBe(api);
+  });
+
+  it("does not discard a separately owned native API while resetting its transport", async () => {
+    const { createWsNativeApi, resetWsNativeApiForTest } = await import("./wsNativeApi");
+    const { readNativeApi } = await import("./nativeApi");
+    const override = { ...createWsNativeApi() };
+    getWindowForTest().nativeApi = override;
+    await resetWsNativeApiForTest();
+    expect(readNativeApi()).toBe(override);
+  });
+
   it("forwards exhausted shell failures and removes unsubscribed listeners", async () => {
     const { createWsNativeApi, onShellStreamFailure } = await import("./wsNativeApi");
     createWsNativeApi();

@@ -22,7 +22,7 @@ export function SpaceEmptyState(props: {
   // would open a picker with nothing in it.
   if (!props.hasProjectsElsewhere) {
     return (
-      <p className="px-2 pt-4 text-center text-ui text-muted-foreground/58">No projects yet</p>
+      <p className="px-2 pt-4 text-center text-ui text-muted-foreground/80">No projects yet</p>
     );
   }
 
@@ -31,7 +31,7 @@ export function SpaceEmptyState(props: {
   return (
     <div className="px-2 pt-4 pb-1 text-center">
       <p className="text-ui text-foreground/75">{title}</p>
-      <p className="mx-auto mt-1 max-w-52 text-ui-xs leading-4 text-muted-foreground/55">
+      <p className="mx-auto mt-1 max-w-52 text-ui-xs leading-4 text-muted-foreground/80">
         {props.space
           ? "Move projects here, or right-click a project to file it."
           : "New and unassigned projects appear here."}

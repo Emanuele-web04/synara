@@ -187,7 +187,7 @@ export function ThreadFindBar({
           value={query}
           onChange={(event) => handleQueryChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search chat..."
+          placeholder="Search chat…"
           aria-label="Find in thread"
           autoComplete="off"
           spellCheck={false}

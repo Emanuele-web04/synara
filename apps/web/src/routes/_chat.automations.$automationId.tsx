@@ -157,11 +157,11 @@ function automationStatusDisplay(definition: AutomationDefinition): {
 } {
   switch (automationLifecycleState(definition)) {
     case "active":
-      return { label: "Active", dotClassName: "bg-emerald-500" };
+      return { label: "Active", dotClassName: "bg-status-success" };
     case "paused":
-      return { label: "Paused", dotClassName: "bg-amber-500" };
+      return { label: "Paused", dotClassName: "bg-warning" };
     case "scheduled":
-      return { label: "Scheduled", dotClassName: "bg-sky-500" };
+      return { label: "Scheduled", dotClassName: "bg-info" };
     case "done":
       return { label: "Done", dotClassName: "bg-muted-foreground" };
   }
@@ -642,7 +642,10 @@ function AutomationDetailView() {
                         <CentralIcon
                           name="info-simple"
                           className="size-3 text-muted-foreground/60"
-                          aria-label="Where the automation runs: a worktree, a local checkout, or auto"
+                          // CentralIcon is aria-hidden unless given its `label` prop, so
+                          // this bare aria-label never rendered; keep the hint on `title`
+                          // and out of the EditRow label that names the control.
+                          title="Where the automation runs: a worktree, a local checkout, or auto"
                         />
                       </>
                     }
@@ -737,6 +740,7 @@ function AutomationDetailView() {
                       value={datetimeLocalFromIso(schedule.runAt)}
                       disabled={!editable}
                       title={editDisabledTitle}
+                      aria-label="Run at"
                       onChange={(event) =>
                         event.target.value
                           ? patch({
@@ -942,7 +946,7 @@ function AutomationDetailView() {
                           type="button"
                           variant="ghost"
                           size="xs"
-                          className="h-5 shrink-0 px-1.5 text-ui-xs text-muted-foreground/70"
+                          className="h-6 shrink-0 px-1.5 text-ui-xs text-muted-foreground"
                           onClick={() =>
                             void navigate({
                               to: "/$threadId",

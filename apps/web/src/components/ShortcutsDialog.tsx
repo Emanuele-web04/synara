@@ -81,7 +81,7 @@ function ShortcutsDialogContent(props: {
   return (
     <>
       <DialogHeader className="pb-2">
-        <DialogTitle className="text-base">Keybindings</DialogTitle>
+        <DialogTitle>Keybindings</DialogTitle>
         <DialogDescription className="text-ui leading-snug">
           Reflects the bindings active in your current context.
         </DialogDescription>
@@ -90,7 +90,7 @@ function ShortcutsDialogContent(props: {
             ref={inputRef}
             type="search"
             size="sm"
-            placeholder="Search shortcuts..."
+            placeholder="Search shortcuts…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
@@ -136,15 +136,8 @@ function ShortcutSection({
   return (
     <section className={cn(!isFirst && "border-t border-border/50")}>
       <header className="flex items-baseline justify-between gap-3 px-6 pt-4 pb-2">
-        <h3
-          className={cn(
-            "text-ui-sm font-semibold",
-            muted ? "text-muted-foreground/70" : "text-muted-foreground",
-          )}
-        >
-          {section.title}
-        </h3>
-        <p className="truncate text-ui-sm text-muted-foreground/70">{section.description}</p>
+        <h3 className="text-ui-sm font-semibold text-muted-foreground">{section.title}</h3>
+        <p className="truncate text-ui-sm text-muted-foreground">{section.description}</p>
       </header>
       <ul className={cn("px-3 pb-3", muted && "opacity-75")}>
         {section.entries.map((entry) => (

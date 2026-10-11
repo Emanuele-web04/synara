@@ -1,3 +1,4 @@
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 import "../../index.css";
 
 import {
@@ -828,7 +829,8 @@ describe("ComposerModelPicker with several accounts", () => {
 });
 
 describe("Claude composer budget suffix", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
   it.each([

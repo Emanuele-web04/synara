@@ -26,6 +26,7 @@ import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { extractWebFetchUrl } from "../../lib/toolCallLabel";
 import { LinkChipIcon } from "../LinkChipIcon";
 import type { WorkLogEntry } from "../../session-logic";
+import { TRANSCRIPT_TEXT_BUTTON_CLASS_NAME } from "./MessageActionButton";
 import { multiFileEditLabel, type ToolCallGroupSummary } from "./toolCallGroup.logic";
 import {
   renderWorkEntryIcon,
@@ -106,6 +107,13 @@ export function ToolCallGroupSummaryRow(
       ? summaryIcon(summary)
       : props.icon!;
   const liveMultiFileLabel = liveEntry ? multiFileEditLabel(liveEntry) : null;
+  const labelText = liveEntry
+    ? (liveMultiFileLabel ?? workEntryDisplayParts(liveEntry).displayText)
+    : summary
+      ? [summary.label, summary.failedLabel].filter(Boolean).join(", ")
+      : typeof props.label === "string"
+        ? props.label
+        : undefined;
 
   return (
     <div>
@@ -115,6 +123,7 @@ export function ToolCallGroupSummaryRow(
         className={cn(
           "inline-flex max-w-full items-center gap-1.5 py-0.5 text-left transition-colors duration-200 hover:text-foreground",
           MUTED_LABEL_TEXT_CLASS_NAME,
+          TRANSCRIPT_TEXT_BUTTON_CLASS_NAME,
         )}
         style={{ fontSize: `${fontSizePx}px` }}
         onClick={() => onToggle(!open)}
@@ -130,7 +139,11 @@ export function ToolCallGroupSummaryRow(
             renderWorkEntryIcon(Icon, "size-3.5")
           )}
         </span>
-        <span className="min-w-0 truncate" data-tool-group-live={liveEntry ? "true" : undefined}>
+        <span
+          className="min-w-0 truncate"
+          title={labelText}
+          data-tool-group-live={liveEntry ? "true" : undefined}
+        >
           {liveEntry ? (
             (liveMultiFileLabel ?? renderWorkEntrySentence(workEntryDisplayParts(liveEntry)))
           ) : !summary ? (

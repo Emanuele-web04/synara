@@ -83,6 +83,7 @@ export function OnboardingStepFooter(props: {
           variant="outline"
           shape="capsule"
           className={FOOTER_BUTTON_CLASS_NAME}
+          disabled={props.navigationLocked}
           onClick={props.onSecondary}
         >
           {props.secondaryLabel}

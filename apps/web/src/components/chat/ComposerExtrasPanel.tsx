@@ -140,8 +140,8 @@ export function ComposerExtrasPanel(props: {
                               type="button"
                               aria-label="Choose another window"
                               className={cn(
-                                "-mr-1 flex size-5 items-center justify-center rounded-md text-muted-foreground/60 transition-colors",
-                                "hover:bg-[var(--color-background-button-secondary)] hover:text-foreground/80",
+                                "-mr-1 flex size-6 items-center justify-center rounded-md text-muted-foreground/80 transition-colors",
+                                "hover:bg-[var(--color-background-button-secondary)] hover:text-foreground/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
                               )}
                               onClick={(event) => {
                                 event.stopPropagation();

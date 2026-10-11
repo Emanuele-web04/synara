@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ComposerCommandMenu, type ComposerCommandItem } from "./ComposerCommandMenu";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 async function mountMenu(input: {
   isLoading: boolean;
@@ -37,13 +38,14 @@ async function mountMenu(input: {
 }
 
 describe("ComposerCommandMenu empty states", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 
   it.each([
-    ["mention", "mention", "Searching mentions..."],
-    ["slash command", "slash-command", "Loading commands..."],
+    ["mention", "mention", "Searching mentions…"],
+    ["slash command", "slash-command", "Loading commands…"],
   ] as const)(
     "shows the %s loading label before results are available",
     async (_label, triggerKind, text) => {
@@ -73,7 +75,7 @@ describe("ComposerCommandMenu empty states", () => {
       await expect
         .element(page.getByText("No commands are available for this provider.", { exact: true }))
         .toBeVisible();
-      expect(document.body.textContent).not.toContain("Loading commands...");
+      expect(document.body.textContent).not.toContain("Loading commands…");
     } finally {
       await menu.cleanup();
     }
@@ -81,7 +83,8 @@ describe("ComposerCommandMenu empty states", () => {
 });
 
 describe("ComposerCommandMenu provider command notices", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

@@ -867,7 +867,7 @@ export function SingleChatSurface(props: {
     switch (pane.kind) {
       case "browser":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>Loading browser…</PanelStateMessage>}>
             <LazyBrowserPanel
               mode="sidebar"
               threadId={props.threadId}
@@ -879,7 +879,7 @@ export function SingleChatSurface(props: {
         );
       case "device":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading simulator...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>Loading simulator…</PanelStateMessage>}>
             <LazyDevicePanel
               mode="sidebar"
               threadId={props.threadId}
@@ -892,7 +892,7 @@ export function SingleChatSurface(props: {
         );
       case "pullRequest":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>Loading pull request…</PanelStateMessage>}>
             <PullRequestDockPane
               pane={pane}
               hostThreadId={props.threadId}
@@ -939,7 +939,7 @@ export function SingleChatSurface(props: {
         // mounted (offcanvas is CSS-only), so without this the off-screen terminal
         // would keep WebGL + resize observers alive for nothing.
         return (
-          <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>Loading terminal…</PanelStateMessage>}>
             <DockTerminalPane
               paneId={pane.id}
               hostThreadId={props.threadId}
@@ -951,7 +951,7 @@ export function SingleChatSurface(props: {
         );
       case "git":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading Git...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>Loading Git…</PanelStateMessage>}>
             <GitPanel
               hostThreadId={props.threadId}
               projectId={props.projectId}
@@ -961,7 +961,7 @@ export function SingleChatSurface(props: {
         );
       case "explorer":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading explorer...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>Loading explorer…</PanelStateMessage>}>
             <DockExplorerPane
               threadId={props.threadId}
               workspaceRoot={workspaceRoot}
@@ -974,7 +974,7 @@ export function SingleChatSurface(props: {
         );
       case "file":
         return (
-          <Suspense fallback={<PanelStateMessage>Loading file...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>Loading file…</PanelStateMessage>}>
             <DockFilePane
               workspaceRoot={workspaceRoot}
               filePath={pane.filePath}

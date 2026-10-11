@@ -510,7 +510,7 @@ function FilePreviewLoadingState() {
     <div
       className="min-h-0 flex-1 space-y-2.5 overflow-hidden px-3 py-3"
       role="status"
-      aria-label="Loading file..."
+      aria-label="Loading file…"
     >
       {FILE_PREVIEW_SKELETON_LINES.map((line) => (
         <div key={`${line.indent}-${line.width}`} className="flex h-3 items-center gap-2">
@@ -521,7 +521,7 @@ function FilePreviewLoadingState() {
           />
         </div>
       ))}
-      <span className="sr-only">Loading file...</span>
+      <span className="sr-only">Loading file…</span>
     </div>
   );
 }
@@ -1079,7 +1079,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             ? activeEditBuffer.error
               ? "Save failed"
               : activeEditBuffer.saving
-                ? "Saving..."
+                ? "Saving…"
                 : editBufferDirty
                   ? "Unsaved changes"
                   : "Saved"
@@ -1131,7 +1131,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         >
           {fileReadCapacityError
             ? fileQuery.isFetching
-              ? "Refreshing file..."
+              ? "Refreshing file…"
               : "File refresh delayed."
             : fileReadError instanceof Error
               ? fileReadError.message

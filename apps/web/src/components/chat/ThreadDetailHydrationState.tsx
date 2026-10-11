@@ -22,7 +22,7 @@ export const ThreadDetailHydrationState = function ThreadDetailHydrationState({
       <DelayedLoaderFade>
         <div className="flex flex-col items-center gap-3 select-none">
           <Spinner aria-label="Loading conversation" className="size-5 text-muted-foreground/50" />
-          <span className="text-ui leading-snug text-muted-foreground/50">
+          <span className="text-ui leading-snug text-muted-foreground/80">
             Loading conversation
           </span>
         </div>

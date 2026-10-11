@@ -33,7 +33,7 @@ export const ForkSourceDivider = memo(function ForkSourceDivider({
       <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
       <a
         href={sourceHref}
-        aria-label={`Open source chat ${source.sourceTitle}`}
+        aria-label={`Continued from chat: ${source.sourceTitle}`}
         title={source.sourceTitle}
         className="inline-flex min-w-0 shrink items-center gap-2 rounded-sm text-ui font-normal text-[var(--color-text-accent)] transition-opacity duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]/60"
         onClick={(event) => {

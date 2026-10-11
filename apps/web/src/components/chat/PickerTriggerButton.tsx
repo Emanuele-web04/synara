@@ -38,7 +38,7 @@ export function PickerTriggerButton(
       {...buttonProps}
       size="sm"
       variant={variant}
-      {...(hideLabel && typeof label === "string" ? { title: label } : {})}
+      {...(typeof label === "string" ? { title: label } : {})}
       className={cn(
         "min-w-0 justify-start overflow-hidden whitespace-nowrap px-1.5 text-[var(--color-text-foreground)] [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,

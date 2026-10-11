@@ -103,7 +103,7 @@ export function SkillsSettingsPanel() {
   const synaraSkillsDir = catalogQuery.data?.synaraSkillsDir;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <SettingsSection title="Portable skills">
         <SettingsRow
           title="Synara skills folder"

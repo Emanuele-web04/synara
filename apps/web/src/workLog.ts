@@ -362,6 +362,7 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   toolName?: string;
   runtimeWarningRepeatCount?: number;
   runtimeWarningMessage?: string;
+  runtimeWarningWillRetry?: boolean;
   suppressStandaloneCommandStart?: boolean;
   taskListHasTasks?: boolean;
 }
@@ -546,6 +547,7 @@ export function deriveWorkLogEntries(
         collapseKey: _collapseKey,
         runtimeWarningMessage: _runtimeWarningMessage,
         runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
+        runtimeWarningWillRetry: _runtimeWarningWillRetry,
         suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
         taskListHasTasks: _taskListHasTasks,
         ...entry
@@ -1733,6 +1735,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (activity.kind === "auth.status") {
     entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;
   }
+  if (activity.kind === "runtime.warning" && payload?.willRetry === true) {
+    entry.runtimeWarningWillRetry = true;
+  }
   if (activity.kind === "task.progress") {
     const subagentToolUseId = asTrimmedString(payload?.toolUseId);
     if (subagentToolUseId) {
@@ -2108,7 +2113,7 @@ function extractCollabActionTitle(payload: Record<string, unknown> | null): stri
   for (const candidate of candidates) {
     const title = asTrimmedString(candidate);
     if (title && !isGenericToolTitle(title)) {
-      return title.length > 120 ? `${title.slice(0, 117).trimEnd()}...` : title;
+      return title.length > 120 ? `${title.slice(0, 119).trimEnd()}…` : title;
     }
   }
   return null;
@@ -2246,6 +2251,11 @@ function shouldCollapseRuntimeWarningEntries(
   if (previous.turnId !== next.turnId) {
     return false;
   }
+  // Retryable warnings carry a structured flag, not a text pattern: consecutive
+  // retries of the same turn ("Reconnecting... n/5") collapse to the latest.
+  if (previous.runtimeWarningWillRetry && next.runtimeWarningWillRetry) {
+    return true;
+  }
   return (
     normalizeToolTextForComparison(previous.label) === normalizeToolTextForComparison(next.label) &&
     normalizeToolTextForComparison(
@@ -2261,6 +2271,15 @@ function mergeRuntimeWarningEntries(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
 ): DerivedWorkLogEntry {
+  if (previous.runtimeWarningWillRetry && next.runtimeWarningWillRetry) {
+    // Latest attempt wins; anchor at the first row's position/id.
+    return {
+      ...next,
+      id: previous.id,
+      createdAt: previous.createdAt,
+      ...(previous.sequence !== undefined ? { sequence: previous.sequence } : {}),
+    };
+  }
   const repeatCount = (previous.runtimeWarningRepeatCount ?? 1) + 1;
   const runtimeWarningMessage =
     next.runtimeWarningMessage ??

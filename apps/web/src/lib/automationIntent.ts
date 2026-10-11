@@ -796,7 +796,7 @@ function truncateName(value: string): string {
   if (normalized.length <= MAX_NAME_LENGTH) {
     return normalized;
   }
-  return `${normalized.slice(0, MAX_NAME_LENGTH - 1).trimEnd()}...`;
+  return `${normalized.slice(0, MAX_NAME_LENGTH - 1).trimEnd()}…`;
 }
 
 function sentenceCase(value: string): string {

@@ -189,6 +189,10 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
           </div>
         </RouteSurfaceHeader>
 
+        {/* Pre-hydration every project's count is 0, so the overview would flash
+            its empty state before the cards arrive. Hold it back until the
+            thread store is hydrated (the stale-project redirect waits on the
+            same flag). */}
         <div className="min-h-0 min-w-0 flex-1 pt-3">
           {projectBoard ? (
             <KanbanProjectBoardView
@@ -200,7 +204,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               nowMs={nowMs}
               viewMode={kanbanViewMode}
             />
-          ) : (
+          ) : threadsHydrated ? (
             <KanbanOverview
               board={board}
               onOpenProject={handleOpenProject}
@@ -211,7 +215,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               nowMs={nowMs}
               viewMode={kanbanViewMode}
             />
-          )}
+          ) : null}
         </div>
       </RouteSurface>
 

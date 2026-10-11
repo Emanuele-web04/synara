@@ -219,7 +219,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
           {computerScope?.prompt ?? KIND_PROMPT[approval.requestKind]}
           {!computerScope && (approval.toolName ?? parsed.tool) ? (
-            <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
+            <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/80">
               {approval.toolName ?? parsed.tool}
             </span>
           ) : null}
@@ -268,7 +268,7 @@ function ApprovalDetail({
     return (
       <div className="mt-2">
         {parsed.fallback ? (
-          <p className="mb-1.5 text-ui-sm leading-snug text-muted-foreground/70">
+          <p className="mb-1.5 text-ui-sm leading-snug text-muted-foreground/80">
             {parsed.fallback}
           </p>
         ) : null}
@@ -286,13 +286,13 @@ function ApprovalDetail({
     return (
       <div className="mt-2">
         {parsed.fallback ? (
-          <p className="text-ui-sm leading-snug text-muted-foreground/70">{parsed.fallback}</p>
+          <p className="text-ui-sm leading-snug text-muted-foreground/80">{parsed.fallback}</p>
         ) : null}
         {toolParamsDisplay && toolParamsDisplay.length > 0 ? (
           <dl className="mt-2 space-y-1 rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 text-ui-xs leading-snug">
             {toolParamsDisplay.map((parameter) => (
               <div className="grid grid-cols-[auto_1fr] gap-x-2" key={parameter.name}>
-                <dt className="font-medium text-muted-foreground/65">
+                <dt className="font-medium text-muted-foreground/80">
                   {parameter.displayName ?? parameter.name}
                 </dt>
                 <dd className="min-w-0 break-words font-mono text-foreground/80">
@@ -317,7 +317,7 @@ function ApprovalDetail({
         </p>
         {parsed.fileDir ? (
           <p
-            className="mt-0.5 truncate font-mono text-ui-xs leading-tight text-muted-foreground/55"
+            className="mt-0.5 truncate font-mono text-ui-xs leading-tight text-muted-foreground/80"
             title={parsed.fileDir}
           >
             {shortenPath(parsed.fileDir)}
@@ -339,7 +339,7 @@ function ApprovalDetail({
     );
   }
 
-  return <p className="mt-2 text-ui text-muted-foreground/65">Review the request to continue.</p>;
+  return <p className="mt-2 text-ui text-muted-foreground/80">Review the request to continue.</p>;
 }
 
 function formatToolParameterValue(value: unknown): string {
