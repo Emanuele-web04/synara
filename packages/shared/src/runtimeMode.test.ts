@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   normalizeRuntimeModeForProvider,
+  autoRuntimeModeSelectionIssue,
   providerSupportsAutoRuntimeMode,
+  providerSupportsLocalAutoRuntimeMode,
   runtimeModeEscalatesPrivilege,
 } from "./runtimeMode";
 
@@ -27,4 +29,39 @@ describe("runtime mode compatibility", () => {
     expect(runtimeModeEscalatesPrivilege("auto", "full-access")).toBe(true);
     expect(runtimeModeEscalatesPrivilege("auto", "approval-required")).toBe(false);
   });
+});
+
+it.each([
+  "codex",
+  "claudeAgent",
+  "opencode",
+  "cursor",
+  "grok",
+  "devin",
+  "droid",
+  "pi",
+  "antigravity",
+] as const)(
+  "keeps local Auto available for %s independently of native Auto capabilities",
+  (provider) => {
+    expect(providerSupportsLocalAutoRuntimeMode(provider)).toBe(true);
+    expect(normalizeRuntimeModeForProvider("auto-local", provider)).toBe("auto-local");
+    expect(
+      autoRuntimeModeSelectionIssue({
+        runtimeMode: "auto-local",
+        modelSelection: { provider, model: "test", supportsAutoMode: false },
+      }),
+    ).toBeNull();
+  },
+);
+
+it("keeps unsupported OMP local Auto selections manual", () => {
+  expect(providerSupportsLocalAutoRuntimeMode("omp")).toBe(false);
+  expect(normalizeRuntimeModeForProvider("auto-local", "omp")).toBe("approval-required");
+  expect(
+    autoRuntimeModeSelectionIssue({
+      runtimeMode: "auto-local",
+      modelSelection: { provider: "omp", model: "test" },
+    }),
+  ).toBe('Provider "omp" does not support local Auto tool approvals.');
 });

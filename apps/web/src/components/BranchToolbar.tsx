@@ -1,4 +1,6 @@
 import { requestCurrentAppSnap } from "../appSnap.logic";
+import { useQuery } from "@tanstack/react-query";
+import { localAutoQueryOptions } from "~/lib/serverReactQuery";
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
@@ -9,6 +11,7 @@ import type {
   ThreadId,
   RuntimeMode,
 } from "@synara/contracts";
+import { providerSupportsLocalAutoRuntimeMode } from "@synara/shared/runtimeMode";
 import { ChevronDownIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
@@ -87,7 +90,7 @@ function RuntimeModeMenuItem({
       value={mode}
       className={cn(
         "runtime-mode-menu-item",
-        mode === "auto" && "runtime-mode-menu-item--auto",
+        (mode === "auto" || mode === "auto-local") && "runtime-mode-menu-item--auto",
         accent &&
           "text-[var(--runtime-full-access-accent)] data-highlighted:text-[var(--runtime-full-access-accent)]",
       )}
@@ -161,6 +164,11 @@ export function RuntimeUsageControls({
   className,
   hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
+  const localAuto = useQuery(localAutoQueryOptions());
+  const localAutoAvailable =
+    provider !== undefined &&
+    providerSupportsLocalAutoRuntimeMode(provider) &&
+    localAuto.data?.phase === "ready";
   const autoModeAvailable =
     provider !== undefined &&
     providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
@@ -187,7 +195,8 @@ export function RuntimeUsageControls({
                 className={cn(
                   "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 [&_svg]:mx-0 sm:px-2.5",
                   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-                  runtimeMode === "auto" && RUNTIME_AUTO_ACCENT_CLASS_NAME,
+                  (runtimeMode === "auto" || runtimeMode === "auto-local") &&
+                    RUNTIME_AUTO_ACCENT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
                 title={`${runtimePresentation.label}: ${runtimePresentation.description}.${pendingDescription} Click to change permissions.`}
@@ -197,7 +206,7 @@ export function RuntimeUsageControls({
             <span className="inline-flex items-center gap-1.5">
               {runtimeMode === "full-access" ? (
                 <CentralIcon name="shield-access" className="size-3.5 shrink-0" />
-              ) : runtimeMode === "auto" ? (
+              ) : runtimeMode === "auto" || runtimeMode === "auto-local" ? (
                 <CentralIcon name="shield-code" className="size-3.5 shrink-0" />
               ) : (
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
@@ -225,8 +234,12 @@ export function RuntimeUsageControls({
               onValueChange={(value) => {
                 if (
                   !value ||
-                  (value !== "full-access" && value !== "auto" && value !== "approval-required") ||
+                  (value !== "full-access" &&
+                    value !== "auto" &&
+                    value !== "auto-local" &&
+                    value !== "approval-required") ||
                   (value === "auto" && !autoModeAvailable) ||
+                  (value === "auto-local" && !localAutoAvailable) ||
                   value === runtimeMode
                 ) {
                   return;
@@ -238,6 +251,12 @@ export function RuntimeUsageControls({
                 mode="approval-required"
                 icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
               />
+              {localAutoAvailable || runtimeMode === "auto-local" ? (
+                <RuntimeModeMenuItem
+                  mode="auto-local"
+                  icon={<CentralIcon name="shield-code" className="size-4 shrink-0" />}
+                />
+              ) : null}
               {autoModeAvailable ? (
                 <RuntimeModeMenuItem
                   mode="auto"

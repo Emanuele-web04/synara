@@ -50,5 +50,6 @@ export * from "./computerSpaces";
 export * from "./computerAudit";
 export * from "./computerBrowser";
 export * from "./rpc";
+export * from "./localAuto";
 export * from "./claudeCache";
 export * from "./todo";

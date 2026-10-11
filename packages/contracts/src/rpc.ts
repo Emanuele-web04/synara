@@ -1,3 +1,4 @@
+import { LocalAutoManageInput, LocalAutoStatus } from "./localAuto";
 import { Schema } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
@@ -1354,6 +1355,12 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
   error: WsRpcError,
 });
 
+export const WsServerLocalAutoRpc = Rpc.make(WS_METHODS.serverLocalAuto, {
+  payload: LocalAutoManageInput,
+  success: LocalAutoStatus,
+  error: WsRpcError,
+});
+
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
   success: ServerProviderUpdateResult,
@@ -1996,6 +2003,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
+  WsServerLocalAutoRpc,
   WsServerListExternalMcpIntegrationsRpc,
   WsServerCreateExternalMcpIntegrationRpc,
   WsServerRevokeExternalMcpIntegrationRpc,

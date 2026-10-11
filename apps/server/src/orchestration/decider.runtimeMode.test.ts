@@ -85,6 +85,34 @@ async function makeProjectOnlyReadModel(): Promise<OrchestrationReadModel> {
 }
 
 describe("decider Auto model compatibility", () => {
+  it("rejects enabling local Auto on an unsupported OMP thread", async () => {
+    const base = makeReadModel(true);
+    const readModel: OrchestrationReadModel = {
+      ...base,
+      threads: [
+        {
+          ...base.threads[0]!,
+          modelSelection: { provider: "omp", model: "test" },
+          runtimeMode: "approval-required",
+        },
+      ],
+    };
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.runtime-mode.set",
+            commandId: CommandId.makeUnsafe("cmd-enable-local-auto-omp"),
+            threadId: THREAD_ID,
+            runtimeMode: "auto-local",
+            createdAt: NOW,
+          },
+          readModel,
+        }),
+      ),
+    ).rejects.toThrow('Provider "omp" does not support local Auto tool approvals.');
+  });
+
   it("rejects changing an Auto thread to a Claude model reported as unsupported", async () => {
     await expect(
       Effect.runPromise(

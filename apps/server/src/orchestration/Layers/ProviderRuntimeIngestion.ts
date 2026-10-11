@@ -1,3 +1,4 @@
+import { makeLocalAutoReviewer } from "../../localAuto/reviewer";
 import {
   startComputerTurnTiming,
   endComputerTurnTiming,
@@ -815,6 +816,7 @@ export function selectProviderRuntimeJournalStream(input: {
 }
 
 const make = Effect.gen(function* () {
+  const reviewLocalAuto = yield* makeLocalAutoReviewer;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
@@ -3689,6 +3691,8 @@ const make = Effect.gen(function* () {
       if (completedToolOutputKey) {
         yield* Cache.invalidate(bufferedToolOutputByKey, completedToolOutputKey);
       }
+
+      if (thread.id === event.threadId) yield* reviewLocalAuto(event, runtimeSequence);
 
       // Exact-turn delivery modes deliberately survive terminal events for a
       // bounded TTL: providers may send late item/delta events after settlement.
