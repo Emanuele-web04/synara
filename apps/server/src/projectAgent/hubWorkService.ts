@@ -26,7 +26,7 @@ import {
 import type { ProjectAgentRepositoryShape } from "../persistence/Services/ProjectAgentRepository";
 import { ProjectAgentServiceError } from "./Errors";
 import { resolveHubWorkLifecycle } from "./hubWorkLifecycle";
-import { isServerGroupsEnabled } from "./groupsBetaGate";
+import { GROUPS_BETA_ONLY_MESSAGE, isServerGroupsEnabled } from "./groupsBetaGate";
 import type { ProjectAgentPrincipal } from "./principal";
 import type { ProjectAgentServiceShape } from "./Services/ProjectAgentService";
 
@@ -131,8 +131,7 @@ export function makeHubWorkService(dependencies: HubWorkDependencies): HubWorkSe
 
   const requireConfig = (projectId: ProjectId) =>
     Effect.gen(function* () {
-      if (!isServerGroupsEnabled())
-        return yield* Effect.fail(fail("Hubs are available in Synara Beta."));
+      if (!isServerGroupsEnabled()) return yield* Effect.fail(fail(GROUPS_BETA_ONLY_MESSAGE));
       const config = yield* projectAgentRepository
         .getConfig(projectId)
         .pipe(Effect.mapError(serviceError));

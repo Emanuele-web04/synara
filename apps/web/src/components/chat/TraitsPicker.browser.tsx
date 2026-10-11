@@ -187,11 +187,11 @@ describe("TraitsPicker (Claude)", () => {
     await expect.element(trigger).toHaveTextContent("High");
     await trigger.click();
     await page.getByRole("menuitemradio", { name: "200k", exact: true }).click();
-    await expect.element(trigger).toHaveTextContent("High · 200k");
+    await expect.element(trigger).toHaveTextContent(/^High\s*·\s*200k$/u);
     await trigger.click();
     const effortGroup = page.getByRole("group", { name: "Effort", exact: true });
     await effortGroup.getByRole("menuitemradio", { name: "Auto (Claude Code)" }).click();
-    await expect.element(trigger).toHaveTextContent("Auto (Claude Code) · 200k");
+    await expect.element(trigger).toHaveTextContent(/^Auto \(Claude Code\)\s*·\s*200k$/u);
     const selection =
       useComposerDraftStore.getState().draftsByThreadId[CLAUDE_THREAD_ID]?.modelSelectionByProvider
         .claudeAgent;
@@ -214,7 +214,7 @@ describe("TraitsPicker (Claude)", () => {
         "Ultrathink:\n",
       );
     });
-    await expect.element(trigger).toHaveTextContent("Ultrathink · 200k");
+    await expect.element(trigger).toHaveTextContent(/^Ultrathink\s*·\s*200k$/u);
   });
 
   it("keeps an unconfigured custom-model hint without a traits trigger", async () => {
