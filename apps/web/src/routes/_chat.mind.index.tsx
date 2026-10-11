@@ -483,7 +483,7 @@ function MindRouteView() {
       await queryClient.cancelQueries({ queryKey: mindQueryKey });
       // The optimistic write fans out to every cached list scope.
       queryClient.setQueriesData<MindListResult>({ queryKey: mindQueryKey }, (prev) =>
-        prev
+        prev?.memories.some((item) => item.memoryId === memory.memoryId)
           ? {
               memories: prev.memories.filter((item) => item.memoryId !== memory.memoryId),
               count: optimisticForgetCount({ count: prev.count, shown: prev.memories.length }),
