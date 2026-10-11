@@ -167,7 +167,7 @@ export function buildSettingsSkillGroups(
       // Stray markup artifacts (e.g. a lone `>` from a YAML scalar) carry no
       // information — fall back instead of rendering them as the description.
       const description =
-        rawDescription && /[a-z0-9]/i.test(rawDescription) ? rawDescription : "No description.";
+        rawDescription && /[\p{L}\p{N}]/u.test(rawDescription) ? rawDescription : "No description.";
       return {
         key,
         displayName: skillDisplayName(primarySkill),

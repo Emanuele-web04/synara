@@ -71,6 +71,14 @@ describe("buildSettingsSkillGroups", () => {
     expect(groups[0]?.description).toBe("No description.");
   });
 
+  it.each(["检查代码", "コードを確認", "مراجعة الشفرة", "परीक्षण करें"])(
+    "preserves a skill description written in another script: %s",
+    (description) => {
+      const groups = buildSettingsSkillGroups([skill({ description })]);
+      expect(groups[0]?.description).toBe(description);
+    },
+  );
+
   it("does not show provider icons for shared alias-only skills", () => {
     const groups = buildSettingsSkillGroups([
       skill({

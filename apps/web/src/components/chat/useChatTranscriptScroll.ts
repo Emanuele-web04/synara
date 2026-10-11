@@ -9,10 +9,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type MouseEvent,
   type WheelEvent,
 } from "react";
-import { flushSync } from "react-dom";
 import { isScrollContainerNearBottom } from "../../chat-scroll";
 import { isEditableEventTarget } from "../../lib/editableEventTarget";
 import type { TimelineEntry } from "../../session-logic";
@@ -48,6 +48,13 @@ export function useChatTranscriptScroll({
     top: number;
   } | null>(null);
   const pendingInteractionAnchorFrameRef = useRef<number | null>(null);
+  const pendingFollowCorrectionTimerRef = useRef<number | null>(null);
+  const cancelPendingFollowCorrection = useCallback(() => {
+    if (pendingFollowCorrectionTimerRef.current !== null) {
+      window.clearTimeout(pendingFollowCorrectionTimerRef.current);
+      pendingFollowCorrectionTimerRef.current = null;
+    }
+  }, []);
   const showScrollDebouncer = useRef(
     new Debouncer(() => setShowScrollToBottom(true), { wait: 150 }),
   );
@@ -56,12 +63,13 @@ export function useChatTranscriptScroll({
     const scrollDebouncer = showScrollDebouncer.current;
     return () => {
       scrollDebouncer.cancel();
+      cancelPendingFollowCorrection();
       const pendingFrame = pendingInteractionAnchorFrameRef.current;
       if (pendingFrame !== null) {
         window.cancelAnimationFrame(pendingFrame);
       }
     };
-  }, []);
+  }, [cancelPendingFollowCorrection]);
 
   const tailAnchorScrollInFlightRef = useRef(false);
 
@@ -78,13 +86,24 @@ export function useChatTranscriptScroll({
   const detachedAtRef = useRef(0);
   const DETACHED_RESTICK_GRACE_MS = 250;
   // User scroll gestures take ownership from streaming auto-follow. Ref updates
-  // are immediate; state updates project into the `followLiveOutput` prop.
-  const [isUserScrollDetached, setIsUserScrollDetached] = useState(false);
+  // are immediate; the store projects into the `followLiveOutput` prop. React renders
+  // external-store changes synchronously before the next frame from any context, so a
+  // gesture disables list-owned follow before an already queued animation frame runs
+  // without `flushSync`, which React rejects when a gesture lands inside a commit.
+  const [detachedStore] = useState(createTranscriptDetachedStore);
+  const isUserScrollDetached = useSyncExternalStore(
+    detachedStore.subscribe,
+    detachedStore.get,
+    detachedStore.get,
+  );
   const isUserScrollDetachedRef = useRef(isUserScrollDetached);
-  const setTranscriptScrollDetached = useCallback((detached: boolean) => {
-    isUserScrollDetachedRef.current = detached;
-    setIsUserScrollDetached(detached);
-  }, []);
+  const setTranscriptScrollDetached = useCallback(
+    (detached: boolean) => {
+      isUserScrollDetachedRef.current = detached;
+      detachedStore.set(detached);
+    },
+    [detachedStore],
+  );
   const pendingScrollGestureRef = useRef<{
     container: HTMLElement;
     scrollTop: number;
@@ -125,6 +144,7 @@ export function useChatTranscriptScroll({
     (targetThreadId: ThreadId, animated = false) => {
       cancelPendingScrollGesture();
       lateGestureScrollRef.current = null;
+      cancelPendingFollowCorrection();
       autoFollowThreadIdRef.current = targetThreadId;
       animateNextAutoFollowScrollRef.current = animated;
       isAtEndRef.current = true;
@@ -132,38 +152,40 @@ export function useChatTranscriptScroll({
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
     },
-    [cancelPendingScrollGesture, setTranscriptScrollDetached],
+    [cancelPendingScrollGesture, cancelPendingFollowCorrection, setTranscriptScrollDetached],
   );
-  const clearTranscriptAutoFollow = useCallback(
-    (synchronous = false) => {
-      cancelPendingScrollGesture();
-      const scrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
-      autoFollowThreadIdRef.current = null;
-      animateNextAutoFollowScrollRef.current = false;
-      settledScrollRequestRef.current += 1;
-      settledScrollInFlightRef.current = false;
-      programmaticScrollUntilRef.current = 0;
-      // A user scroll gesture takes over from any in-flight tail-anchor slide.
-      tailAnchorScrollInFlightRef.current = false;
-      const container = legendListRef.current?.getScrollableNode();
-      const detached =
-        container instanceof HTMLElement && container.scrollHeight > container.clientHeight + 1;
-      if (detached) {
-        detachedAtRef.current = performance.now();
-        lateGestureScrollRef.current = null;
-      }
-      if (detached !== isUserScrollDetachedRef.current) {
-        // Disable list-owned follow before an already queued animation frame can
-        // run. Continuous wheel events otherwise defer this prop update in React.
-        if (synchronous) flushSync(() => setTranscriptScrollDetached(detached));
-        else setTranscriptScrollDetached(detached);
-      }
-      if (scrollTarget) {
-        void stopTranscriptScrollAtCurrentOffset(scrollTarget);
-      }
-    },
-    [legendListRef, cancelPendingScrollGesture, setTranscriptScrollDetached],
-  );
+  const clearTranscriptAutoFollow = useCallback(() => {
+    cancelPendingScrollGesture();
+    cancelPendingFollowCorrection();
+    const scrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
+    autoFollowThreadIdRef.current = null;
+    animateNextAutoFollowScrollRef.current = false;
+    settledScrollRequestRef.current += 1;
+    settledScrollInFlightRef.current = false;
+    programmaticScrollUntilRef.current = 0;
+    // A user scroll gesture takes over from any in-flight tail-anchor slide.
+    tailAnchorScrollInFlightRef.current = false;
+    const container = legendListRef.current?.getScrollableNode();
+    const detached =
+      container instanceof HTMLElement && container.scrollHeight > container.clientHeight + 1;
+    if (detached) {
+      detachedAtRef.current = performance.now();
+      lateGestureScrollRef.current = null;
+    }
+    if (detached !== isUserScrollDetachedRef.current) {
+      // The detached store renders before an already queued animation frame can
+      // run, so list-owned follow is off by then even for continuous wheel events.
+      setTranscriptScrollDetached(detached);
+    }
+    if (scrollTarget) {
+      void stopTranscriptScrollAtCurrentOffset(scrollTarget);
+    }
+  }, [
+    legendListRef,
+    cancelPendingScrollGesture,
+    cancelPendingFollowCorrection,
+    setTranscriptScrollDetached,
+  ]);
   const onTranscriptNavigate = useCallback(() => {
     // Search can navigate from an effect. Its ref ownership changes immediately,
     // while React applies the list prop before the animated jump's next frame.
@@ -221,7 +243,7 @@ export function useChatTranscriptScroll({
           // (growth alone never decreases scrollTop).
           if (container.scrollTop < lateGesture.scrollTop - 1) {
             lateGestureScrollRef.current = null;
-            clearTranscriptAutoFollow(true);
+            clearTranscriptAutoFollow();
             return;
           }
           const inWindow = performance.now() <= lateGesture.until;
@@ -240,7 +262,7 @@ export function useChatTranscriptScroll({
                   legendListRef.current?.getScrollableNode() === container &&
                   !isScrollContainerNearBottom(container, 1)
                 )
-                  clearTranscriptAutoFollow(true);
+                  clearTranscriptAutoFollow();
               }),
             );
             return;
@@ -252,21 +274,36 @@ export function useChatTranscriptScroll({
           !isScrollContainerNearBottom(container, 1) &&
           !tailAnchorScrollInFlightRef.current &&
           !settledScrollInFlightRef.current &&
-          performance.now() >= programmaticScrollUntilRef.current
+          pendingFollowCorrectionTimerRef.current === null
         ) {
+          // Preserve the only notification of a growing live row during the
+          // native-scroll guard. Keep its throttle instead of retrying per frame.
           const request = settledScrollRequestRef.current;
-          programmaticScrollUntilRef.current = performance.now() + 200;
-          window.requestAnimationFrame(() => {
+          const correctAtEnd = () => {
+            pendingFollowCorrectionTimerRef.current = null;
             if (
-              request === settledScrollRequestRef.current &&
-              !isUserScrollDetachedRef.current &&
-              !tailAnchorScrollInFlightRef.current &&
-              !settledScrollInFlightRef.current &&
-              legendListRef.current?.getScrollableNode() === container &&
-              !isScrollContainerNearBottom(container, 1)
+              request !== settledScrollRequestRef.current ||
+              isUserScrollDetachedRef.current ||
+              tailAnchorScrollInFlightRef.current ||
+              settledScrollInFlightRef.current ||
+              legendListRef.current?.getScrollableNode() !== container ||
+              isScrollContainerNearBottom(container, 1)
             )
-              scrollToEnd();
-          });
+              return;
+            const remainingGuardMs = programmaticScrollUntilRef.current - performance.now();
+            if (remainingGuardMs > 0) {
+              pendingFollowCorrectionTimerRef.current = window.setTimeout(
+                correctAtEnd,
+                remainingGuardMs,
+              );
+              return;
+            }
+            scrollToEnd();
+          };
+          pendingFollowCorrectionTimerRef.current = window.setTimeout(
+            correctAtEnd,
+            Math.max(0, programmaticScrollUntilRef.current - performance.now()),
+          );
         }
         return;
       }
@@ -355,7 +392,7 @@ export function useChatTranscriptScroll({
     [legendListRef, cancelPendingInteractionAnchorAdjustment],
   );
   const onMessagesPointerDownBase = useCallback(() => {
-    clearTranscriptAutoFollow(true);
+    clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
   const releaseTranscriptScrollGesture = useCallback(() => {
     const state = legendListRef.current?.getState();
@@ -366,10 +403,10 @@ export function useChatTranscriptScroll({
   const onMessagesScrollBase = useCallback(() => {}, []);
   const onMessagesTouchEndBase = releaseTranscriptScrollGesture;
   const onMessagesTouchMoveBase = useCallback(() => {
-    clearTranscriptAutoFollow(true);
+    clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
   const onMessagesTouchStartBase = useCallback(() => {
-    clearTranscriptAutoFollow(true);
+    clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
   // Follow outlives the viewport it describes: layout can move a following
   // reader without a gesture. A gesture that starts more than a viewport above
@@ -398,7 +435,7 @@ export function useChatTranscriptScroll({
                 isFollowingFromViewport(container) &&
                 (!upward || isScrollContainerNearBottom(container, 1)),
             };
-      clearTranscriptAutoFollow(true);
+      clearTranscriptAutoFollow();
       pendingScrollGestureRef.current = origin;
       const decide = () => {
         pendingScrollGestureRef.current = null;
@@ -505,7 +542,7 @@ export function useChatTranscriptScroll({
                 wasFollowing: isFollowingFromViewport(container),
                 keyboard: true,
               };
-        clearTranscriptAutoFollow(true);
+        clearTranscriptAutoFollow();
         pendingScrollGestureRef.current = origin;
         isAtEndRef.current = false;
         showScrollDebouncer.current.maybeExecute();
@@ -567,6 +604,7 @@ export function useChatTranscriptScroll({
   // reads the detached ref in the same commit, and a passive reset would run
   // after it had already skipped the new thread, without re-triggering it.
   useLayoutEffect(() => {
+    cancelPendingFollowCorrection();
     isAtEndRef.current = true;
     settledScrollRequestRef.current += 1;
     settledScrollInFlightRef.current = false;
@@ -575,7 +613,7 @@ export function useChatTranscriptScroll({
     showScrollDebouncer.current.cancel();
     const settle = window.setTimeout(() => setShowScrollToBottom(false), 0);
     return () => window.clearTimeout(settle);
-  }, [activeThreadId, setTranscriptScrollDetached]);
+  }, [activeThreadId, cancelPendingFollowCorrection, setTranscriptScrollDetached]);
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThreadId !== null && autoFollowThreadIdRef.current === activeThreadId;
@@ -645,6 +683,7 @@ export function useChatTranscriptScroll({
   const onScrollToBottom = useCallback(() => {
     cancelPendingScrollGesture();
     lateGestureScrollRef.current = null;
+    cancelPendingFollowCorrection();
     tailAnchorScrollInFlightRef.current = false;
     setTranscriptScrollDetached(false);
     isAtEndRef.current = true;
@@ -684,7 +723,12 @@ export function useChatTranscriptScroll({
           settledScrollInFlightRef.current = false;
         }
       });
-  }, [legendListRef, cancelPendingScrollGesture, setTranscriptScrollDetached]);
+  }, [
+    legendListRef,
+    cancelPendingScrollGesture,
+    cancelPendingFollowCorrection,
+    setTranscriptScrollDetached,
+  ]);
 
   const previousStreamingRef = useRef({ activeThreadId, hasStreamingAssistantText });
   useLayoutEffect(() => {
@@ -775,5 +819,28 @@ export function useChatTranscriptScroll({
     onMessagesTouchMoveBase,
     onMessagesTouchStartBase,
     onMessagesWheelBase,
+  };
+}
+
+interface TranscriptDetachedStore {
+  get: () => boolean;
+  set: (detached: boolean) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+function createTranscriptDetachedStore(): TranscriptDetachedStore {
+  let detached = false;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => detached,
+    set: (next) => {
+      if (next === detached) return;
+      detached = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
   };
 }

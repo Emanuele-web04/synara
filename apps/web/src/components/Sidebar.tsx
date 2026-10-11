@@ -321,6 +321,7 @@ import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
+import { useCreateProjectDialogStore } from "../createProjectDialogStore";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { openExternalLink } from "~/lib/linkChips";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -1563,7 +1564,12 @@ export default function Sidebar() {
   const usageSettingsShortcutLabel = shortcutLabelForCommand(keybindings, "settings.usage");
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
-  const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
+  // Shared with the composer project picker, which opens this same dialog.
+  const createProjectDialogOpen = useCreateProjectDialogStore((state) => state.isOpen);
+  const setCreateProjectDialogOpen = useCreateProjectDialogStore((state) => state.setOpen);
+  // The open flag lives in a module store now, so it outlives this sidebar: close the
+  // dialog with it, or a remounted sidebar would reopen a stale modal over everything.
+  useEffect(() => () => setCreateProjectDialogOpen(false), [setCreateProjectDialogOpen]);
   const [createProjectSpaceId, setCreateProjectSpaceId] = useState<SpaceId | null | undefined>();
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [automationCreateOpen, setAutomationCreateOpen] = useState(false);
@@ -2723,7 +2729,7 @@ export default function Sidebar() {
 
   const handleStartAddProject = useCallback(() => {
     setCreateProjectDialogOpen(true);
-  }, []);
+  }, [setCreateProjectDialogOpen]);
 
   const activeSpaceProjects = useMemo(
     () => ordinarySpaceProjects.filter((project) => (project.spaceId ?? null) === activeSpaceId),

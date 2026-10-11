@@ -6,7 +6,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ThreadId, type ResolvedKeybindingsConfig, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import * as Schema from "effect/Schema";
 import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon } from "~/lib/icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -29,6 +28,13 @@ import { useVisibleDiffFilePath } from "../hooks/useVisibleDiffFilePath";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { shortcutLabelForCommand } from "../keybindings";
 import { useLocalStorage } from "../hooks/useLocalStorage";
+import {
+  DEFAULT_DIFF_RENDER_MODE,
+  DIFF_RENDER_MODE_STORAGE_KEY,
+  DiffRenderModeSchema,
+  type DiffRenderMode,
+} from "../diffRenderMode";
+import { useDiffRenderModeStore } from "../diffRenderModeStore";
 import {
   buildFileDiffRenderKey,
   getRenderablePatch,
@@ -59,7 +65,6 @@ import { createProjectSelector } from "../storeSelectors";
 import { inferCheckpointTurnCountByTurnId } from "../session-logic";
 import { type TimestampFormat, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
-import type { DiffRenderMode } from "./chat/chatHeaderControls";
 import {
   areAllRenderableFilesCollapsed,
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
@@ -129,7 +134,6 @@ import type { TurnDiffSummary } from "../types";
 
 const EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-const DiffRenderModeSchema = Schema.Literals(["stacked", "split"]);
 
 function EditorDiffOptionsCountBadge(props: { count: number | undefined }) {
   if (typeof props.count !== "number" || props.count <= 0) {
@@ -459,9 +463,9 @@ export default function DiffPanel({
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
-  const [diffRenderMode, setDiffRenderMode] = useLocalStorage(
-    "synara:diff-render-mode:v1",
-    "split",
+  const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
+    DIFF_RENDER_MODE_STORAGE_KEY,
+    DEFAULT_DIFF_RENDER_MODE,
     DiffRenderModeSchema,
   );
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
@@ -517,6 +521,17 @@ export default function DiffPanel({
     [diffQueriesEnabled, scopePickerOpen],
   );
   const activeThreadId = controlledThreadId ?? routeThreadId;
+  const diffRenderMode = useDiffRenderModeStore((store) =>
+    store.getModeForThread(activeThreadId, defaultDiffRenderMode),
+  );
+  const setModeForThread = useDiffRenderModeStore((store) => store.setModeForThread);
+  const setDiffRenderMode = useCallback(
+    (nextMode: DiffRenderMode) => {
+      if (activeThreadId) setModeForThread(activeThreadId, nextMode);
+      else setDefaultDiffRenderMode(nextMode);
+    },
+    [activeThreadId, setDefaultDiffRenderMode, setModeForThread],
+  );
   const serverThreadCatalog = useStore(
     useMemo(() => createDiffPanelThreadCatalogSelector(activeThreadId), [activeThreadId]),
   );

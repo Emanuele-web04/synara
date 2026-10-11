@@ -1,0 +1,49 @@
+---
+title: Provider accounts
+description: Configure separate provider accounts, sign in from Synara, choose account-specific models, and inspect usage.
+---
+
+<Callout type="info" title="Synara 1.0.0">
+  These features are available in **Synara 1.0.0 Stable**, except where explicitly marked Beta-only.
+  Hubs and the Tasks to-do list still require Synara Beta.
+</Callout>
+
+Synara supports multiple accounts for each provider. Each account has its own model-picker tab and launch configuration, so work and personal accounts can share a workspace without sharing the selected runtime environment.
+
+## Add and sign in
+
+Open provider settings and choose **Add account**. Choose the provider and an optional display name and color. Configure its account directory or environment as needed. **Import directory** references an existing directory without moving or copying it; browser clients must configure a server-side path manually.
+
+Choose **Sign in** on that account. Synara opens an interactive terminal in settings, using that account's executable and environment on the Synara server machine. Complete the provider's browser, device-code, organization, or credential prompts yourself. For Pi and Oh My Pi, use **Sign-in options** after startup prompts.
+
+Closing the dialog stops the sign-in process and clears its terminal history. It does not log out an account whose credentials the provider already saved. Synara shows **Authenticated** only after a supported health check confirms it; an unknown status may require checking the provider directly. OpenCode accounts using an external server authenticate on that server.
+
+## Pick models and switch accounts
+
+Choose the account's tab in the composer model picker. Models come from the installed runtime and account configuration. Synara refreshes stale catalogs when needed and keeps a previous working catalog available if discovery fails; use the retry action when an error is shown.
+
+Favorites retain model, effort, speed, and account together. A favorite for a disabled or removed account is hidden. To continue an existing conversation with another provider, use a [provider handoff](/docs/workflows/handoffs).
+
+## Inspect account usage
+
+The Environment panel shows accounts for the active provider with separate usage details. **Settings → Usage** uses account-specific snapshots too. Availability depends on what each provider exposes; an absent account metric must not be interpreted as zero use.
+
+## Use account commands in Synara terminals
+
+Enabled accounts receive stable commands such as `claude-work` or `codex-personal` in new or restarted Synara terminals. Ordinary `claude` and `codex` commands keep their meaning. Synara does not edit your global shell startup files.
+
+Account commands support directory-backed credentials. Secret environment values are not written into their command files; a terminal command that needs such a secret still requires it through a secure runtime mechanism. Managed Synara sessions use the account's configured environment.
+
+Provider capabilities still differ. See the [provider guides](/docs/providers) for runtime setup and troubleshooting.
+
+## Hide providers you do not use
+
+In 1.0.1-beta.2, **Settings → Providers → Enabled providers** controls visibility across model choices, ordering, CLI tools, custom models, usage options and the plugin library. Expand **Disabled providers** to restore one. Accounts, paths, custom and starred models, ordering and existing chats are preserved; disabling does not interrupt running turns. Enabling does not install a CLI or sign in.
+
+## Managed Claude accounts on macOS
+
+Managed accounts retain the system home and username for Keychain access, with separate `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` directories. Login, chats, health and usage use the same resolved account configuration. An older sign-in stored under `unknown` or a private Keychain may require signing in again; Synara does not copy or delete Keychain entries.
+
+**Signed in locally** means the CLI reports saved authentication, not that the next request will succeed. Usage authentication errors belong to the matching account. Inference-only tokens, including `claude setup-token`, can run chats without the `user:profile` scope required for live usage. Tokens hidden in wrapper scripts cannot be read for usage.
+
+Source evidence: Synara `48603e869`, the audited release head for `1.0.1-beta.2`. `docs/providers.md`, `apps/server/src/provider/claudeEnvironment.ts`, `apps/server/src/providerUsage/providers/claude.ts`, and the provider settings/model selectors.
