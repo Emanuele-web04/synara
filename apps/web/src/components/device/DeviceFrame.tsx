@@ -345,7 +345,7 @@ export const DeviceSilhouette = memo(function DeviceSilhouette({
  * two nubs. `volumeRocker` belongs to the Android spec, whose backend does not
  * exist yet; it gets its press when that lands.
  */
-export const NUB_ACTIONS: Record<
+const NUB_ACTIONS: Record<
   string,
   { readonly label: string; readonly button?: DeviceHardwareButton; readonly hint?: string }
 > = {

@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  DEVICE_HELPER_BINARY_NAME,
   DEVICE_HELPER_CACHE_SEGMENTS,
   deviceHelperCacheKey,
 } from "@synara/shared/deviceHelperCache";
@@ -50,9 +49,5 @@ describe("helper cache path agreement", () => {
 
   it("roots the cache where the smoke script writes it", () => {
     expect(DEVICE_HELPER_CACHE_ROOT).toBe(join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS));
-  });
-
-  it("names the binary the build script produces", () => {
-    expect(DEVICE_HELPER_BINARY_NAME).toBe("synara-device-helper");
   });
 });

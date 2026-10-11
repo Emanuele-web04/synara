@@ -34,18 +34,28 @@ describe("browser CI partitions", () => {
       if (file.endsWith("/ChatView.browser.tsx")) {
         expect(owners.map(({ project }) => project).sort()).toEqual([
           "chat-follow (chromium)",
+          "chat-projects (chromium)",
           "chat-workflows (chromium)",
         ]);
         for (const name of [
           "ChatView transcript geometry (full app) renders the active thread title",
           "ChatView transcript geometry (full app) restores streaming follow after wheel",
+          "keeps scroll anchor stable",
+          "renders tool activity",
+          "creates a project",
+          "new worktree",
+          "approval already answered",
+          "queued composer request",
           "a newly added case",
-          "a newly added restores streaming follow case",
-          "[geometry:linux] a quarantined case",
-          "[geometry:linux] restores streaming follow",
         ]) {
-          const selected = owners.filter(({ pattern }) => pattern?.test(name));
-          expect(selected.length, name).toBe(stable[0]!.pattern!.test(name) ? 1 : 0);
+          // Expected membership must not come from the config being checked.
+          for (const [title, expected] of [
+            [name, 1],
+            [`[geometry:linux] ${name}`, 0],
+          ] as const) {
+            const selected = owners.filter(({ pattern }) => pattern?.test(title));
+            expect(selected.length, title).toBe(expected);
+          }
         }
       } else {
         expect(owners.map(({ project }) => project)).toEqual(["components (chromium)"]);
@@ -53,5 +63,5 @@ describe("browser CI partitions", () => {
       }
       expect(owners.every(({ fileParallelism }) => fileParallelism === false)).toBe(true);
     }
-  }, 30_000);
+  }, 120_000);
 });

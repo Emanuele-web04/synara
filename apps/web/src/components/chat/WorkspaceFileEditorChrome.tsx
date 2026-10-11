@@ -112,10 +112,7 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
         CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
       )}
     >
-      <nav
-        aria-label="File path"
-        className="flex min-w-0 flex-1 items-center text-[12px] leading-none"
-      >
+      <nav aria-label="File path" className="flex min-w-0 flex-1 items-center text-ui leading-none">
         <span className="flex min-w-0 shrink-[9999] items-center overflow-hidden">
           {prefixSegments.map((segment) => (
             <Fragment key={segment.key}>
@@ -142,8 +139,11 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
         ) : null}
       </nav>
 
-      <span className="shrink-0 text-[11px] text-muted-foreground/70">{props.title}</span>
+      <span className="shrink-0 text-ui-sm text-muted-foreground/70">{props.title}</span>
 
+      <span role="status" className="shrink-0 text-ui-sm text-muted-foreground">
+        {props.saving ? "Saving..." : props.dirty ? "Unsaved changes" : "Saved"}
+      </span>
       <div className="flex shrink-0 items-center gap-1.5">
         {props.actions}
         <Button
@@ -205,7 +205,6 @@ interface WorkspaceFileEditorConflictBarProps {
   conflict: boolean;
   onReload: () => void;
   onOverwrite: () => void;
-  onDismiss: () => void;
 }
 
 export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflictBarProps) {
@@ -215,41 +214,29 @@ export function WorkspaceFileEditorConflictBar(props: WorkspaceFileEditorConflic
         aria-hidden="true"
         className="size-3.5 shrink-0 text-[var(--color-warning)]"
       />
-      <p className="min-w-0 flex-1 truncate text-[11px] text-foreground/85" title={props.message}>
+      <p className="min-w-0 flex-1 truncate text-ui-sm text-foreground/85" title={props.message}>
         {props.message}
       </p>
-      {props.conflict ? (
-        <>
-          <Button
-            type="button"
-            size="xs"
-            variant="chrome-outline"
-            className="!h-6 shrink-0 rounded-md text-[11px]"
-            onClick={props.onReload}
-          >
-            Reload from disk
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="chrome-outline"
-            className="!h-6 shrink-0 rounded-md text-[11px]"
-            onClick={props.onOverwrite}
-          >
-            Overwrite
-          </Button>
-        </>
-      ) : null}
-      <ChatHeaderIconButton
+      <Button
         type="button"
-        tone="plain"
-        label="Dismiss"
-        title="Dismiss"
-        className="!size-6"
-        onClick={props.onDismiss}
+        size="xs"
+        variant="chrome-outline"
+        className="!h-6 shrink-0 rounded-md text-ui-sm"
+        onClick={props.onReload}
       >
-        <XIcon aria-hidden="true" className="size-3" />
-      </ChatHeaderIconButton>
+        Reload from disk
+      </Button>
+      {props.conflict ? (
+        <Button
+          type="button"
+          size="xs"
+          variant="chrome-outline"
+          className="!h-6 shrink-0 rounded-md text-ui-sm"
+          onClick={props.onOverwrite}
+        >
+          Overwrite
+        </Button>
+      ) : null}
     </div>
   );
 }

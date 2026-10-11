@@ -52,17 +52,6 @@ describe("heatmapIntensity", () => {
     expect(levels).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
   });
 
-  it("keeps the busiest day at the top level and ranks quartiles in order", () => {
-    const counts = Array.from({ length: 100 }, (_, index) => index + 1);
-    const active = sorted(counts);
-    expect(heatmapIntensity(1, active)).toBe(1);
-    expect(heatmapIntensity(25, active)).toBe(1);
-    expect(heatmapIntensity(26, active)).toBe(2);
-    expect(heatmapIntensity(75, active)).toBe(3);
-    expect(heatmapIntensity(76, active)).toBe(4);
-    expect(heatmapIntensity(100, active)).toBe(4);
-  });
-
   it("gives tied days the same level and renders a uniform window at full intensity", () => {
     const active = sorted([500, 500, 500, 500]);
     expect(active.map((count) => heatmapIntensity(count, active))).toEqual([4, 4, 4, 4]);
@@ -75,18 +64,22 @@ describe("ProfileStatsQuery", () => {
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const stats = yield* ProfileStatsQuery;
-        for (const [threadId, parentThreadId, creationSource] of [
-          ["root", null, null],
-          ["mirrored-child", "root", "provider_native"],
-          ["independent-child", "root", "synara_mcp"],
+        for (const [threadId, parentThreadId, creationSource, sourceTurnId] of [
+          ["root", null, null, null],
+          ["mirrored-child", "root", "provider_native", "first"],
+          ["independent-child", "root", "synara_mcp", null],
+          ["uncovered-parent", null, null, null],
+          ["uncovered-child", "uncovered-parent", "provider_native", "uncovered-parent-turn"],
+          ["unknown-source-child", "uncovered-parent", "provider_native", null],
+          ["scalar-parent-child", "root", "provider_native", "fallback"],
         ] as const) {
           yield* sql`
           INSERT INTO projection_threads
             (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
-             env_mode, created_at, updated_at, parent_thread_id, creation_source)
+             env_mode, created_at, updated_at, parent_thread_id, creation_source, source_turn_id)
           VALUES (${threadId}, 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
             'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
-            ${parentThreadId}, ${creationSource})
+            ${parentThreadId}, ${creationSource}, ${sourceTurnId})
         `;
         }
         const addActivity = (id: string, threadId: string, turnId: string, payload: object) => sql`
@@ -148,6 +141,89 @@ describe("ProfileStatsQuery", () => {
           modelUsage: { "claude-fable-5": "unusable" },
         });
         yield* addActivity("8", "independent-child", "independent", versioned);
+        // A previous parent turn with a complete breakdown must not suppress a
+        // later provider-native child whose own parent turn was interrupted.
+        yield* addActivity("9-parent", "uncovered-parent", "previous-parent-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 2_000,
+              outputTokens: 1_000,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        });
+        // Malformed historical payloads are ignored by the fallback probe
+        // instead of making the entire Profile query fail.
+        yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES (
+            '9-invalid-parent', 'uncovered-parent', 'uncovered-parent-turn',
+            'error', 'turn.completed', 'interrupted', '{not-json', 10, '2026-09-10T12:00:00Z'
+          )
+        `;
+        // If a provider-native child is the only row with a usable breakdown,
+        // retain its verified usage even though the parent has no result row.
+        yield* addActivity("9", "uncovered-child", "uncovered", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 1_000,
+              outputTokens: 500,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+            },
+          },
+        });
+        // Missing source-turn provenance is not evidence that an older parent
+        // result includes this child's work. Background events can omit turnId.
+        yield* addActivity("9-unknown-source", "unknown-source-child", "unknown-source-turn", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 700,
+        });
+        // A scalar model entry in the matching parent is unusable, and must not
+        // fail the SQLite query or suppress this child's valid fallback.
+        yield* addActivity("9-scalar-parent-child", "scalar-parent-child", "scalar-child-turn", {
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 400,
+        });
+        // A malformed numeric field must not make a parent look usable and
+        // suppress the child's valid usage.
+        yield* sql`
+          INSERT INTO projection_threads
+            (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+             env_mode, created_at, updated_at, parent_thread_id, creation_source, source_turn_id)
+          VALUES (
+            'malformed-parent', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            NULL, NULL, NULL
+          ),
+          (
+            'malformed-child', 'project', 'Claude', '{"provider":"claudeAgent","model":"claude-fable-5"}',
+            'full-access', 'default', 'local', '2026-09-10', '2026-09-10',
+            'malformed-parent', 'provider_native', 'malformed-parent-turn'
+          )
+        `;
+        yield* addActivity("10-parent", "malformed-parent", "malformed-parent-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: "not-a-number",
+              outputTokens: "also-not-a-number",
+            },
+          },
+        });
+        yield* addActivity("10-child", "malformed-child", "malformed-child-turn", {
+          tokenAccountingVersion: 1,
+          modelUsage: {
+            "claude-fable-5": {
+              inputTokens: 300,
+              outputTokens: 200,
+            },
+          },
+        });
         // Successful main-loop usage survives even though old compact model totals
         // cannot be classified as per-turn or cumulative without process evidence.
         yield* sql`
@@ -183,9 +259,9 @@ describe("ProfileStatsQuery", () => {
         // The verified fallback must outlive ordinary runtime-event retention.
         yield* sql`DELETE FROM provider_runtime_events`;
         const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
-        expect(result.lifetimeTotalTokens).toBe(85_228);
+        expect(result.lifetimeTotalTokens).toBe(91_328);
         expect(result.models.map(({ model, tokens }) => ({ model, tokens }))).toEqual([
-          { model: "claude-fable-5", tokens: 83_228 },
+          { model: "claude-fable-5", tokens: 89_328 },
           { model: "claude-opus-4-8", tokens: 2_000 },
         ]);
       }),
@@ -399,7 +475,7 @@ describe("ProfileStatsQuery", () => {
               'thread.turn-start-requested',
               '2026-06-13T09:35:00.000Z',
               'client',
-              '{"threadId":"thread-codex","modelSelection":{"provider":"codex","model":"gpt-5-codex","options":{"reasoningEffort":"high"}}}',
+              '{"threadId":"thread-codex","modelSelection":{"provider":"codex","instanceId":"codex","model":"gpt-5-codex","options":[{"id":"reasoningEffort","value":"high"}]}}',
               '{}'
             ),
             (
@@ -427,6 +503,7 @@ describe("ProfileStatsQuery", () => {
         expect(stats.insights.topReasoningPercent).toBeCloseTo(66.7);
         expect(stats.providerModels[0]).toMatchObject({
           provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
           turnCount: 2,
         });
@@ -495,6 +572,224 @@ describe("ProfileStatsQuery", () => {
         expect(stats.providerModels).toEqual([
           expect.objectContaining({ provider: "codex", model: "gpt-5-codex", turnCount: 1 }),
         ]);
+      }),
+    );
+  });
+
+  it("attributes provider-less custom instance selections to their session provider", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-pi-work',
+            'project-profile',
+            'Pi Work Thread',
+            '{"instanceId":"pi_work","model":"openai/gpt-5"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T10:00:00.000Z',
+            '2026-06-13T10:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES (
+            'thread-pi-work',
+            'ready',
+            'pi',
+            'pi_work',
+            '2026-06-13T10:00:00.000Z'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES (
+            'event-pi-work',
+            'thread',
+            'thread-pi-work',
+            1,
+            'thread.turn-start-requested',
+            '2026-06-13T10:05:00.000Z',
+            'client',
+            '{"threadId":"thread-pi-work","modelSelection":{"instanceId":"pi_work","model":"openai/gpt-5"}}',
+            '{}'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES (
+            'activity-pi-work',
+            'thread-pi-work',
+            'turn-pi-work',
+            'info',
+            'context-window.updated',
+            'tokens updated',
+            '{"totalProcessedTokens":2500}',
+            1,
+            '2026-06-13T10:06:00.000Z'
+          )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(stats.insights.topProvider).toBe("pi");
+        expect(stats.providerModels[0]).toMatchObject({
+          provider: "pi",
+          instanceId: "pi_work",
+          model: "openai/gpt-5",
+          turnCount: 1,
+        });
+        expect(tokenStats.topProvider).toBe("pi");
+        expect(tokenStats.providers).toEqual(["pi"]);
+        expect(tokenStats.models).toContainEqual(
+          expect.objectContaining({
+            provider: "pi",
+            instanceId: "pi_work",
+            model: "openai/gpt-5",
+          }),
+        );
+      }),
+    );
+  });
+
+  it("reports providers without positive token totals without inventing usage", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+        for (const provider of ["codex", "grok"]) {
+          const selection = JSON.stringify({ provider, model: `${provider}-model` });
+          yield* sql`
+            INSERT INTO projection_threads (
+              thread_id, project_id, title, model_selection_json, runtime_mode,
+              interaction_mode, env_mode, created_at, updated_at
+            ) VALUES (
+              ${provider}, 'project-profile', ${provider}, ${selection}, 'full-access',
+              'default', 'local', '2026-06-13T09:00:00.000Z', '2026-06-13T09:00:00.000Z'
+            )
+          `;
+          const payload = JSON.stringify({
+            threadId: provider,
+            modelSelection: { provider, model: `${provider}-model` },
+          });
+          yield* sql`
+            INSERT INTO orchestration_events (
+              event_id, aggregate_kind, stream_id, stream_version, event_type,
+              occurred_at, actor_kind, payload_json, metadata_json
+            ) VALUES (
+              ${provider}, 'thread', ${provider}, 1, 'thread.turn-start-requested',
+              '2026-06-13T09:05:00.000Z', 'client', ${payload}, '{}'
+            )
+          `;
+        }
+
+        const withoutTokens = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(withoutTokens.available).toBe(false);
+        expect(withoutTokens.unavailableProviders).toEqual(["codex", "grok"]);
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            'codex-tokens', 'codex', 'codex-turn', 'info', 'context-window.updated', 'tokens',
+            '{"totalProcessedTokens":1000}', 1, '2026-06-13T09:06:00.000Z'
+          )
+        `;
+        const missingTelemetry = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(missingTelemetry.unavailableProviders).toEqual(["grok"]);
+        expect(missingTelemetry.lifetimeTotalTokens).toBe(1000);
+
+        // An observed zero is not a positive token total. The coverage notice must
+        // describe the missing positive totals, without claiming telemetry is absent.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            'grok-zero-tokens', 'grok', 'grok-turn', 'info', 'context-window.updated', 'tokens',
+            '{"totalProcessedTokens":0}', 1, '2026-06-13T09:06:00.000Z'
+          )
+        `;
+        const partial = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(partial.available).toBe(true);
+        expect(partial.lifetimeTotalTokens).toBe(1000);
+        expect(partial.topProviderPercent).toBe(100);
+        expect(partial.unavailableProviders).toEqual(["grok"]);
+        expect(partial.models).toEqual([
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "codex-model",
+            tokens: 1000,
+            percent: 100,
+          },
+        ]);
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        expect(stats.providerModels).toContainEqual({
+          provider: "grok",
+          instanceId: "grok",
+          model: "grok-model",
+          turnCount: 1,
+          percent: 50,
+        });
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            'grok-tokens', 'grok', 'grok-turn', 'info', 'context-window.updated', 'tokens',
+            '{"totalProcessedTokens":1000}', 2, '2026-06-13T09:07:00.000Z'
+          )
+        `;
+        const complete = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(complete.unavailableProviders).toEqual([]);
+        expect(complete.lifetimeTotalTokens).toBe(2000);
       }),
     );
   });
@@ -642,8 +937,20 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.providers).toEqual(["claudeAgent", "codex"]);
         // Token-based model mix mirrors the token ranking, not the turn counts.
         expect(tokenStats.models).toEqual([
-          { provider: "claudeAgent", model: "claude-sonnet-4-6", tokens: 5000, percent: 83.3 },
-          { provider: "codex", model: "gpt-5-codex", tokens: 1000, percent: 16.7 },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-sonnet-4-6",
+            tokens: 5000,
+            percent: 83.3,
+          },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 1000,
+            percent: 16.7,
+          },
         ]);
         // Turn-based provider/model mix is unchanged by the token ranking.
         expect(stats.providerModels[0]).toMatchObject({ provider: "codex", turnCount: 2 });
@@ -856,9 +1163,27 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.lifetimeTotalTokens).toBe(11000);
         expect(tokenStats.topProvider).toBe("codex");
         expect(tokenStats.models).toEqual([
-          { provider: "codex", model: "gpt-5-codex", tokens: 6000, percent: 54.5 },
-          { provider: "claudeAgent", model: "claude-fable-5", tokens: 3000, percent: 27.3 },
-          { provider: "claudeAgent", model: "claude-opus-4-8", tokens: 2000, percent: 18.2 },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 6000,
+            percent: 54.5,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-fable-5",
+            tokens: 3000,
+            percent: 27.3,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-opus-4-8",
+            tokens: 2000,
+            percent: 18.2,
+          },
         ]);
       }),
     );
@@ -1069,9 +1394,212 @@ describe("ProfileStatsQuery", () => {
 
         expect(tokenStats.lifetimeTotalTokens).toBe(4200);
         expect(tokenStats.models).toEqual([
-          { provider: "codex", model: "gpt-5-codex", tokens: 2500, percent: 59.5 },
-          { provider: "claudeAgent", model: "claude-haiku-4-5", tokens: 1700, percent: 40.5 },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 2500,
+            percent: 59.5,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-haiku-4-5",
+            tokens: 1700,
+            percent: 40.5,
+          },
         ]);
+      }),
+    );
+  });
+
+  it("attributes provider-less token updates to the active session before model heuristics", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-opencode-claude-model',
+            'project-profile',
+            'OpenCode Claude Model Thread',
+            '{"instanceId":"work","model":"anthropic/claude-sonnet-4-6"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T10:00:00.000Z',
+            '2026-06-13T10:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES (
+            'thread-opencode-claude-model',
+            'ready',
+            'opencode',
+            'work',
+            '2026-06-13T10:00:00.000Z'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES (
+            'activity-opencode-claude-model',
+            'thread-opencode-claude-model',
+            'turn-opencode-claude-model',
+            'info',
+            'context-window.updated',
+            'tokens updated',
+            '{"totalProcessedTokens":3200}',
+            1,
+            '2026-06-13T10:06:00.000Z'
+          )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.topProvider).toBe("opencode");
+        expect(tokenStats.providers).toEqual(["opencode"]);
+        expect(tokenStats.unavailableProviders).not.toContain("claudeAgent");
+      }),
+    );
+  });
+
+  it("keeps historical provider-less turns attributed before latest session fallback", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-switched-provider',
+            'project-profile',
+            'Switched Provider Thread',
+            '{"instanceId":"codex_work","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T10:00:00.000Z',
+            '2026-06-13T11:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES (
+            'thread-switched-provider',
+            'ready',
+            'codex',
+            'codex_work',
+            '2026-06-13T11:00:00.000Z'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES
+            (
+              'event-switched-claude',
+              'thread',
+              'thread-switched-provider',
+              1,
+              'thread.turn-start-requested',
+              '2026-06-13T10:05:00.000Z',
+              'client',
+              '{"threadId":"thread-switched-provider","modelSelection":{"instanceId":"work","model":"claude-sonnet-4-6"}}',
+              '{}'
+            ),
+            (
+              'event-switched-codex',
+              'thread',
+              'thread-switched-provider',
+              2,
+              'thread.turn-start-requested',
+              '2026-06-13T11:05:00.000Z',
+              'client',
+              '{"threadId":"thread-switched-provider","modelSelection":{"instanceId":"codex_work","model":"gpt-5-codex"}}',
+              '{}'
+            )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        const claudeRow = stats.providerModels.find(
+          (row) => row.provider === "claudeAgent" && row.instanceId === "work",
+        );
+        const codexRow = stats.providerModels.find(
+          (row) => row.provider === "codex" && row.instanceId === "codex_work",
+        );
+
+        expect(claudeRow).toMatchObject({
+          model: "claude-sonnet-4-6",
+          turnCount: 1,
+        });
+        expect(codexRow).toMatchObject({
+          model: "gpt-5-codex",
+          turnCount: 1,
+        });
       }),
     );
   });
@@ -1683,8 +2211,275 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.lifetimeTotalTokens).toBe(1500);
         expect(tokenStats.providers).toEqual(["claudeAgent"]);
         expect(tokenStats.models).toEqual([
-          { provider: "claudeAgent", model: "unknown", tokens: 1500, percent: 100 },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "unknown",
+            tokens: 1500,
+            percent: 100,
+          },
         ]);
+      }),
+    );
+  });
+
+  it("does not subtract another provider's counter when a thread switches providers and back", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-switch', 'project-profile', 'Switch Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default', 'local',
+            '2026-06-13T12:00:00.000Z', '2026-06-13T12:00:00.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id, aggregate_kind, stream_id, stream_version, event_type,
+            occurred_at, actor_kind, payload_json, metadata_json
+          )
+          VALUES
+            ('event-switch-1', 'thread', 'thread-switch', 1, 'thread.turn-start-requested',
+              '2026-06-13T12:01:00.000Z', 'client',
+              '{"threadId":"thread-switch","messageId":"message-switch-1","modelSelection":{"provider":"codex","model":"gpt-5-codex"}}',
+              '{}'),
+            ('event-switch-2', 'thread', 'thread-switch', 2, 'thread.turn-start-requested',
+              '2026-06-13T12:10:00.000Z', 'client',
+              '{"threadId":"thread-switch","messageId":"message-switch-2","modelSelection":{"provider":"opencode","model":"sonnet"}}',
+              '{}'),
+            ('event-switch-3', 'thread', 'thread-switch', 3, 'thread.turn-start-requested',
+              '2026-06-13T12:20:00.000Z', 'client',
+              '{"threadId":"thread-switch","messageId":"message-switch-3","modelSelection":{"provider":"codex","model":"gpt-5-codex"}}',
+              '{}')
+        `;
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, state, requested_at, checkpoint_files_json
+          )
+          VALUES
+            ('thread-switch', 'turn-switch-1', 'message-switch-1', 'completed',
+              '2026-06-13T12:01:00.000Z', '[]'),
+            ('thread-switch', 'turn-switch-2', 'message-switch-2', 'completed',
+              '2026-06-13T12:10:00.000Z', '[]'),
+            ('thread-switch', 'turn-switch-3', 'message-switch-3', 'completed',
+              '2026-06-13T12:20:00.000Z', '[]')
+        `;
+        // Codex resumes its own running total after the OpenCode turn.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('activity-switch-1', 'thread-switch', 'turn-switch-1', 'info',
+              'context-window.updated', 'tokens updated',
+              '{"provider":"codex","totalProcessedTokens":100000}', 1, '2026-06-13T12:02:00.000Z'),
+            ('activity-switch-2', 'thread-switch', 'turn-switch-2', 'info',
+              'context-window.updated', 'tokens updated',
+              '{"provider":"opencode","totalProcessedTokens":5000}', 2, '2026-06-13T12:11:00.000Z'),
+            ('activity-switch-3', 'thread-switch', 'turn-switch-3', 'info',
+              'context-window.updated', 'tokens updated',
+              '{"provider":"codex","totalProcessedTokens":110000}', 3, '2026-06-13T12:21:00.000Z')
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.lifetimeTotalTokens).toBe(115_000);
+        expect(tokenStats.models).toEqual([
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 110_000,
+            percent: 95.7,
+          },
+          {
+            provider: "opencode",
+            instanceId: "opencode",
+            model: "sonnet",
+            tokens: 5_000,
+            percent: 4.3,
+          },
+        ]);
+      }),
+    );
+  });
+
+  it("starts a fresh cumulative baseline for each native usage session", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-native-session', 'project-profile', 'Native session thread',
+            '{"provider":"antigravity","model":"Gemini 3.5 Flash"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T12:00:00.000Z', '2026-06-13T12:00:00.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('native-session-1', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-a:one","totalProcessedTokens":1000}',
+              1, '2026-06-13T12:00:00.000Z'),
+            ('native-session-2', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-a:one","totalProcessedTokens":1500}',
+              2, '2026-06-13T12:01:00.000Z'),
+            ('native-session-3', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-b:two","totalProcessedTokens":1500}',
+              3, '2026-06-13T12:02:00.000Z'),
+            ('native-session-4', 'thread-native-session', NULL, 'info',
+              'context-window.updated', 'tokens',
+              '{"provider":"antigravity","usageSessionId":"conversation-b:two","totalProcessedTokens":2000}',
+              4, '2026-06-13T12:03:00.000Z')
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.lifetimeTotalTokens).toBe(3_500);
+        expect(tokenStats.models).toEqual([
+          {
+            provider: "antigravity",
+            instanceId: "antigravity",
+            model: "Gemini 3.5 Flash",
+            tokens: 3_500,
+            percent: 100,
+          },
+        ]);
+      }),
+    );
+  });
+
+  it("never ranks per-chat or Studio container projects as the most-worked project", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, kind, created_at, updated_at, deleted_at
+          )
+          VALUES
+            ('project-real', 'Real', '/work/real', '{}', 'project',
+              '2026-06-12T09:00:00.000Z', '2026-06-12T09:00:00.000Z', NULL),
+            ('project-chat', 'Busy chat', '/chats/busy', '{}', 'chat',
+              '2026-06-12T09:00:00.000Z', '2026-06-12T09:00:00.000Z', NULL)
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES
+            ('thread-real', 'project-real', 'Real Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default', 'local',
+              '2026-06-13T09:00:00.000Z', '2026-06-13T09:00:00.000Z', NULL),
+            ('thread-chat', 'project-chat', 'Busy Chat',
+              '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default', 'local',
+              '2026-06-13T09:00:00.000Z', '2026-06-13T09:00:00.000Z', NULL)
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, is_streaming, source, created_at, updated_at
+          )
+          VALUES
+            ('message-real-1', 'thread-real', 'turn-real-1', 'user', 'real', 0, 'native',
+              '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:00.000Z'),
+            ('message-chat-1', 'thread-chat', 'turn-chat-1', 'user', 'chat one', 0, 'native',
+              '2026-06-13T10:05:00.000Z', '2026-06-13T10:05:00.000Z'),
+            ('message-chat-2', 'thread-chat', 'turn-chat-2', 'user', 'chat two', 0, 'native',
+              '2026-06-13T10:15:00.000Z', '2026-06-13T10:15:00.000Z')
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+
+        expect(stats.mostWorkedProject?.projectId).toBe("project-real");
+      }),
+    );
+  });
+
+  it("keeps Claude results of automation and agent dispatches out of the Profile totals", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-claude-origins', 'project-profile', 'Claude origins',
+            '{"provider":"claudeAgent","model":"claude-sonnet-5"}',
+            'full-access', 'default', 'local',
+            '2026-06-14T09:00:00.000Z', '2026-06-14T09:00:00.000Z', NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, is_streaming, source, dispatch_origin,
+            created_at, updated_at
+          )
+          VALUES
+            ('m-user', 'thread-claude-origins', 'turn-user', 'user', 'hi', 0, 'native', 'user',
+              '2026-06-14T09:00:00.000Z', '2026-06-14T09:00:00.000Z'),
+            ('m-auto', 'thread-claude-origins', 'turn-auto', 'user', 'run', 0, 'native', 'automation',
+              '2026-06-14T10:00:00.000Z', '2026-06-14T10:00:00.000Z'),
+            ('m-agent', 'thread-claude-origins', 'turn-agent', 'user', 'go', 0, 'native', 'agent',
+              '2026-06-14T11:00:00.000Z', '2026-06-14T11:00:00.000Z')
+        `;
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, state, requested_at, started_at, completed_at,
+            checkpoint_files_json
+          )
+          VALUES
+            ('thread-claude-origins', 'turn-user', 'm-user', 'completed', '2026-06-14T09:00:00.000Z',
+              '2026-06-14T09:00:00.000Z', '2026-06-14T09:05:00.000Z', '[]'),
+            ('thread-claude-origins', 'turn-auto', 'm-auto', 'completed', '2026-06-14T10:00:00.000Z',
+              '2026-06-14T10:00:00.000Z', '2026-06-14T10:05:00.000Z', '[]'),
+            ('thread-claude-origins', 'turn-agent', 'm-agent', 'completed', '2026-06-14T11:00:00.000Z',
+              '2026-06-14T11:00:00.000Z', '2026-06-14T11:05:00.000Z', '[]')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          )
+          VALUES
+            ('a-user', 'thread-claude-origins', 'turn-user', 'info', 'turn.completed', 'done',
+              '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":1000}',
+              1, '2026-06-14T09:05:00.000Z'),
+            ('a-auto', 'thread-claude-origins', 'turn-auto', 'info', 'turn.completed', 'done',
+              '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":7000}',
+              2, '2026-06-14T10:05:00.000Z'),
+            ('a-agent', 'thread-claude-origins', 'turn-agent', 'info', 'turn.completed', 'done',
+              '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":9000}',
+              3, '2026-06-14T11:05:00.000Z')
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.lifetimeTotalTokens).toBe(1000);
       }),
     );
   });

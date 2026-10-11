@@ -1,0 +1,163 @@
+{
+  "workload": "Vite development transforms, one initial transform and three invalidated retransforms per module per process",
+  "order": [
+    "dev-transforms-off-1.json",
+    "dev-transforms-on-1.json",
+    "dev-transforms-off-2.json",
+    "dev-transforms-on-2-retry.json"
+  ],
+  "excludedRun": {
+    "sample": "dev-transforms-on-2",
+    "reason": "Vite restarted after the configuration was edited during measurement. No complete sample was retained. Repeated after the configuration was frozen."
+  },
+  "runs": [
+    {
+      "revision": "dd88d9272f97e4dda5735281e73ce14de388ad25",
+      "dirty": true,
+      "node": "v24.19.0",
+      "platform": "linux 6.18.44 x64",
+      "cpu": "AMD EPYC 9V74 80-Core Processor",
+      "compiler": false,
+      "initializedMs": 1936.2249779999997,
+      "results": [
+        {
+          "file": "/src/main.tsx",
+          "initialMs": 17.782130000000052,
+          "retransformMs": [3.5428219999998873, 2.1961590000000797, 2.0726529999997183]
+        },
+        {
+          "file": "/src/routes/__root.tsx",
+          "initialMs": 57.27569399999993,
+          "retransformMs": [28.847710000000006, 18.240638000000217, 10.61580499999991]
+        },
+        {
+          "file": "/src/components/ChatView.tsx",
+          "initialMs": 48.32309299999997,
+          "retransformMs": [29.607832000000144, 26.290885000000344, 19.93858900000032]
+        },
+        {
+          "file": "/src/components/chat/SingleChatSurface.tsx",
+          "initialMs": 6.827344999999696,
+          "retransformMs": [6.189716999999746, 7.021225999999842, 7.00077599999986]
+        },
+        {
+          "file": "/src/components/chat/MessagesTimeline.tsx",
+          "initialMs": 30.675355999999738,
+          "retransformMs": [20.96242600000005, 17.07010999999966, 13.084714000000076]
+        }
+      ],
+      "sample": "dev-transforms-off-1"
+    },
+    {
+      "revision": "dd88d9272f97e4dda5735281e73ce14de388ad25",
+      "dirty": true,
+      "node": "v24.19.0",
+      "platform": "linux 6.18.44 x64",
+      "cpu": "AMD EPYC 9V74 80-Core Processor",
+      "compiler": true,
+      "initializedMs": 2190.603435,
+      "results": [
+        {
+          "file": "/src/main.tsx",
+          "initialMs": 162.54448600000023,
+          "retransformMs": [10.972850999999991, 8.405475000000024, 7.102808999999979]
+        },
+        {
+          "file": "/src/routes/__root.tsx",
+          "initialMs": 661.698253,
+          "retransformMs": [381.5800000000004, 417.0474680000002, 322.3256830000005]
+        },
+        {
+          "file": "/src/components/ChatView.tsx",
+          "initialMs": 30391.154068000003,
+          "retransformMs": [27215.539209000002, 26647.290421000005, 26109.91661300001]
+        },
+        {
+          "file": "/src/components/chat/SingleChatSurface.tsx",
+          "initialMs": 464.78009600000223,
+          "retransformMs": [422.5912660000031, 358.13244600000326, 380.68112100000144]
+        },
+        {
+          "file": "/src/components/chat/MessagesTimeline.tsx",
+          "initialMs": 1517.1585709999927,
+          "retransformMs": [1178.931217999998, 1348.5814320000063, 1086.4057259999972]
+        }
+      ],
+      "sample": "dev-transforms-on-1"
+    },
+    {
+      "revision": "dd88d9272f97e4dda5735281e73ce14de388ad25",
+      "dirty": true,
+      "node": "v24.19.0",
+      "platform": "linux 6.18.44 x64",
+      "cpu": "AMD EPYC 9V74 80-Core Processor",
+      "compiler": false,
+      "initializedMs": 2397.198685,
+      "results": [
+        {
+          "file": "/src/main.tsx",
+          "initialMs": 31.071781999999985,
+          "retransformMs": [4.317481999999927, 2.9016059999999015, 7.595178000000033]
+        },
+        {
+          "file": "/src/routes/__root.tsx",
+          "initialMs": 66.50579800000014,
+          "retransformMs": [26.232596000000285, 23.735027000000173, 16.53521600000022]
+        },
+        {
+          "file": "/src/components/ChatView.tsx",
+          "initialMs": 85.60786299999972,
+          "retransformMs": [23.76579300000003, 42.68576899999971, 43.38965199999984]
+        },
+        {
+          "file": "/src/components/chat/SingleChatSurface.tsx",
+          "initialMs": 21.76113200000009,
+          "retransformMs": [12.83242700000028, 12.990624999999909, 19.75387899999987]
+        },
+        {
+          "file": "/src/components/chat/MessagesTimeline.tsx",
+          "initialMs": 50.80564999999979,
+          "retransformMs": [51.72624700000006, 23.86369999999988, 30.952682000000095]
+        }
+      ],
+      "sample": "dev-transforms-off-2"
+    },
+    {
+      "revision": "dd88d9272f97e4dda5735281e73ce14de388ad25",
+      "dirty": true,
+      "node": "v24.19.0",
+      "platform": "linux 6.18.44 x64",
+      "cpu": "AMD EPYC 9V74 80-Core Processor",
+      "compiler": true,
+      "initializedMs": 1988.793898,
+      "results": [
+        {
+          "file": "/src/main.tsx",
+          "initialMs": 195.48998299999994,
+          "retransformMs": [12.314280999999937, 9.559895000000324, 8.130018000000291]
+        },
+        {
+          "file": "/src/routes/__root.tsx",
+          "initialMs": 627.1437940000001,
+          "retransformMs": [373.7050199999999, 316.3213780000001, 318.6110870000002]
+        },
+        {
+          "file": "/src/components/ChatView.tsx",
+          "initialMs": 28669.585651,
+          "retransformMs": [26330.970778999996, 29010.014605000004, 25302.631693999996]
+        },
+        {
+          "file": "/src/components/chat/SingleChatSurface.tsx",
+          "initialMs": 443.34528199999477,
+          "retransformMs": [373.100494000013, 389.9703690000024, 402.9271399999998]
+        },
+        {
+          "file": "/src/components/chat/MessagesTimeline.tsx",
+          "initialMs": 1384.6667089999974,
+          "retransformMs": [1230.855119999993, 1166.6798379999964, 1278.4652659999992]
+        }
+      ],
+      "sample": "dev-transforms-on-2-retry"
+    }
+  ]
+}

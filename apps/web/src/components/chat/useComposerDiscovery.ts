@@ -1,5 +1,6 @@
 import {
   type ProjectEntry,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderMentionReference,
   type ProviderNativeCommandDescriptor,
@@ -42,23 +43,29 @@ const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 interface ComposerDiscoveryInput {
   threadId: ThreadId;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
   composerTrigger: ComposerTrigger | null;
   composerCommandPicker: "fork-target" | "review-target" | null;
   providerModelDiscoveryCwd: string | null;
   providerOptionsForDispatch: ProviderStartOptions | undefined;
   gitCwd: string | null;
   piAgentDir: string;
+  ompAgentDir: string;
+  discoverNativeCompaction?: boolean;
 }
 
 export function useComposerDiscovery({
   threadId,
   selectedProvider,
+  selectedProviderInstanceId,
   composerTrigger,
   composerCommandPicker,
   providerModelDiscoveryCwd,
   providerOptionsForDispatch,
   gitCwd,
   piAgentDir,
+  ompAgentDir,
+  discoverNativeCompaction,
 }: ComposerDiscoveryInput) {
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
@@ -77,11 +84,12 @@ export function useComposerDiscovery({
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const composerSkillCwd = providerModelDiscoveryCwd;
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, selectedProviderInstanceId),
   );
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
       binaryPath:
@@ -98,23 +106,41 @@ export function useComposerDiscovery({
         selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.experimentalWebSockets
           : undefined,
-      agentDir: selectedProvider === "pi" ? piAgentDir || null : null,
+      agentDir:
+        selectedProvider === "pi"
+          ? piAgentDir || null
+          : selectedProvider === "omp"
+            ? ompAgentDir || null
+            : null,
       enabled:
-        (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
+        (composerTriggerKind === "slash-command" ||
+          composerTriggerKind === "slash-model" ||
+          discoverNativeCompaction === true) &&
         supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
         composerSkillCwd !== null,
     }),
   );
   const canDiscoverProviderSkills =
-    selectedProvider === "pi" || supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
+    selectedProvider === "pi" ||
+    selectedProvider === "omp" ||
+    supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
-      agentDir: selectedProvider === "pi" ? piAgentDir || null : null,
+      agentDir:
+        selectedProvider === "pi"
+          ? piAgentDir || null
+          : selectedProvider === "omp"
+            ? ompAgentDir || null
+            : null,
       enabled:
-        (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
+        (isSkillTrigger ||
+          composerTriggerKind === "slash-command" ||
+          selectedProvider === "pi" ||
+          selectedProvider === "omp") &&
         canDiscoverProviderSkills &&
         composerSkillCwd !== null,
     }),
@@ -122,6 +148,7 @@ export function useComposerDiscovery({
   const providerPluginsQuery = useQuery(
     providerPluginsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
       enabled:
@@ -201,6 +228,7 @@ export function useComposerDiscovery({
     isLocalFolderBrowserOpen,
     providerPlugins,
     providerNativeCommands,
+    providerArtifacts: providerCommandsQuery.data?.artifacts,
     providerSkills,
     workspaceEntries,
     effectiveComposerTrigger,
@@ -208,5 +236,10 @@ export function useComposerDiscovery({
     supportsTextNativeReviewCommand,
     isComposerMenuLoading,
     canCompactThread: supportsThreadCompaction(providerComposerCapabilitiesQuery.data),
+    isNativeCommandDiscoveryPending:
+      providerComposerCapabilitiesQuery.isPending ||
+      (supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
+        providerCommandsQuery.isPending) ||
+      providerCommandsQuery.isFetching,
   };
 }

@@ -33,7 +33,7 @@ export function BrowserAnnotationChip({
     variant === "list" ? (
       <span
         className={cn(
-          "group relative flex h-9 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-xs text-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
+          "group relative flex h-9 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-ui leading-snug text-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
           onRemove && "pr-8",
           className,
         )}
@@ -41,11 +41,11 @@ export function BrowserAnnotationChip({
         data-testid="browser-annotation-chip"
         {...rest}
       >
-        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--sidebar-accent-active)] text-[10px] font-semibold text-muted-foreground">
+        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--sidebar-accent-active)] text-ui-xs font-semibold text-muted-foreground">
           {annotation.ordinal}
         </span>
         <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
-        <span className="max-w-[40%] shrink truncate text-[11px] text-muted-foreground">
+        <span className="max-w-[40%] shrink truncate text-ui-sm text-muted-foreground">
           {pageLabel}
         </span>
         {onRemove ? (
@@ -71,7 +71,7 @@ export function BrowserAnnotationChip({
         {...rest}
       >
         <span className="inline-flex h-6 min-w-0 max-w-[11rem] items-center gap-1.5 rounded-full pl-2 pr-2">
-          <span className="shrink-0 text-[10px] font-semibold text-muted-foreground">
+          <span className="shrink-0 text-ui-xs font-semibold text-muted-foreground">
             #{annotation.ordinal}
           </span>
           <span className="min-w-0 truncate">{label}</span>
@@ -93,11 +93,11 @@ export function BrowserAnnotationChip({
       <TooltipTrigger render={trigger} />
       <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
         <div className="space-y-1">
-          <p className="text-xs font-medium text-foreground">
+          <p className="text-ui leading-snug font-medium text-foreground">
             #{annotation.ordinal} · {label}
           </p>
-          <p className="text-[0.6875rem] text-muted-foreground">{pageLabel}</p>
-          <p className="break-all font-mono text-[0.625rem] text-muted-foreground/80">
+          <p className="text-ui-sm text-muted-foreground">{pageLabel}</p>
+          <p className="break-all font-mono text-ui-xs text-muted-foreground/80">
             {annotation.selector}
           </p>
         </div>

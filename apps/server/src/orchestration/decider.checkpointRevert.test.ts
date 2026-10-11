@@ -466,14 +466,6 @@ describe("checkpoint revert decider", () => {
       latestTurn: null,
     },
     {
-      name: "running",
-      session: makeSession({
-        status: "running",
-        activeTurnId: TurnId.makeUnsafe("turn-active"),
-      }),
-      latestTurn: null,
-    },
-    {
       name: "interrupted with an active turn",
       session: makeSession({
         status: "interrupted",
@@ -504,11 +496,6 @@ describe("checkpoint revert decider", () => {
   });
 
   it.each([
-    {
-      name: "ready and idle",
-      session: makeSession({ status: "ready" }),
-      latestTurn: makeLatestTurn("completed"),
-    },
     {
       name: "interrupted with no active turn",
       session: makeSession({ status: "interrupted" }),

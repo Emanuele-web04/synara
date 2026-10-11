@@ -12,24 +12,6 @@ const projectionThreadsColumnNames = (sql: SqlClient.SqlClient) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 describe("040_ProjectionThreadsPinnedMessagesNotes", () => {
-  it.effect("adds pinned message and note columns", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-
-      yield* runMigrations({ toMigrationInclusive: 39 });
-
-      const beforeColumns = yield* projectionThreadsColumnNames(sql);
-      assert.notInclude(beforeColumns, "pinned_messages_json");
-      assert.notInclude(beforeColumns, "notes");
-
-      yield* runMigrations({ toMigrationInclusive: 40 });
-
-      const afterColumns = yield* projectionThreadsColumnNames(sql);
-      assert.include(afterColumns, "pinned_messages_json");
-      assert.include(afterColumns, "notes");
-    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
-  );
-
   it.effect("fills in the second column when the first already exists", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

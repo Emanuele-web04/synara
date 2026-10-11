@@ -78,3 +78,7 @@ After creation, confirm:
 - [ ] Provider and mode selections are correct
 - [ ] Shared-checkout collision risk is understood
 - [ ] The fork's result is reviewed and delivered independently
+
+## Selected-message boundary in 1.0.2-beta.1
+
+A provider-native fork respects the selected message boundary rather than silently carrying later conversation state. Provider-specific support still applies; unsupported native rollback uses the safe retained-context path. Verify the source divider and the inherited conversation before sending new work.

@@ -425,7 +425,7 @@ function intervalUnitLabel(unit: string): "s" | "m" | "h" | "d" {
   return "d";
 }
 
-export function formatAutomationIntentCadence(schedule: AutomationSchedule): string {
+function formatAutomationIntentCadence(schedule: AutomationSchedule): string {
   if (schedule.type === "interval") {
     const seconds = schedule.everySeconds;
     if (seconds % 86_400 === 0) return `Every ${seconds / 86_400}d`;

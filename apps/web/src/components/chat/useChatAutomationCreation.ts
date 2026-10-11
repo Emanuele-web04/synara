@@ -44,6 +44,8 @@ function automationScheduleActivityPayload(schedule: AutomationSchedule) {
   switch (schedule.type) {
     case "manual":
       return { type: "manual" } as const;
+    case "project-event":
+      return { type: "project-event", projectId: schedule.projectId } as const;
     case "once":
       return { type: "once", runAt: schedule.runAt } as const;
     case "interval":
@@ -277,7 +279,9 @@ export function useChatAutomationCreation({
             associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
             associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
             lastKnownPr: activeThread.lastKnownPr ?? null,
-            createdAt: activeThread.createdAt,
+            // Promotion materializes the draft as a durable thread now; the draft's
+            // timestamp only records when its composer was opened.
+            createdAt: new Date().toISOString(),
           },
           api,
           { force: true },

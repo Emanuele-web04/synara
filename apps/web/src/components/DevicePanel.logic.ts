@@ -494,7 +494,7 @@ export type DeviceAvailabilityView =
  * unaffected": names what broke, the toolchain that broke it, and what still
  * works, so the notice answers the obvious next question in one line.
  */
-export function describeDegradedCapabilities(
+function describeDegradedCapabilities(
   capabilities: readonly DeviceCapabilityStatus[],
   toolchain: DeviceToolchain | undefined,
 ): string {
@@ -742,7 +742,7 @@ export function deviceSetupCheckingLabel(steps: readonly DeviceSetupStep[]): str
 
 // ── Thread state helpers ─────────────────────────────────────────────
 
-export function attachedDeviceFromThreadState(
+function attachedDeviceFromThreadState(
   state: ThreadDeviceState | undefined,
 ): DeviceDescriptor | null {
   if (!state?.attachedDeviceUdid) return null;

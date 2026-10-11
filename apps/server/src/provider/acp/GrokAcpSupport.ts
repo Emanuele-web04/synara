@@ -10,6 +10,7 @@ import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -21,6 +22,10 @@ export interface GrokAcpRuntimeSettings {
   readonly binaryPath?: string;
   readonly model?: string;
   readonly reasoningEffort?: GrokModelOptions["reasoningEffort"];
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly instanceId?: string;
+  readonly homeDir?: string;
+  readonly isolationRootDir?: string;
 }
 
 export interface GrokAcpRuntimeInput extends Omit<
@@ -125,7 +130,15 @@ export function buildGrokAcpSpawnInput(
     command: grokSettings?.binaryPath || "grok",
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "grok" }),
+    providerEnvironment: {
+      driver: "grok",
+      ...(grokSettings?.instanceId !== undefined ? { instanceId: grokSettings.instanceId } : {}),
+      ...(grokSettings?.environment !== undefined ? { environment: grokSettings.environment } : {}),
+      ...(grokSettings?.homeDir !== undefined ? { homeDir: grokSettings.homeDir } : {}),
+      ...(grokSettings?.isolationRootDir !== undefined
+        ? { isolationRootDir: grokSettings.isolationRootDir }
+        : {}),
+    },
   };
 }
 
@@ -141,54 +154,75 @@ function describeAuthMethodIds(authMethodIds: ReadonlySet<string>): string {
   return authMethodIds.size > 0 ? [...authMethodIds].join(", ") : "none";
 }
 
-export const resolveGrokAcpAuthMethodId = (
-  initializeResult: Acp.InitializeResponse,
-): Effect.Effect<string, AcpErrors.AcpError> =>
-  Effect.gen(function* () {
-    const authMethodIds = availableAuthMethodIds(initializeResult);
-    const hasApiKey = hasGrokApiKeyEnv();
-    if (hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
-      return GROK_API_KEY_AUTH_METHOD_ID;
-    }
-    if (authMethodIds.has(GROK_CACHED_TOKEN_AUTH_METHOD_ID)) {
-      return GROK_CACHED_TOKEN_AUTH_METHOD_ID;
-    }
-    const advertised = describeAuthMethodIds(authMethodIds);
-    if (!hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+export const resolveGrokAcpAuthMethodIdForEnv =
+  (
+    environment?: Readonly<Record<string, string>> | undefined,
+    instanceId?: string | undefined,
+    homeDir?: string | undefined,
+    isolationRootDir?: string | undefined,
+  ) =>
+  (initializeResult: Acp.InitializeResponse): Effect.Effect<string, AcpErrors.AcpError> =>
+    Effect.gen(function* () {
+      const authMethodIds = availableAuthMethodIds(initializeResult);
+      const effectiveEnv = yield* Effect.try({
+        try: () =>
+          buildProviderChildEnvironment({
+            provider: "grok",
+            baseEnv: buildProviderProcessEnv({
+              driver: "grok",
+              ...(environment !== undefined ? { environment } : {}),
+              ...(instanceId !== undefined ? { instanceId } : {}),
+              ...(homeDir !== undefined ? { homeDir } : {}),
+              ...(isolationRootDir !== undefined ? { isolationRootDir } : {}),
+            }),
+          }),
+        catch: (cause) => new AcpErrors.AcpSpawnError({ command: "grok", cause }),
+      });
+      const hasApiKey = hasGrokApiKeyEnv(effectiveEnv);
+      if (hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+        return GROK_API_KEY_AUTH_METHOD_ID;
+      }
+      if (authMethodIds.has(GROK_CACHED_TOKEN_AUTH_METHOD_ID)) {
+        return GROK_CACHED_TOKEN_AUTH_METHOD_ID;
+      }
+      const advertised = describeAuthMethodIds(authMethodIds);
+      if (!hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+        return yield* new AcpErrors.AcpRequestError({
+          code: -32602,
+          errorMessage:
+            "Grok ACP requires API-key authentication, but XAI_API_KEY is not set. Set XAI_API_KEY and restart Synara, or run `grok login` to create a cached login.",
+          data: { authMethods: [...authMethodIds], reason: "credentials_missing" },
+        });
+      }
+      if (
+        !hasApiKey &&
+        authMethodIds.size > 0 &&
+        [...authMethodIds].every((methodId) => GROK_INTERACTIVE_AUTH_METHOD_IDS.has(methodId))
+      ) {
+        return yield* new AcpErrors.AcpRequestError({
+          code: -32602,
+          errorMessage: `Grok is not authenticated for headless ACP. Run \`grok login\` (or launch \`grok\`) and retry. Grok advertised only interactive auth methods: ${advertised}.`,
+          data: { authMethods: [...authMethodIds], reason: "credentials_missing" },
+        });
+      }
+      if (hasApiKey && !authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+        return yield* new AcpErrors.AcpRequestError({
+          code: -32602,
+          errorMessage: `Grok did not advertise API-key authentication even though XAI_API_KEY is set (advertised: ${advertised}). Update Grok or check its login policy, then restart Synara.`,
+          data: { authMethods: [...authMethodIds], reason: "compatibility_mismatch" },
+        });
+      }
       return yield* new AcpErrors.AcpRequestError({
         code: -32602,
-        errorMessage:
-          "Grok ACP requires API-key authentication, but XAI_API_KEY is not set. Set XAI_API_KEY and restart Synara, or run `grok login` to create a cached login.",
-        data: { authMethods: [...authMethodIds], reason: "credentials_missing" },
+        errorMessage: `Grok ACP advertised no supported headless authentication method (advertised: ${advertised}). Synara supports cached_token and xai.api_key; update Grok and retry.`,
+        data: {
+          authMethods: [...authMethodIds],
+          reason: "compatibility_mismatch",
+        },
       });
-    }
-    if (
-      !hasApiKey &&
-      authMethodIds.size > 0 &&
-      [...authMethodIds].every((methodId) => GROK_INTERACTIVE_AUTH_METHOD_IDS.has(methodId))
-    ) {
-      return yield* new AcpErrors.AcpRequestError({
-        code: -32602,
-        errorMessage: `Grok is not authenticated for headless ACP. Run \`grok login\` (or launch \`grok\`) and retry. Grok advertised only interactive auth methods: ${advertised}.`,
-        data: { authMethods: [...authMethodIds], reason: "credentials_missing" },
-      });
-    }
-    if (hasApiKey && !authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
-      return yield* new AcpErrors.AcpRequestError({
-        code: -32602,
-        errorMessage: `Grok did not advertise API-key authentication even though XAI_API_KEY is set (advertised: ${advertised}). Update Grok or check its login policy, then restart Synara.`,
-        data: { authMethods: [...authMethodIds], reason: "compatibility_mismatch" },
-      });
-    }
-    return yield* new AcpErrors.AcpRequestError({
-      code: -32602,
-      errorMessage: `Grok ACP advertised no supported headless authentication method (advertised: ${advertised}). Synara supports cached_token and xai.api_key; update Grok and retry.`,
-      data: {
-        authMethods: [...authMethodIds],
-        reason: "compatibility_mismatch",
-      },
     });
-  });
+
+export const resolveGrokAcpAuthMethodId = resolveGrokAcpAuthMethodIdForEnv();
 
 export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
@@ -198,7 +232,12 @@ export const makeGrokAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.runtimeMode),
-        resolveAuthMethodId: resolveGrokAcpAuthMethodId,
+        resolveAuthMethodId: resolveGrokAcpAuthMethodIdForEnv(
+          input.grokSettings?.environment,
+          input.grokSettings?.instanceId,
+          input.grokSettings?.homeDir,
+          input.grokSettings?.isolationRootDir,
+        ),
         authenticateMeta: { headless: true },
         freshSessionRetry: {
           shouldRetry: isGrokSessionStoragePathNotFoundError,

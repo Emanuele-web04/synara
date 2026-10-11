@@ -117,7 +117,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.toolchain.outputs.present == 'true'
-        run: bun install --frozen-lockfile --ignore-scripts
+        run: bun install --frozen-lockfile --ignore-scripts --filter '@synara/scripts'
 
       # The blocking check: compile against this toolchain and ask the helper
       # which capabilities resolved. A moved symbol fails here, needs no

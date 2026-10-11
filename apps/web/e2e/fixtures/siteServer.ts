@@ -224,6 +224,9 @@ const SIGNIN_HTML = `<!doctype html><html><head><title>Sign-in fixture</title></
 </body></html>`;
 
 const HTML_BY_PATH: Readonly<Record<string, string>> = {
+  "/focus": "<!doctype html><title>Focus fixture</title><input aria-label='Browser input'>",
+  "/focus-autofocus":
+    "<!doctype html><title>Autofocus fixture</title><input autofocus aria-label='Browser input'>",
   "/app": APP_HTML,
   "/next": NEXT_HTML,
   "/oauth": OAUTH_HTML,
@@ -236,6 +239,24 @@ const HTML_BY_PATH: Readonly<Record<string, string>> = {
 export async function startVisibleBrowserFixtureSite(): Promise<VisibleBrowserFixtureSite> {
   const server: Server = createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://fixture.test").pathname;
+    if (requestPath === "/focus-popup") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        response.setHeader("Content-Type", "text/html; charset=utf-8");
+        response.end(
+          `<!doctype html><title>Focus popup</title><body data-post="${body === "proof=retained" ? body : ""}"><input></body>`,
+        );
+      });
+      return;
+    }
+    if (requestPath === "/focus-redirect") {
+      response.writeHead(302, { Location: "/focus" });
+      response.end();
+      return;
+    }
     if (requestPath === "/redirect-blocker.js") {
       response.setHeader("Content-Type", "text/javascript");
       response.setHeader("Cache-Control", "no-store");
