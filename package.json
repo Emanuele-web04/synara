@@ -37,7 +37,7 @@
     "build": "turbo run build",
     "build:marketing": "turbo run build --filter=@synara/marketing",
     "build:desktop": "turbo run build --filter=@synara/desktop --filter=@synara/cli",
-    "postinstall": "effect-tsgo patch --typescript --typescript-package @typescript/native",
+    "postinstall": "node scripts/patch-workspace-typescript.ts && effect-tsgo patch --typescript --typescript-package @typescript/native",
     "typecheck": "effect-tsgo patch --typescript --typescript-package @typescript/native && turbo run typecheck",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "turbo run typecheck:legacy",

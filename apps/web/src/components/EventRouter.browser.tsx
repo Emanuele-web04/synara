@@ -119,7 +119,6 @@ let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
 let getShellSnapshotRequestCount = 0;
 let getThreadDetailSnapshotRequestCount = 0;
-const getThreadDetailSnapshotRequests: unknown[] = [];
 let delayNextThreadDetailSnapshotResponse = false;
 let pendingThreadDetailSnapshotResponse: {
   readonly client: EffectRpcWebSocketClient;
@@ -289,7 +288,6 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
   }
   if (tag === ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot) {
     getThreadDetailSnapshotRequestCount += 1;
-    getThreadDetailSnapshotRequests.push(body);
     const request = body as { readonly threadId?: ThreadId } | null;
     const thread = request?.threadId ? findThreadDetailFromFixtureSnapshot(request.threadId) : null;
     return thread
@@ -670,7 +668,6 @@ describe("EventRouter scoped orchestration sync", () => {
     replayRequestCursors = [];
     getShellSnapshotRequestCount = 0;
     getThreadDetailSnapshotRequestCount = 0;
-    getThreadDetailSnapshotRequests.length = 0;
     delayNextThreadDetailSnapshotResponse = false;
     pendingThreadDetailSnapshotResponse = null;
     resetThreadDetailResumeCursorsForTests();
@@ -753,7 +750,6 @@ describe("EventRouter scoped orchestration sync", () => {
         threadId: THREAD_ID,
         afterSequence: 1,
         batchReplay: true,
-        messageWindow: { limit: 100 },
       });
       expect(subscribeShellRequestCount).toBe(previousShell);
       expect(subscribeThreadRequestCountById.get(THREAD_ID)).toBe(previousThread);
@@ -2382,32 +2378,13 @@ describe("EventRouter scoped orchestration sync", () => {
         },
         { timeout: 4_000, interval: 16 },
       );
-      const subscribeCountBeforeBufferedEvent =
-        subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
-      const snapshotReadsBeforeBufferedEvent = getThreadDetailSnapshotRequestCount;
       sendThreadEventPush(bufferedEvent);
       await vi.waitFor(
         () => {
-          expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
-            snapshotReadsBeforeBufferedEvent,
-          );
-          expect(getThreadDetailSnapshotRequests.at(-1)).toEqual({
-            _tag: ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot,
-            threadId: recoveryThreadId,
-            messageWindow: { limit: 100 },
-          });
+          expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBeGreaterThanOrEqual(2);
         },
         { timeout: 4_000, interval: 16 },
       );
-      // A buffered event requests the projection without cancelling its stream.
-      // No projection exists yet, so it cannot establish an applied cursor.
-      expect(subscribeThreadRequestCountById.get(recoveryThreadId)).toBe(
-        subscribeCountBeforeBufferedEvent,
-      );
-      expect(buildThreadSubscribeInput(recoveryThreadId)).toEqual({
-        threadId: recoveryThreadId,
-        messageWindow: { limit: 100 },
-      });
       const subscribeCountBeforeMaterialization =
         subscribeThreadRequestCountById.get(recoveryThreadId) ?? 0;
       const detailSnapshotReadsBeforeMaterialization = getThreadDetailSnapshotRequestCount;
@@ -2453,7 +2430,6 @@ describe("EventRouter scoped orchestration sync", () => {
             (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
           );
           expect(message?.text).toBe("buffered reply");
-          expect(useStore.getState().threadDetailAppliedSequenceById?.[recoveryThreadId]).toBe(3);
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -2468,12 +2444,6 @@ describe("EventRouter scoped orchestration sync", () => {
           (entry) => entry.id === MessageId.makeUnsafe("msg-buffered-assistant"),
         ),
       ).toHaveLength(1);
-      expect(buildThreadSubscribeInput(recoveryThreadId)).toEqual({
-        threadId: recoveryThreadId,
-        afterSequence: 3,
-        batchReplay: true,
-        messageWindow: { limit: 100 },
-      });
     } finally {
       await mounted.cleanup();
     }

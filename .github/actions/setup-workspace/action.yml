@@ -98,8 +98,8 @@ runs:
           export BUN_INSTALL_CACHE_DIR="$RUNNER_TEMP/bun-install-cache"
           echo "Bun install cache: $BUN_INSTALL_CACHE_DIR"
         fi
-        # Workspace prepare hooks patch the same TypeScript files. Serialize
-        # lifecycle scripts so a reader cannot observe another hook's partial write.
+        # Bound dependency lifecycles. Root postinstall patches each installed
+        # TypeScript compiler once, after workspace hooks have completed.
         case "$WORKSPACE_SCOPE" in
           full) bun install --frozen-lockfile --concurrent-scripts=1 ;;
           static) bun install --frozen-lockfile --filter './' --filter '@synara/scripts' --concurrent-scripts=1 ;;

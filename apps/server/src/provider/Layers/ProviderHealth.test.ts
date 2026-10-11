@@ -1053,6 +1053,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
     it.effect("queues another bounded refresh when the follow-up also becomes stale", () =>
       Effect.gen(function* () {
+        yield* withTempCodexHome();
         const fileSystem = yield* FileSystem.FileSystem;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "provider-health-enable-race-",
