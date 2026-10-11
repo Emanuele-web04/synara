@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.0.3 — 2026-10-11
+
+**Easier Hub navigation, simpler conversation recovery and safer provider restarts.**
+
+This Stable patch audits all **three commits** from `v1.0.2` through `fc6fd90c1f3854719ef83fcdb3ee7e57a8437986`: PR [#1685](https://github.com/Emanuele-web04/synara/pull/1685), the direct transcript/Hub navigation commit `52f06318f`, and PR [#1846](https://github.com/Emanuele-web04/synara/pull/1846). Hubs remains available in Stable; diagnostics remains Beta-only. Stable and Beta retain separate identities, data homes and update feeds.
+
+### Added
+
+- Hubs is visible in the main rail by default. Existing saved settings reveal it once; hiding it again from Customize remains respected. Coordinator rows use the project sidebar layout with worker disclosure, pinning and a settings action.
+
+### Changed
+
+- Native conversation detail loads the full server projection. The recent-history pager, first-message loader and private IndexedDB detail cache added in 1.0.2 have been removed. Imported provider history retains its separate **Load earlier messages** control. Stored conversations and exports are not truncated by this change.
+- Active work shows **Working for** with a live duration; settled work uses a compact **Worked for** disclosure. Labels follow the chat font size, without model badges or completion icons. Finished tools and narration remain expandable, or visible when folding is disabled.
+- Native release packaging can overlap quality and server tests, while both publishers still require every mandatory gate. Intel macOS packaging runs on Apple Silicon with architecture checks and an actual Intel-host startup check. Failed attempts can retain a verified same-run artifact checkpoint for qualification retries; source, signing and digest checks fail closed. These workflow changes do not establish a percentage speedup for this release.
+
+### Fixed
+
+- Recovery snapshots apply projected rollbacks/reverts, preventing removed messages from reappearing after a disconnect. Ordinary refreshes still preserve newer streamed text.
+- Provider restart recovery does not create replacement sessions or resend persisted child commands whose owner is missing or deleted. Undispatched work is blocked; ambiguous delivery stays uncertain. Surviving children report the error and unrelated chats remain usable.
+- Persisted Claude compaction reviews with unavailable owners stay held instead of resending the message or failing startup.
+- Chat deletion cancels queued work and clears local caches before optional computer teardown, so a cleanup failure or timeout cannot leave queued promotions stuck.
+- Desktop HTTP requests initialize the pinned Undici dispatcher before requests, avoiding Electron 43's macOS `setTypeOfService` socket crash while preserving fetch globals and error behavior.
+
+### Verification
+
+Local formatting, lint (883 warnings, zero errors), all seven typechecks, release smoke and Windows runtime boundary checks passed on the prepared release inputs. Focused server tests passed 499 cases; web unit tests passed 303. The desktop HTTP regression passed under both Node 24 and Electron 43. The full feature-head CI passed at `fc6fd90c1f3854719ef83fcdb3ee7e57a8437986`.
+
+The initial local browser run passed 230 cases and failed three ChatView cases: send-anchor movement, close-button pointer travel, and transcript reveal timing. All three passed an unchanged isolated rerun; the initial run also logged ResizeObserver notifications. The cause is not established, and this is not reported as a full local browser pass. Hub navigation and imported-history files passed in that run.
+
+The exact tag workflow's full quality suite, three server shards, four native installers and public-asset verification remain publication gates. Signed/notarized macOS, Windows Defender/startup and updater-feed evidence will be recorded after publication. Manual installed-app upgrades and live-provider sessions are not claimed.
+
 ## 1.0.2 — 2026-10-11
 
 **Hubs comes to Stable, with visible subagents, chat-managed Tasks and faster reopening of long conversations.**
