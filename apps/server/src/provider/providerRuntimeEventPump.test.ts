@@ -31,6 +31,36 @@ function completedEvent(eventId: string): ProviderRuntimeEvent {
   };
 }
 
+function requestOpenedEvent(
+  eventId: string,
+  detail: string,
+): Extract<ProviderRuntimeEvent, { readonly type: "request.opened" }> {
+  return {
+    type: "request.opened",
+    eventId: EventId.makeUnsafe(eventId),
+    provider: "codex",
+    createdAt: "2026-07-23T20:00:00.000Z",
+    threadId: THREAD_ID,
+    turnId: TURN_ID,
+    payload: { requestType: "command_execution_approval", detail },
+  };
+}
+
+function unmappedEvent(
+  eventId: string,
+  detail: string,
+): Extract<ProviderRuntimeEvent, { readonly type: "event.unmapped" }> {
+  return {
+    type: "event.unmapped",
+    eventId: EventId.makeUnsafe(eventId),
+    provider: "codex",
+    createdAt: "2026-07-23T20:00:00.000Z",
+    threadId: THREAD_ID,
+    turnId: TURN_ID,
+    payload: { nativeType: "item/future/outputDelta", detail },
+  };
+}
+
 function textEvent(eventId: string, delta: string): TextEvent {
   return {
     ...completedEvent(eventId),
@@ -494,6 +524,70 @@ describe("providerRuntimeEventPump", () => {
       ),
     );
   });
+
+  it.each([false, true])(
+    "normalizes diagnostic details without changing approval args (batching: %s)",
+    async (batchAssistantText) => {
+      const request = {
+        ...requestOpenedEvent("request-trim", "  rm -rf *  \n"),
+        payload: {
+          requestType: "command_execution_approval" as const,
+          detail: "  rm -rf *  \n",
+          args: { command: "  rm -rf *  \n" },
+        },
+      };
+      const unmapped = unmappedEvent("unmapped-trim", "  raw tool output\n");
+      const emptyRequest = requestOpenedEvent("request-empty", "   \n");
+      const emptyUnmapped = unmappedEvent("unmapped-empty", "   \n");
+      const unchanged = requestOpenedEvent("request-unchanged", "already normalized");
+      const events = [request, unmapped, emptyRequest, emptyUnmapped, unchanged];
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const queue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+            const completed = yield* Deferred.make<void>();
+            const processed: ProviderRuntimeEvent[] = [];
+            let firstRequestAttempts = 0;
+            yield* runProviderRuntimeEventPump({
+              provider: "codex",
+              stream: Stream.fromQueue(queue),
+              batchAssistantText,
+              processEvent: (event) =>
+                Effect.gen(function* () {
+                  processed.push(event);
+                  if (event.eventId === request.eventId && firstRequestAttempts++ === 0) {
+                    return yield* Effect.fail(new Error("transient persistence failure"));
+                  }
+                  if (event.eventId === unchanged.eventId) {
+                    yield* Deferred.succeed(completed, undefined);
+                  }
+                }),
+              updateHealth: () => {},
+              retryBaseDelayMs: 1,
+              retryMaxDelayMs: 1,
+            }).pipe(Effect.forkScoped);
+
+            yield* Queue.offerAll(queue, events);
+            yield* Deferred.await(completed);
+
+            expect(processed).toEqual([
+              { ...request, payload: { ...request.payload, detail: "rm -rf *" } },
+              { ...request, payload: { ...request.payload, detail: "rm -rf *" } },
+              { ...unmapped, payload: { ...unmapped.payload, detail: "raw tool output" } },
+              { ...emptyRequest, payload: { ...emptyRequest.payload, detail: undefined } },
+              { ...emptyUnmapped, payload: { ...emptyUnmapped.payload, detail: undefined } },
+              unchanged,
+            ]);
+            expect(processed[0]).toBe(processed[1]);
+            expect(processed.at(-1)).toBe(unchanged);
+            expect(request.payload.detail).toBe("  rm -rf *  \n");
+            expect(unmapped.payload.detail).toBe("  raw tool output\n");
+          }),
+        ),
+      );
+    },
+  );
 
   it("heals a degraded pump after sustained successful processing", async () => {
     class PermanentEventError extends Error {}
