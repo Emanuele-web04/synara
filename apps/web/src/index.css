@@ -1023,51 +1023,6 @@ label:has(> select#reasoning-effort) select {
   unicode-bidi: isolate;
 }
 
-.chat-markdown hr {
-  margin: 1.5rem 0;
-  border: 0;
-  border-top: 1px solid var(--border);
-}
-
-/* Headings: restore visual hierarchy that Tailwind preflight flattens.
-   Keep sizes compact so assistant replies remain scannable. */
-.chat-markdown h1,
-.chat-markdown h2,
-.chat-markdown h3,
-.chat-markdown h4,
-.chat-markdown h5,
-.chat-markdown h6 {
-  margin: 1.1em 0 0.35em;
-  font-weight: 600;
-  line-height: 1.25;
-  letter-spacing: -0.01em;
-}
-
-.chat-markdown h1 {
-  font-size: 1.75em;
-}
-
-.chat-markdown h2 {
-  font-size: 1.55em;
-}
-
-.chat-markdown h3 {
-  font-size: 1.35em;
-}
-
-.chat-markdown h4 {
-  font-size: 1.2em;
-}
-
-.chat-markdown h5 {
-  font-size: 1.1em;
-}
-
-.chat-markdown h6 {
-  font-size: 1em;
-  color: var(--muted-foreground);
-}
-
 .chat-markdown h1 + h2,
 .chat-markdown h2 + h3,
 .chat-markdown h3 + h4,
@@ -1151,18 +1106,11 @@ label:has(> select#reasoning-effort) select {
   color: var(--chat-text-secondary);
 }
 
-.chat-markdown[data-direction-mode="auto-blocks"] blockquote {
-  border-left: 0;
-  border-inline-start: 2px solid var(--border);
-  padding-left: 0;
-  padding-inline-start: 0.8rem;
-}
-
 /* GitHub `> [!NOTE]` alerts (tagged by remarkGithubAlerts). */
 .chat-markdown blockquote[data-github-alert] {
   --github-alert-color: var(--info);
-  border-left-width: 3px;
-  border-left-color: var(--github-alert-color);
+  border-inline-start-width: 3px;
+  border-inline-start-color: var(--github-alert-color);
   color: var(--foreground);
 }
 .chat-markdown blockquote[data-github-alert="tip"] {
@@ -3355,6 +3303,13 @@ diffs-container {
 .chat-composer-stacked-top {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
+  border-top-left-radius: var(--composer-radius);
+  border-top-right-radius: var(--composer-radius);
+}
+
+/* Banners sit inside the input border; equal-width stacked panels own an outer
+   outline and use the full composer radius in every view. */
+.chat-composer-surface-banner {
   border-top-left-radius: calc(var(--composer-radius) - 1px);
   border-top-right-radius: calc(var(--composer-radius) - 1px);
 }
@@ -3367,6 +3322,23 @@ diffs-container {
 .chat-composer-stacked-top[data-composer-stacked-attached="true"] {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
+}
+
+/* Join the input to the last visible flush panel, including panels with a
+   side-margin wrapper. Detached notices or cards between the rail and input
+   retain the input's rounded top. This follows rendered panels rather than
+   duplicating the visibility state of queue, file, task, and notice components. */
+[data-composer-panels]:has(
+    > [data-composer-flush-panel]:last-child,
+    > [data-composer-stacked-wrapper]:last-child > [data-composer-flush-panel]
+  )
+  + .chat-composer-shell {
+  &,
+  & .chat-composer-surface,
+  & .chat-composer-surface-banner {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+  }
 }
 
 /* Composer glass — the same material as the floating menus/pickers
@@ -3795,14 +3767,6 @@ diffs-container {
 
 .runtime-mode-menu-item {
   align-items: stretch;
-}
-
-.runtime-mode-menu-item--auto[data-checked] {
-  color: var(--color-text-accent);
-}
-
-.runtime-mode-menu-item--auto[data-checked] .runtime-mode-menu-description {
-  color: inherit;
 }
 
 /* Thin scrollbar for long model-provider lists inside picker submenus. */

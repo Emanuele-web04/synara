@@ -1722,6 +1722,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div className={MUTED_LABEL_TEXT_CLASS_NAME}>
                 <ChatMarkdown
                   text={segmentText}
+                  tone="subtle"
                   cwd={markdownCwd}
                   directionMode="auto-blocks"
                   isStreaming={false}
@@ -2388,6 +2389,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               >
                 <ChatMarkdown
                   text={item.message.text}
+                  tone="subtle"
                   cwd={markdownCwd}
                   directionMode="auto-blocks"
                   isStreaming={false}
@@ -3024,7 +3026,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           initialScrollAtEnd={tailAnchorMessageId === null || hasInheritedTailAnchor}
           {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
           maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
-          maintainScrollAtEndThreshold={0.1}
+          maintainScrollAtEndThreshold={
+            followLiveOutput && !tailAnchorSlideInFlight ? Number.POSITIVE_INFINITY : 0.1
+          }
           {...(tailAnchorMessageId !== null
             ? { maintainVisibleContentPosition: false }
             : !followLiveOutput

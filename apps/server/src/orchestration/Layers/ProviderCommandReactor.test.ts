@@ -487,6 +487,7 @@ describe("ProviderCommandReactor", () => {
     const setRuntimeSessionTurnState = (input: {
       readonly threadId: string;
       readonly status: ProviderSession["status"];
+      readonly runtimeMode?: ProviderSession["runtimeMode"];
       readonly activeTurnId?: TurnId;
     }) => {
       const threadId = ThreadId.makeUnsafe(input.threadId);
@@ -504,6 +505,7 @@ describe("ProviderCommandReactor", () => {
       const next: ProviderSession = {
         ...base,
         status: input.status,
+        runtimeMode: input.runtimeMode ?? base.runtimeMode,
         ...(input.activeTurnId !== undefined ? { activeTurnId: input.activeTurnId } : {}),
       };
       if (input.activeTurnId === undefined) {
@@ -12384,6 +12386,7 @@ describe("ProviderCommandReactor", () => {
         harness.setRuntimeSessionTurnState({
           threadId,
           status: "running",
+          runtimeMode: "approval-required",
           activeTurnId: asTurnId("coding-live"),
         });
         await Effect.runPromise(
@@ -12459,6 +12462,7 @@ describe("ProviderCommandReactor", () => {
     harness.setRuntimeSessionTurnState({
       threadId,
       status: "running",
+      runtimeMode: "approval-required",
       activeTurnId: asTurnId("computer-live"),
     });
     await Effect.runPromise(
@@ -12589,7 +12593,11 @@ describe("ProviderCommandReactor", () => {
       gatewaySessions: { ...registry, computerControlProvisioned },
     });
     const now = new Date().toISOString();
-    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+    harness.setRuntimeSessionTurnState({
+      threadId,
+      status: "ready",
+      runtimeMode: "approval-required",
+    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -17055,7 +17063,11 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "ready",
+      runtimeMode: "approval-required",
+    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -18196,7 +18208,66 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("restarts the provider session when runtime mode changes on the thread or turn request", async () => {
+  it("keeps an idle session and finished turn unchanged during repeated permission changes", async () => {
+    const harness = await createHarness({
+      ingestRuntimeEvents: true,
+      threadModelSelection: { provider: "codex", model: "gpt-6-luna" },
+    });
+    const now = new Date().toISOString();
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "idle-permission-baseline",
+      text: "first",
+      createdAt: now,
+    });
+    await harness.drain();
+    await harness.emitRuntimeEvent({
+      type: "turn.started",
+      eventId: asEventId("idle-permission-turn-started"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-1"),
+      createdAt: now,
+      payload: {},
+      providerRefs: {},
+    });
+    await emitHarnessTurnTerminal(harness, {
+      eventId: "idle-permission-turn-completed",
+      provider: "codex",
+      type: "completed",
+    });
+    await waitFor(
+      async () => (await readHarnessThread(harness))?.latestTurn?.state === "completed",
+    );
+    await harness.drain();
+    const before = await readHarnessThread(harness);
+    const eventsBefore = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
+    for (const runtimeMode of ["auto", "full-access", "auto", "full-access"] as const) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          runtimeMode,
+          createdAt: now,
+        }),
+      );
+      await harness.drain();
+      const after = await readHarnessThread(harness);
+      expect(after?.runtimeMode).toBe(runtimeMode);
+      expect(after?.session).toEqual(before?.session);
+      expect(after?.latestTurn).toEqual(before?.latestTurn);
+      expect(after?.activities).toEqual(before?.activities);
+      expect(harness.startSession).toHaveBeenCalledTimes(1);
+    }
+    const eventsAfter = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
+    expect(
+      Array.from(eventsAfter)
+        .slice(Array.from(eventsBefore).length)
+        .map((event) => event.type),
+    ).toEqual(Array(4).fill("thread.runtime-mode-set"));
+  });
+
+  it("defers idle runtime mode changes until the next turn and honors turn overrides", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -18243,7 +18314,9 @@ describe("ProviderCommandReactor", () => {
     await waitFor(
       async () => (await readHarnessThread(harness))?.runtimeMode === "approval-required",
     );
-    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect((await readHarnessThread(harness))?.session?.runtimeMode).toBe("full-access");
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -18256,13 +18329,32 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "full-access",
+        runtimeMode: "approval-required",
         createdAt: now,
       }),
     );
 
-    await waitFor(() => harness.startSession.mock.calls.length === 3);
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-runtime-mode-3"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-runtime-mode-3"),
+          role: "user",
+          text: "third",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 3);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
 
     expect(harness.stopSession.mock.calls.length).toBe(0);
     expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
@@ -18876,6 +18968,25 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-runtime-mode-claude-no-options"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-runtime-mode-claude-no-options"),
+          role: "user",
+          text: "continue",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
     await waitFor(() => harness.startSession.mock.calls.length === 1);
 
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
@@ -19425,6 +19536,24 @@ describe("ProviderCommandReactor", () => {
     await waitFor(
       async () => (await readHarnessThread(harness))?.runtimeMode === "approval-required",
     );
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-restart-failure-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-restart-failure-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
     await waitFor(() => harness.startSession.mock.calls.length === 2);
     await harness.drain();
 
@@ -19433,23 +19562,79 @@ describe("ProviderCommandReactor", () => {
 
     const thread = await readHarnessThread(harness);
     expect(thread?.session?.threadId).toBe("thread-1");
+    expect(thread?.runtimeMode).toBe("approval-required");
     expect(thread?.session?.runtimeMode).toBe("full-access");
-    const events = await Effect.runPromise(
-      Stream.runCollect(harness.engine.readEvents(0)).pipe(
-        Effect.map((items) => Array.from(items)),
-      ),
+    expect(await Effect.runPromise(harness.listSessions())).toEqual(
+      expect.arrayContaining([expect.objectContaining({ runtimeMode: "full-access" })]),
     );
-    const runtimeModeEvent = events.find(
-      (event) => event.commandId === "cmd-runtime-mode-set-restart-failure",
+    expect(thread?.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "provider.turn.start.failed",
+          payload: expect.objectContaining({
+            detail: expect.stringContaining("simulated restart failure"),
+          }),
+        }),
+      ]),
     );
-    expect(runtimeModeEvent).toBeDefined();
-    const delivery = await Effect.runPromise(
-      harness.deliveryRepository.getDelivery({
-        consumerName: "provider-command-reactor.v1",
-        eventSequence: runtimeModeEvent!.sequence,
+  });
+
+  it("reconfigures the live permission mode when the projection already claims the requested mode", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-permission-projection-initial"),
+        threadId,
+        message: {
+          messageId: asMessageId("permission-projection-initial"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        createdAt: now,
       }),
     );
-    expect(delivery.pipe(Option.getOrThrow).state).toBe("uncertain");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+
+    const currentSession = (await readHarnessThread(harness))?.session;
+    expect(currentSession).toBeDefined();
+    if (!currentSession) throw new Error("Expected an established provider session");
+    // A failed rebind used to project the requested mode without changing the
+    // process. A later dispatch must consult the actual runtime even if such
+    // stale state has already been persisted.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-permission-projection-stale"),
+        threadId,
+        session: { ...currentSession, runtimeMode: "approval-required" },
+        createdAt: now,
+      }),
+    );
+    expect(await Effect.runPromise(harness.listSessions())).toEqual(
+      expect.arrayContaining([expect.objectContaining({ runtimeMode: "full-access" })]),
+    );
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "permission-projection-next-turn",
+      text: "second",
+      createdAt: now,
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+    expect(await Effect.runPromise(harness.listSessions())).toEqual(
+      expect.arrayContaining([expect.objectContaining({ runtimeMode: "approval-required" })]),
+    );
+    expect((await readHarnessThread(harness))?.session?.runtimeMode).toBe("approval-required");
   });
 
   it.each(["opencode"] as const)(
@@ -22537,8 +22722,11 @@ describe("ProviderCommandReactor", () => {
       );
       return state.pipe(Option.getOrThrow).lastAckedSequence >= settled.sequence;
     });
-    // With no active turn the same event applies by ensuring the session.
-    expect(harness.startSession.mock.calls.length).toBe(1);
+    // Settling the turn does not make permission selection start a session.
+    // The desired mode waits for the next turn in both cases.
+    expect(harness.startSession.mock.calls.length).toBe(0);
+    expect((await readHarnessThread(harness))?.runtimeMode).toBe("approval-required");
+    expect((await readHarnessThread(harness))?.session?.runtimeMode).toBe("full-access");
   });
 });
 
