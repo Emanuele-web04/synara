@@ -1,4 +1,8 @@
-import { BrowserCookieImportInput, BrowserVaultSettings } from "@synara/contracts";
+import {
+  BrowserCookieImportInput,
+  BrowserCookieSource,
+  BrowserVaultSettings,
+} from "@synara/contracts";
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import { Schema } from "effect";
 import type { DesktopBrowserManager } from "./browserManager";
@@ -12,7 +16,6 @@ const Reveal = Schema.Struct({
   id: Schema.String.check(Schema.isMaxLength(256)),
   password: Password,
 });
-const CookieSource = Schema.Literals(["chrome", "safari", "edge"]);
 
 export function registerBrowserVaultIpc(
   ipcMain: IpcMain,
@@ -56,7 +59,7 @@ export function registerBrowserVaultIpc(
   };
   handle(channels.cookieSources, () => requireCookies().sources());
   handle(channels.cookieProfiles, (input) =>
-    requireCookies().profiles(Schema.decodeUnknownSync(CookieSource)(input)),
+    requireCookies().profiles(Schema.decodeUnknownSync(BrowserCookieSource)(input)),
   );
   handle(channels.importCookies, (input) =>
     requireCookies().import(Schema.decodeUnknownSync(BrowserCookieImportInput)(input)),
