@@ -5,6 +5,7 @@
 
 import {
   ApprovalRequestId,
+  DEFAULT_SERVER_SETTINGS,
   CommandId,
   type ContextMenuItem,
   EventId,
@@ -304,6 +305,7 @@ describe("wsNativeApi", () => {
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
+        titleRefresh: DEFAULT_SERVER_SETTINGS.titleRefresh,
         keepAwakeMode: "off",
         lowerProviderProcessPriority: true,
         defaultThreadEnvMode: "local",
