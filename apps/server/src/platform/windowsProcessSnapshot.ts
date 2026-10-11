@@ -326,6 +326,8 @@ export function createWindowsProcessSnapshotObserver(
 
       const attempt = Promise.resolve()
         .then(() => {
+          // A queued capture must not create a worker after its owner disposes.
+          if (disposed) return null;
           worker ??= createWorker();
           return captureWithTimeout(worker);
         })

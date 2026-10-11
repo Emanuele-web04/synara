@@ -340,6 +340,9 @@ describe("Windows process snapshots", () => {
     const observer = createPreparedWindowsTeardownProcessSnapshotObserver({ createWorker });
     const capture = observer.captureWithin(3_000);
     await vi.advanceTimersByTimeAsync(0);
+    expect(createWorker).toHaveBeenCalledTimes(1);
+    expect(worker.capture).toHaveBeenCalledTimes(1);
+    expect(worker.dispose).not.toHaveBeenCalled();
     observer.dispose();
     await expect(capture).resolves.toBeNull();
     await vi.advanceTimersByTimeAsync(0);
@@ -349,4 +352,33 @@ describe("Windows process snapshots", () => {
     observer.dispose();
     expect(worker.dispose).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["ordinary", createWindowsProcessSnapshotObserver],
+    ["teardown", createWindowsTeardownProcessSnapshotObserver],
+    ["prepared", createPreparedWindowsTeardownProcessSnapshotObserver],
+  ] as const)(
+    "does not create or capture a %s worker after immediate disposal",
+    async (_name, create) => {
+      vi.useFakeTimers();
+      const worker: ProcessChildrenSnapshotWorker = {
+        capture: vi.fn().mockResolvedValue(new Map()),
+        dispose: vi.fn(),
+      };
+      const createWorker = vi.fn(() => worker);
+      const observer = create({ createWorker });
+      const capture = observer.capture();
+      // Dispose in the same turn, before the queued worker-creation callback runs.
+      observer.dispose();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(createWorker).not.toHaveBeenCalled();
+      expect(worker.capture).not.toHaveBeenCalled();
+      expect(worker.dispose).not.toHaveBeenCalled();
+      await expect(capture).resolves.toBeNull();
+      await expect(observer.capture()).resolves.toBeNull();
+      observer.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 });
