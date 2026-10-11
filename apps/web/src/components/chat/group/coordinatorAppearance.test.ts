@@ -1,12 +1,12 @@
 // FILE: coordinatorAppearance.test.ts
 // Purpose: Covers the coordinator appearance resolver — known keys map to their
 //          glyph/color, and unknown or cleared keys fall back to the default
-//          bot icon with the inherited row color.
+//          Hubs icon with the inherited row color.
 // Layer: Web logic test
 
 import { describe, expect, it } from "vitest";
 
-import { BotIcon, BrainIcon } from "~/lib/icons";
+import { BrainIcon, HubIcon } from "~/lib/icons";
 
 import {
   COORDINATOR_COLOR_OPTIONS,
@@ -15,11 +15,11 @@ import {
 } from "./coordinatorAppearance";
 
 describe("resolveCoordinatorAppearance", () => {
-  it("returns the bot icon and inherited color for an empty config", () => {
+  it("returns the Hubs icon and inherited color for an empty config", () => {
     const appearance = resolveCoordinatorAppearance({});
-    expect(appearance.Icon).toBe(BotIcon);
+    expect(appearance.Icon).toBe(HubIcon);
     expect(appearance.iconClassName).toBe("");
-    expect(appearance.iconKey).toBe("bot");
+    expect(appearance.iconKey).toBe("hub");
     expect(appearance.colorKey).toBe("default");
   });
 
@@ -34,8 +34,8 @@ describe("resolveCoordinatorAppearance", () => {
 
   it("falls back to the default icon for an unknown key", () => {
     const appearance = resolveCoordinatorAppearance({ coordinatorIcon: "no-such-icon" });
-    expect(appearance.Icon).toBe(BotIcon);
-    expect(appearance.iconKey).toBe("bot");
+    expect(appearance.Icon).toBe(HubIcon);
+    expect(appearance.iconKey).toBe("hub");
   });
 
   it("falls back to the default color for an unknown key", () => {

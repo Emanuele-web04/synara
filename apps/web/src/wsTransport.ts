@@ -104,7 +104,6 @@ import {
   clearThreadDetailResumeCursor,
   resetThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
-import { adoptVerifiedThreadCacheIdentity } from "./threadDetailCacheIdentity";
 import { trackWsTurnSettlement, type WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
@@ -1539,7 +1538,6 @@ export class WsTransport {
       useDeviceStateStore.getState().clear();
       useComputerStateStore.getState().clear();
     }
-    adoptVerifiedThreadCacheIdentity(compatibility.serverInstanceId);
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);
     this.setCompatibilityIssue(null);

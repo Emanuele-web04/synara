@@ -34,6 +34,7 @@ import {
   type GitRecentCommit,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
+import { directorySymlinkType } from "@synara/shared/filesystemPlatform";
 import { parseGitHubRepositoryNameWithOwnerFromRemoteUrl } from "@synara/shared/githubRepository";
 import { isWorkspaceRelativePathSafe } from "@synara/shared/path";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
@@ -3431,7 +3432,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         await nodeFs.symlink(
           link.target,
           absolutePath,
-          link.kind === "dir" && process.platform === "win32" ? "junction" : link.kind,
+          link.kind === "dir" ? directorySymlinkType() : link.kind,
         );
       }
     };
@@ -3456,11 +3457,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     ): Promise<"linked" | "copied"> => {
       await nodeFs.mkdir(nodePath.dirname(targetPath), { recursive: true });
       if (link.kind === "dir") {
-        await nodeFs.symlink(
-          link.target,
-          targetPath,
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        await nodeFs.symlink(link.target, targetPath, directorySymlinkType());
         return "linked";
       }
       try {
