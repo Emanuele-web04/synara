@@ -761,6 +761,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ? { forkSourceResumeCursor: importResumeCursor }
         : { resumeCursor: importResumeCursor }),
       runtimeMode: thread.runtimeMode,
+      // Imported provider-native threads were created outside Synara under the
+      // native account 0 binding.
+      accountOrdinal: 0,
     });
 
     yield* Effect.gen(function* () {

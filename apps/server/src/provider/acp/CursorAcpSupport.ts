@@ -6,7 +6,11 @@
  *
  * @module CursorAcpSupport
  */
-import { type CursorModelOptions, type ProviderModelDescriptor } from "@synara/contracts";
+import {
+  type CursorModelOptions,
+  type ProviderAccountLaunchContext,
+  type ProviderModelDescriptor,
+} from "@synara/contracts";
 import { formatModelDisplayName, parseCursorCliReasoningEffort } from "@synara/shared/model";
 import { Effect, Layer, Schema, Scope, ServiceMap } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -49,6 +53,7 @@ export interface CursorAcpRuntimeInput extends Omit<
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined;
+  readonly accountLaunch?: ProviderAccountLaunchContext;
 }
 
 export interface CursorAcpModelSelectionErrorContext {
@@ -93,6 +98,7 @@ export function buildCursorAcpSpawnInput(
   cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
   cwd: string,
   commandOptions?: CursorAgentCommandOptions,
+  accountLaunch?: ProviderAccountLaunchContext,
 ): AcpSpawnInput {
   const command = buildCursorAgentCommand(
     cursorSettings?.binaryPath,
@@ -114,9 +120,15 @@ export function buildCursorAcpSpawnInput(
       ...(cursorSettings?.instanceId !== undefined
         ? { instanceId: cursorSettings.instanceId }
         : {}),
-      ...(cursorSettings?.environment !== undefined
-        ? { environment: cursorSettings.environment }
-        : {}),
+      ...(accountLaunch
+        ? {
+            environment: Object.fromEntries(
+              Object.entries(accountLaunch.environment).filter(([, value]) => value !== ""),
+            ),
+          }
+        : cursorSettings?.environment !== undefined
+          ? { environment: cursorSettings.environment }
+          : {}),
       ...(cursorSettings?.homeDir !== undefined ? { homeDir: cursorSettings.homeDir } : {}),
       ...(cursorSettings?.isolationRootDir !== undefined
         ? { isolationRootDir: cursorSettings.isolationRootDir }
@@ -146,7 +158,12 @@ export const makeCursorAcpRuntime = (
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildCursorAcpSpawnInput(input.cursorSettings, input.cwd),
+        spawn: buildCursorAcpSpawnInput(
+          input.cursorSettings,
+          input.cwd,
+          undefined,
+          input.accountLaunch,
+        ),
         // Authenticate on demand only: always-auth makes cursor-agent re-open the
         // OAuth login page on every session start (#1341); same pattern as Devin.
         authPolicy: "on-demand",

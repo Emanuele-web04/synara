@@ -24,6 +24,7 @@ import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
 import { ProviderHealthLive } from "./Layers/ProviderHealth";
 import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
+import { ProviderAccountsLive } from "../providerAccounts/Layers/ProviderAccounts";
 import { ProviderSessionDirectoryLive } from "./Layers/ProviderSessionDirectory";
 import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime";
 import { ProviderRuntimeEventRepositoryLive } from "../persistence/Layers/ProviderRuntimeEvents";
@@ -106,6 +107,10 @@ export function makeServerProviderLayer(
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
     );
+    const providerAccountsLayer = ProviderAccountsLive.pipe(
+      Layer.provide(ServerSecretStoreLive),
+      Layer.provide(providerSessionDirectoryLayer),
+    );
     const providerServiceLayer = makeDurableProviderServiceLive({
       ...(canonicalEventLogger ? { canonicalEventLogger } : {}),
     }).pipe(
@@ -115,6 +120,7 @@ export function makeServerProviderLayer(
       // Provider sessions resolve persisted provider-instance settings before launch.
       Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
       Layer.provide(ServerSecretStoreLive),
+      Layer.provide(providerAccountsLayer),
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
@@ -126,6 +132,7 @@ export function makeServerProviderLayer(
       providerDiscoveryLayer,
       adapterRegistryLayer,
       providerSessionDirectoryLayer,
+      providerAccountsLayer,
     );
   }).pipe(Effect.provide(ProviderCredentialsLive.pipe(Layer.orDie)), Layer.unwrap);
 }

@@ -2228,6 +2228,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         ...(input.autoApproveSynaraTools !== undefined
           ? { autoApproveSynaraTools: input.autoApproveSynaraTools }
           : {}),
+        ...(input.accountLaunch !== undefined ? { accountLaunch: input.accountLaunch } : {}),
         runtimeMode: input.runtimeMode,
         ...codexModelSelectionOverrides(input.modelSelection),
       };

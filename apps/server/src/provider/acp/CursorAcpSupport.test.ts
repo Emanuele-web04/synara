@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { beforeEach, afterEach } from "vitest";
+import { buildAcpSpawnProcessEnv } from "./AcpSessionRuntime";
 import { Effect, Layer } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -155,6 +160,50 @@ describe("buildCursorAcpSpawnInput", () => {
       },
       providerEnvironment: { driver: "cursor" },
     });
+  });
+
+  it("applies managed-account environment overrides over inherited env", () => {
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = "key_native";
+    try {
+      const spawn = buildCursorAcpSpawnInput(undefined, "/tmp/project", undefined, {
+        ordinal: 2,
+        generation: 1,
+        environment: {
+          CURSOR_API_KEY: "key_managed",
+          CURSOR_CONFIG_DIR: "/accounts/cursor/2/agent/home",
+        },
+      });
+      expect(buildAcpSpawnProcessEnv(spawn)?.CURSOR_API_KEY).toBe("key_managed");
+      expect(buildAcpSpawnProcessEnv(spawn)?.CURSOR_CONFIG_DIR).toBe(
+        "/accounts/cursor/2/agent/home",
+      );
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.CURSOR_API_KEY;
+      } else {
+        process.env.CURSOR_API_KEY = previousApiKey;
+      }
+    }
+  });
+
+  it("strips conflicting Cursor auth overrides marked for removal", () => {
+    const previousApiKey = process.env.CURSOR_API_KEY;
+    process.env.CURSOR_API_KEY = "key_native";
+    try {
+      const spawn = buildCursorAcpSpawnInput(undefined, "/tmp/project", undefined, {
+        ordinal: 2,
+        generation: 1,
+        environment: { CURSOR_API_KEY: "" },
+      });
+      expect(buildAcpSpawnProcessEnv(spawn)).not.toHaveProperty("CURSOR_API_KEY");
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.CURSOR_API_KEY;
+      } else {
+        process.env.CURSOR_API_KEY = previousApiKey;
+      }
+    }
   });
 
   it("passes api endpoint overrides through the Cursor launcher fallback", () => {
@@ -1496,4 +1545,15 @@ describe("buildCursorAcpModelDescriptorsFromAvailableModels", () => {
     expect(composer?.supportsFastMode).toBe(true);
     expect(composer?.contextWindowOptions).toBeUndefined();
   });
+});
+
+let isolatedTestHome: string;
+beforeEach(() => {
+  isolatedTestHome = mkdtempSync(join(tmpdir(), "synara-managed-acp-"));
+  vi.stubEnv("HOME", isolatedTestHome);
+  vi.stubEnv("USERPROFILE", isolatedTestHome);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(isolatedTestHome, { recursive: true, force: true });
 });
