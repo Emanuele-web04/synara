@@ -6,10 +6,12 @@
 import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { MessageDeliveryCheckIcon } from "~/lib/icons";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { makeActivity } from "../../storeTestFixtures";
 import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
 import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
+import { MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 // Every settled turn opens with a header carrying its final state.
@@ -816,7 +818,9 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).not.toContain('data-synara-working-loader="true"');
-    expect(markup).toContain('class="size-3.5 shrink-0"');
+    expect(markup).toContain(
+      renderToStaticMarkup(<MessageDeliveryCheckIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />),
+    );
   });
 
   it("does not reserve a timestamp footer between live status updates and Thinking", async () => {
