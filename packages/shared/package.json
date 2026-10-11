@@ -446,7 +446,6 @@
     }
   },
   "scripts": {
-    "prepare": "effect-language-service patch",
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "tsc --noEmit",
