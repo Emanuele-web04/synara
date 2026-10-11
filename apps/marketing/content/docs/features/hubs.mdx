@@ -1,13 +1,13 @@
 ---
 title: Hubs and Library
-description: Coordinate related work across agents and repositories with shared instructions, memory, and a versioned Library in Synara Beta.
+description: Coordinate related work across agents and repositories with shared instructions, memory, and a versioned Library in Synara.
 ---
 
-<Callout type="info" title="Synara 1.0.0">
-  Hubs require **Synara Beta** and remain unavailable in **Synara 1.0.0 Stable**.
+<Callout type="info" title="Synara 1.0.2">
+  Hubs are available in **Synara 1.0.2 Stable** and **Synara Beta**.
 </Callout>
 
-Hubs are available in **Synara Beta**. A Hub combines one coordinator conversation, worker chats, shared context, and a Library of delivered files. It can cover several repositories or work without a repository for research, writing, and planning.
+Hubs are available in **Synara 1.0.2 Stable** and **Synara Beta**. A Hub combines one coordinator conversation, worker chats, shared context, and a Library of delivered files. It can cover several repositories or work without a repository for research, writing, and planning.
 
 ## Create a Hub
 
@@ -39,10 +39,10 @@ For a remote backup, configure **Environment → Library hosting → Git remote*
 
 Deleting a Hub removes its coordinator, context, and automations after name confirmation. Linked repositories and their chats remain. A custom Library folder is kept, while the default Library is moved to Trash when possible. Read the deletion notice for retained folders.
 
-Hubs use the Beta app's data home. The on-disk workspace parent retains its historical name, `~/Documents/Synara/Groups/`. Hubs remain unavailable in Stable; see [Synara Beta](/docs/features/synara-beta) for isolation and data-copy behavior.
+Hubs use the running app's data home; Stable and Beta keep separate Hubs and chats. The on-disk workspace parent retains its historical name, `~/Documents/Synara/Groups/`. Beta data is not copied back to Stable; see [Synara Beta](/docs/features/synara-beta) for isolation and data-copy behavior.
 
 ## Worker approvals in the coordinator chat
 
 In 1.0.2-beta.1, pending worker approvals appear above the coordinator composer. Open the named worker or choose **Approve once**, **Always allow this session** when supported, **Decline**, or **Cancel turn**. Answering in either conversation clears the request in both. These are human controls; agents have no tool for approving a worker.
 
-A task accepted into the Hub queue inherits the coordinator's access mode unless explicitly overridden, and retains that mode while queued. Changing an active chat's mode applies on its next turn. Hubs remains Beta-only.
+A task accepted into the Hub queue inherits the coordinator's access mode unless explicitly overridden, and retains that mode while queued. Changing an active chat's mode applies on its next turn. Hubs are available in Stable and Beta.
