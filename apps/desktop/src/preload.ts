@@ -6,6 +6,7 @@ import type {
   DesktopBridge,
   DesktopComputerPreviewFrame,
   DesktopDiagnosticActivity,
+  SynaraStorageSnapshot,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -265,7 +266,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     getState: () => ipcRenderer.invoke(IPC.beta.getState),
     install: () => ipcRenderer.invoke(IPC.beta.install),
     launch: () => ipcRenderer.invoke(IPC.beta.launch),
-    importAndLaunch: () => ipcRenderer.invoke(IPC.beta.importAndLaunch),
+    importAndLaunch: (input?: { readonly storageSnapshot?: SynaraStorageSnapshot }) =>
+      ipcRenderer.invoke(IPC.beta.importAndLaunch, input),
     leave: (input: { readonly moveToTrash: boolean }) => ipcRenderer.invoke(IPC.beta.leave, input),
   },
   getUpdateState: () => ipcRenderer.invoke(IPC.updateGetState),

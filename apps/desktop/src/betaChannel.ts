@@ -23,6 +23,7 @@ import { delimiter, isAbsolute, join, resolve } from "node:path";
 import {
   BETA_IMPORT_REQUEST_FILE_NAME,
   BETA_IMPORT_RESULT_FILE_NAME,
+  BETA_IMPORT_STORAGE_FILE_NAME,
   SYNARA_BETA_HOME_DIR_NAME,
   SYNARA_BETA_HOME_ENV,
   SYNARA_BETA_INSTALL_DIR_ENV,
@@ -41,9 +42,13 @@ import type {
   DesktopBetaActionResult,
   DesktopBetaChannelState,
   DesktopBetaInstallProgress,
+  DesktopBridge,
+  SynaraStorageSnapshot,
 } from "@synara/contracts";
 
 import { installBetaFromFeed, type BetaInstallDeps, type ExpectedTeamId } from "./betaInstaller";
+
+import { validateSynaraStorageSnapshot } from "./desktopStorageMigration";
 
 // electron-builder registers the uninstall key under the raw NSIS guid (no
 // braces); the value itself lives in @synara/shared/betaChannel.
@@ -386,6 +391,26 @@ export function writeBetaImportRequest(input: {
   renameSync(tempPath, requestPath);
 }
 
+/** Stages browser settings for the beta server's transactional import. */
+export function writeBetaImportStorageSnapshot(input: {
+  readonly betaHomeDir: string;
+  readonly snapshot: SynaraStorageSnapshot;
+}): void {
+  const validated = validateSynaraStorageSnapshot(input.snapshot);
+  if (!validated) {
+    throw new Error("Refusing to write an invalid Synara storage snapshot for the beta import.");
+  }
+  mkdirSync(input.betaHomeDir, { recursive: true });
+  const snapshotPath = join(input.betaHomeDir, BETA_IMPORT_STORAGE_FILE_NAME);
+  const tempPath = `${snapshotPath}.tmp-${process.pid}`;
+  writeFileSync(tempPath, `${JSON.stringify(validated)}\n`, "utf8");
+  renameSync(tempPath, snapshotPath);
+}
+
+type BetaImportAndLaunchInput = Parameters<
+  NonNullable<DesktopBridge["beta"]>["importAndLaunch"]
+>[0];
+
 /**
  * Launches the installed beta by executable path with a sanitized environment.
  * Spawning the binary directly (rather than `open`) keeps Launch Services from
@@ -397,14 +422,22 @@ export async function launchBetaInstall(
   platform: NodeJS.Platform = process.platform,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
-  if (!detection.installed || !detection.executablePath) {
+  const executablePath = detection.executablePath;
+  if (!detection.installed || !executablePath) {
     throw new Error("Synara Beta is not installed");
   }
-  const executable =
-    platform === "darwin"
-      ? join(detection.installPath!, "Contents", "MacOS", BETA_MAC_EXECUTABLE_NAME)
-      : detection.executablePath;
-  await spawnDetached(executable, env ?? process.env);
+  if (platform === "darwin") {
+    const installPath = detection.installPath;
+    if (!installPath) {
+      throw new Error("Synara Beta is not installed");
+    }
+    await spawnDetached(
+      join(installPath, "Contents", "MacOS", BETA_MAC_EXECUTABLE_NAME),
+      env ?? process.env,
+    );
+    return;
+  }
+  await spawnDetached(executablePath, env ?? process.env);
 }
 
 const action = (
@@ -563,13 +596,11 @@ export class DesktopBetaChannel {
     return this.launch();
   }
 
-  /**
-   * Downloads and installs beta when needed, writes the import marker into the
-   * beta home, and launches the beta app. The beta server performs the snapshot
-   * itself at startup, before opening its own database, so the stable app never
-   * touches beta state directly.
-   */
-  async importAndLaunch(sourceHomeDir: string): Promise<DesktopBetaActionResult> {
+  /** Stages the requested data handoff for beta to commit during startup. */
+  async importAndLaunch(
+    sourceHomeDir: string,
+    input?: BetaImportAndLaunchInput,
+  ): Promise<DesktopBetaActionResult> {
     if (this.deps.flavor !== "production") {
       return action(false, "not-supported", "Beta handoff is only available from stable Synara.");
     }
@@ -586,11 +617,28 @@ export class DesktopBetaChannel {
         "Quit Synara Beta first so it can pick up the import on its next launch.",
       );
     }
+    const suppliedSnapshot = input?.storageSnapshot;
+    const validatedSnapshot = suppliedSnapshot
+      ? validateSynaraStorageSnapshot(suppliedSnapshot)
+      : null;
+    if (suppliedSnapshot && !validatedSnapshot) {
+      return action(
+        false,
+        "internal",
+        "The browser settings snapshot was invalid, so nothing was handed off to Synara Beta.",
+      );
+    }
     try {
-      writeBetaImportRequest({
-        betaHomeDir: this.deps.betaHomeDir,
-        sourceHomeDir,
-      });
+      if (validatedSnapshot) {
+        writeBetaImportStorageSnapshot({
+          betaHomeDir: this.deps.betaHomeDir,
+          snapshot: validatedSnapshot,
+        });
+      } else {
+        rmSync(join(this.deps.betaHomeDir, BETA_IMPORT_STORAGE_FILE_NAME), { force: true });
+      }
+      // Publish the request only after its optional snapshot is ready.
+      writeBetaImportRequest({ betaHomeDir: this.deps.betaHomeDir, sourceHomeDir });
       this.installProgress = { phase: "opening", percent: null };
       await launchBetaInstall(detection, this.deps.platform, this.launchEnv());
       this.installProgress = null;
@@ -598,16 +646,32 @@ export class DesktopBetaChannel {
     } catch (error) {
       this.installProgress = null;
       // A marker without a launched beta would run the import on some later,
-      // unrelated beta start; remove it so nothing consumes it by surprise.
-      try {
-        rmSync(join(this.deps.betaHomeDir, BETA_IMPORT_REQUEST_FILE_NAME), {
-          recursive: true,
-          force: true,
-        });
-      } catch {
-        // best effort
-      }
+      // unrelated beta start; remove it and its pending snapshot.
+      this.removeHalfWrittenHandoff();
       return action(false, "internal", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /**
+   * Removes every handoff artifact after a failure. A leftover marker or
+   * sidecar would be consumed by an unrelated later beta start, so a cleanup
+   * miss is logged but never hides the handoff error itself.
+   */
+  private removeHalfWrittenHandoff(): void {
+    const cleanupPaths = [
+      join(this.deps.betaHomeDir, BETA_IMPORT_REQUEST_FILE_NAME),
+      join(this.deps.betaHomeDir, BETA_IMPORT_STORAGE_FILE_NAME),
+    ];
+    for (const cleanupPath of cleanupPaths) {
+      try {
+        rmSync(cleanupPath, { force: true });
+      } catch (cleanupError) {
+        console.warn(
+          `[betaChannel] Failed to remove half-written beta handoff file ${cleanupPath}: ${
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          }`,
+        );
+      }
     }
   }
 }

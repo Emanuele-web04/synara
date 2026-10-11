@@ -184,9 +184,14 @@ The stable app offers a one-click handoff under **Settings → General → Synar
   pair), and vacuums that staged copy into a checkpointed snapshot. Either way
   the result is a consistent point-in-time copy and the outcome is written to
   `~/.synara-beta/import-result.json` so the stable settings card can report
-  success or the failure reason. The importer stages every file first, rejects
-  symbolic links in copied state, and rolls back normal filesystem commit errors
-  rather than reporting success with only part of the state copied.
+  success or the failure reason. The handoff also seeds missing browser-profile
+  settings, copies user skills and MCP client credentials, and keeps Beta-only
+  entries in those directories. Browser settings commit with the database and
+  are acknowledged after renderer hydration; a rejected import leaves Beta's
+  current browser profile untouched. Composer image blobs in IndexedDB are not
+  included. The importer stages every file first, rejects symbolic links in copied
+  state and overlapping Stable/Beta homes, and rolls back normal filesystem commit
+  errors rather than reporting success with only part of the state copied.
 - Only a packaged beta (`SYNARA_DESKTOP_BUNDLE_ID` is the beta bundle id)
   consumes the marker, and only from stable's data folder (`SYNARA_STABLE_HOME`
   handed over by stable, else `~/.synara`). A stray marker in any other home
@@ -232,8 +237,12 @@ environment variables, so a demo never touches a real `~/.synara`,
   `userData` base, respectively; overriding `HOME` isolates the Electron profile exactly like
   `scripts/verify-packaged-desktop-startup.ts` does.
 
-The import copies settings, provider secrets, and a database snapshot. It never
-copies logs, diagnostics queues, runtime files, other import markers, database
+The import copies settings, provider secrets, user skills, MCP client credentials,
+and a database snapshot. Worktree pointers into Stable's home are cleared from
+thread state and replay events, including paths through home aliases or outward
+links. Branch names and independently addressed worktrees outside that home remain.
+It never copies pending MCP pairings, environment identity, device ownership
+claims, logs, diagnostics queues, runtime files, other import markers, database
 sidecars (`state.sqlite-wal`/`-shm`/`-journal`), or `*.lifecycle-lock`
 directories — a leaked lock directory would make beta refuse to start while the
 stable process is alive. Nothing is ever written into the stable home: the

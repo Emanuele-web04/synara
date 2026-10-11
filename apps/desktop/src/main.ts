@@ -323,10 +323,12 @@ import {
   resolveVisibleWindowBounds,
   writeDesktopWindowState,
 } from "./windowState";
+import { BETA_IMPORT_STORAGE_FILE_NAME } from "@synara/shared/betaChannel";
 import {
   acknowledgeSynaraStorageSnapshot,
   readSynaraStorageSnapshot,
   resolveSynaraStorageSnapshotPath,
+  validateSynaraStorageSnapshot,
 } from "./desktopStorageMigration";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
@@ -4985,7 +4987,12 @@ function requestGracefulAppQuit(reason: string): void {
 }
 
 function registerIpcHandlers(): void {
-  const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+  const profileSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+  const importedSnapshotPath =
+    desktopFlavor === "beta"
+      ? Path.join(BASE_DIR, "userdata", BETA_IMPORT_STORAGE_FILE_NAME)
+      : null;
+  let storageSnapshotPath = profileSnapshotPath;
 
   ipcMain.removeAllListeners(IPC.betaDiagnostics.enabled);
   ipcMain.on(IPC.betaDiagnostics.enabled, (event: IpcMainEvent) => {
@@ -5003,7 +5010,16 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeAllListeners(IPC.storageMigration.read);
   ipcMain.on(IPC.storageMigration.read, (event: IpcMainEvent) => {
-    event.returnValue = readSynaraStorageSnapshot(storageSnapshotPath);
+    if (importedSnapshotPath) {
+      const importedSnapshot = readSynaraStorageSnapshot(importedSnapshotPath);
+      if (importedSnapshot) {
+        storageSnapshotPath = importedSnapshotPath;
+        event.returnValue = importedSnapshot;
+        return;
+      }
+    }
+    storageSnapshotPath = profileSnapshotPath;
+    event.returnValue = readSynaraStorageSnapshot(profileSnapshotPath);
   });
 
   ipcMain.removeHandler(IPC.storageMigration.acknowledge);
@@ -5390,7 +5406,34 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.beta.launch, async () => betaChannel.launch());
 
   ipcMain.removeHandler(IPC.beta.importAndLaunch);
-  ipcMain.handle(IPC.beta.importAndLaunch, async () => betaChannel.importAndLaunch(BASE_DIR));
+  ipcMain.handle(IPC.beta.importAndLaunch, async (_event, rawInput: unknown) => {
+    if (rawInput !== null && typeof rawInput === "object") {
+      if (!("storageSnapshot" in rawInput)) {
+        return betaChannel.importAndLaunch(BASE_DIR);
+      }
+      const candidate = rawInput.storageSnapshot;
+      if (candidate === undefined) {
+        return betaChannel.importAndLaunch(BASE_DIR);
+      }
+      const validatedSnapshot = validateSynaraStorageSnapshot(candidate);
+      if (!validatedSnapshot) {
+        return {
+          ok: false,
+          error: "internal" as const,
+          message: "Invalid browser settings snapshot for the beta import.",
+        };
+      }
+      return betaChannel.importAndLaunch(BASE_DIR, { storageSnapshot: validatedSnapshot });
+    }
+    if (rawInput === undefined || rawInput === null) {
+      return betaChannel.importAndLaunch(BASE_DIR);
+    }
+    return {
+      ok: false,
+      error: "internal" as const,
+      message: "Invalid browser settings snapshot for the beta import.",
+    };
+  });
 
   ipcMain.removeHandler(IPC.beta.leave);
   ipcMain.handle(IPC.beta.leave, async (_event, rawInput: unknown) => {
