@@ -29,6 +29,9 @@ function archive(...entries: Buffer[]): string {
 }
 
 describe("RPM payload archive inspection", () => {
+  const buildIdPath = "usr/lib/.build-id/16/6a10e13400be630d45cdc040664c53511639a6";
+  const buildId = (target: string) => entry(buildIdPath, 0o120777, 1, Buffer.from(target));
+
   it("accepts bounded newc files and directories before extraction", () => {
     expect(() =>
       assertRpmCpioArchive(
@@ -59,6 +62,64 @@ describe("RPM payload archive inspection", () => {
     expect(() => assertRpmCpioArchive(archive(entry("./opt/file"), entry("opt/file")))).toThrow(
       "Duplicate",
     );
+  });
+  it("accepts rpmbuild metadata links to regular application files even when listed first", () => {
+    expect(() =>
+      assertRpmCpioArchive(
+        archive(buildId("../../../../opt/Synara/synara"), entry("./opt/Synara/synara")),
+      ),
+    ).not.toThrow();
+  });
+  it.each([
+    "/opt/Synara/synara",
+    "../../../../../opt/Synara/synara",
+    "../../../../opt//Synara/synara",
+    "../../../../opt\\Synara\\synara",
+    "../../../../opt/Synara/synara\0hidden",
+    "../../../../opt/Synara/line\nbreak",
+    "../../../../opt/Synara/missing",
+    "",
+  ])("rejects unsafe or missing build-id target %j", (target) => {
+    expect(() =>
+      assertRpmCpioArchive(archive(buildId(target), entry("opt/Synara/synara"))),
+    ).toThrow();
+  });
+  it("rejects build-id links to directories, other links or files outside the app payload", () => {
+    expect(() =>
+      assertRpmCpioArchive(
+        archive(
+          buildId("../../../../opt/Synara"),
+          entry("opt/Synara", 0o040755, 2, Buffer.alloc(0)),
+        ),
+      ),
+    ).toThrow("archived application file");
+    const other = "usr/lib/.build-id/23/60d2c52c9d8dea9ec199603c0214e74669cde0";
+    expect(() =>
+      assertRpmCpioArchive(
+        archive(
+          buildId("../23/60d2c52c9d8dea9ec199603c0214e74669cde0"),
+          entry(other, 0o120777, 1, Buffer.from("../../../../opt/Synara/synara")),
+          entry("opt/Synara/synara"),
+        ),
+      ),
+    ).toThrow("archived application file");
+    expect(() =>
+      assertRpmCpioArchive(archive(buildId("../../../../etc/config"), entry("etc/config"))),
+    ).toThrow("archived application file");
+  });
+  it("rejects extraction paths through a link or regular-file ancestor", () => {
+    expect(() =>
+      assertRpmCpioArchive(
+        archive(
+          buildId("../../../../opt/Synara/synara"),
+          entry(`${buildIdPath}/nested`),
+          entry("opt/Synara/synara"),
+        ),
+      ),
+    ).toThrow("non-directory");
+    expect(() =>
+      assertRpmCpioArchive(archive(entry("opt/Synara"), entry("opt/Synara/synara"))),
+    ).toThrow("non-directory");
   });
   it("rejects missing trailers, truncated payloads and trailing archive data", () => {
     const file = archive(entry("opt/file"));

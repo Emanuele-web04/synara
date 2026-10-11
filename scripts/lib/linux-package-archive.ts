@@ -34,6 +34,8 @@ export function assertRpmCpioArchive(archive: string): void {
     const size = fstatSync(descriptor).size;
     const names: string[] = [];
     const types: string[] = [];
+    const kinds = new Map<string, number>();
+    const buildIdLinks = new Map<string, string>();
     const read = (position: number, length: number): Buffer => {
       if (position + length > size) throw new Error("Truncated RPM payload archive.");
       const buffer = Buffer.alloc(length);
@@ -67,14 +69,31 @@ export function assertRpmCpioArchive(archive: string): void {
         break;
       }
       const kind = mode & 0o170000;
-      if (kind !== 0o040000 && kind !== 0o100000)
+      const path = name.replace(/^\.\//, "").replace(/\/$/, "");
+      // rpmbuild adds SHA-1 build-id links for packaged ELF binaries. Keep the
+      // application payload file-only and inspect these metadata links before
+      // extraction: their targets must be regular files in this same archive.
+      const isBuildIdLink =
+        kind === 0o120000 && /^usr\/lib\/\.build-id\/[0-9a-f]{2}\/[0-9a-f]{38}$/.test(path);
+      if (kind !== 0o040000 && kind !== 0o100000 && !isBuildIdLink)
         throw new Error(`RPM payload may contain only files and directories: ${name}.`);
-      if (kind === 0o100000 && linkCount !== 1)
+      if ((kind === 0o100000 || isBuildIdLink) && linkCount !== 1)
         throw new Error(`RPM payload must not contain hard links: ${name}.`);
       if (kind === 0o040000 && fileSize !== 0)
         throw new Error(`RPM directory entry contains data: ${name}.`);
+      if (isBuildIdLink) {
+        if (fileSize < 1 || fileSize > 4096)
+          throw new Error(`Invalid RPM build-id link size: ${name}.`);
+        const target = new TextDecoder("utf-8", { fatal: true }).decode(
+          read(dataPosition, fileSize),
+        );
+        if (target.startsWith("/") || /[\\\p{Cc}]/u.test(target))
+          throw new Error(`Unsafe RPM build-id link target: ${name}.`);
+        buildIdLinks.set(path, target);
+      }
       names.push(name);
       types.push(kind === 0o040000 ? "d" : "-");
+      kinds.set(path, kind);
       if (names.length > 100_000) throw new Error("RPM payload archive has too many entries.");
     }
     if (!trailer) throw new Error("RPM payload archive is missing its trailer.");
@@ -85,6 +104,34 @@ export function assertRpmCpioArchive(archive: string): void {
       position += padding.length;
     }
     assertLinuxPackageArchiveEntries(names, types, "RPM");
+    for (const path of kinds.keys()) {
+      const parents = path.split("/");
+      parents.pop();
+      while (parents.length > 0) {
+        const parentKind = kinds.get(parents.join("/"));
+        if (parentKind !== undefined && parentKind !== 0o040000)
+          throw new Error(`RPM archive path traverses a non-directory: ${path}.`);
+        parents.pop();
+      }
+    }
+    for (const [path, target] of buildIdLinks) {
+      const resolved = path.split("/");
+      resolved.pop();
+      for (const part of target.split("/")) {
+        if (part === ".") continue;
+        if (part === "..") {
+          if (resolved.length === 0)
+            throw new Error(`RPM build-id link escapes the archive: ${path}.`);
+          resolved.pop();
+        } else {
+          if (!part) throw new Error(`Unsafe RPM build-id link target: ${path}.`);
+          resolved.push(part);
+        }
+      }
+      const destination = resolved.join("/");
+      if (!destination.startsWith("opt/") || kinds.get(destination) !== 0o100000)
+        throw new Error(`RPM build-id link must target an archived application file: ${path}.`);
+    }
   } finally {
     closeSync(descriptor);
   }
