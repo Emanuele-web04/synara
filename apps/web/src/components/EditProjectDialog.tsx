@@ -33,7 +33,6 @@ export interface EditProjectDialogProps {
   /** Placeholder for the name field: what the project is called with no local name. */
   folderName: string;
   initialValue: EditProjectValue;
-  belowField?: ReactNode;
   onOpenChange: (open: boolean) => void;
   onSave: (value: EditProjectValue) => void;
   belowField?: ReactNode | undefined;
@@ -44,7 +43,6 @@ export function EditProjectDialog({
   cwd,
   folderName,
   initialValue,
-  belowField,
   onOpenChange,
   onSave,
   belowField,
@@ -61,7 +59,6 @@ export function EditProjectDialog({
           cwd={cwd}
           folderName={folderName}
           initialValue={initialValue}
-          belowField={belowField}
           onOpenChange={onOpenChange}
           onSave={onSave}
           belowField={belowField}
@@ -75,7 +72,6 @@ function EditProjectForm({
   cwd,
   folderName,
   initialValue,
-  belowField,
   onOpenChange,
   onSave,
   belowField,
@@ -165,7 +161,6 @@ function EditProjectForm({
         </Popover>
         {belowField}
       </DialogPanel>
-      {belowField ? <div className="px-6 pb-1">{belowField}</div> : null}
       <DialogFooter>
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
           Cancel

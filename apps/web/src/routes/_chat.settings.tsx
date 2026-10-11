@@ -7,7 +7,6 @@ import {
   type DesktopAudioInputDevice,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
-  type ThreadTitleRefreshMode,
   type SidechatExpiry,
   type ThreadTitleRefreshMode,
 } from "@synara/contracts";
