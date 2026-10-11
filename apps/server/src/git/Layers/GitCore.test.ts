@@ -1180,23 +1180,27 @@ it.layer(TestLayer)("git integration", (it) => {
         const remote = yield* makeTmpDir();
         const source = yield* makeTmpDir();
         const clone = yield* makeTmpDir();
+        const realGitCore = yield* GitCore;
+        // Register this service after the repositories so its background
+        // refresh scope closes before their scoped directory cleanup runs.
+        const core = yield* makeIsolatedGitCore(realGitCore.execute);
         yield* git(remote, ["init", "--bare"]);
 
         yield* initRepoWithCommit(source);
-        const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
+        const defaultBranch = (yield* core.listBranches({ cwd: source })).branches.find(
           (branch) => branch.current,
         )!.name;
         yield* git(source, ["remote", "add", "origin", remote]);
         yield* git(source, ["push", "-u", "origin", defaultBranch]);
 
         const featureBranch = "feature-behind";
-        yield* (yield* GitCore).createBranch({ cwd: source, branch: featureBranch });
-        yield* (yield* GitCore).checkoutBranch({ cwd: source, branch: featureBranch });
+        yield* core.createBranch({ cwd: source, branch: featureBranch });
+        yield* core.checkoutBranch({ cwd: source, branch: featureBranch });
         yield* writeTextFile(path.join(source, "feature.txt"), "feature base\n");
         yield* git(source, ["add", "feature.txt"]);
         yield* git(source, ["commit", "-m", "feature base"]);
         yield* git(source, ["push", "-u", "origin", featureBranch]);
-        yield* (yield* GitCore).checkoutBranch({ cwd: source, branch: defaultBranch });
+        yield* core.checkoutBranch({ cwd: source, branch: defaultBranch });
 
         yield* git(clone, ["clone", remote, "."]);
         yield* git(clone, ["config", "user.email", "test@test.com"]);
@@ -1207,8 +1211,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(clone, ["commit", "-m", "remote feature update"]);
         yield* git(clone, ["push", "origin", featureBranch]);
 
-        yield* (yield* GitCore).checkoutBranch({ cwd: source, branch: featureBranch });
-        const core = yield* GitCore;
+        yield* core.checkoutBranch({ cwd: source, branch: featureBranch });
         yield* Effect.promise(() =>
           vi.waitFor(
             async () => {
