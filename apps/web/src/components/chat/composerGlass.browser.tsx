@@ -38,13 +38,21 @@ afterEach(() => {
   }
 });
 
-function ComposerFixture() {
+function ComposerFixture({ panel = "attached" }: { panel?: "attached" | "detached" | "none" }) {
   return (
     <div data-chat-composer-slot>
       <ComposerColumnFrame>
-        <ComposerStackedPanel data-testid="stacked">Queued follow-up</ComposerStackedPanel>
-        <div className={COMPOSER_INPUT_SURFACE_CLASS_NAME} data-testid="composer">
-          Draft input
+        <div data-composer-panels>
+          {panel !== "none" ? (
+            <ComposerStackedPanel detached={panel === "detached"} data-testid="stacked">
+              Queued follow-up
+            </ComposerStackedPanel>
+          ) : null}
+        </div>
+        <div className="chat-composer-shell">
+          <div className={COMPOSER_INPUT_SURFACE_CLASS_NAME} data-testid="composer">
+            Draft input
+          </div>
         </div>
       </ComposerColumnFrame>
     </div>
@@ -80,7 +88,24 @@ describe("chat composer on sidebar-only macOS glass", () => {
       surface("composer").getBoundingClientRect().width,
       1,
     );
+    // Equal-width outer outlines keep equal radii; only inset surfaces subtract the border.
+    expect(getComputedStyle(surface("stacked")).borderTopLeftRadius).toBe(
+      getComputedStyle(surface("composer")).borderBottomLeftRadius,
+    );
   });
+
+  it.each(["detached", "none"] as const)(
+    "keeps a rounded input when the preceding panel is %s",
+    async (panel) => {
+      await render(<ComposerFixture panel={panel} />, { container: appRoot });
+      expect(parseFloat(getComputedStyle(surface("composer")).borderTopLeftRadius)).toBeGreaterThan(
+        0,
+      );
+      expect(
+        parseFloat(getComputedStyle(surface("composer")).borderTopRightRadius),
+      ).toBeGreaterThan(0);
+    },
+  );
 
   it.each(["light", "dark"])(
     "avoids a second backdrop layer and keeps dense fills in %s mode",

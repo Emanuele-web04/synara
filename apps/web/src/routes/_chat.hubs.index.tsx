@@ -184,8 +184,7 @@ function HubsIndexRouteView() {
 }
 
 export const Route = createFileRoute("/_chat/hubs/")({
-  // Hubs are Beta-only: on Stable a /hubs link (or the old /studio redirect)
-  // lands on the home route instead.
+  // If the shared feature policy disables Hubs, direct and legacy links return home.
   beforeLoad: () => {
     if (!GROUPS_ON) {
       throw redirect({ to: "/", replace: true });
