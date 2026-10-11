@@ -88,6 +88,10 @@ describe("chat composer on sidebar-only macOS glass", () => {
       surface("composer").getBoundingClientRect().width,
       1,
     );
+    // Equal-width outer outlines keep equal radii; only inset surfaces subtract the border.
+    expect(getComputedStyle(surface("stacked")).borderTopLeftRadius).toBe(
+      getComputedStyle(surface("composer")).borderBottomLeftRadius,
+    );
   });
 
   it.each(["detached", "none"] as const)(

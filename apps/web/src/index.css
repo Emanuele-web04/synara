@@ -3182,6 +3182,13 @@ diffs-container {
 .chat-composer-stacked-top {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
+  border-top-left-radius: var(--composer-radius);
+  border-top-right-radius: var(--composer-radius);
+}
+
+/* Banners sit inside the input border; equal-width stacked panels own an outer
+   outline and use the full composer radius in every view. */
+.chat-composer-surface-banner {
   border-top-left-radius: calc(var(--composer-radius) - 1px);
   border-top-right-radius: calc(var(--composer-radius) - 1px);
 }

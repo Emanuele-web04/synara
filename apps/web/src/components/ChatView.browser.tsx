@@ -14767,6 +14767,9 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(railBounds.left).toBeCloseTo(inputBounds.left, 1);
         expect(railBounds.right).toBeCloseTo(inputBounds.right, 1);
         expect(railBounds.bottom).toBeCloseTo(inputBounds.top + 1, 1);
+        expect(getComputedStyle(rail).borderTopLeftRadius).toBe(
+          getComputedStyle(surface).borderBottomLeftRadius,
+        );
         expect(getComputedStyle(surface).borderTopLeftRadius).toBe("0px");
         expect(getComputedStyle(surface).borderTopRightRadius).toBe("0px");
       }
