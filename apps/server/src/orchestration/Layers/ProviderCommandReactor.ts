@@ -3216,14 +3216,25 @@ const make = Effect.gen(function* () {
         )
           return;
       } else if (pendingReview) return;
-      const nativeObservation = providerService.getClaudeCacheObservation
-        ? yield* awaitClaudeCompactionPreparation(
-            providerService
-              .getClaudeCacheObservation(input.threadId)
-              .pipe(Effect.catch(() => Effect.succeed(undefined))),
-            input.claudeCompactionCancellation,
-          )
-        : undefined;
+      // Mirrors Claude Code: the review is off unless the person turns it on, as
+      // embedded Claude Code never asks. When on, only a person is asked before
+      // resuming a long-idle, large conversation, never for /compact (the choice
+      // the prompt recommends); agents and automations proceed as the SDK would.
+      const reviewsColdCache =
+        (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
+        (yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.providers.claudeAgent.confirmColdCacheResume),
+          Effect.catch(() => Effect.succeed(false)),
+        ));
+      const nativeObservation =
+        reviewsColdCache && providerService.getClaudeCacheObservation
+          ? yield* awaitClaudeCompactionPreparation(
+              providerService
+                .getClaudeCacheObservation(input.threadId)
+                .pipe(Effect.catch(() => Effect.succeed(undefined))),
+              input.claudeCompactionCancellation,
+            )
+          : undefined;
       // In-session model controls run inside sendTurn, after this preflight.
       // Assess the requested model now without changing the native session.
       const requestedSelection = input.modelSelection ?? thread.modelSelection;
@@ -3237,6 +3248,7 @@ const make = Effect.gen(function* () {
       if (
         observation &&
         assessment.requiresConfirmation &&
+        !/^\/compact(?:\s|$)/.test(input.messageText.trim()) &&
         (!input.acceptedCacheReview ||
           !claudeCacheReviewCoversObservation(input.acceptedCacheReview, observation))
       ) {

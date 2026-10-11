@@ -145,14 +145,24 @@ const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
+const WORKTREE_LINK_MARKER = "synara-worktree-links.json";
 const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 /** Which local files a new worktree receives from its source checkout, and how. */
 interface WorktreeTransferPlan {
   /** Untracked files plus ignored paths matched by `.worktreeinclude`. Copied. */
   readonly copyPaths: ReadonlyArray<string>;
-  /** Ignored paths matched by `.worktreelink` and not by `.worktreeinclude`. Linked, never copied. */
+  /** Ignored paths matched by `.worktreelink` and not by `.worktreeinclude`. Linked where supported, with a file-copy fallback. */
   readonly linkPaths: ReadonlyArray<string>;
+}
+
+interface ManagedWorktreeLink {
+  readonly path: string;
+  readonly kind: "file" | "dir";
+}
+
+interface WorktreeLinkTarget extends ManagedWorktreeLink {
+  readonly target: string;
 }
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
@@ -3317,41 +3327,150 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    /**
-     * A directory link is a junction on Windows because creating one needs no
-     * privilege. A file symlink may be refused there, so it falls back to a copy.
-     */
+    const isManagedLinkPath = (value: unknown): value is string =>
+      typeof value === "string" &&
+      value.length > 0 &&
+      !value.includes("\0") &&
+      !nodePath.isAbsolute(value) &&
+      !nodePath.win32.isAbsolute(value) &&
+      nodePath.win32.parse(value).root === "" &&
+      value.split(/[\\/]/u).every((part) => part !== "" && part !== "." && part !== "..");
+
+    const worktreeLinkMarkerPath = (worktreePath: string) =>
+      executeGit("GitCore.worktreeLinks.gitDir", worktreePath, [
+        "rev-parse",
+        "--absolute-git-dir",
+      ]).pipe(Effect.map((result) => nodePath.join(result.stdout.trim(), WORKTREE_LINK_MARKER)));
+
+    const readManagedWorktreeLinks = (worktreePath: string) =>
+      Effect.gen(function* () {
+        const markerPath = yield* worktreeLinkMarkerPath(worktreePath);
+        return yield* Effect.tryPromise({
+          try: async (): Promise<ReadonlyArray<ManagedWorktreeLink>> => {
+            const text = await nodeFs.readFile(markerPath, "utf8").catch((cause: unknown) => {
+              if (hasNodeErrorCode(cause, "ENOENT")) return null;
+              throw cause;
+            });
+            if (text === null) return [];
+            const marker: unknown = JSON.parse(text);
+            if (
+              typeof marker !== "object" ||
+              marker === null ||
+              !("version" in marker) ||
+              marker.version !== 1 ||
+              !("links" in marker) ||
+              !Array.isArray(marker.links) ||
+              !marker.links.every(
+                (entry: unknown) =>
+                  typeof entry === "object" &&
+                  entry !== null &&
+                  "path" in entry &&
+                  isManagedLinkPath(entry.path) &&
+                  "kind" in entry &&
+                  (entry.kind === "file" || entry.kind === "dir"),
+              )
+            )
+              throw new Error("Invalid managed worktree link record.");
+            return marker.links as ReadonlyArray<ManagedWorktreeLink>;
+          },
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.worktreeLinks.read",
+              worktreePath,
+              ["worktree", "links", "read"],
+              "could not read the managed worktree link record.",
+              cause,
+            ),
+        });
+      });
+
+    // Never follow a replaced ancestor into a shared checkout when inspecting,
+    // unlinking or restoring a recorded path. Only an absent path is skippable.
+    const inspectManagedLinkPath = async (worktreePath: string, relativePath: string) => {
+      if (!isManagedLinkPath(relativePath)) throw new Error("Unsafe managed worktree link path.");
+      const absolutePath = nodePath.resolve(worktreePath, relativePath);
+      const relative = nodePath.relative(worktreePath, absolutePath);
+      if (relative.startsWith(`..${nodePath.sep}`) || nodePath.isAbsolute(relative))
+        throw new Error("Managed worktree link path escapes its checkout.");
+      const parents = [worktreePath];
+      const segments = relative.split(nodePath.sep);
+      for (let index = 1; index < segments.length; index += 1)
+        parents.push(nodePath.join(worktreePath, ...segments.slice(0, index)));
+      for (const parent of parents) {
+        const entry = await nodeFs.lstat(parent).catch((cause: unknown) => {
+          if (hasNodeErrorCode(cause, "ENOENT")) return null;
+          throw cause;
+        });
+        if (entry === null) return null;
+        if (entry.isSymbolicLink() || !entry.isDirectory())
+          throw new Error("Managed worktree link ancestor is no longer a real directory.");
+      }
+      return await nodeFs.lstat(absolutePath).catch((cause: unknown) => {
+        if (hasNodeErrorCode(cause, "ENOENT")) return null;
+        throw cause;
+      });
+    };
+
+    const restoreWorktreeLinkTargets = async (
+      worktreePath: string,
+      links: ReadonlyArray<WorktreeLinkTarget>,
+    ) => {
+      const root = await nodeFs.lstat(worktreePath).catch((cause: unknown) => {
+        if (hasNodeErrorCode(cause, "ENOENT")) return null;
+        throw cause;
+      });
+      if (root === null) return;
+      for (const link of links) {
+        const absolutePath = nodePath.join(worktreePath, link.path);
+        const existing = await inspectManagedLinkPath(worktreePath, link.path);
+        if (existing !== null) {
+          if (existing.isSymbolicLink() && (await nodeFs.readlink(absolutePath)) === link.target)
+            continue;
+          throw new Error("Refusing to overwrite a changed worktree path while restoring links.");
+        }
+        await nodeFs.symlink(
+          link.target,
+          absolutePath,
+          link.kind === "dir" && process.platform === "win32" ? "junction" : link.kind,
+        );
+      }
+    };
+
+    /** Resolve the complete chain so a later removal cannot strand another worktree. */
+    const resolveWorktreeLink = async (sourcePath: string, relativePath: string) => {
+      const target = await nodeFs.realpath(sourcePath);
+      const source = await nodeFs.stat(target);
+      if (!source.isFile() && !source.isDirectory())
+        throw new Error("Only regular files and directories can be shared into a worktree.");
+      return {
+        path: relativePath,
+        target,
+        kind: source.isDirectory() ? ("dir" as const) : ("file" as const),
+      };
+    };
+
+    /** A refused file symlink becomes a real independent copy of its resolved file. */
     const linkWorktreePath = async (
-      sourcePath: string,
+      link: WorktreeLinkTarget,
       targetPath: string,
     ): Promise<"linked" | "copied"> => {
-      const source = await nodeFs.lstat(sourcePath);
-      // A source that is itself a link is re-pointed at its target rather than
-      // chained, so removing one worktree never breaks another's link.
-      const linkTarget = source.isSymbolicLink()
-        ? nodePath.resolve(nodePath.dirname(sourcePath), await nodeFs.readlink(sourcePath))
-        : sourcePath;
-      const resolved = await nodeFs.stat(sourcePath).catch(() => null);
       await nodeFs.mkdir(nodePath.dirname(targetPath), { recursive: true });
-      if (resolved?.isDirectory()) {
+      if (link.kind === "dir") {
         await nodeFs.symlink(
-          linkTarget,
+          link.target,
           targetPath,
           process.platform === "win32" ? "junction" : "dir",
         );
         return "linked";
       }
       try {
-        await nodeFs.symlink(linkTarget, targetPath, "file");
+        await nodeFs.symlink(link.target, targetPath, "file");
         return "linked";
       } catch (cause) {
-        if (
-          !["EPERM", "EACCES", "ENOTSUP", "EINVAL"].some((code) => hasNodeErrorCode(cause, code))
-        ) {
+        if (!["EPERM", "EACCES", "ENOTSUP", "EINVAL"].some((code) => hasNodeErrorCode(cause, code)))
           throw cause;
-        }
-        await nodeFs.cp(sourcePath, targetPath, {
-          recursive: true,
+        await nodeFs.cp(link.target, targetPath, {
+          dereference: true,
           force: false,
           errorOnExist: true,
           preserveTimestamps: true,
@@ -3360,34 +3479,75 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       }
     };
 
-    /**
-     * `git worktree remove` on Windows descends into a junction and deletes the
-     * shared target, so every link Synara created is unlinked first. A worktree
-     * whose directory already vanished has nothing to unlink.
-     */
+    /** Detach shared links before Git removal; retain enough identity to undo a refusal. */
     const detachWorktreeLinks = (worktreePath: string) =>
       Effect.gen(function* () {
-        const exists = yield* Effect.promise(() =>
-          nodeFs.lstat(worktreePath).then(
-            () => true,
-            () => false,
-          ),
-        );
-        if (!exists) return;
-        // Only `.worktreelink` entries are consulted: a copied path is a real
-        // directory and is skipped by the lstat check below.
-        const linkPaths = yield* listIgnoredPathsMatching(worktreePath, ".worktreelink", {
-          collapseDirectories: true,
+        const root = yield* Effect.tryPromise({
+          try: () =>
+            nodeFs.lstat(worktreePath).catch((cause: unknown) => {
+              if (hasNodeErrorCode(cause, "ENOENT")) return null;
+              throw cause;
+            }),
+          catch: (cause) =>
+            createGitCommandError(
+              "GitCore.removeWorktree",
+              worktreePath,
+              ["worktree", "unlink"],
+              "could not inspect the worktree before detaching links.",
+              cause,
+            ),
         });
-        yield* Effect.tryPromise({
+        if (root === null) return [] as ReadonlyArray<WorktreeLinkTarget>;
+        if (root.isSymbolicLink() || !root.isDirectory()) {
+          return yield* Effect.fail(
+            createGitCommandError(
+              "GitCore.removeWorktree",
+              worktreePath,
+              ["worktree", "unlink"],
+              "the worktree root is no longer a real directory.",
+            ),
+          );
+        }
+        const [managed, declared] = yield* Effect.all([
+          readManagedWorktreeLinks(worktreePath),
+          listIgnoredPathsMatching(worktreePath, ".worktreelink", { collapseDirectories: true }),
+        ]);
+        return yield* Effect.tryPromise({
           try: async () => {
-            for (const relativePath of linkPaths) {
-              const absolutePath = nodePath.join(worktreePath, relativePath);
-              const entry = await nodeFs.lstat(absolutePath).catch((cause: unknown) => {
-                if (hasNodeErrorCode(cause, "ENOENT")) return null;
-                throw cause;
-              });
-              if (entry?.isSymbolicLink()) await nodeFs.unlink(absolutePath);
+            const detached: WorktreeLinkTarget[] = [];
+            try {
+              for (const relativePath of new Set([
+                ...managed.map((entry) => entry.path),
+                ...declared,
+              ])) {
+                const absolutePath = nodePath.join(worktreePath, relativePath);
+                const entry = await inspectManagedLinkPath(worktreePath, relativePath);
+                if (!entry?.isSymbolicLink()) continue;
+                const target = await nodeFs.readlink(absolutePath);
+                const resolved = await nodeFs.stat(absolutePath).catch((cause: unknown) => {
+                  if (hasNodeErrorCode(cause, "ENOENT")) return null;
+                  throw cause;
+                });
+                const kind = resolved
+                  ? resolved.isDirectory()
+                    ? "dir"
+                    : "file"
+                  : managed.find((link) => link.path === relativePath)?.kind;
+                if (!kind) throw new Error("Cannot safely restore an unrecorded dangling link.");
+                await nodeFs.unlink(absolutePath);
+                detached.push({ path: relativePath, target, kind });
+              }
+              return detached;
+            } catch (cause) {
+              try {
+                await restoreWorktreeLinkTargets(worktreePath, detached);
+              } catch (restoreCause) {
+                throw new AggregateError(
+                  [cause, restoreCause],
+                  "Worktree link detachment and restoration failed.",
+                );
+              }
+              throw cause;
             }
           },
           catch: (cause) =>
@@ -3401,9 +3561,35 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         });
       });
 
+    const withDetachedWorktreeLinks = <A>(
+      worktreePath: string,
+      remove: Effect.Effect<A, GitCommandError>,
+    ) =>
+      // Detachment and restoration own filesystem mutations. Keep both atomic
+      // with respect to caller cancellation while the Git command stays interruptible.
+      // The bracket preserves a failed/interrupted command and any restoration failure.
+      Effect.acquireUseRelease(
+        detachWorktreeLinks(worktreePath),
+        () => remove,
+        (links, outcome) =>
+          Exit.isSuccess(outcome)
+            ? Effect.void
+            : Effect.tryPromise({
+                try: () => restoreWorktreeLinkTargets(worktreePath, links),
+                catch: (restoreCause) =>
+                  createGitCommandError(
+                    "GitCore.removeWorktree",
+                    worktreePath,
+                    ["worktree", "links", "restore"],
+                    "worktree removal failed and its detached links could not all be restored.",
+                    restoreCause,
+                  ),
+              }),
+      );
+
     const readWorktreeStateHash = (cwd: string) =>
       Effect.gen(function* () {
-        const [staged, unstaged, plan] = yield* Effect.all(
+        const [staged, unstaged, plan, managed] = yield* Effect.all(
           [
             executeGit(
               "GitCore.readWorktreeStateHash.staged",
@@ -3427,6 +3613,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
             ),
             planWorktreeTransfer(cwd),
+            readManagedWorktreeLinks(cwd),
           ],
           { concurrency: "unbounded" },
         );
@@ -3435,12 +3622,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             const hash = createHash("sha256");
             hash.update("staged\0").update(staged.stdout);
             hash.update("unstaged\0").update(unstaged.stdout);
-            const linkPaths = new Set(plan.linkPaths);
-            for (const relativePath of [...plan.copyPaths, ...plan.linkPaths].sort()) {
+            const linkPaths = new Set([...plan.linkPaths, ...managed.map((entry) => entry.path)]);
+            for (const relativePath of [...new Set([...plan.copyPaths, ...linkPaths])].sort()) {
               const absolutePath = nodePath.join(cwd, relativePath);
-              const entry = await nodeFs.lstat(absolutePath);
+              const entry = linkPaths.has(relativePath)
+                ? await inspectManagedLinkPath(cwd, relativePath)
+                : await nodeFs.lstat(absolutePath);
               hash.update("path\0").update(relativePath).update("\0");
               if (linkPaths.has(relativePath)) hash.update("link\0");
+              if (entry === null) {
+                hash.update("missing\0");
+                continue;
+              }
               if (entry.isSymbolicLink()) {
                 hash.update("symlink\0").update(await nodeFs.readlink(absolutePath));
               } else if (entry.isFile()) {
@@ -3559,21 +3752,57 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           { discard: true, concurrency: 4 },
         );
 
-        yield* Effect.forEach(
+        const links = yield* Effect.forEach(
           linkPaths,
           (relativePath) =>
             Effect.tryPromise({
-              try: () =>
-                linkWorktreePath(
-                  nodePath.join(sourceCwd, relativePath),
-                  nodePath.join(worktreePath, relativePath),
-                ),
+              try: () => resolveWorktreeLink(nodePath.join(sourceCwd, relativePath), relativePath),
               catch: (cause) =>
                 createGitCommandError(
                   "GitCore.copyCheckoutChanges",
                   sourceCwd,
                   ["worktree", "link", relativePath],
-                  `could not link ${relativePath} into the detached worktree.`,
+                  `could not resolve ${relativePath} before linking the detached worktree.`,
+                  cause,
+                ),
+            }),
+          { concurrency: 4 },
+        );
+        if (links.length > 0) {
+          const markerPath = yield* worktreeLinkMarkerPath(worktreePath);
+          // Persist intent before creating any link. Cleanup must also work if
+          // copying is interrupted or the user later changes .worktreelink.
+          yield* Effect.tryPromise({
+            try: () =>
+              nodeFs.writeFile(
+                markerPath,
+                JSON.stringify({
+                  version: 1,
+                  links: links.map(({ path, kind }) => ({ path, kind })),
+                }),
+                { encoding: "utf8", flag: "wx", mode: 0o600 },
+              ),
+            catch: (cause) =>
+              createGitCommandError(
+                "GitCore.copyCheckoutChanges",
+                worktreePath,
+                ["worktree", "links", "record"],
+                "could not record linked paths before creating them.",
+                cause,
+              ),
+          });
+        }
+        yield* Effect.forEach(
+          links,
+          (link) =>
+            Effect.tryPromise({
+              try: () => linkWorktreePath(link, nodePath.join(worktreePath, link.path)),
+              catch: (cause) =>
+                createGitCommandError(
+                  "GitCore.copyCheckoutChanges",
+                  sourceCwd,
+                  ["worktree", "link", link.path],
+                  `could not link ${link.path} into the detached worktree.`,
                   cause,
                 ),
             }).pipe(
@@ -3582,7 +3811,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   ? Effect.logWarning("worktree link fell back to a copy", {
                       sourceCwd,
                       worktreePath,
-                      relativePath,
+                      relativePath: link.path,
                     })
                   : Effect.void,
               ),
@@ -3593,7 +3822,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const snapshotWorktree: GitCoreShape["snapshotWorktree"] = (input) =>
       Effect.gen(function* () {
-        const [patch, plan, head] = yield* Effect.all(
+        const [patch, plan, head, managed] = yield* Effect.all(
           [
             executeGit(
               "GitCore.snapshotWorktree.patch",
@@ -3607,6 +3836,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               "--verify",
               "HEAD^{commit}",
             ]).pipe(Effect.map((result) => result.stdout.trim())),
+            readManagedWorktreeLinks(input.cwd),
           ],
           { concurrency: "unbounded" },
         );
@@ -3622,8 +3852,28 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 encoding: "utf8",
                 mode: 0o600,
               });
+              const copiedPaths = new Set(plan.copyPaths);
+              const linkedPaths = new Set(plan.linkPaths);
+              for (const link of managed) {
+                const entry = await inspectManagedLinkPath(input.cwd, link.path);
+                if (entry?.isSymbolicLink()) {
+                  if (!copiedPaths.has(link.path)) linkedPaths.add(link.path);
+                } else {
+                  linkedPaths.delete(link.path);
+                  // A refused file link or a user-owned replacement is actual
+                  // checkout data. Preserve it rather than claiming it is shared.
+                  if (entry?.isFile() || entry?.isDirectory()) copiedPaths.add(link.path);
+                  else if (entry) throw new Error("Unsupported managed worktree snapshot path.");
+                }
+              }
+              const snapshotCopyPaths = [...copiedPaths]
+                .sort()
+                .filter(
+                  (entry, _, paths) =>
+                    !paths.some((parent) => parent !== entry && entry.startsWith(`${parent}/`)),
+                );
               const filesRoot = nodePath.join(temporaryPath, "files");
-              for (const relativePath of plan.copyPaths) {
+              for (const relativePath of snapshotCopyPaths) {
                 const targetPath = nodePath.join(filesRoot, relativePath);
                 await nodeFs.mkdir(nodePath.dirname(targetPath), {
                   recursive: true,
@@ -3642,8 +3892,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   {
                     sourceWorktree: input.cwd,
                     head,
-                    copiedPaths: plan.copyPaths,
-                    linkedPaths: plan.linkPaths,
+                    copiedPaths: snapshotCopyPaths,
+                    linkedPaths: [...linkedPaths].sort(),
                     createdAt: new Date().toISOString(),
                   },
                   null,
@@ -3897,15 +4147,15 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             // When the links cannot be detached, the forced removal is skipped
             // too: a leftover worktree is recoverable, a deleted link target is not.
             Effect.onError(() =>
-              detachWorktreeLinks(worktreePath).pipe(
-                Effect.andThen(
-                  executeGit(
-                    "GitCore.createDetachedWorktree.rollback",
-                    input.cwd,
-                    ["worktree", "remove", "--force", worktreePath],
-                    { allowNonZeroExit: true },
-                  ),
-                ),
+              withDetachedWorktreeLinks(
+                worktreePath,
+                executeGit("GitCore.createDetachedWorktree.rollback", input.cwd, [
+                  "worktree",
+                  "remove",
+                  "--force",
+                  worktreePath,
+                ]),
+              ).pipe(
                 Effect.andThen(
                   newBranch
                     ? executeGit(
@@ -4049,18 +4299,20 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           args.push("--force");
         }
         args.push(input.path);
-        yield* detachWorktreeLinks(input.path);
-        yield* executeGit("GitCore.removeWorktree", input.cwd, args, {
-          timeoutMs: 15_000,
-          fallbackErrorMessage: "git worktree remove failed",
-        }).pipe(
-          Effect.mapError((error) =>
-            createGitCommandError(
-              "GitCore.removeWorktree",
-              input.cwd,
-              args,
-              `${commandLabel(args)} failed (cwd: ${input.cwd}): ${error instanceof Error ? error.message : String(error)}`,
-              error,
+        yield* withDetachedWorktreeLinks(
+          input.path,
+          executeGit("GitCore.removeWorktree", input.cwd, args, {
+            timeoutMs: 15_000,
+            fallbackErrorMessage: "git worktree remove failed",
+          }).pipe(
+            Effect.mapError((error) =>
+              createGitCommandError(
+                "GitCore.removeWorktree",
+                input.cwd,
+                args,
+                `${commandLabel(args)} failed (cwd: ${input.cwd}): ${error instanceof Error ? error.message : String(error)}`,
+                error,
+              ),
             ),
           ),
         );

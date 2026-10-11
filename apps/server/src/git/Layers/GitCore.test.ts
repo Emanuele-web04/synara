@@ -9,6 +9,7 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
+  Deferred,
   Effect,
   Exit,
   Fiber,
@@ -26,6 +27,11 @@ import { collectGitOutput, GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return { ...actual, symlink: vi.fn(actual.symlink) };
+});
 
 // ── Helpers ──
 
@@ -2086,6 +2092,316 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
       }),
     );
+
+    it.effect("worktree link safety: detaches shared paths after the declaration is removed", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const realCore = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-removed-link-declaration");
+        yield* realCore.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        yield* Effect.promise(() => fs.unlink(path.join(wtPath, ".worktreelink")));
+        let observedRemoval = false;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation !== "GitCore.removeWorktree") return realCore.execute(input);
+          return Effect.promise(async () => {
+            observedRemoval = true;
+            // Windows Git may descend into a junction. Check the actual barrier
+            // before delegating to real Git on every platform.
+            expect(existsSync(path.join(wtPath, "vendor"))).toBe(false);
+            expect(await fs.readFile(path.join(tmp, "vendor", "sdk.txt"), "utf8")).toBe("sdk\n");
+          }).pipe(Effect.andThen(realCore.execute(input)));
+        });
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        expect(observedRemoval).toBe(true);
+        expect(existsSync(wtPath)).toBe(false);
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+      }),
+    );
+
+    it.effect("worktree link safety: preserves links when non-force removal is rejected", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const core = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-rejected-link-removal");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        yield* writeTextFile(path.join(wtPath, "README.md"), "preserve this working copy\n");
+        const result = yield* core
+          .removeWorktree({ cwd: tmp, path: wtPath, force: false })
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(existsSync(wtPath)).toBe(true);
+        expect(
+          yield* Effect.promise(() =>
+            fs.lstat(path.join(wtPath, "vendor")).then(
+              (entry) => entry.isSymbolicLink(),
+              () => false,
+            ),
+          ),
+        ).toBe(true);
+        expect(yield* readTextFile(path.join(wtPath, "README.md"))).toBe(
+          "preserve this working copy\n",
+        );
+        expect(yield* readTextFile(path.join(wtPath, "vendor", "sdk.txt"))).toBe("sdk\n");
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect("worktree link safety: rejects an unsafe record before any removal", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const realCore = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-invalid-link-record");
+        yield* realCore.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        const gitDir = yield* git(wtPath, ["rev-parse", "--absolute-git-dir"]);
+        const markerPath = path.join(gitDir, "synara-worktree-links.json");
+        const originalRecord = yield* readTextFile(markerPath);
+        yield* writeTextFile(
+          markerPath,
+          JSON.stringify({ version: 1, links: [{ path: "../vendor", kind: "dir" }] }),
+        );
+        let removalAttempted = false;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.removeWorktree") removalAttempted = true;
+          return realCore.execute(input);
+        });
+        const result = yield* core
+          .removeWorktree({ cwd: tmp, path: wtPath, force: true })
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(removalAttempted).toBe(false);
+        expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(true);
+        expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+        yield* writeTextFile(markerPath, originalRecord);
+        yield* realCore.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
+    it.effect(
+      "worktree link lifecycle: restores links when the removal caller is interrupted",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithLinkedVendor(tmp);
+          const realCore = yield* GitCore;
+          const wtPath = path.join(tmp, "wt-interrupted-link-removal");
+          yield* realCore.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            copyChangesFrom: tmp,
+          });
+          const vendor = path.join(wtPath, "vendor");
+          const originalTarget = yield* Effect.promise(() => fs.readlink(vendor));
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let gitRemovalExecuted = false;
+          const core = yield* makeIsolatedGitCore((input) => {
+            if (input.operation !== "GitCore.removeWorktree") return realCore.execute(input);
+            return Effect.gen(function* () {
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              gitRemovalExecuted = true;
+              return yield* realCore.execute(input);
+            });
+          });
+          const removal = yield* core
+            .removeWorktree({ cwd: tmp, path: wtPath, force: true })
+            .pipe(Effect.forkChild);
+          try {
+            yield* Deferred.await(entered);
+            expect(existsSync(vendor)).toBe(false);
+            const cancellation = yield* Fiber.interrupt(removal).pipe(Effect.forkChild);
+            // Keep the command boundary interruptible. A broad uninterruptible
+            // removal must fail this bound instead of waiting for our release.
+            yield* Effect.promise(() =>
+              vi.waitFor(() => expect(removal.pollUnsafe()).toBeDefined(), { timeout: 2_000 }),
+            );
+            yield* Fiber.join(cancellation);
+            expect(Exit.hasInterrupts(yield* Fiber.await(removal))).toBe(true);
+            expect(gitRemovalExecuted).toBe(false);
+            expect(existsSync(wtPath)).toBe(true);
+            expect(existsSync(vendor)).toBe(true);
+            expect(yield* lstatIsLink(vendor)).toBe(true);
+            expect(yield* Effect.promise(() => fs.readlink(vendor))).toBe(originalTarget);
+            expect(yield* readTextFile(path.join(vendor, "sdk.txt"))).toBe("sdk\n");
+            expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+          } finally {
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.interrupt(removal);
+          }
+          yield* realCore.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        }),
+    );
+
+    it.effect(
+      "worktree link lifecycle: fingerprints managed links after deleting their declaration",
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithLinkedVendor(tmp);
+          const core = yield* GitCore;
+          const wtPath = path.join(tmp, "wt-owned-removed-declaration");
+          yield* core.createDetachedWorktree({
+            cwd: tmp,
+            ref: "HEAD",
+            path: wtPath,
+            copyChangesFrom: tmp,
+          });
+          yield* Effect.promise(() => fs.unlink(path.join(wtPath, ".worktreelink")));
+          const proof = yield* core.recordWorktreeOwnership({
+            path: wtPath,
+            branch: null,
+            token: "removed-declaration-link-token",
+          });
+          expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+            verified: true,
+            reason: null,
+          });
+          const otherVendor = path.join(tmp, "other-vendor");
+          yield* Effect.promise(async () => {
+            await fs.mkdir(otherVendor);
+            await fs.unlink(path.join(wtPath, "vendor"));
+            await fs.symlink(
+              otherVendor,
+              path.join(wtPath, "vendor"),
+              process.platform === "win32" ? "junction" : "dir",
+            );
+          });
+          expect(yield* core.verifyWorktreeOwnership({ path: wtPath, proof })).toEqual({
+            verified: false,
+            reason: "worktree state changed",
+          });
+          expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+          yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+        }),
+    );
+
+    it.effect("worktree link lifecycle: rejects a drive-relative managed path before removal", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithLinkedVendor(tmp);
+        const realCore = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-drive-relative-record");
+        yield* realCore.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+        const gitDir = yield* git(wtPath, ["rev-parse", "--absolute-git-dir"]);
+        const markerPath = path.join(gitDir, "synara-worktree-links.json");
+        const originalRecord = yield* readTextFile(markerPath);
+        expect(path.win32.isAbsolute("C:../vendor")).toBe(false);
+        yield* writeTextFile(
+          markerPath,
+          JSON.stringify({ version: 1, links: [{ path: "C:../vendor", kind: "dir" }] }),
+        );
+        let removalAttempted = false;
+        const core = yield* makeIsolatedGitCore((input) => {
+          if (input.operation === "GitCore.removeWorktree") removalAttempted = true;
+          return realCore.execute(input);
+        });
+        try {
+          const result = yield* core
+            .removeWorktree({ cwd: tmp, path: wtPath, force: true })
+            .pipe(Effect.exit);
+          expect(Exit.isFailure(result)).toBe(true);
+          expect(removalAttempted).toBe(false);
+          expect(yield* lstatIsLink(path.join(wtPath, "vendor"))).toBe(true);
+          expect(yield* readTextFile(path.join(tmp, "vendor", "sdk.txt"))).toBe("sdk\n");
+        } finally {
+          if (existsSync(wtPath)) {
+            yield* writeTextFile(markerPath, originalRecord);
+            yield* realCore.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+          }
+        }
+      }),
+    );
+
+    for (const sourceIsLink of [false, true]) {
+      it.effect(
+        `worktree link safety: snapshots the file fallback from a ${sourceIsLink ? "symlink" : "regular file"}`,
+        () =>
+          Effect.gen(function* () {
+            const tmp = yield* makeTmpDir();
+            yield* initRepoWithCommit(tmp);
+            yield* writeTextFile(path.join(tmp, ".gitignore"), "shared.txt\nshared-source.txt\n");
+            yield* writeTextFile(path.join(tmp, ".worktreelink"), "shared.txt\n");
+            yield* git(tmp, ["add", ".gitignore", ".worktreelink"]);
+            yield* git(tmp, ["commit", "-m", "configure shared file"]);
+            if (sourceIsLink) {
+              yield* writeTextFile(path.join(tmp, "shared-source.txt"), "shared input\n");
+              yield* Effect.promise(() =>
+                fs.symlink("shared-source.txt", path.join(tmp, "shared.txt"), "file"),
+              );
+            } else {
+              yield* writeTextFile(path.join(tmp, "shared.txt"), "shared input\n");
+            }
+            const core = yield* GitCore;
+            const wtPath = path.join(tmp, "wt-file-fallback");
+            const targetFile = path.join(wtPath, "shared.txt");
+            const originalSymlink = yield* Effect.promise(() =>
+              vi
+                .importActual<typeof import("node:fs/promises")>("node:fs/promises")
+                .then((actual) => actual.symlink),
+            );
+            const refusedSymlink = vi
+              .mocked(fs.symlink)
+              .mockImplementation((target, destination, type) =>
+                destination === targetFile
+                  ? Promise.reject(
+                      Object.assign(new Error("controlled file symlink denial"), { code: "EPERM" }),
+                    )
+                  : originalSymlink(target, destination, type),
+              );
+            try {
+              yield* core.createDetachedWorktree({
+                cwd: tmp,
+                ref: "HEAD",
+                path: wtPath,
+                copyChangesFrom: tmp,
+              });
+            } finally {
+              refusedSymlink.mockImplementation(originalSymlink);
+            }
+            expect(yield* lstatIsLink(targetFile)).toBe(false);
+            expect(yield* readTextFile(targetFile)).toBe("shared input\n");
+            yield* writeTextFile(targetFile, "local fallback edit\n");
+            expect(yield* readTextFile(path.join(tmp, "shared.txt"))).toBe("shared input\n");
+            const snapshotRoot = yield* makeTmpDir("fallback-worktree-snapshot-test-");
+            const outputPath = path.join(snapshotRoot, "snapshot");
+            yield* core.snapshotWorktree({ cwd: wtPath, outputPath });
+            const manifest = JSON.parse(
+              yield* readTextFile(path.join(outputPath, "snapshot.json")),
+            ) as { copiedPaths: string[]; linkedPaths: string[] };
+            expect(manifest.copiedPaths).toEqual(["shared.txt"]);
+            expect(manifest.linkedPaths).toEqual([]);
+            expect(yield* readTextFile(path.join(outputPath, "files", "shared.txt"))).toBe(
+              "local fallback edit\n",
+            );
+            yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+            expect(yield* readTextFile(path.join(tmp, "shared.txt"))).toBe("shared input\n");
+          }),
+      );
+    }
 
     it.effect("creates a branch-backed managed worktree when newBranch is provided", () =>
       Effect.gen(function* () {
